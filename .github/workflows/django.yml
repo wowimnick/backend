@@ -24,13 +24,32 @@ jobs:
       run: |
         pwd
         ls -la
+    - name: Create Gunicorn systemd service
+      run: |
+        sudo tee /etc/systemd/system/gunicorn.service << EOF
+        [Unit]
+        Description=Gunicorn daemon for Django project
+        After=network.target
+
+        [Service]
+        User=ubuntu
+        Group=ubuntu
+        WorkingDirectory=$(pwd)
+        ExecStart=$(which gunicorn) CEBackend.wsgi:application --bind 127.0.0.1:8000 --log-file=/home/ubuntu/gunicorn.log
+        Restart=always
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
     - name: Restart Django application
       run: |
-        pkill gunicorn || true
-        nohup gunicorn CEBackend.wsgi:application --bind 127.0.0.1:8000 --daemon --log-file=/home/ubuntu/gunicorn.log &
+        sudo systemctl daemon-reload
+        sudo systemctl restart gunicorn
+        sudo systemctl enable gunicorn
     - name: Check if Gunicorn is running
       run: |
         sleep 5
+        sudo systemctl status gunicorn
         ps aux | grep gunicorn
         cat /home/ubuntu/gunicorn.log
     - name: Test Django API
