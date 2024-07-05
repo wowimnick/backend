@@ -27,7 +27,7 @@ jobs:
     - name: Restart Django application
       run: |
         pkill gunicorn || true
-        nohup gunicorn CEBackend.wsgi:application --bind 127.0.0.1:8000 --log-file=/home/ubuntu/gunicorn.log &
+        nohup gunicorn CEBackend.wsgi:application --bind 127.0.0.1:8000 --daemon --log-file=/home/ubuntu/gunicorn.log &
     - name: Check if Gunicorn is running
       run: |
         sleep 5
@@ -35,4 +35,4 @@ jobs:
         cat /home/ubuntu/gunicorn.log
     - name: Test Django API
       run: |
-        curl http://127.0.0.1:8000/api/
+        curl http://127.0.0.1:8000/api/classes/
