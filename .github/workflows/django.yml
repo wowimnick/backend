@@ -20,7 +20,19 @@ jobs:
         pip install gunicorn
     - name: Run migrations
       run: python manage.py migrate
+    - name: Check current directory and list files
+      run: |
+        pwd
+        ls -la
     - name: Restart Django application
       run: |
         pkill gunicorn || true
-        gunicorn CEBackend.wsgi:application --bind 127.0.0.1:8000 --daemon
+        nohup gunicorn CEBackend.wsgi:application --bind 127.0.0.1:8000 --daemon --log-file=/home/ubuntu/gunicorn.log &
+    - name: Check if Gunicorn is running
+      run: |
+        sleep 5
+        ps aux | grep gunicorn
+        cat /home/ubuntu/gunicorn.log
+    - name: Test Django API
+      run: |
+        curl http://127.0.0.1:8000/api/
