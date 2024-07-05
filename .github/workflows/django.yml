@@ -23,4 +23,4 @@ jobs:
     - name: Restart Django application
       run: |
         pkill gunicorn || true
-        gunicorn your_project.wsgi:application --bind 127.0.0.1:8000 --daemon
+        gunicorn CEBackend.wsgi:application --bind 127.0.0.1:8000 --daemon
