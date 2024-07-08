@@ -29,7 +29,7 @@ SECRET_KEY = 'django-insecure-1yfmf)77ngglvh_18m&(7ub5a$abwu!99$2lmx@)3dk4)!=m4l
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['3.142.223.49', 'localhost', '127.0.0.1']
+ALLOWED_HOSTS = ['3.142.223.49', 'localhost', '127.0.0.1', 'classeasily.com']
 
 
 # Application definition
@@ -77,7 +77,8 @@ TEMPLATES = [
 
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:3000',
-    'http://3.142.223.49:3000',
+    'http://3.142.223.49',
+    'http://classeasily.com',
 ]
 
 WSGI_APPLICATION = 'CEBackend.wsgi.application'
