@@ -31,6 +31,7 @@ class ClassesMain(models.Model):
     classFilterSubcategory = models.CharField(max_length=100)
     businessId = models.ForeignKey(BusinessInfo, models.DO_NOTHING, db_column='businessId', blank=True, null=True)
     classTotalReviews = models.IntegerField()
+    additionalInfo = models.CharField(max_length=100, blank=True, null=True)
     createdAt = models.DateTimeField()
 
     class Meta:
