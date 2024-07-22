@@ -17,6 +17,8 @@ jobs:
       run: |
         python --version
         which python
+        echo "Python path:"
+        python -c "import sys; print('\n'.join(sys.path))"
     - name: Display pip version and path
       run: |
         pip --version
@@ -30,6 +32,10 @@ jobs:
         pip install gunicorn
     - name: Display installed packages
       run: pip list
+    - name: Verify boto3 installation
+      run: |
+        pip show boto3
+        python -c "import boto3; print(boto3.__file__)"
     - name: Check Django settings
       run: |
         echo "INSTALLED_APPS contents:"
@@ -39,19 +45,20 @@ jobs:
     - name: Check for custom PYTHONPATH
       run: echo $PYTHONPATH
     - name: Verify Gunicorn configuration
-      run: cat /etc/systemd/system/gunicorn.service
+      run: |
+        cat /etc/systemd/system/gunicorn.service
+        echo "Gunicorn executable path:"
+        which gunicorn
     - name: Run Django check
       run: python manage.py check
-    - name: Attempt to import required modules
-      run: |
-        python -c "import storages; print(storages.__file__)"
-        python -c "import boto3; print(boto3.__file__)"
     - name: Run migrations
       run: python manage.py migrate
-    - name: Restart Django application
+    - name: Update Gunicorn service file
       run: |
+        sudo sed -i 's#ExecStart=.*#ExecStart=$(which gunicorn) --workers 3 --bind 127.0.0.1:8000 CEBackend.wsgi:application#' /etc/systemd/system/gunicorn.service
         sudo systemctl daemon-reload
-        sudo systemctl restart gunicorn
+    - name: Restart Django application
+      run: sudo systemctl restart gunicorn
     - name: Check Gunicorn status
       run: sudo systemctl status gunicorn
     - name: Check Django logs with full traceback
