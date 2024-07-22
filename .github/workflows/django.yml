@@ -18,15 +18,32 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install gunicorn
-        pip install django-storages
+    - name: Check Django settings
+      run: |
+        grep "INSTALLED_APPS" CEBackend/settings.py
+        grep "storages" CEBackend/settings.py
     - name: Run migrations
       run: python manage.py migrate
     - name: Restart Django application
       run: |
         sudo systemctl daemon-reload
         sudo systemctl restart gunicorn
-        sudo systemctl status gunicorn
-    - name: Test Django API
+    - name: Check Gunicorn status
+      run: sudo systemctl status gunicorn
+    - name: Check Django logs
+      run: sudo journalctl -u gunicorn -n 50 --no-pager
+    - name: Wait for application to start
       run: |
-        sleep 5
-        curl http://127.0.0.1:8000/api/
+        for i in {1..12}
+        do
+          if nc -z 127.0.0.1 8000; then
+            echo "Application is running"
+            exit 0
+          fi
+          echo "Waiting for application to start..."
+          sleep 5
+        done
+        echo "Application failed to start"
+        exit 1
+    - name: Test Django API
+      run: curl http://127.0.0.1:8000/api/
