@@ -12,11 +12,15 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.x'
-    - name: Display Python version
-      run: python --version
-    - name: Display pip version
-      run: pip --version
+        python-version: '3.10'
+    - name: Display Python version and path
+      run: |
+        python --version
+        which python
+    - name: Display pip version and path
+      run: |
+        pip --version
+        which pip
     - name: Display requirements.txt content
       run: cat requirements.txt
     - name: Install dependencies
@@ -28,8 +32,16 @@ jobs:
       run: pip list
     - name: Check Django settings
       run: |
-        grep "INSTALLED_APPS" CEBackend/settings.py
-        grep "storages" CEBackend/settings.py
+        echo "INSTALLED_APPS contents:"
+        grep -A 20 "INSTALLED_APPS" CEBackend/settings.py
+    - name: Check for custom PYTHONPATH
+      run: echo $PYTHONPATH
+    - name: Verify Gunicorn configuration
+      run: cat /etc/systemd/system/gunicorn.service
+    - name: Run Django check
+      run: python manage.py check
+    - name: Attempt to import storages
+      run: python -c "import storages; print(storages.__file__)"
     - name: Run migrations
       run: python manage.py migrate
     - name: Restart Django application
@@ -38,8 +50,8 @@ jobs:
         sudo systemctl restart gunicorn
     - name: Check Gunicorn status
       run: sudo systemctl status gunicorn
-    - name: Check Django logs
-      run: sudo journalctl -u gunicorn -n 50 --no-pager
+    - name: Check Django logs with full traceback
+      run: sudo journalctl -u gunicorn -n 100 --no-pager
     - name: Wait for application to start
       run: |
         for i in {1..12}
