@@ -34,14 +34,18 @@ jobs:
       run: |
         echo "INSTALLED_APPS contents:"
         grep -A 20 "INSTALLED_APPS" CEBackend/settings.py
+        echo "AWS settings:"
+        grep -i "aws" CEBackend/settings.py
     - name: Check for custom PYTHONPATH
       run: echo $PYTHONPATH
     - name: Verify Gunicorn configuration
       run: cat /etc/systemd/system/gunicorn.service
     - name: Run Django check
       run: python manage.py check
-    - name: Attempt to import storages
-      run: python -c "import storages; print(storages.__file__)"
+    - name: Attempt to import required modules
+      run: |
+        python -c "import storages; print(storages.__file__)"
+        python -c "import boto3; print(boto3.__file__)"
     - name: Run migrations
       run: python manage.py migrate
     - name: Restart Django application
