@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import BusinessInfo, ClassesMain, Users, SubClasses, Reviews
+from .models import BusinessInfo, ClassesMain, Users, SubClasses, Reviews, ClassImage
 
 class UserSerializer(serializers.ModelSerializer):
     name = serializers.SerializerMethodField()
@@ -23,9 +23,16 @@ class SubClassesSerializer(serializers.ModelSerializer):
         model = SubClasses
         fields = '__all__'
 
+class ClassImageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ClassImage
+        fields = ['imageId', 'image', 'createdAt']
+
 class ClassesMainSerializer(serializers.ModelSerializer):
+    classVideo = serializers.FileField(required=False)
     subclasses = SubClassesSerializer(many=True, read_only=True)
     reviews = ReviewSerializer(many=True, read_only=True)
+    images = ClassImageSerializer(many=True, read_only=True)
 
     class Meta:
         model = ClassesMain

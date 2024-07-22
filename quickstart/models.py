@@ -1,4 +1,5 @@
 from django.db import models
+from storages.backends.s3boto3 import S3Boto3Storage
 
 class BusinessInfo(models.Model):
     businessName = models.CharField(max_length=100)
@@ -18,20 +19,32 @@ class BusinessInfo(models.Model):
     class Meta:
         db_table = 'businessInfo'
 
+class ClassImage(models.Model):
+    imageId = models.AutoField(primary_key=True)
+    classId = models.ForeignKey('ClassesMain', related_name='images', on_delete=models.CASCADE)
+    image = models.ImageField(upload_to='class_images/', storage=S3Boto3Storage())
+    createdAt = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'classImages'
 
 class ClassesMain(models.Model):
     classId = models.AutoField(primary_key=True)
-    className = models.CharField(max_length=100)
-    classDescription = models.CharField(max_length=100, blank=True, null=True)
+    classImage = models.ImageField(upload_to='class_images/', storage=S3Boto3Storage(), blank=True, null=True)
+    classVideo = models.FileField(upload_to='class_videos/', storage=S3Boto3Storage(), blank=True, null=True)
+    className = models.CharField(max_length=50)
+    classDescription = models.CharField(max_length=2000, blank=True, null=True)
     classLocation = models.CharField(max_length=100)
+    classCoordinates = models.CharField(max_length=100)
     classRating = models.CharField(max_length=100)
+    classFeatures = models.CharField(max_length=1000)
     classPrice = models.IntegerField()
     classCategory = models.CharField(max_length=100)
     classFilterCategory = models.CharField(max_length=100)
     classFilterSubcategory = models.CharField(max_length=100)
     businessId = models.ForeignKey(BusinessInfo, models.DO_NOTHING, db_column='businessId', blank=True, null=True)
     classTotalReviews = models.IntegerField()
-    additionalInfo = models.CharField(max_length=100, blank=True, null=True)
+    additionalInfo = models.CharField(max_length=5000, blank=True, null=True)
     createdAt = models.DateTimeField()
 
     class Meta:

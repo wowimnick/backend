@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     'corsheaders',
     'rest_framework',
     'quickstart',
+    'storages',
 ]
 
 MIDDLEWARE = [
@@ -91,12 +92,25 @@ DATABASES = {
         'NAME': 'CEDB',
         'USER': 'admin',
         'PASSWORD': '%0Timberline',
-        'HOST': 'database-1.czutdql9jx70.us-east-2.rds.amazonaws.com',
+        'HOST': 'database-1.czutdql9jx70.us-east-2.rds.amazonaws.com', # 
         'PORT': '3306',
     }
 }
 
 GOOGLE_MAPS_API_KEY = 'AIzaSyAwQpma98jxsA0Hbl1gKMrX-5WpVI7sdMQ'
+AWS_ACCESS_KEY_ID = 'AKIAWWFPKBRYUKKAUCTD'
+AWS_SECRET_ACCESS_KEY = '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'
+AWS_STORAGE_BUCKET_NAME = 'classeasily'
+AWS_S3_CUSTOM_DOMAIN = f'{AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com'
+AWS_S3_OBJECT_PARAMETERS = {
+    'CacheControl': 'max-age=86400',
+}
+AWS_DEFAULT_ACL = 'public-read'
+AWS_S3_SIGNATURE_VERSION = 's3v4'
+AWS_S3_ADDRESSING_STYLE = 'virtual'
+
+DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+STATICFILES_STORAGE = 'storages.backends.s3boto3.S3StaticStorage'
 
 # Password validation
 # https://docs.djangoproject.com/en/4.1/ref/settings/#auth-password-validators
