@@ -10,6 +10,11 @@ class UserSerializer(serializers.ModelSerializer):
 
     def get_name(self, obj):
         return f"{obj.firstName} {obj.lastName}"
+    
+class BusinessInfoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BusinessInfo
+        fields = '__all__'
 
 class ReviewSerializer(serializers.ModelSerializer):
     userId = UserSerializer(read_only=True)

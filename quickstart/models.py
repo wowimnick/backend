@@ -4,6 +4,7 @@ from storages.backends.s3boto3 import S3Boto3Storage
 class BusinessInfo(models.Model):
     businessName = models.CharField(max_length=100)
     businessId = models.AutoField(primary_key=True)
+    businessImage = models.ImageField(upload_to='business_images/', storage=S3Boto3Storage(), blank=True, null=True)
     businessType = models.CharField(max_length=100)
     businessAddress = models.CharField(max_length=100)
     businessDescription = models.CharField(max_length=100, blank=True, null=True)
@@ -15,6 +16,13 @@ class BusinessInfo(models.Model):
     businessDefaultCancellation = models.CharField(max_length=100, blank=True, null=True)
     userId = models.ForeignKey('Users', models.DO_NOTHING, db_column='userId', blank=True, null=True)
     businessZipCode = models.CharField(max_length=100)
+    totalReviews = models.IntegerField(default=0)
+
+    def update_total_reviews(self):
+        self.totalReviews = Reviews.objects.filter(
+            classId__businessId=self
+        ).count()
+        self.save()
 
     class Meta:
         db_table = 'businessInfo'
@@ -30,8 +38,6 @@ class ClassImage(models.Model):
 
 class ClassesMain(models.Model):
     classId = models.AutoField(primary_key=True)
-    classImage = models.ImageField(upload_to='class_images/', storage=S3Boto3Storage(), blank=True, null=True)
-    classVideo = models.FileField(upload_to='class_videos/', storage=S3Boto3Storage(), blank=True, null=True)
     className = models.CharField(max_length=50)
     classDescription = models.CharField(max_length=2000, blank=True, null=True)
     classLocation = models.CharField(max_length=100)
@@ -81,6 +87,11 @@ class Reviews(models.Model):
     comment = models.TextField(blank=True, null=True)
     createdAt = models.DateTimeField()
 
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        if self.classId and self.classId.businessId:
+            self.classId.businessId.update_total_reviews()
+
     class Meta:
         db_table = 'reviews'
 
@@ -102,6 +113,7 @@ class SubClasses(models.Model):
     classId = models.ForeignKey(ClassesMain, models.DO_NOTHING, db_column='classId', blank=True, null=True)
     subclassTitle = models.CharField(max_length=100)
     subclassDescription = models.CharField(max_length=100, blank=True, null=True)
+    subclassImage = models.ImageField(upload_to='subclass_images/', storage=S3Boto3Storage(), blank=True, null=True)
     subclassTags = models.CharField(max_length=100)
     subclassType = models.CharField(max_length=100)
     subclassLevel = models.CharField(max_length=100)
