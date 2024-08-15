@@ -118,8 +118,8 @@ class BusinessInfoDetail(generics.RetrieveUpdateDestroyAPIView):
         data = serializer.data
         # Add user info to the response
         user_data = {
-            'firstName': instance.userId.firstName,
-            'lastName': instance.userId.lastName,
+            'first_name': instance.userId.first_name,
+            'last_name': instance.userId.last_name,
             'email': instance.userId.email,
         }
         data['user'] = user_data

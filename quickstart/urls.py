@@ -1,7 +1,9 @@
-from django.urls import path
+from django.urls import path, include
 from .views import BusinessInfoDetail, BusinessInfoViewSet, ClassList, ClassDetail, ClassReviews, get_google_maps_api_key, ClassImageList, ClassImageDetail, SubClassesViewSet, SubClassDetail
 
 urlpatterns = [
+    path('auth/', include('dj_rest_auth.urls')),
+    path('auth/registration/', include('dj_rest_auth.registration.urls')),
     path('classes/', ClassList.as_view(), name='class-list'),
     path('classes/<int:pk>/', ClassDetail.as_view(), name='class-detail'),
     path('classes/<int:pk>/reviews/', ClassReviews.as_view(), name='class-reviews'),

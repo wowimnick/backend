@@ -1,5 +1,27 @@
 from django.db import models
 from storages.backends.s3boto3 import S3Boto3Storage
+from django.contrib.auth.models import AbstractUser
+
+class CustomUser(AbstractUser):
+    userId = models.AutoField(primary_key=True)
+    email = models.EmailField(unique=True)
+    birthDate = models.DateField(null=True, blank=True)
+    bio = models.TextField(blank=True)
+    phoneNumber = models.CharField(max_length=100, blank=True, null=True)
+    country = models.CharField(max_length=100)
+    city = models.CharField(max_length=100)
+    state = models.CharField(max_length=100)
+    address = models.CharField(max_length=255)
+    zipCode = models.CharField(max_length=100)
+    avatar = models.ImageField(upload_to='avatars/', null=True, blank=True)
+    createdAt = models.DateTimeField(auto_now_add=True)
+    
+    USERNAME_FIELD = 'email'
+    REQUIRED_FIELDS = ['username']
+
+    def __str__(self):
+        return self.email
+    
 
 class BusinessInfo(models.Model):
     businessName = models.CharField(max_length=100)
@@ -12,9 +34,9 @@ class BusinessInfo(models.Model):
     businessState = models.CharField(max_length=100, blank=True, null=True)
     businessPhoneNumber = models.CharField(max_length=100)
     businessEmail = models.CharField(max_length=100, blank=True, null=True)
-    createdAt = models.DateTimeField()
+    createdAt = models.DateTimeField(auto_now_add=True)
     businessDefaultCancellation = models.CharField(max_length=100, blank=True, null=True)
-    userId = models.ForeignKey('Users', models.DO_NOTHING, db_column='userId', blank=True, null=True)
+    userId = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='businesses')
     businessZipCode = models.CharField(max_length=100)
     totalReviews = models.IntegerField(default=0)
 
@@ -59,10 +81,10 @@ class ClassesMain(models.Model):
 
 class Enrollments(models.Model):
     enrollmentId = models.AutoField(primary_key=True)
-    userId = models.ForeignKey('Users', models.DO_NOTHING, db_column='userId', blank=True, null=True)
+    userId = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='enrollments')
     scheduleId = models.ForeignKey('Schedules', models.DO_NOTHING, db_column='scheduleId', blank=True, null=True)
     status = models.CharField(max_length=100)
-    createdAt = models.DateTimeField()
+    createdAt = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = 'enrollments'
@@ -70,9 +92,9 @@ class Enrollments(models.Model):
 
 class Favorites(models.Model):
     favoriteId = models.AutoField(primary_key=True)
-    userId = models.ForeignKey('Users', models.DO_NOTHING, db_column='userId', blank=True, null=True)
+    userId = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='favorites')
     classId = models.ForeignKey(ClassesMain, models.DO_NOTHING, db_column='classId', blank=True, null=True)
-    createdAt = models.DateTimeField()
+    createdAt = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = 'favorites'
@@ -80,12 +102,12 @@ class Favorites(models.Model):
 
 class Reviews(models.Model):
     reviewId = models.AutoField(primary_key=True)
-    userId = models.ForeignKey('Users', models.DO_NOTHING, db_column='userId', blank=True, null=True)
+    userId = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='reviews')
     businessId = models.ForeignKey(BusinessInfo, models.DO_NOTHING, db_column='businessId', blank=True, null=True)
     classId = models.ForeignKey(ClassesMain, models.DO_NOTHING, db_column='classId', blank=True, null=True)
     rating = models.IntegerField()
     comment = models.TextField(blank=True, null=True)
-    createdAt = models.DateTimeField()
+    createdAt = models.DateTimeField(auto_now_add=True)
 
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
@@ -126,18 +148,3 @@ class SubClasses(models.Model):
     class Meta:
         db_table = 'subClasses'
 
-
-class Users(models.Model):
-    userId = models.AutoField(primary_key=True)
-    firstName = models.CharField(max_length=100)
-    lastName = models.CharField(max_length=100)
-    email = models.CharField(unique=True, max_length=100)
-    password = models.CharField(max_length=100)
-    phoneNumber = models.CharField(max_length=100, blank=True, null=True)
-    city = models.CharField(max_length=100)
-    state = models.CharField(max_length=100)
-    zipCode = models.CharField(max_length=100)
-    createdAt = models.DateTimeField()
-
-    class Meta:
-        db_table = 'users'

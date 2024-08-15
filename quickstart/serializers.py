@@ -1,15 +1,45 @@
 from rest_framework import serializers
-from .models import BusinessInfo, ClassesMain, Users, SubClasses, Reviews, ClassImage
+from dj_rest_auth.registration.serializers import RegisterSerializer
+from .models import BusinessInfo, ClassesMain, CustomUser, SubClasses, Reviews, ClassImage, CustomUser
+
+class CustomRegisterSerializer(RegisterSerializer):
+    first_name = serializers.CharField(required=True)
+    last_name = serializers.CharField(required=True)
+    birth_date = serializers.DateField(required=False)
+    phone_number = serializers.CharField(required=False)
+    bio = serializers.CharField(required=False)
+    country = serializers.CharField(required=False)
+    city = serializers.CharField(required=False)
+    address = serializers.CharField(required=False)
+    avatar = serializers.ImageField(required=False)
+
+    def custom_signup(self, request, user):
+        user.first_name = self.validated_data.get('first_name', '') # type: ignore
+        user.last_name = self.validated_data.get('last_name', '') # type: ignore
+        user.birth_date = self.validated_data.get('birth_date', None) # type: ignore
+        user.phone_number = self.validated_data.get('phone_number', '') # type: ignore
+        user.bio = self.validated_data.get('bio', '') # type: ignore
+        user.country = self.validated_data.get('country', '') # type: ignore
+        user.city = self.validated_data.get('city', '') # type: ignore
+        user.address = self.validated_data.get('address', '') # type: ignore
+        user.avatar = self.validated_data.get('avatar', None) # type: ignore
+        user.save()
+
+class CustomUserDetailsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CustomUser
+        fields = ('id', 'email', 'first_name', 'last_name', 'birth_date', 'phone_number', 'bio', 'country', 'city', 'address', 'avatar')
+        read_only_fields = ('email',)
 
 class UserSerializer(serializers.ModelSerializer):
     name = serializers.SerializerMethodField()
 
     class Meta:
-        model = Users
+        model = CustomUser
         fields = ['userId', 'name']
 
     def get_name(self, obj):
-        return f"{obj.firstName} {obj.lastName}"
+        return f"{obj.first_name} {obj.last_name}"
     
 class BusinessInfoSerializer(serializers.ModelSerializer):
     class Meta:
