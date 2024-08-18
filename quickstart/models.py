@@ -5,15 +5,15 @@ from django.contrib.auth.models import AbstractUser
 class CustomUser(AbstractUser):
     userId = models.AutoField(primary_key=True)
     email = models.EmailField(unique=True)
-    birthDate = models.DateField(null=True, blank=True)
+    birth_date = models.DateField(null=True, blank=True)
     bio = models.TextField(blank=True)
-    phoneNumber = models.CharField(max_length=100, blank=True, null=True)
+    phone_number = models.CharField(max_length=100, blank=True, null=True)
     country = models.CharField(max_length=100)
     city = models.CharField(max_length=100)
     state = models.CharField(max_length=100)
     address = models.CharField(max_length=255)
     zipCode = models.CharField(max_length=100)
-    avatar = models.ImageField(upload_to='avatars/', null=True, blank=True)
+    avatar = models.ImageField(upload_to='avatars/', storage=S3Boto3Storage(), null=True, blank=True)
     createdAt = models.DateTimeField(auto_now_add=True)
     
     USERNAME_FIELD = 'email'
@@ -22,6 +22,11 @@ class CustomUser(AbstractUser):
     def __str__(self):
         return self.email
     
+    def get_avatar_url(self):
+        if self.avatar:
+            return self.avatar.url
+        return None
+        
 
 class BusinessInfo(models.Model):
     businessName = models.CharField(max_length=100)

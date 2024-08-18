@@ -1,9 +1,17 @@
-from django.urls import path, include
-from .views import BusinessInfoDetail, BusinessInfoViewSet, ClassList, ClassDetail, ClassReviews, get_google_maps_api_key, ClassImageList, ClassImageDetail, SubClassesViewSet, SubClassDetail
+from django.urls import path, include, re_path
+from .views import BusinessInfoDetail, BusinessInfoViewSet, ClassList, ClassDetail, ClassReviews, CustomLoginView, CustomTokenObtainPairView, get_google_maps_api_key, ClassImageList, ClassImageDetail, SubClassesViewSet, SubClassDetail, CustomRegisterView
+from allauth.account.views import confirm_email
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from django.views.generic import TemplateView
 
 urlpatterns = [
     path('auth/', include('dj_rest_auth.urls')),
-    path('auth/registration/', include('dj_rest_auth.registration.urls')),
+    path('login/', CustomLoginView.as_view(), name='token_obtain_pair'),
+    path('token/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
+    path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    path('auth/registration/', CustomRegisterView.as_view(), name='rest_register'),
+    re_path(r'^account-confirm-email/', TemplateView.as_view(template_name="email_confirmation.html"), name='account_email_verification_sent'),
+    re_path(r'^account-confirm-email/(?P<key>[-:\w]+)/$', confirm_email, name='account_confirm_email'),
     path('classes/', ClassList.as_view(), name='class-list'),
     path('classes/<int:pk>/', ClassDetail.as_view(), name='class-detail'),
     path('classes/<int:pk>/reviews/', ClassReviews.as_view(), name='class-reviews'),

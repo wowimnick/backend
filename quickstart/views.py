@@ -1,15 +1,58 @@
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, viewsets
 from .models import BusinessInfo, ClassesMain, Reviews, ClassImage, SubClasses
-from .serializers import BusinessInfoSerializer, ClassesMainSerializer, ReviewSerializer, ClassImageSerializer, SubClassesSerializer
+from .serializers import BusinessInfoSerializer, ClassesMainSerializer, ReviewSerializer, ClassImageSerializer, SubClassesSerializer, CustomRegisterSerializer, CustomUserDetailsSerializer
 from django.http import JsonResponse
+from django.db.models import Exists, OuterRef
 from rest_framework.response import Response
+from dj_rest_auth.registration.views import RegisterView
 from django.conf import settings
+from rest_framework_simplejwt.views import TokenObtainPairView
+from .serializers import CustomTokenObtainPairSerializer
+from rest_framework import status
 from django.views.decorators.http import require_GET
+from dj_rest_auth.views import LoginView
+import logging
+
+logger = logging.getLogger(__name__)
+logger.debug("views module loaded")
+
+class CustomTokenObtainPairView(TokenObtainPairView):
+    serializer_class = CustomTokenObtainPairSerializer
+
+class CustomLoginView(TokenObtainPairView):
+    serializer_class = CustomTokenObtainPairSerializer
+
+class CustomRegisterView(RegisterView):
+    serializer_class = CustomRegisterSerializer
+
+    def post(self, request, *args, **kwargs):
+        logger.debug(f"Registration request data: {request.data}")
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            logger.error(f"Serializer errors: {serializer.errors}")
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return super().post(request, *args, **kwargs)
 
 class ClassList(generics.ListCreateAPIView):
-    queryset = ClassesMain.objects.all()
     serializer_class = ClassesMainSerializer
+
+    def get_queryset(self):
+        queryset = ClassesMain.objects.all()
+        
+        private = self.request.query_params.get('private', None)
+        group = self.request.query_params.get('group', None)
+
+        if private == 'true':
+            queryset = queryset.filter(
+                Exists(SubClasses.objects.filter(classId=OuterRef('pk'), subclassType='Private'))
+            )
+        elif group == 'true':
+            queryset = queryset.filter(
+                Exists(SubClasses.objects.filter(classId=OuterRef('pk'), subclassType='Group'))
+            )
+
+        return queryset
 
     def perform_create(self, serializer):
         instance = serializer.save(
