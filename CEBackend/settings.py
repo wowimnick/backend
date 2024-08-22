@@ -216,7 +216,7 @@ DATABASES = {
         'NAME': 'CEDB',
         'USER': 'admin',
         'PASSWORD': '%0Timberline',
-        'HOST': 'database-1.czutdql9jx70.us-east-2.rds.amazonaws.com', # localhost 
+        'HOST': 'localhost', #  database-1.czutdql9jx70.us-east-2.rds.amazonaws.com
         'PORT': '3306',
     }
 }

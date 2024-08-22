@@ -23,6 +23,12 @@ class CustomTokenObtainPairView(TokenObtainPairView):
 class CustomLoginView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
 
+class UserUpdateView(generics.UpdateAPIView):
+    serializer_class = CustomUserDetailsSerializer
+
+    def get_object(self):
+        return self.request.user
+
 class CustomRegisterView(RegisterView):
     serializer_class = CustomRegisterSerializer
 

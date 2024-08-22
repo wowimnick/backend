@@ -24,7 +24,7 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = CustomUser
-        fields = ('userId', 'email', 'first_name', 'last_name', 'birth_date', 'phone_number', 'bio', 'country', 'city', 'address', 'avatar_url')
+        fields = ('userId', 'email', 'first_name', 'last_name', 'birth_date', 'phone_number', 'bio', 'country', 'state', 'city', 'address', 'zipCode', 'avatar_url')
         read_only_fields = ('userId', 'email', 'avatar_url')
 
     def get_avatar_url(self, obj):
@@ -56,6 +56,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             'bio': user.bio,
             'phone_number': user.phone_number,
             'country': user.country,
+            'state': user.state,
             'city': user.city,
             'state': user.state,
             'address': user.address,
@@ -65,14 +66,16 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         return data
 
 class CustomRegisterSerializer(RegisterSerializer):
-    first_name = serializers.CharField(required=False)
-    last_name = serializers.CharField(required=False)
-    birth_date = serializers.DateField(required=False)  
-    phone_number = serializers.CharField(required=False) 
+    first_name = serializers.CharField(required=True)
+    last_name = serializers.CharField(required=True)
+    birth_date = serializers.DateField(required=True)  
+    phone_number = serializers.CharField(required=True) 
     bio = serializers.CharField(required=False)
-    country = serializers.CharField(required=False)
-    city = serializers.CharField(required=False)
-    address = serializers.CharField(required=False)
+    country = serializers.CharField(required=True)
+    state = serializers.CharField(required=True)
+    city = serializers.CharField(required=True)
+    address = serializers.CharField(required=True)
+    zipCode = serializers.CharField(required=True)
     avatar = serializers.ImageField(required=False)
 
     def __init__(self, *args, **kwargs):
@@ -99,8 +102,10 @@ class CustomRegisterSerializer(RegisterSerializer):
             'phone_number': self.validated_data.get('phone_number', ''),
             'bio': self.validated_data.get('bio', ''),
             'country': self.validated_data.get('country', ''),
+            'state': self.validated_data.get('state', ''),
             'city': self.validated_data.get('city', ''),
             'address': self.validated_data.get('address', ''),
+            'zipCode': self.validated_data.get('zipCode', ''),
             'avatar': self.validated_data.get('avatar', None)
         })
         logger.debug(f"Cleaned data: {data}")
@@ -116,8 +121,10 @@ class CustomRegisterSerializer(RegisterSerializer):
         user.phone_number = self.validated_data.get('phone_number')
         user.bio = self.validated_data.get('bio')
         user.country = self.validated_data.get('country')
+        user.state = self.validated_data.get('state')
         user.city = self.validated_data.get('city')
         user.address = self.validated_data.get('address')
+        user.zipCode = self.validated_data.get('zipCode')
         user.avatar = self.validated_data.get('avatar')
         user.save()
         logger.debug(f"User saved: {user}")
@@ -134,8 +141,10 @@ class CustomRegisterSerializer(RegisterSerializer):
             phone_number=validated_data.get('phone_number', ''),
             bio=validated_data.get('bio', ''),
             country=validated_data.get('country', ''),
+            state=validated_data.get('state', ''),
             city=validated_data.get('city', ''),
             address=validated_data.get('address', ''),
+            zipCode=validated_data.get('zipCode', ''),
             avatar=validated_data.get('avatar')
         )
         return user
