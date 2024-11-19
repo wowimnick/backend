@@ -1,9 +1,9 @@
 from django.urls import path, include
 from .views import (
     BookingStatusViewSet, BookingViewSet, BusinessInfoDetail, BusinessInfoViewSet, ClassList, ClassDetail, ClassReviews,
-    CustomLoginView, CustomTokenObtainPairView, CustomTokenRefreshView, LogoutView, ScheduleViewSet, StudentViewSet, UserUpdateView, get_google_maps_api_key,
+    CustomLoginView, CustomTokenObtainPairView, CustomTokenRefreshView, LogoutView, ScheduleViewSet, StudentViewSet, UserRoleView, UserUpdateView, get_google_maps_api_key,
     ClassImageList, ClassImageDetail, SubClassesViewSet, SubClassDetail, CustomRegisterView,
-    InstructorViewSet, RoleViewSet
+    InstructorViewSet, RoleViewSet, search_classes_by_location
 )
 from allauth.account.views import confirm_email
 from rest_framework_simplejwt.views import TokenRefreshView
@@ -12,6 +12,7 @@ from django.views.generic import TemplateView
 urlpatterns = [
     path('auth/', include('dj_rest_auth.urls')),
     path('login/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
+    path('user/role/', UserRoleView.as_view(), name='user-role'),
     path('token/refresh/', CustomTokenRefreshView.as_view(), name='token_refresh'),
     path('logout/', LogoutView.as_view(), name='logout'),
     path('user/update/', UserUpdateView.as_view(), name='user-update'),
@@ -20,6 +21,7 @@ urlpatterns = [
     path('account-confirm-email/', TemplateView.as_view(template_name="email_confirmation.html"), name='account_email_verification_sent'),
     path('account-confirm-email/<str:key>/', confirm_email, name='account_confirm_email'),
     path('classes/', ClassList.as_view(), name='class-list'),
+    path('classes/search/', search_classes_by_location, name='class-search'),
     path('classes/<int:pk>/', ClassDetail.as_view(), name='class-detail'),
     path('classes/<int:pk>/reviews/', ClassReviews.as_view(), name='class-reviews'),
     path('classes/<int:pk>/subclasses/', SubClassesViewSet.as_view(), name='class-subclasses'),

@@ -3,11 +3,18 @@ from django.http import JsonResponse
 from django.views.decorators.http import require_GET
 from django.utils.dateparse import parse_date
 from django.db.models import Exists, OuterRef
+from django.db import connection
 from django.conf import settings
+from django.utils import timezone
+from datetime import datetime, timedelta
+from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderTimedOut
+import math
+
 
 from rest_framework import generics, viewsets, status, permissions, filters
 from rest_framework.response import Response
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -22,7 +29,7 @@ from .models import (
 )
 from .serializers import (
     AttendanceSerializer, BookingSerializer, BookingStatusSerializer,
-    BusinessInfoSerializer, ClassesMainSerializer, PerformanceSerializer,
+    BusinessInfoSerializer, BusinessStatsSerializer, ClassesMainSerializer, PerformanceSerializer,
     ReviewSerializer, ClassImageSerializer, ScheduleSerializer,
     StudentSerializer, SubClassesSerializer, CustomRegisterSerializer,
     CustomUserDetailsSerializer, InstructorSerializer, EducationSerializer,
@@ -32,9 +39,21 @@ from .serializers import (
 )
 
 import logging
+from rest_framework.permissions import IsAuthenticated
+from rest_framework_simplejwt.authentication import JWTAuthentication
 
 logger = logging.getLogger(__name__)
-logger.debug("views module loaded")
+
+class UserRoleView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            role = request.user.role.name if request.user.role else None
+            return Response({'role': role})
+        except Exception as e:
+            return Response({'error': str(e)}, status=400)
 
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
@@ -159,6 +178,107 @@ class CustomRegisterView(RegisterView):
             logger.error(f"Serializer errors: {serializer.errors}")
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         return super().post(request, *args, **kwargs)
+    
+def haversine_distance(lat1, lon1, lat2, lon2):
+    """
+    Calculate the distance between two points on earth using Haversine formula
+    Returns distance in kilometers
+    """
+    R = 6371  # Earth's radius in kilometers
+
+    # Convert latitude and longitude to radians
+    lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+    
+    # Haversine formula
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+    c = 2 * math.asin(math.sqrt(a))
+    
+    return R * c
+
+@api_view(['GET'])
+def search_classes_by_location(request):
+    """
+    Search for classes based on coordinates within a radius.
+    Required parameters: lat, lng
+    Optional parameter: radius (in km, defaults to 10)
+    """
+    try:
+        lat = request.GET.get('lat')
+        lng = request.GET.get('lng')
+        radius = float(request.GET.get('radius', 100))  # Default 10km radius
+        
+        if not lat or not lng:
+            return Response({
+                "error": "Missing coordinates",
+                "message": "Both latitude and longitude are required"
+            }, status=400)
+            
+        search_lat = float(lat)
+        search_lng = float(lng)
+
+        # Get all classes
+        classes = ClassesMain.objects.filter(isActive=True)
+        
+        # Filter and add distance
+        classes_with_distance = []
+        for class_obj in classes:
+            try:
+                if not class_obj.classCoordinates:
+                    continue
+                    
+                class_lat, class_lng = map(
+                    float, 
+                    class_obj.classCoordinates.split(',')
+                )
+                
+                distance = haversine_distance(
+                    search_lat, search_lng,
+                    class_lat, class_lng
+                )
+                
+                if distance <= radius:
+                    classes_with_distance.append((class_obj, distance))
+                        
+            except (ValueError, AttributeError) as e:
+                logger.warning(f"Error processing class coordinates for class {class_obj.classId}: {str(e)}")
+                continue
+
+        # Sort by distance
+        classes_with_distance.sort(key=lambda x: x[1])
+        
+        # Prepare response
+        serialized_classes = []
+        for class_obj, distance in classes_with_distance:
+            class_data = ClassesMainSerializer(class_obj).data
+            class_data['distance'] = round(distance, 2)
+            class_data['distance_text'] = (
+                f"{round(distance, 1)}km away" if distance >= 1 
+                else f"{round(distance * 1000)}m away"
+            )
+            serialized_classes.append(class_data)
+
+        return Response({
+            'results': serialized_classes,
+            'total': len(serialized_classes),
+            'search_coordinates': {
+                'lat': search_lat,
+                'lng': search_lng
+            }
+        })
+
+    except ValueError as e:
+        return Response({
+            "error": "Invalid coordinates",
+            "message": str(e)
+        }, status=400)
+    except Exception as e:
+        logger.error(f"Unexpected error in search_classes_by_location: {str(e)}")
+        return Response({
+            "error": "Server error",
+            "message": "An unexpected error occurred while processing your request"
+        }, status=500)
 
 class ClassList(generics.ListCreateAPIView):
     serializer_class = ClassesMainSerializer
@@ -264,6 +384,73 @@ class SubClassDetail(generics.RetrieveUpdateDestroyAPIView):
 
         return Response(serializer.data)
     
+class BusinessViewSet(viewsets.ModelViewSet):
+    serializer_class = BusinessStatsSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        # Only return businesses owned by the current user
+        return BusinessInfo.objects.filter(owner=self.request.user)
+
+    @action(detail=True, methods=['get'])
+    def dashboard_stats(self, request, pk=None):
+        business = self.get_object()
+        serializer = BusinessStatsSerializer(business)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['get'])
+    def revenue_over_time(self, request, pk=None):
+        business = self.get_object()
+        timeframe = request.query_params.get('timeframe', 'monthly')
+        
+        # Get revenue data grouped by the specified timeframe
+        bookings = Booking.objects.filter(
+            class_instance__businessId=business,
+            status__name='Completed'
+        )
+
+        if timeframe == 'daily':
+            days = 30
+            start_date = timezone.now() - timedelta(days=days)
+            revenue_data = bookings.filter(
+                booking_date__gte=start_date
+            ).values('booking_date').annotate(
+                revenue=Sum('class_instance__classPrice')
+            ).order_by('booking_date')
+        else:  # monthly
+            months = 12
+            start_date = timezone.now() - timedelta(days=months * 30)
+            revenue_data = bookings.filter(
+                booking_date__gte=start_date
+            ).values('booking_date__month').annotate(
+                revenue=Sum('class_instance__classPrice')
+            ).order_by('booking_date__month')
+
+        return Response(revenue_data)
+
+    @action(detail=True, methods=['get'])
+    def class_performance(self, request, pk=None):
+        business = self.get_object()
+        
+        # Get performance metrics for each class
+        classes = ClassesMain.objects.filter(
+            businessId=business
+        ).annotate(
+            booking_count=Count('booking'),
+            revenue=Sum('classPrice'),
+            review_count=Count('reviews'),
+            average_rating=Avg('reviews__rating')
+        )
+
+        return Response({
+            'class_id': class_obj.classId,
+            'class_name': class_obj.className,
+            'booking_count': class_obj.booking_count,
+            'revenue': class_obj.revenue,
+            'review_count': class_obj.review_count,
+            'average_rating': class_obj.average_rating
+        } for class_obj in classes)
+    
 class BusinessInfoDetail(generics.RetrieveUpdateDestroyAPIView):
     queryset = BusinessInfo.objects.all()
     serializer_class = BusinessInfoSerializer
@@ -278,13 +465,6 @@ class BusinessInfoDetail(generics.RetrieveUpdateDestroyAPIView):
         instance = self.get_object()
         serializer = self.get_serializer(instance)
         data = serializer.data
-        # Add user info to the response
-        user_data = {
-            'first_name': instance.userId.first_name,
-            'last_name': instance.userId.last_name,
-            'email': instance.userId.email,
-        }
-        data['user'] = user_data
         
         # Add related classes
         related_classes = ClassesMain.objects.filter(businessId=instance)

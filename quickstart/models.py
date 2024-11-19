@@ -16,7 +16,7 @@ class CustomUser(AbstractUser):
     email = models.EmailField(unique=True)
     birth_date = models.DateField(null=True, blank=True)
     bio = models.TextField(blank=True)
-    phone_number = models.CharField(max_length=100, blank=True, null=True)
+    phone_number = models.CharField(max_length=100, blank=True)
     country = models.CharField(max_length=100)
     city = models.CharField(max_length=100)
     state = models.CharField(max_length=100)
@@ -44,19 +44,20 @@ class CustomUser(AbstractUser):
 class BusinessInfo(models.Model):
     businessName = models.CharField(max_length=100)
     businessId = models.AutoField(primary_key=True)
+    owner = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='owned_businesses')
     businessImage = models.ImageField(upload_to='business_images/', storage=S3Boto3Storage(), blank=True, null=True)
     businessType = models.CharField(max_length=100)
     businessAddress = models.CharField(max_length=100)
-    businessDescription = models.CharField(max_length=100, blank=True, null=True)
+    businessDescription = models.CharField(max_length=500, blank=True, null=True)
     businessCity = models.CharField(max_length=100)
     businessState = models.CharField(max_length=100, blank=True, null=True)
     businessPhoneNumber = models.CharField(max_length=100)
     businessEmail = models.CharField(max_length=100, blank=True, null=True)
     createdAt = models.DateTimeField(auto_now_add=True)
     businessDefaultCancellation = models.CharField(max_length=100, blank=True, null=True)
-    userId = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='businesses')
     businessZipCode = models.CharField(max_length=100)
     totalReviews = models.IntegerField(default=0)
+    isActive = models.BooleanField(default=True)
 
     def update_total_reviews(self):
         self.totalReviews = Reviews.objects.filter(
@@ -66,11 +67,17 @@ class BusinessInfo(models.Model):
 
     class Meta:
         db_table = 'businessInfo'
+        verbose_name_plural = 'Business Information'
 
 class Instructor(models.Model):
     user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='instructor_profile')
+    business = models.ForeignKey(BusinessInfo, on_delete=models.CASCADE, related_name='instructors')
     specialization = models.CharField(max_length=100)
-    employment_type = models.CharField(max_length=20, choices=[('full-time', 'Full-time'), ('part-time', 'Part-time'), ('contract', 'Contract')])
+    employment_type = models.CharField(max_length=20, choices=[
+        ('full-time', 'Full-time'),
+        ('part-time', 'Part-time'),
+        ('contract', 'Contract')
+    ])
     department = models.CharField(max_length=100)
     hire_date = models.DateField()
     active_classes = models.IntegerField(default=0)
@@ -207,23 +214,26 @@ class ClassImage(models.Model):
 
 class ClassesMain(models.Model):
     classId = models.AutoField(primary_key=True)
+    businessId = models.ForeignKey(BusinessInfo, on_delete=models.CASCADE, related_name='classes')
+    instructor = models.ForeignKey(Instructor, on_delete=models.SET_NULL, null=True, related_name='classes')
     className = models.CharField(max_length=50)
     classDescription = models.CharField(max_length=2000, blank=True, null=True)
     classLocation = models.CharField(max_length=100)
     classCoordinates = models.CharField(max_length=100)
-    classRating = models.CharField(max_length=100)
+    classRating = models.DecimalField(max_digits=3, decimal_places=1, default=Decimal('0.0'))
     classFeatures = models.CharField(max_length=1000)
-    classPrice = models.IntegerField()
+    classPrice = models.DecimalField(max_digits=10, decimal_places=2)
     classCategory = models.CharField(max_length=100)
     classFilterCategory = models.CharField(max_length=100)
     classFilterSubcategory = models.CharField(max_length=100)
-    businessId = models.ForeignKey(BusinessInfo, models.DO_NOTHING, db_column='businessId', blank=True, null=True)
-    classTotalReviews = models.IntegerField()
-    additionalInfo = models.CharField(max_length=5000, blank=True, null=True)
-    createdAt = models.DateTimeField()
+    classTotalReviews = models.IntegerField(default=0)
+    isActive = models.BooleanField(default=True)
+    createdAt = models.DateTimeField(auto_now_add=True)
+    updatedAt = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = 'classesMain'
+        ordering = ['-createdAt']
 
 
 class Enrollments(models.Model):
