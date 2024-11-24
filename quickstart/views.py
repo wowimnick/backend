@@ -19,7 +19,11 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
-
+from rest_framework.response import Response
+from rest_framework.decorators import action
+from django.shortcuts import get_object_or_404
+from django.db.models import Q
+from rest_framework.exceptions import PermissionDenied
 from dj_rest_auth.registration.views import RegisterView
 
 from .models import (
@@ -50,10 +54,67 @@ class UserRoleView(APIView):
 
     def get(self, request):
         try:
+            # Get current user role
             role = request.user.role.name if request.user.role else None
-            return Response({'role': role})
+            
+            # Return role with hierarchy information
+            role_hierarchy = {
+                'Super Admin': 100,
+                'Admin': 90,
+                'Business Owner': 80,
+                'Manager': 70,
+                'Instructor': 60,
+                'Content Creator': 50,
+                'Student': 10,
+                'Guest': 0
+            }
+            
+            return Response({
+                'role': role,
+                'roleLevel': role_hierarchy.get(str(role) if role else '', 0),
+                'allowedRoles': [r for r, level in role_hierarchy.items() 
+                               if level <= role_hierarchy.get(str(role) if role else '', 0)]
+            })
+            
         except Exception as e:
-            return Response({'error': str(e)}, status=400)
+            return Response({
+                'error': str(e),
+                'role': None,
+                'roleLevel': 0,
+                'allowedRoles': []
+            }, status=400)
+        
+def check_user_role(user, allowed_roles):
+    """
+    Check if user has any of the allowed roles
+    
+    Args:
+        user: User object
+        allowed_roles: List of role names
+    Returns:
+        bool: True if user has any of the allowed roles
+    """
+    logger.debug(f"User: {user.role.name}")
+    return user.role and user.role.name in allowed_roles
+        
+class BaseUserDataPermission(permissions.BasePermission):
+    """
+    Base permission class for user-related data access
+    """
+    def has_permission(self, request, view):
+        return request.user and request.user.is_authenticated
+
+    def has_object_permission(self, request, view, obj):
+        # Admin users can access all records
+        if check_user_role(request.user, ['Admin', 'Super Admin']):
+            return True
+            
+        # Check if the object belongs to the requesting user
+        if hasattr(obj, 'user'):
+            return obj.user == request.user
+        if hasattr(obj, 'userId'):
+            return obj.userId == request.user
+        return False
 
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
@@ -389,7 +450,6 @@ class BusinessViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        # Only return businesses owned by the current user
         return BusinessInfo.objects.filter(owner=self.request.user)
 
     @action(detail=True, methods=['get'])
@@ -403,7 +463,6 @@ class BusinessViewSet(viewsets.ModelViewSet):
         business = self.get_object()
         timeframe = request.query_params.get('timeframe', 'monthly')
         
-        # Get revenue data grouped by the specified timeframe
         bookings = Booking.objects.filter(
             class_instance__businessId=business,
             status__name='Completed'
@@ -417,7 +476,7 @@ class BusinessViewSet(viewsets.ModelViewSet):
             ).values('booking_date').annotate(
                 revenue=Sum('class_instance__classPrice')
             ).order_by('booking_date')
-        else:  # monthly
+        else:
             months = 12
             start_date = timezone.now() - timedelta(days=months * 30)
             revenue_data = bookings.filter(
@@ -487,27 +546,45 @@ class BusinessInfoDetail(generics.RetrieveUpdateDestroyAPIView):
     
 class IsAdminUser(permissions.BasePermission):
     def has_permission(self, request, view):
-        return request.user and request.user.has_role('Admin') or request.user.has_role('SuperAdmin')
+        return request.user and check_user_role(request.user, ['Admin', 'Super Admin'])
 
 class IsBusinessOwner(permissions.BasePermission):
     def has_permission(self, request, view):
-        return request.user and (request.user.has_role('Business Owner') or request.user.has_role('Admin') or request.user.has_role('SuperAdmin'))
+        return request.user and check_user_role(
+            request.user, 
+            ['Business Owner', 'Admin', 'Super Admin']
+        )
 
 class IsManager(permissions.BasePermission):
     def has_permission(self, request, view):
-        return request.user and (request.user.has_role('Manager') or request.user.has_role('Business Owner') or request.user.has_role('Admin') or request.user.has_role('SuperAdmin'))
+        return request.user and check_user_role(
+            request.user,
+            ['Manager', 'Business Owner', 'Admin', 'Super Admin']
+        )
 
 class IsInstructor(permissions.BasePermission):
     def has_permission(self, request, view):
-        return request.user and (request.user.has_role('Instructor') or request.user.has_role('Content Creator') or request.user.has_role('Manager') or request.user.has_role('Business Owner') or request.user.has_role('Admin') or request.user.has_role('SuperAdmin'))
+        return request.user and check_user_role(
+            request.user,
+            ['Instructor', 'Content Creator', 'Manager', 'Business Owner', 'Admin', 'Super Admin']
+        )
 
-class InstructorViewSet(viewsets.ModelViewSet):
+class SecureInstructorViewSet(viewsets.ModelViewSet):
     queryset = Instructor.objects.all()
     serializer_class = InstructorSerializer
+    permission_classes = [BaseUserDataPermission]
 
-    def create(self, request, *args, **kwargs):
-        logger.info(f"Received create request with data: {request.data}")
-        return super().create(request, *args, **kwargs)
+    def get_queryset(self):
+        user = self.request.user
+        if user.has_role('Admin') or user.has_role('Super Admin'):
+            return Instructor.objects.all()
+        elif user.has_role('Business Owner'):
+            return Instructor.objects.filter(business__owner=user)
+        elif user.has_role('Manager'):
+            return Instructor.objects.filter(business__in=user.managed_businesses.all())
+        elif user.has_role('Instructor'):
+            return Instructor.objects.filter(user=user)
+        return Instructor.objects.none()
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
@@ -516,9 +593,22 @@ class InstructorViewSet(viewsets.ModelViewSet):
             permission_classes = [IsInstructor]
         return [permission() for permission in permission_classes]
 
+    def perform_create(self, serializer):
+        # Verify business access if specified
+        business_id = self.request.data.get('business')
+        if business_id:
+            business = get_object_or_404(BusinessInfo, id=business_id)
+            if not (self.request.user.has_role('Admin') or 
+                   business.owner == self.request.user or 
+                   business in self.request.user.managed_businesses.all()):
+                raise PermissionDenied("You don't have permission to add instructors to this business")
+        serializer.save()
+
     @action(detail=True, methods=['post'])
     def add_education(self, request, pk=None):
         instructor = self.get_object()
+        if not (request.user.has_role('Admin') or instructor.user == request.user):
+            raise PermissionDenied("You don't have permission to add education to this instructor")
         serializer = EducationSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(instructor=instructor)
@@ -528,6 +618,8 @@ class InstructorViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def add_certification(self, request, pk=None):
         instructor = self.get_object()
+        if not (request.user.has_role('Admin') or instructor.user == request.user):
+            raise PermissionDenied("You don't have permission to add certifications to this instructor")
         serializer = CertificationSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(instructor=instructor)
@@ -537,6 +629,8 @@ class InstructorViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def add_skill(self, request, pk=None):
         instructor = self.get_object()
+        if not (request.user.has_role('Admin') or instructor.user == request.user):
+            raise PermissionDenied("You don't have permission to add skills to this instructor")
         serializer = SkillSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(instructor=instructor)
@@ -546,6 +640,8 @@ class InstructorViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def add_note(self, request, pk=None):
         instructor = self.get_object()
+        if not (request.user.has_role('Admin') or request.user.has_role('Manager')):
+            raise PermissionDenied("You don't have permission to add notes")
         serializer = InstructorNoteSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(instructor=instructor, author=request.user)
@@ -555,12 +651,14 @@ class InstructorViewSet(viewsets.ModelViewSet):
 class BookingStatusViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = BookingStatus.objects.all()
     serializer_class = BookingStatusSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInstructor]
 
 class BookingViewSet(viewsets.ModelViewSet):
     queryset = Booking.objects.all()
     serializer_class = BookingSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInstructor]
+
+    
 
     def get_queryset(self):
         queryset = super().get_queryset().select_related(
@@ -569,17 +667,31 @@ class BookingViewSet(viewsets.ModelViewSet):
             'class_instance', 
             'subclass'
         )
+
+        user = self.request.user
+        if check_user_role(user, ['Admin', 'Super Admin']):
+            pass
+        elif check_user_role(user, ['Business Owner']):
+            queryset = queryset.filter(class_instance__businessId__owner=user)
+        elif check_user_role(user, ['Manager']):
+            managed_businesses = user.managed_businesses.all()
+            queryset = queryset.filter(class_instance__businessId__in=managed_businesses)
+        elif check_user_role(user, ['Instructor']):
+            queryset = queryset.filter(instructor__user=user)
+        else:
+            queryset = queryset.none()
+
         status = self.request.query_params.get('status', None)
         instructor = self.request.query_params.get('instructor', None)
 
-        if status is not None:
+        if status:
             if ',' in status:
                 statuses = status.split(',')
                 queryset = queryset.filter(status__name__in=statuses)
             else:
                 queryset = queryset.filter(status__name=status)
 
-        if instructor is not None:
+        if instructor:
             queryset = queryset.filter(instructor_id=instructor)
 
         return queryset
@@ -613,9 +725,32 @@ class BookingViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         serializer.save()
 
-class StudentViewSet(viewsets.ModelViewSet):
-    queryset = Student.objects.all()
+
+class SecureStudentViewSet(viewsets.ModelViewSet):
     serializer_class = StudentSerializer
+    permission_classes = [BaseUserDataPermission]
+
+    def get_queryset(self):
+        user = self.request.user
+        if check_user_role(user, ['Admin', 'Super Admin']):
+            return Student.objects.all()
+        elif check_user_role(user, ['Business Owner']):
+            return Student.objects.filter(
+                Q(enrollments__class_instance__businessId__owner=user) |
+                Q(bookings__class_instance__businessId__owner=user)
+            ).distinct()
+        elif check_user_role(user, ['Manager']):
+            managed_businesses = user.managed_businesses.all()
+            return Student.objects.filter(
+                Q(enrollments__class_instance__businessId__in=managed_businesses) |
+                Q(bookings__class_instance__businessId__in=managed_businesses)
+            ).distinct()
+        elif check_user_role(user, ['Instructor']):
+            return Student.objects.filter(
+                Q(enrollments__class_instance__instructor__user=user) |
+                Q(bookings__instructor__user=user)
+            ).distinct()
+        return Student.objects.filter(user=user)
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
@@ -624,9 +759,17 @@ class StudentViewSet(viewsets.ModelViewSet):
             permission_classes = [permissions.IsAuthenticated]
         return [permission() for permission in permission_classes]
 
+    def perform_create(self, serializer):
+        if not check_user_role(self.request.user, ['Admin']):
+            if serializer.validated_data.get('user') != self.request.user:
+                raise PermissionDenied("You can only create a student profile for yourself")
+        serializer.save()
+
     @action(detail=True, methods=['post'])
     def add_note(self, request, pk=None):
         student = self.get_object()
+        if not check_user_role(request.user, ['Admin', 'Manager']):
+            raise PermissionDenied("You don't have permission to add notes")
         serializer = StudentNoteSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(student=student, author=request.user)
@@ -636,6 +779,13 @@ class StudentViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def enroll(self, request, pk=None):
         student = self.get_object()
+        class_instance = get_object_or_404(ClassesMain, pk=request.data.get('class_instance'))
+        
+        if not (check_user_role(request.user, ['Admin']) or 
+                student.user == request.user or 
+                class_instance.businessId.owner == request.user):
+            raise PermissionDenied("You don't have permission to enroll this student")
+            
         serializer = EnrollmentSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(student=student)
@@ -645,6 +795,12 @@ class StudentViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def record_attendance(self, request, pk=None):
         enrollment = get_object_or_404(Enrollment, pk=request.data.get('enrollment_id'))
+        
+        # Verify attendance recording permissions
+        if not (request.user.has_role('Admin') or 
+                enrollment.class_instance.instructor.user == request.user):
+            raise PermissionDenied("You don't have permission to record attendance")
+            
         serializer = AttendanceSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(enrollment=enrollment)
@@ -654,22 +810,41 @@ class StudentViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def record_performance(self, request, pk=None):
         enrollment = get_object_or_404(Enrollment, pk=request.data.get('enrollment_id'))
+        
+        # Verify performance recording permissions
+        if not (request.user.has_role('Admin') or 
+                enrollment.class_instance.instructor.user == request.user):
+            raise PermissionDenied("You don't have permission to record performance")
+            
         serializer = PerformanceSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(enrollment=enrollment)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
+
     @action(detail=True, methods=['get'])
     def bookings(self, request, pk=None):
         student = self.get_object()
-        bookings = student.bookings.all()
+        # Filter bookings based on user permissions
+        if request.user.has_role('Admin'):
+            bookings = student.bookings.all()
+        elif student.user == request.user:
+            bookings = student.bookings.all()
+        else:
+            bookings = student.bookings.filter(
+                Q(class_instance__businessId__owner=request.user) |
+                Q(instructor__user=request.user)
+            )
         serializer = BookingSerializer(bookings, many=True)
         return Response(serializer.data)
 
     @action(detail=True, methods=['post'])
     def create_booking(self, request, pk=None):
         student = self.get_object()
+        # Verify booking creation permissions
+        if not (request.user.has_role('Admin') or student.user == request.user):
+            raise PermissionDenied("You don't have permission to create bookings for this student")
+            
         serializer = BookingSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(student=student)
@@ -699,6 +874,17 @@ class ScheduleViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        
+        user = self.request.user
+        if not check_user_role(user, ['Admin', 'Super Admin']):
+            if check_user_role(user, ['Business Owner']):
+                queryset = queryset.filter(class_instance__businessId__owner=user)
+            elif check_user_role(user, ['Manager']):
+                queryset = queryset.filter(class_instance__businessId__in=user.managed_businesses.all())
+            elif check_user_role(user, ['Instructor']):
+                queryset = queryset.filter(instructor__user=user)
+
+        # Apply filters
         date_from = self.request.query_params.get('date_from')
         date_to = self.request.query_params.get('date_to')
         instructor = self.request.query_params.get('instructor')
@@ -721,6 +907,9 @@ class ScheduleViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def add_student(self, request, pk=None):
         schedule = self.get_object()
+        if not check_user_role(request.user, ['Admin', 'Manager', 'Instructor']):
+            raise PermissionDenied("You don't have permission to add students to schedules")
+            
         serializer = ScheduleStudentSerializer(data=request.data)
         if serializer.is_valid():
             if schedule.enrolled_students >= schedule.capacity:
@@ -756,6 +945,10 @@ class ScheduleViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def mark_attendance(self, request, pk=None):
         schedule = self.get_object()
+        if not (check_user_role(request.user, ['Admin']) or 
+                schedule.instructor.user == request.user):
+            raise PermissionDenied("You don't have permission to mark attendance")
+            
         serializer = ScheduleStudentSerializer(data=request.data, partial=True)
         if serializer.is_valid():
             try:
@@ -876,6 +1069,12 @@ class RoleViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Role.objects.all()
     serializer_class = RoleSerializer
     permission_classes = [IsAdminUser]
+
+    def get_queryset(self):
+        
+        if check_user_role(self.request.user, ['Admin', 'Super Admin']):
+            return Role.objects.all()
+        return Role.objects.none()
 
 @require_GET
 def get_google_maps_api_key(request):

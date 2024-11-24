@@ -306,19 +306,21 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
         data = super().validate(attrs)
         
-        # Add user data to response
+        # Add user data and role to response
         user = self.user
         data['user'] = {
-            'userId': user.userId,
-            'email': user.email,
-            'first_name': user.first_name,
-            'last_name': user.last_name,
+            'userId': self.user.userId,
+            'email': self.user.email,
+            'first_name': self.user.first_name,
+            'last_name': self.user.last_name,
             'birth_date': user.birth_date,
             'bio': user.bio,
             'phone_number': user.phone_number,
             'avatar_url': user.get_avatar_url(),
-            'role': user.role.name if user.role else None,
         }
+
+                # Add role information
+        data['role'] = self.user.role.name if self.user.role else None
         
         return data
 

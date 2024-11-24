@@ -1,9 +1,9 @@
 from django.urls import path, include
 from .views import (
     BookingStatusViewSet, BookingViewSet, BusinessInfoDetail, BusinessInfoViewSet, ClassList, ClassDetail, ClassReviews,
-    CustomLoginView, CustomTokenObtainPairView, CustomTokenRefreshView, LogoutView, ScheduleViewSet, StudentViewSet, UserRoleView, UserUpdateView, get_google_maps_api_key,
+    CustomLoginView, CustomTokenObtainPairView, CustomTokenRefreshView, LogoutView, ScheduleViewSet, SecureStudentViewSet, UserRoleView, UserUpdateView, get_google_maps_api_key,
     ClassImageList, ClassImageDetail, SubClassesViewSet, SubClassDetail, CustomRegisterView,
-    InstructorViewSet, RoleViewSet, search_classes_by_location
+    SecureInstructorViewSet, RoleViewSet, search_classes_by_location
 )
 from allauth.account.views import confirm_email
 from rest_framework_simplejwt.views import TokenRefreshView
@@ -33,24 +33,24 @@ urlpatterns = [
     path('google-maps-key/', get_google_maps_api_key, name='google_maps_api_key'),
 
     # New URLs for instructors and roles
-    path('instructors/', InstructorViewSet.as_view({'get': 'list', 'post': 'create'}), name='instructor-list'),
-    path('instructors/<int:pk>/', InstructorViewSet.as_view({'get': 'retrieve', 'put': 'update', 'patch': 'partial_update', 'delete': 'destroy'}), name='instructor-detail'),
-    path('instructors/<int:pk>/education/', InstructorViewSet.as_view({'post': 'add_education'}), name='instructor-add-education'),
-    path('instructors/<int:pk>/certification/', InstructorViewSet.as_view({'post': 'add_certification'}), name='instructor-add-certification'),
-    path('instructors/<int:pk>/skill/', InstructorViewSet.as_view({'post': 'add_skill'}), name='instructor-add-skill'),
-    path('instructors/<int:pk>/note/', InstructorViewSet.as_view({'post': 'add_note'}), name='instructor-add-note'),
+    path('instructors/', SecureInstructorViewSet.as_view({'get': 'list', 'post': 'create'}), name='instructor-list'),
+    path('instructors/<int:pk>/', SecureInstructorViewSet.as_view({'get': 'retrieve', 'put': 'update', 'patch': 'partial_update', 'delete': 'destroy'}), name='instructor-detail'),
+    path('instructors/<int:pk>/education/', SecureInstructorViewSet.as_view({'post': 'add_education'}), name='instructor-add-education'),
+    path('instructors/<int:pk>/certification/', SecureInstructorViewSet.as_view({'post': 'add_certification'}), name='instructor-add-certification'),
+    path('instructors/<int:pk>/skill/', SecureInstructorViewSet.as_view({'post': 'add_skill'}), name='instructor-add-skill'),
+    path('instructors/<int:pk>/note/', SecureInstructorViewSet.as_view({'post': 'add_note'}), name='instructor-add-note'),
     path('roles/', RoleViewSet.as_view({'get': 'list'}), name='role-list'),
     path('roles/<int:pk>/', RoleViewSet.as_view({'get': 'retrieve'}), name='role-detail'),
 
     # Student URLs
-    path('students/', StudentViewSet.as_view({'get': 'list', 'post': 'create'}), name='student-list'),
-    path('students/<int:pk>/', StudentViewSet.as_view({'get': 'retrieve', 'put': 'update', 'patch': 'partial_update', 'delete': 'destroy'}), name='student-detail'),
-    path('students/<int:pk>/note/', StudentViewSet.as_view({'post': 'add_note'}), name='student-add-note'),
-    path('students/<int:pk>/enroll/', StudentViewSet.as_view({'post': 'enroll'}), name='student-enroll'),
-    path('students/<int:pk>/attendance/', StudentViewSet.as_view({'post': 'record_attendance'}), name='student-record-attendance'),
-    path('students/<int:pk>/performance/', StudentViewSet.as_view({'post': 'record_performance'}), name='student-record-performance'),
-    path('students/<int:pk>/bookings/', StudentViewSet.as_view({'get': 'bookings'}), name='student-bookings'),
-    path('students/<int:pk>/create_booking/', StudentViewSet.as_view({'post': 'create_booking'}), name='student-create-booking'),
+    path('students/', SecureStudentViewSet.as_view({'get': 'list', 'post': 'create'}), name='student-list'),
+    path('students/<int:pk>/', SecureStudentViewSet.as_view({'get': 'retrieve', 'put': 'update', 'patch': 'partial_update', 'delete': 'destroy'}), name='student-detail'),
+    path('students/<int:pk>/note/', SecureStudentViewSet.as_view({'post': 'add_note'}), name='student-add-note'),
+    path('students/<int:pk>/enroll/', SecureStudentViewSet.as_view({'post': 'enroll'}), name='student-enroll'),
+    path('students/<int:pk>/attendance/', SecureStudentViewSet.as_view({'post': 'record_attendance'}), name='student-record-attendance'),
+    path('students/<int:pk>/performance/', SecureStudentViewSet.as_view({'post': 'record_performance'}), name='student-record-performance'),
+    path('students/<int:pk>/bookings/', SecureStudentViewSet.as_view({'get': 'bookings'}), name='student-bookings'),
+    path('students/<int:pk>/create_booking/', SecureStudentViewSet.as_view({'post': 'create_booking'}), name='student-create-booking'),
 
     # Booking URLs
     path('bookings/', BookingViewSet.as_view({'get': 'list', 'post': 'create'}), name='booking-list'),
