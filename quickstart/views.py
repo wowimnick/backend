@@ -240,6 +240,37 @@ class CustomRegisterView(RegisterView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         return super().post(request, *args, **kwargs)
     
+class FavoriteClasses(APIView):
+    def get(self, request):
+        user = request.user
+        if not user.is_authenticated:
+            return Response({"error": "Authentication required"}, status=401)
+        favorites = user.favorite_classes.all()
+        serializer = ClassesMainSerializer(favorites, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        user = request.user
+        if not user.is_authenticated:
+            return Response({"error": "Authentication required"}, status=401)
+        class_id = request.data.get('class_id')
+        if not class_id:
+            return Response({"error": "class_id is required"}, status=400)
+        class_instance = get_object_or_404(ClassesMain, pk=class_id)
+        user.favorite_classes.add(class_instance)
+        return Response({"message": "Class added to favorites"})
+    
+    def delete(self, request):
+        user = request.user
+        if not user.is_authenticated:
+            return Response({"error": "Authentication required"}, status=401)
+        class_id = request.data.get('class_id')
+        if not class_id:
+            return Response({"error": "class_id is required"}, status=400)
+        class_instance = get_object_or_404(ClassesMain, pk=class_id)
+        user.favorite_classes.remove(class_instance)
+        return Response({"message": "Class removed from favorites"})
+    
 def haversine_distance(lat1, lon1, lat2, lon2):
     """
     Calculate the distance between two points on earth using Haversine formula

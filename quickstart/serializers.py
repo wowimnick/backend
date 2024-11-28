@@ -37,7 +37,7 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
             'userId', 'email', 'first_name', 'last_name', 
             'birth_date', 'bio', 'phone_number', 'country',
             'city', 'state', 'address', 'zipCode', 
-            'avatar_url', 'role'
+            'avatar_url', 'role', 'favorites'
         )
         read_only_fields = ('userId', 'email', 'role')
 
@@ -317,6 +317,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             'bio': user.bio,
             'phone_number': user.phone_number,
             'avatar_url': user.get_avatar_url(),
+            'favorited': user.favorited.all().values_list('classId', flat=True) if user and hasattr(user, 'favorited') else []
         }
 
                 # Add role information
@@ -337,6 +338,7 @@ class CustomRegisterSerializer(RegisterSerializer):
     zipCode = serializers.CharField(required=True)
     avatar = serializers.ImageField(required=False)
     role = serializers.PrimaryKeyRelatedField(queryset=Role.objects.all(), required=False)
+    favorited = serializers.PrimaryKeyRelatedField(queryset=ClassesMain.objects.all(), many=True, required=False)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -368,6 +370,7 @@ class CustomRegisterSerializer(RegisterSerializer):
             'zipCode': self.validated_data.get('zipCode', ''),
             'avatar': self.validated_data.get('avatar', None),
             'role': self.validated_data.get('role', None),
+            'favorited': self.validated_data.get('favorited', [])
         })
         logger.debug(f"Cleaned data: {data}")
         return data
@@ -388,6 +391,7 @@ class CustomRegisterSerializer(RegisterSerializer):
         user.zipCode = self.validated_data.get('zipCode')
         user.avatar = self.validated_data.get('avatar')
         user.role = self.validated_data.get('role')
+        user.favorited = self.validated_data.get('favorited')
         if not user.role:
             default_role = Role.objects.get(name='Student')
             user.role = default_role
@@ -410,7 +414,8 @@ class CustomRegisterSerializer(RegisterSerializer):
             city=validated_data.get('city', ''),
             address=validated_data.get('address', ''),
             zipCode=validated_data.get('zipCode', ''),
-            avatar=validated_data.get('avatar')
+            avatar=validated_data.get('avatar'),
+            favorited=validated_data.get('favorited', [])
         )
         return user
 

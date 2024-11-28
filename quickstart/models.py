@@ -25,6 +25,7 @@ class CustomUser(AbstractUser):
     avatar = models.ImageField(upload_to='avatars/', storage=S3Boto3Storage(), null=True, blank=True)
     createdAt = models.DateTimeField(auto_now_add=True)
     role = models.ForeignKey(Role, on_delete=models.SET_NULL, null=True, blank=True)
+    favorited = models.ManyToManyField('ClassesMain', related_name='favorited_by', blank=True)
     
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['username']

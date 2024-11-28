@@ -30,7 +30,6 @@ urlpatterns = [
     path('classes/images/<int:pk>/', ClassImageDetail.as_view(), name='class-image-detail'),
     path('businesses/', BusinessInfoViewSet.as_view({'get': 'list', 'post': 'create'}), name='business-list'),
     path('businesses/<int:pk>/', BusinessInfoDetail.as_view(), name='business-detail'),
-    path('google-maps-key/', get_google_maps_api_key, name='google_maps_api_key'),
 
     # New URLs for instructors and roles
     path('instructors/', SecureInstructorViewSet.as_view({'get': 'list', 'post': 'create'}), name='instructor-list'),
