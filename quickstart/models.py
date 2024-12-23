@@ -41,11 +41,11 @@ class CustomUser(AbstractUser):
     def has_role(self, role_name):
         return self.role and self.role.name == role_name
 
-
 class BusinessInfo(models.Model):
     businessName = models.CharField(max_length=100)
     businessId = models.AutoField(primary_key=True)
     owner = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='owned_businesses')
+    managers = models.ManyToManyField(CustomUser, related_name='managed_businesses', blank=True)
     businessImage = models.ImageField(upload_to='business_images/', storage=S3Boto3Storage(), blank=True, null=True)
     businessType = models.CharField(max_length=100)
     businessAddress = models.CharField(max_length=100)
@@ -55,7 +55,6 @@ class BusinessInfo(models.Model):
     businessPhoneNumber = models.CharField(max_length=100)
     businessEmail = models.CharField(max_length=100, blank=True, null=True)
     createdAt = models.DateTimeField(auto_now_add=True)
-    businessDefaultCancellation = models.CharField(max_length=100, blank=True, null=True)
     businessZipCode = models.CharField(max_length=100)
     totalReviews = models.IntegerField(default=0)
     isActive = models.BooleanField(default=True)
@@ -132,7 +131,7 @@ class Booking(models.Model):
     student = models.ForeignKey('Student', on_delete=models.CASCADE, related_name='bookings')
     instructor = models.ForeignKey('Instructor', on_delete=models.SET_NULL, null=True, related_name='bookings')
     class_instance = models.ForeignKey('ClassesMain', on_delete=models.CASCADE)
-    subclass = models.ForeignKey('SubClasses', on_delete=models.SET_NULL, null=True, blank=True)
+    option = models.ForeignKey('ClassOption', on_delete=models.SET_NULL, null=True, blank=True)
     status = models.ForeignKey(BookingStatus, on_delete=models.SET_NULL, null=True, blank=True)
     booking_date = models.DateTimeField(auto_now_add=True)
     class_date = models.DateTimeField()
@@ -203,7 +202,6 @@ class Performance(models.Model):
     def __str__(self):
         return f"{self.enrollment.student} - {self.date} - Score: {self.score}"
 
-
 class ClassImage(models.Model):
     imageId = models.AutoField(primary_key=True)
     classId = models.ForeignKey('ClassesMain', related_name='images', on_delete=models.CASCADE)
@@ -221,9 +219,10 @@ class ClassesMain(models.Model):
     classDescription = models.CharField(max_length=2000, blank=True, null=True)
     classLocation = models.CharField(max_length=100)
     classCoordinates = models.CharField(max_length=100)
+    saltLocation = models.BooleanField(default=False)
     classRating = models.DecimalField(max_digits=3, decimal_places=1, default=Decimal('0.0'))
-    classFeatures = models.CharField(max_length=1000)
-    classPrice = models.DecimalField(max_digits=10, decimal_places=2)
+    classFeatures = models.TextField(default='[]')  # Store JSON as text
+    classPrice = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
     classCategory = models.CharField(max_length=100)
     classFilterCategory = models.CharField(max_length=100)
     classFilterSubcategory = models.CharField(max_length=100)
@@ -231,22 +230,14 @@ class ClassesMain(models.Model):
     isActive = models.BooleanField(default=True)
     createdAt = models.DateTimeField(auto_now_add=True)
     updatedAt = models.DateTimeField(auto_now=True)
+    studentContactEmail = models.CharField(max_length=100, blank=True, null=True)
+    studentContactPhone = models.CharField(max_length=100, blank=True, null=True)
+    adminContactEmail = models.CharField(max_length=100, blank=True, null=True)
+    adminContactPhone = models.CharField(max_length=100, blank=True, null=True)
 
     class Meta:
         db_table = 'classesMain'
         ordering = ['-createdAt']
-
-
-class Enrollments(models.Model):
-    enrollmentId = models.AutoField(primary_key=True)
-    userId = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='enrollments')
-    scheduleId = models.ForeignKey('Schedule', models.DO_NOTHING, db_column='scheduleId', blank=True, null=True)
-    status = models.CharField(max_length=100)
-    createdAt = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        db_table = 'enrollments'
-
 
 class Favorites(models.Model):
     favoriteId = models.AutoField(primary_key=True)
@@ -256,7 +247,6 @@ class Favorites(models.Model):
 
     class Meta:
         db_table = 'favorites'
-
 
 class Reviews(models.Model):
     reviewId = models.AutoField(primary_key=True)
@@ -275,11 +265,10 @@ class Reviews(models.Model):
     class Meta:
         db_table = 'reviews'
 
-
 class Schedule(models.Model):
     id = models.AutoField(primary_key=True)
     class_instance = models.ForeignKey('ClassesMain', on_delete=models.CASCADE, related_name='schedules')
-    subclass = models.ForeignKey('SubClasses', on_delete=models.SET_NULL, null=True, blank=True)
+    option = models.ForeignKey('ClassOption', on_delete=models.SET_NULL, null=True, blank=True)
     instructor = models.ForeignKey(Instructor, on_delete=models.CASCADE)
     date = models.DateField()
     start_time = models.TimeField()
@@ -302,9 +291,6 @@ class Schedule(models.Model):
     recurrence_end_date = models.DateField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-
-    def __str__(self):
-        return f"{self.class_instance.className} - {self.date} {self.start_time}"
 
     class Meta:
         ordering = ['date', 'start_time']
@@ -349,22 +335,80 @@ class ScheduleConflict(models.Model):
     class Meta:
         unique_together = ('schedule', 'conflicting_schedule')
 
-
-class SubClasses(models.Model):
-    subclassId = models.AutoField(primary_key=True)
-    classId = models.ForeignKey(ClassesMain, models.DO_NOTHING, db_column='classId', blank=True, null=True)
-    subclassTitle = models.CharField(max_length=100)
-    subclassDescription = models.CharField(max_length=100, blank=True, null=True)
-    subclassImage = models.ImageField(upload_to='subclass_images/', storage=S3Boto3Storage(), blank=True, null=True)
-    subclassTags = models.CharField(max_length=100)
-    subclassType = models.CharField(max_length=100)
-    subclassLevel = models.CharField(max_length=100)
-    subclassAvailability = models.IntegerField()
-    subclassPrice = models.IntegerField()
-    subclassCategory = models.CharField(max_length=100)
-    subclassCalenderDuration = models.CharField(max_length=100)
-    createdAt = models.DateTimeField()
+class ClassOption(models.Model):
+    optionId = models.AutoField(primary_key=True)
+    classId = models.ForeignKey(ClassesMain, on_delete=models.CASCADE, related_name='options')
+    
+    # Basic Info
+    title = models.CharField(max_length=100)
+    description = models.TextField(blank=True, null=True)
+    images = models.TextField(default='[]')  # Store JSON as text
+    
+    # Schedule
+    time = models.TimeField(null=True)
+    frequency = models.CharField(max_length=20, choices=[
+        ('weekly', 'Weekly'),
+        ('biweekly', 'Bi-weekly'),
+        ('monthly', 'Monthly')
+    ])
+    
+    # Capacity & Level
+    maxParticipants = models.IntegerField(null=True)
+    level = models.CharField(max_length=20, choices=[
+        ('beginner', 'Beginner'),
+        ('intermediate', 'Intermediate'),
+        ('advanced', 'Advanced'),
+        ('all', 'All Levels')
+    ])
+    
+    # Pricing & Policies
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    type = models.CharField(max_length=20, choices=[
+        ('single', 'Per Class'),
+        ('course', 'Full Course'),
+        ('month', 'Per Month')
+    ])
+    cancellationPolicy = models.CharField(max_length=30, choices=[
+        ('24h', '24 Hours Notice'),
+        ('48h', '48 Hours Notice'),
+        ('72h', '72 Hours Notice'),
+        ('flexible', 'Flexible')
+    ])
+    
+    # Image handling
+    image = models.ImageField(
+        upload_to='class_options/',
+        storage=S3Boto3Storage(),
+        blank=True,
+        null=True
+    )
+    
+    # Timestamps
+    createdAt = models.DateTimeField(auto_now_add=True)
+    updatedAt = models.DateTimeField(auto_now=True)
 
     class Meta:
-        db_table = 'subClasses'
+        db_table = 'class_options'
+        ordering = ['createdAt']
 
+# New models to replace ArrayField relationships
+class ClassOptionDay(models.Model):
+    option = models.ForeignKey(ClassOption, on_delete=models.CASCADE, related_name='days')
+    day = models.CharField(max_length=3)  # e.g., 'MON', 'TUE', etc.
+
+    class Meta:
+        unique_together = ('option', 'day')
+
+class ClassOptionEquipment(models.Model):
+    option = models.ForeignKey(ClassOption, on_delete=models.CASCADE, related_name='equipment')
+    equipment = models.CharField(max_length=100)
+
+    class Meta:
+        unique_together = ('option', 'equipment')
+
+class ClassOptionTag(models.Model):
+    option = models.ForeignKey(ClassOption, on_delete=models.CASCADE, related_name='tags')
+    tag = models.CharField(max_length=50)
+
+    class Meta:
+        unique_together = ('option', 'tag')
