@@ -1,54 +1,82 @@
 from rest_framework import serializers
-from ..models import (
-    Student, StudentNote, Attendance, 
-    Performance, Enrollment
-)
-from .auth_serializers import CustomUserDetailsSerializer
-from .booking_serializers import BookingSerializer
+from ..models import Booking, Student, StudentEnrollment, StudentNote
+
+from ..serializers import CustomUserDetailsSerializer
 
 class StudentNoteSerializer(serializers.ModelSerializer):
     author_name = serializers.SerializerMethodField()
-
+    author_avatar_url = serializers.SerializerMethodField()
+    
     class Meta:
         model = StudentNote
-        fields = ('id', 'author', 'author_name', 'content', 'created_at')
-
+        fields = [
+            'id', 'content', 'created_at', 'author',
+            'author_name', 'author_avatar_url'
+        ]
+        read_only_fields = ['created_at', 'author']
+    
     def get_author_name(self, obj):
-        return f"{obj.author.first_name} {obj.author.last_name}" if obj.author else "Unknown"
+        if obj.author:
+            return f"{obj.author.first_name} {obj.author.last_name}"
+        return None
+    
+    def get_author_avatar_url(self, obj):
+        if obj.author and obj.author.avatar:
+            return obj.author.avatar.url
+        return None
 
-class AttendanceSerializer(serializers.ModelSerializer):
+class StudentEnrollmentSerializer(serializers.ModelSerializer):
+    class_name = serializers.SerializerMethodField()
+    attendance_records = serializers.SerializerMethodField()
+    
     class Meta:
-        model = Attendance
-        fields = ('id', 'date', 'status')
-
-class PerformanceSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Performance
-        fields = ('id', 'date', 'score', 'comments')
-
-class EnrollmentSerializer(serializers.ModelSerializer):
-    class_name = serializers.CharField(source='class_instance.className', read_only=True)
-    attendances = AttendanceSerializer(many=True, read_only=True)
-    performances = PerformanceSerializer(many=True, read_only=True)
-
-    class Meta:
-        model = Enrollment
-        fields = ('id', 'class_instance', 'class_name', 'enrollment_date', 'status', 'attendances', 'performances')
-
-class StudentSerializer(serializers.ModelSerializer):
+        model = StudentEnrollment
+        fields = [
+            'id', 'class_option', 'class_name', 'start_date',
+            'end_date', 'status', 'attendance_records'
+        ]
+    
+    def get_class_name(self, obj):
+        return obj.class_option.classId.title
+    
+    def get_attendance_records(self, obj):
+        bookings = Booking.objects.filter(
+            student=obj.student,
+            schedule_instance__schedule__option=obj.class_option
+        ).order_by('-schedule_instance__date')
+        
+        return [{
+            'id': booking.id,
+            'date': booking.schedule_instance.date,
+            'class': self.get_class_name(obj),
+            'status': 'Present' if booking.status == 'completed' else 'Absent'
+        } for booking in bookings]
+    
+class StudentProfileSerializer(serializers.ModelSerializer):
     user = CustomUserDetailsSerializer(read_only=True)
-    userId = serializers.IntegerField(write_only=True)
     notes = StudentNoteSerializer(many=True, read_only=True)
-    enrollments = EnrollmentSerializer(many=True, read_only=True)
-    bookings = BookingSerializer(many=True, read_only=True)
-
+    enrollments = StudentEnrollmentSerializer(many=True, read_only=True)
+    active_classes = serializers.IntegerField(read_only=True)
+    total_classes_taken = serializers.IntegerField(read_only=True)
+    average_attendance = serializers.DecimalField(
+        max_digits=5, decimal_places=2, read_only=True
+    )
+    
     class Meta:
         model = Student
-        fields = (
-            'id', 'user', 'userId', 'enrollment_date', 'grade_level',
-            'parent_guardian_name', 'parent_guardian_phone', 'emergency_contact',
-            'emergency_phone', 'allergies', 'medical_conditions', 'active_classes',
-            'total_classes_taken', 'average_attendance', 'overall_performance',
-            'notes', 'enrollments', 'bookings'
-        )
-        read_only_fields = ('active_classes', 'total_classes_taken', 'average_attendance', 'overall_performance')
+        fields = [
+            'id', 'user', 'enrollment_date', 'grade_level',
+            'parent_guardian_name', 'parent_guardian_phone',
+            'emergency_contact', 'emergency_phone',
+            'allergies', 'medical_conditions',
+            'active_classes', 'total_classes_taken',
+            'average_attendance', 'notes', 'enrollments'
+        ]
+        read_only_fields = [
+            'active_classes', 'total_classes_taken',
+            'average_attendance'
+        ]
+
+    def create(self, validated_data):
+        user = self.context['request'].user
+        return Student.objects.create(user=user, **validated_data)

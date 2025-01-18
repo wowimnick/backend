@@ -96,14 +96,17 @@ class CustomTokenRefreshView(APIView):
 
 class UserUpdateView(APIView):
     def patch(self, request):
+        print("Received data:", request.data)  # Add this for debugging
         serializer = CustomUserDetailsSerializer(
             request.user,
             data=request.data,
             partial=True
         )
         if serializer.is_valid():
+            print("Valid data:", serializer.validated_data)  # Add this for debugging
             serializer.save()
             return Response(serializer.data)
+        print("Serializer errors:", serializer.errors)  # Add this for debugging
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class LogoutView(APIView):

@@ -1,87 +1,130 @@
 from rest_framework import viewsets, status
+from rest_framework.decorators import action
 from rest_framework.response import Response
-from datetime import datetime
-from django.shortcuts import get_object_or_404
-from django.db.models import Q
+from django.utils import timezone
+from django.core.exceptions import ValidationError as DjangoValidationError
 
 from ..models import (
-    Booking, BookingStatus
+    Booking,
+    Schedule
 )
 from ..serializers import (
-    BookingSerializer,
-    BookingStatusSerializer
+    BookingCreateSerializer,
+    BookingDetailSerializer
 )
-from .permissions import IsInstructor
-from .permissions import check_user_role
 
-class BookingStatusViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = BookingStatus.objects.all()
-    serializer_class = BookingStatusSerializer
-    permission_classes = [IsInstructor]
+from .permissions import check_user_role
+from django.db import models
 
 class BookingViewSet(viewsets.ModelViewSet):
-    queryset = Booking.objects.all()
-    serializer_class = BookingSerializer
-    permission_classes = [IsInstructor]
-
     def get_queryset(self):
-        queryset = super().get_queryset().select_related(
-            'student__user', 
-            'instructor__user',
-            'class_instance', 
-            'subclass'
-        )
-
         user = self.request.user
-        if check_user_role(user, ['Admin', 'Super Admin']):
-            pass
-        elif check_user_role(user, ['Business Owner']):
-            queryset = queryset.filter(class_instance__businessId__owner=user)
-        elif check_user_role(user, ['Manager']):
-            managed_businesses = user.managed_businesses.all()
-            queryset = queryset.filter(class_instance__businessId__in=managed_businesses)
-        elif check_user_role(user, ['Instructor']):
-            queryset = queryset.filter(instructor__user=user)
-        else:
-            queryset = queryset.none()
-
-        status = self.request.query_params.get('status', None)
-        instructor = self.request.query_params.get('instructor', None)
-
-        if status:
-            if ',' in status:
-                statuses = status.split(',')
-                queryset = queryset.filter(status__name__in=statuses)
-            else:
-                queryset = queryset.filter(status__name=status)
-
-        if instructor:
-            queryset = queryset.filter(instructor_id=instructor)
-
-        return queryset
-
-    def update(self, request, *args, **kwargs):
-        partial = kwargs.pop('partial', False)
-        instance = self.get_object()
+        status_filter = self.request.query_params.get('status')
         
-        # Convert class_date to proper format if it exists
-        if 'class_date' in request.data:
-            try:
-                request.data['class_date'] = datetime.strptime(
-                    request.data['class_date'],
-                    '%Y-%m-%d %H:%M:%S'
-                )
-            except ValueError:
-                return Response(
-                    {"error": "Invalid date format. Use YYYY-MM-DD HH:MM:SS"},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+        # Start with base queryset
+        queryset = Booking.objects.select_related(
+            'schedule_instance', 
+            'schedule_instance__schedule',
+            'schedule_instance__schedule__option',
+            'schedule_instance__schedule__option__classId',
+            'schedule_instance__schedule__option__classId__businessId',
+            'student'
+        )
+        
+        # Handle multiple status filtering
+        if status_filter:
+            status_values = [s.strip() for s in status_filter.split(',')]
+            queryset = queryset.filter(status__in=status_values)
+        
+        # For business owners/managers - show all bookings for their business
+        if check_user_role(user, ['Business Owner', 'Manager']):
+            return queryset.filter(
+                schedule_instance__schedule__option__classId__businessId__in=user.managed_businesses.all()
+            )
+            
+        # For students - show only their bookings
+        return queryset.filter(student__user=user)
 
-        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return BookingCreateSerializer
+        return BookingDetailSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        self.perform_update(serializer)
+        
+        try:
+            booking = serializer.save(
+                student=request.user.student_profile,
+                status='pending',
+                payment_status='pending'
+            )
+            
+            # Here you would integrate with payment processing
+            # For now, we'll just confirm the booking
+            booking.status = 'confirmed'
+            booking.payment_status = 'paid'
+            booking.save()
+            
+            return Response(
+                BookingDetailSerializer(booking).data,
+                status=status.HTTP_201_CREATED
+            )
+            
+        except DjangoValidationError as e:
+            return Response(
+                {'error': e.messages},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        if getattr(instance, '_prefetched_objects_cache', None):
-            instance._prefetched_objects_cache = {}
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        booking = self.get_object()
+        
+        # Can only cancel confirmed bookings
+        if booking.status != 'confirmed':
+            return Response(
+                {'error': ['Can only cancel confirmed bookings']},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        booking.status = 'cancelled'
+        booking.cancelled_at = timezone.now()
+        booking.cancellation_reason = request.data.get('reason', '')
+        booking.save()
+        
+        return Response(BookingDetailSerializer(booking).data)
 
-        return Response(serializer.data)
+    @action(detail=False, methods=['get'])
+    def schedule_availability(self, request):
+        """Get availability for a specific schedule"""
+        schedule_id = request.query_params.get('schedule_id')
+        if not schedule_id:
+            return Response(
+                {'error': ['schedule_id is required']},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        try:
+            schedule = Schedule.objects.get(id=schedule_id)
+            current_bookings = schedule.current_bookings
+            
+            return Response({
+                'schedule_id': schedule_id,
+                'total_capacity': schedule.effective_max_participants,
+                'booked': current_bookings,
+                'available': schedule.effective_max_participants - current_bookings,
+                'is_full': current_bookings >= schedule.effective_max_participants
+            })
+            
+        except Schedule.DoesNotExist:
+            return Response(
+                {'error': ['Schedule not found']},
+                status=status.HTTP_404_NOT_FOUND
+            )

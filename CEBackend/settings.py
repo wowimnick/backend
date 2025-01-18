@@ -90,7 +90,7 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=20),
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=2000),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
@@ -125,7 +125,7 @@ SIMPLE_JWT = {
     'JTI_CLAIM': 'jti',
 
     'SLIDING_TOKEN_REFRESH_EXP_CLAIM': 'refresh_exp',
-    'SLIDING_TOKEN_LIFETIME': timedelta(minutes=15),
+    'SLIDING_TOKEN_LIFETIME': timedelta(minutes=1500),
     'SLIDING_TOKEN_REFRESH_LIFETIME': timedelta(days=1),
 }
 
@@ -232,12 +232,12 @@ WSGI_APPLICATION = 'CEBackend.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.mysql',
+        'ENGINE': 'django.db.backends.postgresql',
         'NAME': 'CEDB',
-        'USER': 'admin',
-        'PASSWORD': '%0Timberline',
-        'HOST': 'database-1.czutdql9jx70.us-east-2.rds.amazonaws.com', #  database-1.czutdql9jx70.us-east-2.rds.amazonaws.com
-        'PORT': '3306',
+        'USER': 'postgres',
+        'PASSWORD': 'A>a*kU>)78P?$R)|k4Ae?|ramjpU',
+        'HOST': 'database-2.czutdql9jx70.us-east-2.rds.amazonaws.com', #  localhost
+        'PORT': '5433',
     }
 }
 

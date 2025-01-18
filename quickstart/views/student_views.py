@@ -1,143 +1,93 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.exceptions import PermissionDenied
-from django.shortcuts import get_object_or_404
-from django.db.models import Q
+from rest_framework.permissions import IsAuthenticated
+from django.utils import timezone
 
-from ..models import (
-    Student, ClassesMain, Enrollment, 
-    StudentNote, Booking, BusinessInfo
-)
-from ..serializers import (
-    StudentSerializer, StudentNoteSerializer,
-    AttendanceSerializer, PerformanceSerializer,
-    EnrollmentSerializer, BookingSerializer
-)
-from .permissions import (
-    BaseUserDataPermission, IsManager, permissions,
-    check_user_role
-)
+from quickstart.models import Student
 
-class SecureStudentViewSet(viewsets.ModelViewSet):
-    serializer_class = StudentSerializer
-    permission_classes = [BaseUserDataPermission]
+from .permissions import check_user_role
+from ..serializers import StudentProfileSerializer, StudentNoteSerializer
 
+class StudentProfileViewSet(viewsets.ModelViewSet):
+    serializer_class = StudentProfileSerializer
+    permission_classes = [IsAuthenticated]
+    
     def get_queryset(self):
         user = self.request.user
+        # Admins and staff can see all students
         if check_user_role(user, ['Admin', 'Super Admin']):
             return Student.objects.all()
-        elif check_user_role(user, ['Business Owner']):
+        # Business owners and managers can see their students
+        if check_user_role(user, ['Business Owner', 'Manager']):
             return Student.objects.filter(
-                Q(enrollments__class_instance__businessId__owner=user) |
-                Q(bookings__class_instance__businessId__owner=user)
+                enrollments__class_option__classId__businessId__in=user.managed_businesses.all()
             ).distinct()
-        elif check_user_role(user, ['Manager']):
-            # Changed managed_businesses access to a related name from your model
-            managed_businesses = BusinessInfo.objects.filter(managers=user)
-            return Student.objects.filter(
-                Q(enrollments__class_instance__businessId__in=managed_businesses) |
-                Q(bookings__class_instance__businessId__in=managed_businesses)
-            ).distinct()
-        elif check_user_role(user, ['Instructor']):
-            return Student.objects.filter(
-                Q(enrollments__class_instance__instructor__user=user) |
-                Q(bookings__instructor__user=user)
-            ).distinct()
+        # Regular users can only see themselves
         return Student.objects.filter(user=user)
-
-    def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            permission_classes = [IsManager]
-        else:
-            permission_classes = [permissions.IsAuthenticated]
-        return [permission() for permission in permission_classes]
-
-    def perform_create(self, serializer):
-        if not check_user_role(self.request.user, ['Admin']):
-            if serializer.validated_data.get('user') != self.request.user:
-                raise PermissionDenied("You can only create a student profile for yourself")
-        serializer.save()
-
+    
     @action(detail=True, methods=['post'])
     def add_note(self, request, pk=None):
         student = self.get_object()
-        if not check_user_role(request.user, ['Admin', 'Manager']):
-            raise PermissionDenied("You don't have permission to add notes")
         serializer = StudentNoteSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save(student=student, author=request.user)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    @action(detail=True, methods=['post'])
-    def enroll(self, request, pk=None):
-        student = self.get_object()
-        class_instance = get_object_or_404(ClassesMain, pk=request.data.get('class_instance'))
-        
-        if not (check_user_role(request.user, ['Admin']) or 
-                student.user == request.user or 
-                class_instance.businessId.owner == request.user):
-            raise PermissionDenied("You don't have permission to enroll this student")
-            
-        serializer = EnrollmentSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save(student=student)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    @action(detail=True, methods=['post'])
-    def record_attendance(self, request, pk=None):
-        enrollment = get_object_or_404(Enrollment, pk=request.data.get('enrollment_id'))
-        
-        if not (check_user_role(request.user, ['Admin']) or 
-                enrollment.class_instance.instructor.user == request.user):
-            raise PermissionDenied("You don't have permission to record attendance")
-            
-        serializer = AttendanceSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save(enrollment=enrollment)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    @action(detail=True, methods=['post'])
-    def record_performance(self, request, pk=None):
-        enrollment = get_object_or_404(Enrollment, pk=request.data.get('enrollment_id'))
-        
-        if not (check_user_role(request.user, ['Admin']) or 
-                enrollment.class_instance.instructor.user == request.user):
-            raise PermissionDenied("You don't have permission to record performance")
-            
-        serializer = PerformanceSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save(enrollment=enrollment)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    @action(detail=True, methods=['get'])
-    def bookings(self, request, pk=None):
-        student = self.get_object()
-        # Filter bookings based on user permissions
-        if check_user_role(request.user, ['Admin']):
-            bookings = student.bookings.all()
-        elif student.user == request.user:
-            bookings = student.bookings.all()
-        else:
-            bookings = student.bookings.filter(
-                Q(class_instance__businessId__owner=request.user) |
-                Q(instructor__user=request.user)
+            serializer.save(
+                student=student,
+                author=request.user
             )
-        serializer = BookingSerializer(bookings, many=True)
-        return Response(serializer.data)
-
-    @action(detail=True, methods=['post'])
-    def create_booking(self, request, pk=None):
-        student = self.get_object()
-        if not (check_user_role(request.user, ['Admin']) or student.user == request.user):
-            raise PermissionDenied("You don't have permission to create bookings for this student")
-            
-        serializer = BookingSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save(student=student)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=False, methods=['get', 'patch'])
+    def me(self, request):
+        """Get or update current user's student profile"""
+        try:
+            student = Student.objects.get(user=request.user)
+            if request.method == 'PATCH':
+                serializer = self.get_serializer(
+                    student, 
+                    data=request.data, 
+                    partial=True
+                )
+                serializer.is_valid(raise_exception=True)
+                serializer.save()
+            else:
+                serializer = self.get_serializer(student)
+            return Response(serializer.data)
+        except Student.DoesNotExist:
+            if request.method == 'GET':
+                return Response(
+                    {'detail': 'Student profile not found'}, 
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            # Create new profile with basic info
+            serializer = self.get_serializer(data={
+                'user': request.user.id,
+                'enrollment_date': timezone.now().date(),
+                **request.data
+            })
+            serializer.is_valid(raise_exception=True)
+            serializer.save(user=request.user)
+            return Response(
+                serializer.data, 
+                status=status.HTTP_201_CREATED
+            )
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+    def perform_update(self, serializer):
+        # Clear 'Pending Update' values if they're being updated
+        instance = serializer.instance
+        data = serializer.validated_data
+        
+        pending_fields = ['parent_guardian_phone', 'emergency_phone']
+        for field in pending_fields:
+            if field in data and instance.__dict__.get(field) == 'Pending Update':
+                # Value is being updated from the default
+                pass  # Let the update proceed
+            elif field in data and data[field] == 'Pending Update':
+                # Don't allow setting back to pending
+                data[field] = instance.__dict__[field]
+                
+        serializer.save()

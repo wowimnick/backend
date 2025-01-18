@@ -10,35 +10,33 @@ from .auth_views import (
 from .business_views import (
     BusinessViewSet,
     BusinessInfoDetail,
-    BusinessInfoViewSet
+    BusinessInfoViewSet,
+    register_business
 )
 
 from .class_views import (
-    ClassList,
-    ClassDetail,
+    ClassView,
     ClassReviews,
     ClassImageList,
     ClassImageDetail,
-    ClassOptionList,
     ClassOptionDetail,
-    search_classes_by_location
+    search_classes_by_location,
+    ScheduleViewSet,
+    toggle_option_active,
+    ScheduleInstanceViewSet,
+    ScheduleBreakViewSet
 )
 
 from .instructor_views import (
-    SecureInstructorViewSet
+    InstructorViewSet
 )
 
 from .student_views import (
-    SecureStudentViewSet
+    StudentProfileViewSet
 )
 
 from .booking_views import (
-    BookingStatusViewSet,
     BookingViewSet
-)
-
-from .schedule_views import (
-    ScheduleViewSet
 )
 
 from .role_views import (
@@ -52,7 +50,8 @@ from .permissions import (
     IsBusinessOwner,
     IsManager,
     IsInstructor,
-    check_user_role
+    check_user_role,
+    check_user_can_create_class
 )
 
 from .utils import (
@@ -72,29 +71,28 @@ __all__ = [
     'BusinessViewSet',
     'BusinessInfoDetail',
     'BusinessInfoViewSet',
+    'register_business',
 
     # Class Views
-    'ClassList',
-    'ClassDetail',
+    'ClassView',
     'ClassReviews',
     'ClassImageList',
     'ClassImageDetail',
-    'ClassOptionList',
     'ClassOptionDetail',
     'search_classes_by_location',
+    'ScheduleViewSet',
+    'toggle_option_active',
+    'ScheduleInstanceViewSet',
+    'ScheduleBreakViewSet',
 
     # Instructor Views
-    'SecureInstructorViewSet',
+    'InstructorViewSet',
 
     # Student Views
-    'SecureStudentViewSet',
+    'StudentProfileViewSet',
 
     # Booking Views
-    'BookingStatusViewSet',
     'BookingViewSet',
-
-    # Schedule Views
-    'ScheduleViewSet',
 
     # Role Views
     'UserRoleView',
@@ -107,6 +105,7 @@ __all__ = [
     'IsManager',
     'IsInstructor',
     'check_user_role',
+    'check_user_can_create_class',
 
     # Utils
     'haversine_distance',

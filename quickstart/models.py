@@ -1,7 +1,12 @@
+from datetime import timedelta
+import json
 from django.db import models
 from django.contrib.auth.models import AbstractUser, Permission
 from django.contrib.contenttypes.models import ContentType
 from storages.backends.s3boto3 import S3Boto3Storage
+from django.core.validators import MinValueValidator, MaxValueValidator
+from django.core.exceptions import ValidationError
+from django.db.models import Count
 from decimal import Decimal
 
 class Role(models.Model):
@@ -10,12 +15,15 @@ class Role(models.Model):
 
     def __str__(self):
         return self.name
+    
+    class Meta:
+        db_table = 'roles'
 
 class CustomUser(AbstractUser):
     userId = models.AutoField(primary_key=True)
     email = models.EmailField(unique=True)
     birth_date = models.DateField(null=True, blank=True)
-    bio = models.TextField(blank=True)
+    bio = models.TextField(null=True, blank=True)
     phone_number = models.CharField(max_length=100, blank=True)
     country = models.CharField(max_length=100)
     city = models.CharField(max_length=100)
@@ -40,34 +48,131 @@ class CustomUser(AbstractUser):
 
     def has_role(self, role_name):
         return self.role and self.role.name == role_name
+    
+    class Meta:
+        db_table = 'users'
 
 class BusinessInfo(models.Model):
-    businessName = models.CharField(max_length=100)
+    # Basic Info (BusinessInfoStep)
     businessId = models.AutoField(primary_key=True)
+    businessName = models.CharField(max_length=100)
+    businessType = models.CharField(max_length=50, choices=[
+        ('individual', 'Individual Teacher'),
+        ('school', 'School'),
+        ('studio', 'Studio'),
+        ('academy', 'Academy'),
+        ('center', 'Learning Center')
+    ])
+    businessDescription = models.TextField(max_length=500)
+    businessImage = models.ImageField(upload_to='business_images/', storage=S3Boto3Storage(), blank=True, null=True)
+    openingTime = models.TimeField()
+    closingTime = models.TimeField()
+    cancellationPolicy = models.CharField(max_length=20, choices=[
+        ('24h', '24 Hours Notice'),
+        ('48h', '48 Hours Notice'),
+        ('72h', '72 Hours Notice'),
+        ('flexible', 'Flexible')
+    ])
+    liabilityWaiver = models.BooleanField(default=False)
+
+    # Contact Details
+    studentContactPhone = models.CharField(max_length=100)
+    studentContactEmail = models.EmailField()
+    adminContactPhone = models.CharField(max_length=100, blank=True, null=True)
+    adminContactEmail = models.EmailField(blank=True, null=True)
+    preferredContact = models.CharField(max_length=20, choices=[
+        ('email', 'Email'),
+        ('phone', 'Phone'),
+        ('both', 'Both Email and Phone')
+    ])
+
+    # Location
+    businessAddress = models.CharField(max_length=255)
+    businessCity = models.CharField(max_length=100)
+    businessState = models.CharField(max_length=100)
+    businessZipCode = models.CharField(max_length=20)
+    latitude = models.DecimalField(max_digits=10, decimal_places=8, null=True)
+    longitude = models.DecimalField(max_digits=11, decimal_places=8, null=True)
+    showExactLocation = models.BooleanField(default=False)
+
+    # Class Types
+    classCategory = models.CharField(max_length=50, choices=[
+        ('academic', 'Academic'),
+        ('music', 'Music'),
+        ('dance', 'Dance'),
+        ('fitness', 'Fitness'),
+        ('art', 'Art'),
+        ('technology', 'Technology'),
+        ('sports', 'Sports')
+    ])
+    subcategories = models.CharField(max_length=255)  # Comma-separated
+    classFormats = models.CharField(max_length=255)   # Comma-separated
+    skillLevels = models.CharField(max_length=255)    # Comma-separated
+    ageGroups = models.CharField(max_length=255)      # Comma-separated
+
+    # Verification
+    verificationDocument = models.FileField(
+        upload_to='verification_documents/',
+        storage=S3Boto3Storage(),
+        blank=True,
+        null=True
+    )
+    verificationStatus = models.CharField(max_length=20, choices=[
+        ('pending', 'Pending'),
+        ('verified', 'Verified'),
+        ('rejected', 'Rejected')
+    ], default='pending')
+    termsAccepted = models.BooleanField(default=False)
+    privacyAccepted = models.BooleanField(default=False)
+
+    # Relations and Metadata
     owner = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='owned_businesses')
     managers = models.ManyToManyField(CustomUser, related_name='managed_businesses', blank=True)
-    businessImage = models.ImageField(upload_to='business_images/', storage=S3Boto3Storage(), blank=True, null=True)
-    businessType = models.CharField(max_length=100)
-    businessAddress = models.CharField(max_length=100)
-    businessDescription = models.CharField(max_length=500, blank=True, null=True)
-    businessCity = models.CharField(max_length=100)
-    businessState = models.CharField(max_length=100, blank=True, null=True)
-    businessPhoneNumber = models.CharField(max_length=100)
-    businessEmail = models.CharField(max_length=100, blank=True, null=True)
-    createdAt = models.DateTimeField(auto_now_add=True)
-    businessZipCode = models.CharField(max_length=100)
-    totalReviews = models.IntegerField(default=0)
     isActive = models.BooleanField(default=True)
+    totalReviews = models.IntegerField(default=0)
+    createdAt = models.DateTimeField(auto_now_add=True)
+    updatedAt = models.DateTimeField(auto_now=True)
+
+
+    def __str__(self):
+        return self.businessName
+
+    def get_subcategories(self):
+        return [x.strip() for x in self.subcategories.split(',')] if self.subcategories else []
+
+    def get_class_formats(self):
+        return [x.strip() for x in self.classFormats.split(',')] if self.classFormats else []
+
+    def get_skill_levels(self):
+        return [x.strip() for x in self.skillLevels.split(',')] if self.skillLevels else []
+
+    def get_age_groups(self):
+        return [x.strip() for x in self.ageGroups.split(',')] if self.ageGroups else []
 
     def update_total_reviews(self):
-        self.totalReviews = Reviews.objects.filter(
-            classId__businessId=self
-        ).count()
-        self.save()
-
+        """Update total reviews count efficiently using annotation"""
+        from .models import Reviews
+        total = Reviews.objects.filter(
+            classId__businessId=self.businessId
+        ).aggregate(
+            total=Count('reviewId')
+        )['total']
+        
+        # Only update if count has changed
+        if total != self.totalReviews:
+            BusinessInfo.objects.filter(businessId=self.businessId).update(
+                totalReviews=total
+            )
+            self.totalReviews = total
     class Meta:
-        db_table = 'businessInfo'
+        db_table = 'business_info'
         verbose_name_plural = 'Business Information'
+        indexes = [
+            models.Index(fields=['businessType']),
+            models.Index(fields=['classCategory']),
+            models.Index(fields=['isActive']),
+        ]
+
 
 class Instructor(models.Model):
     user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='instructor_profile')
@@ -87,6 +192,9 @@ class Instructor(models.Model):
 
     def __str__(self):
         return f"{self.user.first_name} {self.user.last_name}"
+    
+    class Meta:
+        db_table = 'instructors'
 
 class Education(models.Model):
     instructor = models.ForeignKey(Instructor, on_delete=models.CASCADE, related_name='education')
@@ -96,6 +204,9 @@ class Education(models.Model):
 
     def __str__(self):
         return f"{self.degree} from {self.institution}"
+    
+    class Meta:
+        db_table = 'instructor_education'
 
 class Certification(models.Model):
     instructor = models.ForeignKey(Instructor, on_delete=models.CASCADE, related_name='certifications')
@@ -103,6 +214,9 @@ class Certification(models.Model):
 
     def __str__(self):
         return self.name
+    
+    class Meta:
+        db_table = 'instructor_certifications'
 
 class Skill(models.Model):
     instructor = models.ForeignKey(Instructor, on_delete=models.CASCADE, related_name='skills')
@@ -110,6 +224,9 @@ class Skill(models.Model):
 
     def __str__(self):
         return self.name
+    
+    class Meta:
+        db_table = 'instructor_skills'
 
 class InstructorNote(models.Model):
     instructor = models.ForeignKey(Instructor, on_delete=models.CASCADE, related_name='notes')
@@ -120,26 +237,10 @@ class InstructorNote(models.Model):
     def __str__(self):
         return f"Note for {self.instructor} by {self.author}"
     
-class BookingStatus(models.Model):
-    name = models.CharField(max_length=50, unique=True)
+    class Meta:
+        db_table = 'instructor_notes'
+    
 
-    def __str__(self):
-        return self.name
-
-class Booking(models.Model):
-    id = models.AutoField(primary_key=True)
-    student = models.ForeignKey('Student', on_delete=models.CASCADE, related_name='bookings')
-    instructor = models.ForeignKey('Instructor', on_delete=models.SET_NULL, null=True, related_name='bookings')
-    class_instance = models.ForeignKey('ClassesMain', on_delete=models.CASCADE)
-    option = models.ForeignKey('ClassOption', on_delete=models.SET_NULL, null=True, blank=True)
-    status = models.ForeignKey(BookingStatus, on_delete=models.SET_NULL, null=True, blank=True)
-    booking_date = models.DateTimeField(auto_now_add=True)
-    class_date = models.DateTimeField()
-    cancellation_date = models.DateTimeField(null=True, blank=True)
-    notes = models.TextField(blank=True)
-
-    def __str__(self):
-        return f"Booking {self.id} - {self.student} - {self.class_instance}"
 
 class Student(models.Model):
     user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='student_profile')
@@ -151,13 +252,33 @@ class Student(models.Model):
     emergency_phone = models.CharField(max_length=20)
     allergies = models.TextField(blank=True)
     medical_conditions = models.TextField(blank=True)
-    active_classes = models.IntegerField(default=0)
-    total_classes_taken = models.IntegerField(default=0)
-    average_attendance = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
-    overall_performance = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
 
     def __str__(self):
         return f"{self.user.first_name} {self.user.last_name}"
+    
+    @property
+    def active_classes(self):
+        """Count of currently confirmed bookings"""
+        return self.bookings.filter(status='confirmed').count()
+    
+    @property
+    def total_classes_taken(self):
+        """Count of completed bookings"""
+        return self.bookings.filter(status='completed').count()
+    
+    @property
+    def average_attendance(self):
+        """Calculate attendance rate from completed vs total finished bookings"""
+        total_finished = self.bookings.filter(
+            status__in=['completed', 'cancelled']
+        ).count()
+        if total_finished == 0:
+            return Decimal('0.00')
+        completed = self.bookings.filter(status='completed').count()
+        return Decimal(str(round((completed / total_finished) * 100, 2)))
+    
+    class Meta:
+        db_table = 'students'
 
 class StudentNote(models.Model):
     student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='notes')
@@ -167,40 +288,9 @@ class StudentNote(models.Model):
 
     def __str__(self):
         return f"Note for {self.student} by {self.author}"
-
-class Enrollment(models.Model):
-    student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='enrollments')
-    class_instance = models.ForeignKey('ClassesMain', on_delete=models.CASCADE)
-    enrollment_date = models.DateField(auto_now_add=True)
-    status = models.CharField(max_length=20, choices=[
-        ('active', 'Active'),
-        ('completed', 'Completed'),
-        ('withdrawn', 'Withdrawn')
-    ])
-
-    def __str__(self):
-        return f"{self.student} enrolled in {self.class_instance}"
-
-class Attendance(models.Model):
-    enrollment = models.ForeignKey(Enrollment, on_delete=models.CASCADE, related_name='attendances')
-    date = models.DateField()
-    status = models.CharField(max_length=20, choices=[
-        ('present', 'Present'),
-        ('absent', 'Absent'),
-        ('late', 'Late')
-    ])
-
-    def __str__(self):
-        return f"{self.enrollment.student} - {self.date} - {self.status}"
-
-class Performance(models.Model):
-    enrollment = models.ForeignKey(Enrollment, on_delete=models.CASCADE, related_name='performances')
-    date = models.DateField()
-    score = models.DecimalField(max_digits=5, decimal_places=2)
-    comments = models.TextField(blank=True)
-
-    def __str__(self):
-        return f"{self.enrollment.student} - {self.date} - Score: {self.score}"
+    
+    class Meta:
+        db_table = 'student_notes'
 
 class ClassImage(models.Model):
     imageId = models.AutoField(primary_key=True)
@@ -209,35 +299,35 @@ class ClassImage(models.Model):
     createdAt = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        db_table = 'classImages'
+        db_table = 'class_images'
 
 class ClassesMain(models.Model):
     classId = models.AutoField(primary_key=True)
-    businessId = models.ForeignKey(BusinessInfo, on_delete=models.CASCADE, related_name='classes')
-    instructor = models.ForeignKey(Instructor, on_delete=models.SET_NULL, null=True, related_name='classes')
-    className = models.CharField(max_length=50)
-    classDescription = models.CharField(max_length=2000, blank=True, null=True)
-    classLocation = models.CharField(max_length=100)
-    classCoordinates = models.CharField(max_length=100)
+    businessId = models.ForeignKey('BusinessInfo', on_delete=models.CASCADE)
+    
+    # Basic Info Fields
+    title = models.CharField(max_length=100)
+    description = models.TextField(max_length=2000)
+    features = models.JSONField(default=list)  # Store as JSON array
+    category = models.CharField(max_length=50)
+    subcategory = models.CharField(max_length=50, null=True, blank=True)
+    
+    # Location Fields
+    location = models.CharField(max_length=255)
+    coordinates = models.CharField(max_length=50)  # "lat,long" format
     saltLocation = models.BooleanField(default=False)
-    classRating = models.DecimalField(max_digits=3, decimal_places=1, default=Decimal('0.0'))
-    classFeatures = models.TextField(default='[]')  # Store JSON as text
-    classPrice = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
-    classCategory = models.CharField(max_length=100)
-    classFilterCategory = models.CharField(max_length=100)
-    classFilterSubcategory = models.CharField(max_length=100)
-    classTotalReviews = models.IntegerField(default=0)
-    isActive = models.BooleanField(default=True)
+    
+    # Contact Fields
+    studentContactEmail = models.EmailField(null=True, blank=True)
+    studentContactPhone = models.CharField(max_length=20, null=True, blank=True)
+    adminContactEmail = models.EmailField(null=True, blank=True)
+    adminContactPhone = models.CharField(max_length=20, null=True, blank=True)
+    
     createdAt = models.DateTimeField(auto_now_add=True)
     updatedAt = models.DateTimeField(auto_now=True)
-    studentContactEmail = models.CharField(max_length=100, blank=True, null=True)
-    studentContactPhone = models.CharField(max_length=100, blank=True, null=True)
-    adminContactEmail = models.CharField(max_length=100, blank=True, null=True)
-    adminContactPhone = models.CharField(max_length=100, blank=True, null=True)
 
     class Meta:
-        db_table = 'classesMain'
-        ordering = ['-createdAt']
+        db_table = 'classes'
 
 class Favorites(models.Model):
     favoriteId = models.AutoField(primary_key=True)
@@ -265,150 +355,333 @@ class Reviews(models.Model):
     class Meta:
         db_table = 'reviews'
 
-class Schedule(models.Model):
-    id = models.AutoField(primary_key=True)
-    class_instance = models.ForeignKey('ClassesMain', on_delete=models.CASCADE, related_name='schedules')
-    option = models.ForeignKey('ClassOption', on_delete=models.SET_NULL, null=True, blank=True)
-    instructor = models.ForeignKey(Instructor, on_delete=models.CASCADE)
-    date = models.DateField()
-    start_time = models.TimeField()
-    end_time = models.TimeField()
-    status = models.CharField(max_length=20, choices=[
-        ('active', 'Active'),
-        ('cancelled', 'Cancelled'),
-        ('completed', 'Completed')
-    ])
-    room = models.CharField(max_length=100, blank=True, null=True)
-    capacity = models.IntegerField()
-    enrolled_students = models.IntegerField(default=0)
-    notes = models.TextField(blank=True)
-    is_recurring = models.BooleanField(default=False)
-    recurrence_pattern = models.CharField(max_length=20, choices=[
-        ('daily', 'Daily'),
-        ('weekly', 'Weekly'),
-        ('monthly', 'Monthly')
-    ], blank=True, null=True)
-    recurrence_end_date = models.DateField(blank=True, null=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        ordering = ['date', 'start_time']
-        indexes = [
-            models.Index(fields=['date', 'start_time']),
-            models.Index(fields=['instructor']),
-            models.Index(fields=['status']),
-        ]
-
-class ScheduleStudent(models.Model):
-    schedule = models.ForeignKey(Schedule, on_delete=models.CASCADE, related_name='students')
-    student = models.ForeignKey('Student', on_delete=models.CASCADE)
-    status = models.CharField(max_length=20, choices=[
-        ('present', 'Present'),
-        ('absent', 'Absent'),
-        ('late', 'Late'),
-    ])
-    attendance_time = models.DateTimeField(null=True, blank=True)
-    notes = models.TextField(blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        unique_together = ('schedule', 'student')
-        indexes = [
-            models.Index(fields=['schedule', 'student']),
-            models.Index(fields=['status']),
-        ]
-
-    def __str__(self):
-        return f"{self.student} - {self.schedule}"
-
-class ScheduleConflict(models.Model):
-    schedule = models.ForeignKey(Schedule, on_delete=models.CASCADE, related_name='conflicts')
-    conflicting_schedule = models.ForeignKey(Schedule, on_delete=models.CASCADE, related_name='conflicting_with')
-    conflict_type = models.CharField(max_length=20, choices=[
-        ('instructor', 'Instructor Double Booking'),
-        ('room', 'Room Double Booking'),
-        ('student', 'Student Double Booking'),
-    ])
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        unique_together = ('schedule', 'conflicting_schedule')
-
 class ClassOption(models.Model):
     optionId = models.AutoField(primary_key=True)
-    classId = models.ForeignKey(ClassesMain, on_delete=models.CASCADE, related_name='options')
-    
+    classId = models.ForeignKey('ClassesMain', on_delete=models.CASCADE, related_name='options')
+
     # Basic Info
     title = models.CharField(max_length=100)
-    description = models.TextField(blank=True, null=True)
-    images = models.TextField(default='[]')  # Store JSON as text
+    description = models.TextField(null=True, blank=True)
     
-    # Schedule
-    time = models.TimeField(null=True)
-    frequency = models.CharField(max_length=20, choices=[
+    BOOKING_TYPES = [
+        ('single', 'Single Session'),
+        ('course', 'Full Course'),
+        ('recurring', 'Recurring Classes')
+    ]
+    booking_type = models.CharField(
+        max_length=20,
+        choices=BOOKING_TYPES,
+        default='single'
+    )
+
+    image = models.ImageField(
+        upload_to='class_options/', 
+        storage=S3Boto3Storage(),
+        null=True,
+        blank=True
+    )
+    
+    # Common Fields
+    duration = models.IntegerField(default=60)
+    maxParticipants = models.IntegerField(
+        validators=[MinValueValidator(1)],
+        null=True,
+        blank=True
+    )
+
+    level = models.CharField(
+        max_length=20,
+        choices=[
+            ('beginner', 'Beginner'),
+            ('intermediate', 'Intermediate'),
+            ('advanced', 'Advanced'),
+            ('all', 'All Levels')
+        ]
+    )
+
+    # Pricing
+    price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    PRICE_TYPES = [
+        ('per_session', 'Per Session'),
+        ('per_month', 'Monthly'),
+        ('full_course', 'Full Course')
+    ]
+    price_type = models.CharField(
+        max_length=20, 
+        choices=PRICE_TYPES,
+        default='per_session'
+    )
+
+    # Course Specific
+    total_sessions = models.IntegerField(null=True, blank=True)
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
+
+    # Recurring Specific
+    RECURRENCE_PATTERNS = [
         ('weekly', 'Weekly'),
         ('biweekly', 'Bi-weekly'),
         ('monthly', 'Monthly')
-    ])
-    
-    # Capacity & Level
-    maxParticipants = models.IntegerField(null=True)
-    level = models.CharField(max_length=20, choices=[
-        ('beginner', 'Beginner'),
-        ('intermediate', 'Intermediate'),
-        ('advanced', 'Advanced'),
-        ('all', 'All Levels')
-    ])
-    
-    # Pricing & Policies
-    price = models.DecimalField(max_digits=10, decimal_places=2)
-    type = models.CharField(max_length=20, choices=[
-        ('single', 'Per Class'),
-        ('course', 'Full Course'),
-        ('month', 'Per Month')
-    ])
-    cancellationPolicy = models.CharField(max_length=30, choices=[
-        ('24h', '24 Hours Notice'),
-        ('48h', '48 Hours Notice'),
-        ('72h', '72 Hours Notice'),
-        ('flexible', 'Flexible')
-    ])
-    
-    # Image handling
-    image = models.ImageField(
-        upload_to='class_options/',
-        storage=S3Boto3Storage(),
-        blank=True,
-        null=True
+    ]
+    recurrence_pattern = models.CharField(
+        max_length=20,
+        choices=RECURRENCE_PATTERNS,
+        null=True,
+        blank=True
     )
+    sessions_per_week = models.IntegerField(null=True, blank=True)
+    auto_renew_default = models.BooleanField(default=False)
     
-    # Timestamps
+    # Additional Info
+    equipment = models.JSONField(default=list)
+    tags = models.JSONField(default=list)
+    cancellationPolicy = models.CharField(
+        max_length=30,
+        choices=[
+            ('24h', '24 Hours Notice'),
+            ('48h', '48 Hours Notice'),
+            ('72h', '72 Hours Notice'),
+            ('flexible', 'Flexible')
+        ]
+    )
+    active = models.BooleanField(default=True)
     createdAt = models.DateTimeField(auto_now_add=True)
     updatedAt = models.DateTimeField(auto_now=True)
 
+    def get_image_url(self):
+        if self.image:
+            return self.image.url
+        return None
+    
     class Meta:
         db_table = 'class_options'
-        ordering = ['createdAt']
 
-# New models to replace ArrayField relationships
-class ClassOptionDay(models.Model):
-    option = models.ForeignKey(ClassOption, on_delete=models.CASCADE, related_name='days')
-    day = models.CharField(max_length=3)  # e.g., 'MON', 'TUE', etc.
+class Schedule(models.Model):
+    """Template for recurring schedules"""
+    option = models.ForeignKey(ClassOption, on_delete=models.CASCADE, related_name='schedules')
+    day = models.CharField(
+        max_length=3,
+        choices=[
+            ('Mon', 'Monday'),
+            ('Tue', 'Tuesday'),
+            ('Wed', 'Wednesday'),
+            ('Thu', 'Thursday'),
+            ('Fri', 'Friday'),
+            ('Sat', 'Saturday'),
+            ('Sun', 'Sunday')
+        ]
+    )
+    time = models.TimeField()
+    price = models.DecimalField(
+        max_digits=10, 
+        decimal_places=2, 
+        null=True, 
+        blank=True,
+        help_text="Override price for this schedule. If not set, uses ClassOption default price"
+    )
+    maxParticipants = models.IntegerField(
+        null=True, 
+        blank=True,
+        help_text="Override max participants for this schedule. If not set, uses ClassOption default"
+    )
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    @property
+    def effective_max_participants(self):
+        return self.maxParticipants if self.maxParticipants is not None else self.option.maxParticipants
+
+    @property
+    def effective_price(self):
+        return self.price if self.price is not None else self.option.price
+
+    def generate_instances(self, start_date, weeks_ahead=12):
+        day_to_number = {
+            'Mon': 0, 'Tue': 1, 'Wed': 2, 'Thu': 3, 
+            'Fri': 4, 'Sat': 5, 'Sun': 6
+        }
+        target_weekday = day_to_number[self.day]
+        
+        current_date = start_date
+        while current_date.weekday() != target_weekday:
+            current_date += timedelta(days=1)
+        
+        end_date = start_date + timedelta(weeks=weeks_ahead)
+        instances = []
+        
+        while current_date < end_date:
+            # Check if an instance already exists for this date
+            existing = ScheduleInstance.objects.filter(
+                schedule=self,
+                date=current_date
+            ).exists()
+            
+            if not existing:
+                instance = ScheduleInstance(
+                    schedule=self,
+                    date=current_date,
+                    time=self.time,
+                    price=self.effective_price,
+                    max_participants=self.effective_max_participants
+                )
+                instances.append(instance)
+            current_date += timedelta(weeks=1)
+            
+        return ScheduleInstance.objects.bulk_create(instances)
 
     class Meta:
-        unique_together = ('option', 'day')
+        db_table = 'schedules'
+        ordering = ['day', 'time']
+        indexes = [
+            models.Index(fields=['option', 'day', 'time']),
+        ]
 
-class ClassOptionEquipment(models.Model):
-    option = models.ForeignKey(ClassOption, on_delete=models.CASCADE, related_name='equipment')
-    equipment = models.CharField(max_length=100)
+class ScheduleInstance(models.Model):
+    """Specific occurrence of a schedule"""
+    schedule = models.ForeignKey(Schedule, on_delete=models.CASCADE, related_name='instances')
+    date = models.DateField()
+    time = models.TimeField()
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    max_participants = models.IntegerField()
+    
+    STATUS_CHOICES = [
+        ('scheduled', 'Scheduled'),
+        ('cancelled', 'Cancelled'),
+        ('completed', 'Completed')
+    ]
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='scheduled')
+    cancellation_reason = models.TextField(blank=True)
+    
+    # Attendance tracking
+    attendance_marked = models.BooleanField(default=False)
+    instructor_notes = models.TextField(blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    @property
+    def current_bookings(self):
+        return self.bookings.filter(
+            status='confirmed'
+        ).aggregate(
+            total=models.Sum('participants')
+        )['total'] or 0
+    
+    @property
+    def available_spots(self):
+        return self.max_participants - self.current_bookings
+
+    def can_accommodate(self, requested_participants):
+        return self.available_spots >= requested_participants
 
     class Meta:
-        unique_together = ('option', 'equipment')
+        db_table = 'schedule_instances'
+        unique_together = ['schedule', 'date']
+        indexes = [
+            models.Index(fields=['date', 'time']),
+            models.Index(fields=['schedule', 'date']),
+        ]
 
-class ClassOptionTag(models.Model):
-    option = models.ForeignKey(ClassOption, on_delete=models.CASCADE, related_name='tags')
-    tag = models.CharField(max_length=50)
+class ScheduleBreak(models.Model):
+    """Defines break periods for schedules"""
+    schedule = models.ForeignKey(Schedule, on_delete=models.CASCADE, related_name='breaks')
+    start_date = models.DateField()
+    end_date = models.DateField()
+    reason = models.CharField(max_length=200)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        # Automatically cancel all instances in this date range
+        instances = ScheduleInstance.objects.filter(
+            schedule=self.schedule,
+            date__range=(self.start_date, self.end_date),
+            status='scheduled'
+        )
+        instances.update(
+            status='cancelled',
+            cancellation_reason=f"Break period: {self.reason}"
+        )
+    
+    class Meta:
+        db_table = 'schedule_breaks'
+        indexes = [
+            models.Index(fields=['schedule', 'start_date', 'end_date']),
+        ]
+
+class Attendance(models.Model):
+    """Tracks attendance for schedule instances"""
+    schedule_instance = models.ForeignKey(ScheduleInstance, on_delete=models.CASCADE, related_name='attendance_records')
+    student = models.ForeignKey('Student', on_delete=models.CASCADE, related_name='attendance_records')
+    STATUS_CHOICES = [
+        ('present', 'Present'),
+        ('absent', 'Absent'),
+        ('late', 'Late')
+    ]
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES)
+    notes = models.TextField(blank=True)
+    marked_at = models.DateTimeField(auto_now_add=True)
+    marked_by = models.ForeignKey('CustomUser', on_delete=models.SET_NULL, null=True)
 
     class Meta:
-        unique_together = ('option', 'tag')
+        db_table = 'attendance'
+        unique_together = ['schedule_instance', 'student']
+        indexes = [
+            models.Index(fields=['schedule_instance', 'student']),
+            models.Index(fields=['status', 'marked_at']),
+        ]
+
+class Booking(models.Model):
+    id = models.AutoField(primary_key=True)
+    schedule_instance = models.ForeignKey(ScheduleInstance, on_delete=models.CASCADE, related_name='bookings')
+    student = models.ForeignKey('Student', on_delete=models.CASCADE, related_name='bookings')
+    participants = models.IntegerField(validators=[MinValueValidator(1), MaxValueValidator(4)])
+    notes = models.TextField(blank=True)
+    
+    status = models.CharField(max_length=20, choices=[
+        ('pending', 'Pending'),
+        ('confirmed', 'Confirmed'), 
+        ('cancelled', 'Cancelled'),
+        ('completed', 'Completed')
+    ], default='pending')
+    
+    booking_date = models.DateTimeField(auto_now_add=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancellation_reason = models.TextField(blank=True)
+    
+    amount_paid = models.DecimalField(max_digits=10, decimal_places=2)
+    payment_status = models.CharField(max_length=20, choices=[
+        ('pending', 'Pending'),
+        ('paid', 'Paid'),
+        ('refunded', 'Refunded')
+    ], default='pending')
+
+    class Meta:
+        db_table = 'bookings'
+        indexes = [
+            models.Index(fields=['schedule_instance', 'status']),
+            models.Index(fields=['student', 'status']),
+            models.Index(fields=['booking_date']),
+        ]
+
+class StudentEnrollment(models.Model):
+    """Tracks student enrollment in classes"""
+    student = models.ForeignKey('Student', on_delete=models.CASCADE, related_name='enrollments')
+    class_option = models.ForeignKey('ClassOption', on_delete=models.CASCADE, related_name='enrollments')
+    start_date = models.DateField()
+    end_date = models.DateField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=[
+        ('active', 'Active'),
+        ('completed', 'Completed'),
+        ('dropped', 'Dropped'),
+        ('pending', 'Pending')
+    ], default='pending')
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'student_enrollments'
+        indexes = [
+            models.Index(fields=['student', 'status']),
+            models.Index(fields=['class_option', 'status']),
+        ]

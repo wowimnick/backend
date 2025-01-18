@@ -2,10 +2,18 @@ from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.generics import RetrieveUpdateDestroyAPIView
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.db.models import Sum, Count, Avg
 from datetime import timedelta
+from rest_framework.decorators import api_view, permission_classes, parser_classes
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.response import Response
+from rest_framework.parsers import MultiPartParser, FormParser
+import logging
+
+from .permissions import check_user_role
 
 from ..models import (
     BusinessInfo, Booking, ClassesMain, Reviews
@@ -13,9 +21,60 @@ from ..models import (
 from ..serializers import (
     BusinessInfoSerializer,
     BusinessStatsSerializer,
-    ClassesMainSerializer
+    ClassesMainSerializer,
+    BusinessRegistrationSerializer
 )
 from .permissions import IsBusinessOwner, IsManager
+
+logger = logging.getLogger(__name__)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser])
+def register_business(request):
+    try:
+        serializer = BusinessRegistrationSerializer(
+            data=request.data,
+            context={'request': request}
+        )
+        
+        if serializer.is_valid():
+            business = serializer.save()
+            return Response({
+                'status': 'success',
+                'message': 'Business registered successfully',
+                'businessId': business.businessId
+            }, status=status.HTTP_201_CREATED)
+        
+        return Response({
+            'status': 'error',
+            'errors': serializer.errors
+        }, status=status.HTTP_400_BAD_REQUEST)
+        
+    except Exception as e:
+        logger.error(f"Error in business registration: {str(e)}")
+        return Response({
+            'status': 'error',
+            'message': 'An unexpected error occurred'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_user_businesses(request):
+    """Get businesses user can manage"""
+    user = request.user
+    
+    if user.has_role(['Admin', 'Super Admin']):
+        businesses = BusinessInfo.objects.all()
+    else:
+        businesses = BusinessInfo.objects.filter(
+            Q(owner=user) |
+            Q(managers=user)
+        ).distinct()
+        
+    serializer = BusinessInfoSerializer(businesses, many=True)
+    return Response(serializer.data)
+
 
 class BusinessViewSet(viewsets.ModelViewSet):
     serializer_class = BusinessStatsSerializer
@@ -115,14 +174,37 @@ class BusinessInfoDetail(RetrieveUpdateDestroyAPIView):
         return Response(serializer.data)
 
 class BusinessInfoViewSet(viewsets.ModelViewSet):
-    queryset = BusinessInfo.objects.all()
     serializer_class = BusinessInfoSerializer
+    queryset = BusinessInfo.objects.all()
 
     def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            permission_classes = [IsBusinessOwner]
-        elif self.action in ['list', 'retrieve']:
-            permission_classes = [IsManager]
+        """
+        Instantiate and return the list of permissions that this view requires.
+        """
+        if self.action in ['list', 'retrieve']:
+            # Allow anyone to view business listings and details
+            permission_classes = [AllowAny]
         else:
-            permission_classes = [permissions.IsAuthenticated]
+            # Require authentication and proper roles for other actions
+            permission_classes = [IsAuthenticated, IsBusinessOwner]
         return [permission() for permission in permission_classes]
+
+    def get_queryset(self):
+        """
+        Return different querysets based on authentication status and user role
+        """
+        queryset = super().get_queryset()
+        
+        if not self.request.user.is_authenticated:
+            # For anonymous users, only show active businesses
+            return queryset.filter(isActive=True)
+            
+        if check_user_role(self.request.user, ['Admin', 'Super Admin']):
+            # Admins can see everything
+            return queryset
+            
+        # Business owners/managers see their own businesses
+        return queryset.filter(
+            Q(owner=self.request.user) |
+            Q(managers=self.request.user)
+        ).distinct()
