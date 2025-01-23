@@ -81,7 +81,10 @@ class BusinessViewSet(viewsets.ModelViewSet):
     permission_classes = [IsManager]
 
     def get_queryset(self):
-        return BusinessInfo.objects.filter(owner=self.request.user)
+        return BusinessInfo.objects.filter(
+            Q(owner=self.request.user) |
+            Q(managers=self.request.user)
+        ).distinct()
 
     @action(detail=True, methods=['get'])
     def dashboard_stats(self, request, pk=None):

@@ -2,9 +2,9 @@
 from datetime import datetime
 import json
 from django.forms import ValidationError
-from rest_framework import generics
+from rest_framework import generics, viewsets, status, permissions
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import BasePermission, IsAuthenticated, AllowAny
 
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django.db import transaction
@@ -78,116 +78,6 @@ def toggle_option_active(request, pk, option_id):
         return Response({
             'error': str(e)
         }, status=status.HTTP_400_BAD_REQUEST)
-
-@api_view(['GET'])
-def search_classes_by_location(request):
-    """
-    Search for classes based on coordinates within a radius.
-    Required parameters: lat, lng
-    Optional parameters: 
-    - radius (in km, defaults to 10)
-    - location (text-based search)
-    - date (for filtering by availability)
-    """
-    try:
-        # Get search parameters
-        lat = request.GET.get('lat')
-        lng = request.GET.get('lng')
-        radius = float(request.GET.get('radius', 100))
-        location = request.GET.get('location')
-        date = request.GET.get('date')
-        
-        # Initialize queryset
-        queryset = ClassesMain.objects.all()
-        
-        # Apply location-based filtering
-        if location:
-            queryset = queryset.filter(
-                Q(location__icontains=location) |
-                Q(businessId__businessCity__icontains=location) |
-                Q(businessId__businessState__icontains=location)
-            )
-        
-        # If coordinates provided, filter by distance
-        if lat and lng:
-            try:
-                search_lat = float(lat)
-                search_lng = float(lng)
-                
-                classes_with_distance = []
-                for class_obj in queryset:
-                    try:
-                        if not class_obj.coordinates:
-                            continue
-                            
-                        class_lat, class_lng = map(
-                            float, 
-                            class_obj.coordinates.split(',')
-                        )
-                        
-                        distance = haversine_distance(
-                            search_lat, search_lng,
-                            class_lat, class_lng
-                        )
-                        
-                        if distance <= radius:
-                            classes_with_distance.append((class_obj, distance))
-                                
-                    except (ValueError, AttributeError) as e:
-                        logger.warning(f"Error processing coordinates for class {class_obj.classId}: {str(e)}")
-                        continue
-
-                # Sort by distance
-                classes_with_distance.sort(key=lambda x: x[1])
-                
-                # Prepare response data
-                serialized_classes = []
-                for class_obj, distance in classes_with_distance:
-                    class_data = ClassesMainSerializer(class_obj).data
-                    class_data['distance'] = round(distance, 2)
-                    class_data['distance_text'] = (
-                        f"{round(distance, 1)}km away" if distance >= 1 
-                        else f"{round(distance * 1000)}m away"
-                    )
-                    serialized_classes.append(class_data)
-                    
-            except ValueError:
-                return Response({
-                    "error": "Invalid coordinates format",
-                    "message": "Latitude and longitude must be valid numbers"
-                }, status=status.HTTP_400_BAD_REQUEST)
-                
-        else:
-            # If no coordinates, just serialize the filtered queryset
-            serialized_classes = ClassesMainSerializer(queryset, many=True).data
-            
-        # Add search metadata
-        response_data = {
-            'results': serialized_classes,
-            'total': len(serialized_classes),
-            'filters_applied': {
-                'location': bool(location),
-                'coordinates': bool(lat and lng),
-                'date': bool(date),
-                'radius_km': radius if lat and lng else None
-            }
-        }
-        
-        # Add coordinates to response if provided
-        if lat and lng:
-            response_data['search_coordinates'] = {
-                'lat': float(lat),
-                'lng': float(lng)
-            }
-
-        return Response(response_data)
-
-    except Exception as e:
-        logger.error(f"Unexpected error in search_classes_by_location: {str(e)}")
-        return Response({
-            "error": "Server error",
-            "message": "An unexpected error occurred while processing your request"
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 def validate_schedule_conflicts(option, schedule_data, exclude_id=None):
     """
@@ -275,166 +165,322 @@ class BusinessPermissionMixin:
             Q(managers=user)
         ).exists()
     
-class ClassView(BusinessPermissionMixin, generics.GenericAPIView):
-    permission_classes = []  # Allow unauthenticated access for GET
-    parser_classes = [MultiPartParser, FormParser]
-    queryset = ClassesMain.objects.all()
+class BusinessClassesPermission(permissions.BasePermission):
+    def has_permission(self, request, view):
+        """
+        Global permissions check for accessing class views.
+        """
+        # Public read access is always allowed
+        if request.method in permissions.SAFE_METHODS and not getattr(view, 'is_business_context', False):
+            return True
 
-    def get_permissions(self):
+        # For business or write operations, require authentication
+        if not request.user.is_authenticated:
+            return False
+
+        # Admin/Super Admin can do anything
+        if check_user_role(request.user, ['Admin', 'Super Admin']):
+            return True
+
+        # For business context or write operations, check business roles
+        if getattr(view, 'is_business_context', False) or request.method not in permissions.SAFE_METHODS:
+            return check_user_role(request.user, ['Business Owner', 'Manager'])
+
+        return True
+
+    def has_object_permission(self, request, view, obj):
         """
-        Instantiate and return the list of permissions that this view requires.
+        Object-level permission check for specific class instances.
         """
-        if self.request.method in ['POST', 'PUT', 'PATCH', 'DELETE']:
-            return [IsAuthenticated()]
-        return []
+        # Public read access is always allowed
+        if request.method in permissions.SAFE_METHODS and not getattr(view, 'is_business_context', False):
+            return True
+
+        # Admin/Super Admin can do anything
+        if check_user_role(request.user, ['Admin', 'Super Admin']):
+            return True
+
+        # Check if user owns or manages the business
+        try:
+            is_owner = obj.businessId.owner == request.user
+            is_manager = obj.businessId.managers.filter(id=request.user.id).exists()
+            return is_owner or is_manager
+        except AttributeError:
+            return False
+    
+class ClassViewSet(viewsets.ModelViewSet):
+    serializer_class = ClassesMainSerializer
+    permission_classes = [BusinessClassesPermission]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.is_business_context = False
 
     def get_serializer_class(self):
-        if self.request.method == 'POST':
+        if self.action == 'create':
             return ClassCreateSerializer
         return ClassesMainSerializer
 
     def get_queryset(self):
-        queryset = super().get_queryset()
-        queryset = self.get_business_queryset(queryset)
+        queryset = ClassesMain.objects.all()
         
-        # Apply additional filters
-        private = self.request.query_params.get('private', None)
-        group = self.request.query_params.get('group', None)
-
-        if private == 'true':
-            queryset = queryset.filter(
-                Exists(ClassOption.objects.filter(classId=OuterRef('pk'), type='single'))
-            )
-        elif group == 'true':
-            queryset = queryset.filter(
-                Exists(ClassOption.objects.filter(classId=OuterRef('pk'), type='course'))
-            )
-
-        return queryset
-
-    def get(self, request, *args, **kwargs):
-        """Handle both list and detail GET requests"""
-        if 'pk' in kwargs:
-            # Detail view
-            instance = self.get_object()
-            serializer = self.get_serializer(instance)
-            return Response(serializer.data)
-        else:
-            # List view
-            queryset = self.get_queryset()
-            serializer = self.get_serializer(queryset, many=True)
-            return Response(serializer.data)
-
-    def post(self, request, *args, **kwargs):
-        """Create new class - requires business owner/manager permission"""
-        if not check_user_role(request.user, ['Business Owner', 'Manager', 'Admin', 'Super Admin']):
-            raise PermissionDenied("You don't have permission to create classes")
-            
-        # This line needs to be changed
-        serializer = ClassCreateSerializer(data=request.data)  # OLD
+        # Add logging to track queryset filtering
+        logger.debug(f"Getting queryset for user {self.request.user}, business_context: {self.is_business_context}")
         
-        # Change to this:
-        serializer = ClassCreateSerializer(
-            data=request.data,
-            context={'request': request}  # Add this line
+        # Business context - show only owned/managed classes
+        if self.is_business_context:
+            if check_user_role(self.request.user, ['Admin', 'Super Admin']):
+                return queryset
+                
+            return queryset.filter(
+                Q(businessId__owner=self.request.user) |
+                Q(businessId__managers=self.request.user)
+            ).distinct()
+        
+        # Public context - show only active classes
+        return queryset.filter(
+            Exists(
+                ClassOption.objects.filter(
+                    classId=OuterRef('pk'),
+                    active=True
+                )
+            )
         )
-        
-        serializer.is_valid(raise_exception=True)
-        
-        user = request.user
+    
+    @action(detail=False, methods=['get'])
+    def search(self, request):
+        """
+        Search for classes based on coordinates within a radius.
+        Required parameters: lat, lng
+        Optional parameters: 
+        - radius (in km, defaults to 10)
+        - location (text-based search)
+        - date (for filtering by availability)
+        """
         try:
-            # Get the user's business
-            business = BusinessInfo.objects.get(owner=user)
-        except BusinessInfo.DoesNotExist:
-            try:
-                # Check if they're a manager instead
-                business = BusinessInfo.objects.get(managers=user)
-            except BusinessInfo.DoesNotExist:
-                raise PermissionDenied("User has no associated business")
+            # Get search parameters
+            lat = request.query_params.get('lat')
+            lng = request.query_params.get('lng')
+            radius = float(request.query_params.get('radius', 100))
+            location = request.query_params.get('location')
+            date = request.query_params.get('date')
+            
+            # Initialize queryset
+            queryset = ClassesMain.objects.all()
+            
+            # Apply location-based filtering
+            if location:
+                queryset = queryset.filter(
+                    Q(location__icontains=location) |
+                    Q(businessId__businessCity__icontains=location) |
+                    Q(businessId__businessState__icontains=location)
+                )
+            
+            # If coordinates provided, filter by distance
+            if lat and lng:
+                try:
+                    search_lat = float(lat)
+                    search_lng = float(lng)
+                    
+                    classes_with_distance = []
+                    for class_obj in queryset:
+                        try:
+                            if not class_obj.coordinates:
+                                continue
+                                
+                            class_lat, class_lng = map(
+                                float, 
+                                class_obj.coordinates.split(',')
+                            )
+                            
+                            distance = haversine_distance(
+                                search_lat, search_lng,
+                                class_lat, class_lng
+                            )
+                            
+                            if distance <= radius:
+                                classes_with_distance.append((class_obj, distance))
+                                    
+                        except (ValueError, AttributeError) as e:
+                            logger.warning(f"Error processing coordinates for class {class_obj.classId}: {str(e)}")
+                            continue
 
-        serializer.save(businessId=business)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+                    # Sort by distance
+                    classes_with_distance.sort(key=lambda x: x[1])
+                    
+                    # Prepare response data
+                    serialized_classes = []
+                    for class_obj, distance in classes_with_distance:
+                        class_data = ClassesMainSerializer(class_obj).data
+                        class_data['distance'] = round(distance, 2)
+                        class_data['distance_text'] = (
+                            f"{round(distance, 1)}km away" if distance >= 1 
+                            else f"{round(distance * 1000)}m away"
+                        )
+                        serialized_classes.append(class_data)
+                        
+                except ValueError:
+                    return Response({
+                        "error": "Invalid coordinates format",
+                        "message": "Latitude and longitude must be valid numbers"
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                    
+            else:
+                # If no coordinates, just serialize the filtered queryset
+                serialized_classes = ClassesMainSerializer(queryset, many=True).data
+                
+            # Add search metadata
+            response_data = {
+                'results': serialized_classes,
+                'total': len(serialized_classes),
+                'filters_applied': {
+                    'location': bool(location),
+                    'coordinates': bool(lat and lng),
+                    'date': bool(date),
+                    'radius_km': radius if lat and lng else None
+                }
+            }
+            
+            # Add coordinates to response if provided
+            if lat and lng:
+                response_data['search_coordinates'] = {
+                    'lat': float(lat),
+                    'lng': float(lng)
+                }
 
-    def put(self, request, *args, **kwargs):
-        """Full update of a class"""
-        return self.update(request, *args, **kwargs)
+            return Response(response_data)
 
-    def patch(self, request, *args, **kwargs):
-        """Partial update of a class"""
-        return self.update(request, *args, partial=True, **kwargs)
+        except Exception as e:
+            logger.error(f"Unexpected error in search: {str(e)}")
+            return Response({
+                "error": "Server error",
+                "message": "An unexpected error occurred while processing your request"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    def delete(self, request, *args, **kwargs):
-        """Delete a class and all related data"""
+    @action(detail=False, methods=['get'])
+    def business_classes(self, request):
+        """Endpoint for business dashboard"""
+        self.is_business_context = True
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['get'])
+    def business_detail(self, request, pk=None):
+        """Detailed view for business dashboard"""
+        self.is_business_context = True
+        instance = self.get_object()
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['get', 'post'])
+    def images(self, request, pk=None):
+        """Handle class images list and creation"""
+        if request.method == 'GET':
+            images = ClassImage.objects.filter(classId=pk)
+            serializer = ClassImageSerializer(images, many=True)
+            return Response(serializer.data)
+        
+        elif request.method == 'POST':
+            self.is_business_context = True
+            class_instance = self.get_object()
+            
+            # Handle multiple images
+            images = request.FILES.getlist('images')
+            created_images = []
+            
+            for image in images:
+                img = ClassImage.objects.create(
+                    classId=class_instance,
+                    image=image
+                )
+                created_images.append(img)
+            
+            serializer = ClassImageSerializer(created_images, many=True)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['delete'], url_path='images/(?P<image_id>[^/.]+)')
+    def delete_image(self, request, pk=None, image_id=None):
+        """Delete specific class image"""
+        self.is_business_context = True
+        class_instance = self.get_object()
+        
+        try:
+            image = ClassImage.objects.get(
+                imageId=image_id,
+                classId=class_instance
+            )
+            # Delete actual image file
+            if image.image:
+                image.image.delete(save=False)
+            image.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+            
+        except ClassImage.DoesNotExist:
+            return Response(
+                {'error': 'Image not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+    @action(detail=True, methods=['post'])
+    def toggle_option_active(self, request, pk=None):
+        """Toggle option active status"""
+        self.is_business_context = True
+        option_id = request.data.get('option_id')
+        option = get_object_or_404(ClassOption, optionId=option_id, classId_id=pk)
+        
+        option.active = not option.active
+        option.save()
+        
+        return Response({
+            'active': option.active,
+            'optionId': option.optionId
+        })
+
+    def create(self, request, *args, **kwargs):
+        self.is_business_context = True
+        return super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        self.is_business_context = True
+        return super().update(request, *args, **kwargs)
+    
+    def perform_update(self, serializer):
+        instance = serializer.save()
+        
+        # Handle image uploads if present
+        if 'classImages' in self.request.FILES:
+            images = self.request.FILES.getlist('classImages')
+            for image in images:
+                ClassImage.objects.create(classId=instance, image=image)
+
+    def destroy(self, request, *args, **kwargs):
+        self.is_business_context = True
         instance = self.get_object()
         
         try:
-            # Store class title for confirmation response
-            class_title = instance.title
-            
             with transaction.atomic():
-                # Delete related schedules first
-                Schedule.objects.filter(
-                    option__classId=instance
-                ).delete()
+                # Delete related data
+                Schedule.objects.filter(option__classId=instance).delete()
+                ClassOption.objects.filter(classId=instance).delete()
                 
-                # Delete class options
-                ClassOption.objects.filter(
-                    classId=instance
-                ).delete()
-                
-                # Delete class images
+                # Delete images
                 for image in instance.images.all():
-                    # Delete actual image file from storage
                     if image.image:
                         image.image.delete(save=False)
                     image.delete()
                 
-                # Delete reviews
-                Reviews.objects.filter(
-                    classId=instance
-                ).delete()
-                
-                # Finally delete the class itself
+                Reviews.objects.filter(classId=instance).delete()
                 instance.delete()
                 
-            return Response({
-                'message': f'Class "{class_title}" and all related data deleted successfully'
-            }, status=status.HTTP_200_OK)
+            return Response(status=status.HTTP_204_NO_CONTENT)
             
         except Exception as e:
-            return Response({
-                'error': f'Failed to delete class: {str(e)}'
-            }, status=status.HTTP_400_BAD_REQUEST)
-
-    def get_object(self):
-        obj = super().get_object()
-        # Only check business permission for write operations
-        if self.request.method in ['PUT', 'PATCH', 'DELETE']:
-            if not self.check_business_permission(obj.businessId.businessId):
-                raise PermissionDenied("You don't have permission to modify this class")
-        return obj
-
-    def update(self, request, *args, partial=False, **kwargs):
-        """Common update logic for both PUT and PATCH"""
-        instance = self.get_object()
-        serializer = self.get_serializer(instance, data=request.data, partial=partial)
-        serializer.is_valid(raise_exception=True)
-        self.perform_update(serializer)
-
-        # Handle image uploads if present
-        if 'classImages' in request.FILES:
-            images = request.FILES.getlist('classImages')
-            for image in images:
-                ClassImage.objects.create(classId=instance, image=image)
-
-        if getattr(instance, '_prefetched_objects_cache', None):
-            instance._prefetched_objects_cache = {}
-
-        return Response(serializer.data)
-
-    def perform_update(self, serializer):
-        """Hook for custom update behavior"""
-        serializer.save()
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
 class ClassImageList(generics.ListCreateAPIView):
     serializer_class = ClassImageSerializer

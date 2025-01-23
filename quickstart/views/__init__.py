@@ -11,32 +11,31 @@ from .business_views import (
     BusinessViewSet,
     BusinessInfoDetail,
     BusinessInfoViewSet,
-    register_business
+    register_business,
 )
 
 from .class_views import (
-    ClassView,
     ClassReviews,
     ClassImageList,
     ClassImageDetail,
     ClassOptionDetail,
-    search_classes_by_location,
     ScheduleViewSet,
     toggle_option_active,
     ScheduleInstanceViewSet,
-    ScheduleBreakViewSet
+    ScheduleBreakViewSet,
+    ClassViewSet,
 )
 
 from .instructor_views import (
-    InstructorViewSet
+    InstructorViewSet,
 )
 
 from .student_views import (
-    StudentProfileViewSet
+    StudentProfileViewSet,
 )
 
 from .booking_views import (
-    BookingViewSet
+    BookingViewSet,
 )
 
 from .role_views import (
@@ -51,7 +50,11 @@ from .permissions import (
     IsManager,
     IsInstructor,
     check_user_role,
-    check_user_can_create_class
+    check_user_can_create_class,
+)
+
+from .revenue_analytics_views import (
+    RevenueAnalyticsView,
 )
 
 from .utils import (
@@ -74,16 +77,15 @@ __all__ = [
     'register_business',
 
     # Class Views
-    'ClassView',
     'ClassReviews',
     'ClassImageList',
     'ClassImageDetail',
     'ClassOptionDetail',
-    'search_classes_by_location',
     'ScheduleViewSet',
     'toggle_option_active',
     'ScheduleInstanceViewSet',
     'ScheduleBreakViewSet',
+    'ClassViewSet',
 
     # Instructor Views
     'InstructorViewSet',
@@ -106,6 +108,9 @@ __all__ = [
     'IsInstructor',
     'check_user_role',
     'check_user_can_create_class',
+
+    # Revenue Analytics
+    'RevenueAnalyticsView',
 
     # Utils
     'haversine_distance',

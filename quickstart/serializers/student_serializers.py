@@ -61,7 +61,7 @@ class StudentProfileSerializer(serializers.ModelSerializer):
     average_attendance = serializers.DecimalField(
         max_digits=5, decimal_places=2, read_only=True
     )
-    
+
     class Meta:
         model = Student
         fields = [
@@ -74,9 +74,18 @@ class StudentProfileSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             'active_classes', 'total_classes_taken',
-            'average_attendance'
+            'average_attendance', 'notes', 'enrollments'
         ]
 
     def create(self, validated_data):
-        user = self.context['request'].user
-        return Student.objects.create(user=user, **validated_data)
+        """
+        Create a new student profile, ensuring the user is properly set
+        """
+        user = self.context.get('user')
+        if not user:
+            raise serializers.ValidationError("User is required to create a student profile")
+            
+        return Student.objects.create(
+            user=user,
+            **validated_data
+        )

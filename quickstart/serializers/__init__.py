@@ -43,6 +43,13 @@ from .student_serializers import (
     StudentEnrollmentSerializer
 )
 
+from .revenue_analytics_serializers import (
+    RevenueDistributionSerializer,
+    RevenueMetricsSerializer,
+    RevenueReportSerializer,
+    RevenueTimeSeriesSerializer
+)
+
 __all__ = [
     # Auth Serializers
     'CustomLoginSerializer',
@@ -81,5 +88,11 @@ __all__ = [
     # Student Serializers
     'StudentProfileSerializer',
     'StudentNoteSerializer',
-    'StudentEnrollmentSerializer'
+    'StudentEnrollmentSerializer',
+
+    # Revenue Analytics Serializers
+    'RevenueDistributionSerializer',
+    'RevenueMetricsSerializer',
+    'RevenueReportSerializer',
+    'RevenueTimeSeriesSerializer',
 ]

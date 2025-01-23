@@ -99,21 +99,16 @@ SIMPLE_JWT = {
     'ALGORITHM': 'HS256',
     'SIGNING_KEY': SECRET_KEY,
     'VERIFYING_KEY': None,
-    'AUDIENCE': None,
-    'ISSUER': None,
-    'JWK_URL': None,
-    'LEEWAY': 0,
 
-    'AUTH_COOKIE': 'access_token',  # Cookie name for access token
-    'AUTH_COOKIE_REFRESH': 'refresh_token',  # Cookie name for refresh token
+    'AUTH_COOKIE': 'my-app-auth',  # Cookie name for access token
+    'AUTH_COOKIE_REFRESH': 'my-refresh-token',  # Cookie name for refresh token
     'AUTH_COOKIE_DOMAIN': None,    # Specify domain in production
-    'AUTH_COOKIE_SECURE': True,    # Only send over HTTPS
+    'AUTH_COOKIE_SECURE': not DEBUG,  # Only send over HTTPS in production
     'AUTH_COOKIE_HTTP_ONLY': True,  # Not accessible via JavaScript
     'AUTH_COOKIE_PATH': '/',        # Cookie path
-    'AUTH_COOKIE_SAMESITE': 'Lax',  # CSRF protection
+    'AUTH_COOKIE_SAMESITE': 'Lax',  # Allows cross-site requests for development
 
     'AUTH_HEADER_TYPES': ('Bearer',),
-    'AUTH_HEADER_NAME': 'HTTP_AUTHORIZATION',
     'USER_ID_FIELD': 'userId',
     'USER_ID_CLAIM': 'user_id',
     'USER_AUTHENTICATION_RULE': 'rest_framework_simplejwt.authentication.default_user_authentication_rule',
@@ -129,13 +124,13 @@ SIMPLE_JWT = {
     'SLIDING_TOKEN_REFRESH_LIFETIME': timedelta(days=1),
 }
 
-SESSION_COOKIE_SECURE = True  # Only send cookies over HTTPS
+SESSION_COOKIE_SECURE = not DEBUG
 SESSION_COOKIE_HTTPONLY = True  # Prevent JavaScript access to cookies
-SESSION_COOKIE_SAMESITE = 'Strict'  # CSRF protection
+SESSION_COOKIE_SAMESITE = 'Lax'  # CSRF protection
 
-CSRF_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_HTTPONLY = True
-CSRF_COOKIE_SAMESITE = 'Strict'
+CSRF_COOKIE_SAMESITE = 'Lax'
 CSRF_TRUSTED_ORIGINS = ['https://classeasily.com', 'http://localhost:5173']
 
 ACCOUNT_EMAIL_VERIFICATION = 'mandatory'
@@ -151,9 +146,9 @@ AUTH_USER_MODEL = 'quickstart.CustomUser'
 
 REST_AUTH = {
     'USE_JWT': True,
-    'JWT_AUTH_COOKIE': 'my-app-auth',
-    'JWT_AUTH_REFRESH_COOKIE': 'my-refresh-token',
-    'JWT_AUTH_SAMESITE': 'None',
+    'JWT_AUTH_COOKIE': 'my-app-auth',  # Same as SIMPLE_JWT
+    'JWT_AUTH_REFRESH_COOKIE': 'my-refresh-token',  # Same as SIMPLE_JWT
+    'JWT_AUTH_SAMESITE': 'Lax',  # Match your SIMPLE_JWT setting
     'OLD_PASSWORD_FIELD_ENABLED': True,
 }
 
@@ -190,13 +185,14 @@ SOCIALACCOUNT_PROVIDERS = {
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'allauth.account.middleware.AccountMiddleware',
+    'quickstart.middleware.JWTCookieMiddleware'
 ]
 
 ROOT_URLCONF = 'CEBackend.urls'

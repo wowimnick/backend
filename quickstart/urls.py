@@ -8,9 +8,10 @@ from .views import (
     CustomLoginView, CustomTokenObtainPairView, CustomTokenRefreshView,
     LogoutView, UserUpdateView, CustomRegisterView, UserRoleView,
     BusinessInfoViewSet, InstructorViewSet, BookingViewSet,
-    RoleViewSet, BusinessViewSet, register_business, ClassView,
+    RoleViewSet, BusinessViewSet, register_business, 
     ScheduleViewSet, toggle_option_active, ClassReviews, ClassImageList,
-    ClassImageDetail, ClassOptionDetail, search_classes_by_location, StudentProfileViewSet,
+    ClassImageDetail, ClassOptionDetail, StudentProfileViewSet,
+    RevenueAnalyticsView, ClassViewSet, 
     
     # New views for instance-based system
     ScheduleInstanceViewSet,
@@ -27,6 +28,7 @@ router.register(r'instructors', InstructorViewSet, basename='instructor')
 router.register(r'bookings', BookingViewSet, basename='booking')
 router.register(r'roles', RoleViewSet, basename='role')
 router.register(r'students', StudentProfileViewSet, basename='student')
+router.register(r'classes', ClassViewSet, basename='classes')
 # Register schedule-related viewsets
 router.register(r'schedules', ScheduleViewSet, basename='schedule')
 router.register(r'schedule-instances', ScheduleInstanceViewSet, basename='schedule-instance')
@@ -64,11 +66,7 @@ urlpatterns = [
     
     # Classes and related URLs
     path('classes/', include([
-        path('', ClassView.as_view(), name='class-list'),
-        path('create/', ClassView.as_view(), name='class-create'),  
-        path('<int:pk>/', ClassView.as_view(), name='class-detail'),
         path('images/<int:pk>/', ClassImageDetail.as_view(), name='class-image-detail'),
-        path('search/', search_classes_by_location, name='class-search'),
         path('<int:pk>/reviews/', ClassReviews.as_view(), name='class-reviews'),
         path('<int:pk>/images/', ClassImageList.as_view(), name='class-images'),
         path('<int:pk>/options/<int:option_id>/toggle_active/', 
@@ -91,4 +89,6 @@ urlpatterns = [
              ScheduleInstanceViewSet.as_view({'post': 'cancel'}),
              name='cancel-instance'),
     ])),
+
+    path('revenue/analytics/', RevenueAnalyticsView.as_view(), name='revenue-analytics'),
 ]

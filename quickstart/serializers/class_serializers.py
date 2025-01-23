@@ -3,7 +3,7 @@ import json
 from rest_framework import serializers
 from decimal import Decimal
 from django.utils import timezone
-
+from django.db.models import Q
 from ..views.permissions import check_user_role
 from ..models import BusinessInfo, ClassesMain, ClassImage, ClassOption, Reviews, Schedule, ScheduleInstance, ScheduleBreak, Booking
 from django.db import transaction
@@ -172,19 +172,55 @@ class ClassCreateSerializer(serializers.ModelSerializer):
             'images', 'options'
         ]
 
+    def validate(self, data):
+        # Ensure the user is authenticated
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            raise serializers.ValidationError("User must be authenticated to create a class")
+
+        # Validate options and images as before
+        try:
+            options = json.loads(data.get('options', '[]'))
+            if not options:
+                raise serializers.ValidationError({
+                    'options': ['At least one class option is required']
+                })
+        except json.JSONDecodeError:
+            raise serializers.ValidationError("Invalid options format")
+
+        return data
+
     def create(self, validated_data):
         # Pop images and options from validated data
         images = validated_data.pop('images', [])
         options_json = validated_data.pop('options', '[]')
         
+        # Get the current user's business
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            raise serializers.ValidationError("User must be authenticated to create a class")
+
+        try:
+            # Try to get the business for the current user
+            business = BusinessInfo.objects.get(
+                Q(owner=request.user) | Q(managers=request.user)
+            )
+        except BusinessInfo.DoesNotExist:
+            raise serializers.ValidationError({
+                'businessId': ['No business found for the current user']
+            })
+
         try:
             options_data = json.loads(options_json)
         except json.JSONDecodeError:
             raise serializers.ValidationError("Invalid options format")
 
         with transaction.atomic():
-            # Create the class instance
-            class_instance = ClassesMain.objects.create(**validated_data)
+            # Create the class instance with the business
+            class_instance = ClassesMain.objects.create(
+                businessId=business,  # Set the business here
+                **validated_data
+            )
             
             # Create ClassImage instances
             for image in images:
@@ -208,10 +244,10 @@ class ClassCreateSerializer(serializers.ModelSerializer):
                     level=option_data['level'],
                     price=option_data['price'],
                     booking_type=option_data['type'],  # Changed from type to booking_type
-                    equipment=option_data['equipment'],
-                    tags=option_data['tags'],
+                    equipment=option_data.get('equipment', []),
+                    tags=option_data.get('tags', []),
                     cancellationPolicy=option_data['cancellationPolicy'],
-                    image=option_image  # Add this line
+                    image=option_image
                 )
             
             return class_instance

@@ -29,66 +29,85 @@ class CustomTokenObtainPairView(TokenObtainPairView):
 
         data = serializer.validated_data
 
-        # Set refresh token in HTTP-only cookie
-        response = Response(data, status=status.HTTP_200_OK)
+        # Create response with user data
+        response = Response({
+            'user': data['user'],
+            'role': data['role']
+        }, status=status.HTTP_200_OK)
+
+        # Set cookies
         response.set_cookie(
-            key='refresh_token',
-            value=data['refresh'],
+            settings.SIMPLE_JWT['AUTH_COOKIE'],
+            data['access'],
+            max_age=settings.SIMPLE_JWT['ACCESS_TOKEN_LIFETIME'].total_seconds(),
+            httponly=True,
+            samesite=settings.SIMPLE_JWT['AUTH_COOKIE_SAMESITE'],
+            secure=settings.SIMPLE_JWT['AUTH_COOKIE_SECURE']
+        )
+        
+        response.set_cookie(
+            settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'],
+            data['refresh'],
             max_age=settings.SIMPLE_JWT['REFRESH_TOKEN_LIFETIME'].total_seconds(),
             httponly=True,
-            samesite='lax',
-            secure=settings.SESSION_COOKIE_SECURE,  # True in production
-            path='/api/token/refresh/'
+            samesite=settings.SIMPLE_JWT['AUTH_COOKIE_SAMESITE'],
+            secure=settings.SIMPLE_JWT['AUTH_COOKIE_SECURE']
         )
 
-        # Remove refresh token from response data
-        del data['refresh']
-        
         return response
 
 class CustomTokenRefreshView(APIView):
     def post(self, request, *args, **kwargs):
-        refresh_token = request.COOKIES.get('refresh_token')
-
+        refresh_token = request.COOKIES.get(settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'])
+        
         if not refresh_token:
             return Response(
-                {"detail": "No refresh token provided"},
+                {"detail": "Refresh token not found in cookies"},
                 status=status.HTTP_401_UNAUTHORIZED
             )
 
         try:
             refresh = RefreshToken(refresh_token)
             data = {
-                'access': str(refresh.access_token)
+                'access': str(refresh.access_token),
             }
 
             if settings.SIMPLE_JWT['ROTATE_REFRESH_TOKENS']:
-                # Create new refresh token
                 new_refresh = RefreshToken.for_user(refresh.user)
-                
-                response = Response(data, status=status.HTTP_200_OK)
+                data['refresh'] = str(new_refresh)
+
+            response = Response(data, status=status.HTTP_200_OK)
+
+            # Set new access token cookie
+            response.set_cookie(
+                settings.SIMPLE_JWT['AUTH_COOKIE'],
+                data['access'],
+                max_age=settings.SIMPLE_JWT['ACCESS_TOKEN_LIFETIME'].total_seconds(),
+                httponly=True,
+                samesite=settings.SIMPLE_JWT['AUTH_COOKIE_SAMESITE'],
+                secure=settings.SIMPLE_JWT['AUTH_COOKIE_SECURE']
+            )
+
+            # If rotating tokens, set new refresh token cookie
+            if settings.SIMPLE_JWT['ROTATE_REFRESH_TOKENS']:
                 response.set_cookie(
-                    key='refresh_token',
-                    value=str(new_refresh),
+                    settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'],
+                    data['refresh'],
                     max_age=settings.SIMPLE_JWT['REFRESH_TOKEN_LIFETIME'].total_seconds(),
                     httponly=True,
-                    samesite='Lax',
-                    secure=settings.SESSION_COOKIE_SECURE,
-                    path='/api/token/refresh/'
+                    samesite=settings.SIMPLE_JWT['AUTH_COOKIE_SAMESITE'],
+                    secure=settings.SIMPLE_JWT['AUTH_COOKIE_SECURE']
                 )
-                
+
                 if settings.SIMPLE_JWT['BLACKLIST_AFTER_ROTATION']:
                     try:
-                        # Blacklist the old refresh token
                         refresh.blacklist()
                     except AttributeError:
                         pass
 
-                return response
+            return response
 
-            return Response(data, status=status.HTTP_200_OK)
-
-        except (TokenError, AttributeError, TypeError) as e:
+        except (TokenError, AttributeError) as e:
             return Response(
                 {"detail": str(e)},
                 status=status.HTTP_401_UNAUTHORIZED
@@ -112,24 +131,62 @@ class UserUpdateView(APIView):
 class LogoutView(APIView):
     def post(self, request):
         try:
-            refresh_token = request.COOKIES.get('refresh_token')
+            refresh_token = request.COOKIES.get(settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'])
             if refresh_token:
                 token = RefreshToken(refresh_token)
                 token.blacklist()
             
             response = Response(status=status.HTTP_205_RESET_CONTENT)
-            response.delete_cookie(
-                'refresh_token',
-                path='/api/token/refresh/',
-                samesite='Lax'
-            )
+            
+            # Delete both cookies
+            response.delete_cookie(settings.SIMPLE_JWT['AUTH_COOKIE'])
+            response.delete_cookie(settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'])
+            
             return response
             
-        except Exception:
-            return Response(status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {"detail": str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-class CustomLoginView(TokenObtainPairView):
+class CustomLoginView(APIView):
     serializer_class = CustomTokenObtainPairSerializer
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.serializer_class(data=request.data)
+        
+        try:
+            serializer.is_valid(raise_exception=True)
+        except TokenError as e:
+            raise InvalidToken(e.args[0])
+
+        data = serializer.validated_data
+
+        response = Response({
+            'user': data['user'],
+            'role': data['role']
+        }, status=status.HTTP_200_OK)
+
+        response.set_cookie(
+            settings.SIMPLE_JWT['AUTH_COOKIE'],
+            data['access'],
+            max_age=settings.SIMPLE_JWT['ACCESS_TOKEN_LIFETIME'].total_seconds(),
+            httponly=True,
+            samesite=settings.SIMPLE_JWT['AUTH_COOKIE_SAMESITE'],
+            secure=settings.SIMPLE_JWT['AUTH_COOKIE_SECURE']
+        )
+        
+        response.set_cookie(
+            settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'],
+            data['refresh'],
+            max_age=settings.SIMPLE_JWT['REFRESH_TOKEN_LIFETIME'].total_seconds(),
+            httponly=True,
+            samesite=settings.SIMPLE_JWT['AUTH_COOKIE_SAMESITE'],
+            secure=settings.SIMPLE_JWT['AUTH_COOKIE_SECURE']
+        )
+
+        return response
 
 class CustomRegisterView(RegisterView):
     serializer_class = CustomRegisterSerializer
