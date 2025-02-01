@@ -71,7 +71,6 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
                 # For GET requests, create a basic profile
                 new_student_data = {
                     'enrollment_date': timezone.now().date(),
-                    'grade_level': 'Not Specified',
                     'parent_guardian_name': '',
                     'parent_guardian_phone': '',
                     'emergency_contact': '',

@@ -1,5 +1,4 @@
-
-from datetime import datetime
+from datetime import datetime, time
 import json
 from django.forms import ValidationError
 from rest_framework import generics, viewsets, status, permissions
@@ -85,38 +84,47 @@ def validate_schedule_conflicts(option, schedule_data, exclude_id=None):
     
     Args:
         option: ClassOption instance
-        schedule_data: Dict containing 'day' string and 'time' string
+        schedule_data: Dict containing 'day' string and 'time' (string or time object)
         exclude_id: Optional ID to exclude from conflict check (for updates)
     
     Returns:
         (bool, str): Tuple of (is_valid, error_message)
     """
     # Convert schedule time to minutes since midnight for comparison
-    def time_to_minutes(time_str):
-        time_obj = datetime.strptime(time_str, '%H:%M').time()
+    def time_to_minutes(time_val):
+        if isinstance(time_val, str):
+            time_obj = datetime.strptime(time_val, '%H:%M').time()
+        elif isinstance(time_val, time):  # Using the properly imported time type
+            time_obj = time_val
+        else:
+            raise ValueError(f"Invalid time format: {time_val}")
         return time_obj.hour * 60 + time_obj.minute
 
     # Get time range for the proposed schedule
-    proposed_start = time_to_minutes(schedule_data['time'])
-    proposed_end = proposed_start + option.duration
-    proposed_day = schedule_data['day']
+    try:
+        proposed_start = time_to_minutes(schedule_data['time'])
+        proposed_end = proposed_start + option.duration
+        proposed_day = schedule_data['day']
 
-    # Check against existing schedules
-    existing_schedules = option.schedules.all()
-    if exclude_id:
-        existing_schedules = existing_schedules.exclude(id=exclude_id)
+        # Check against existing schedules
+        existing_schedules = option.schedules.all()
+        if exclude_id:
+            existing_schedules = existing_schedules.exclude(id=exclude_id)
 
-    for existing in existing_schedules:
-        # Only check schedules on the same day
-        if existing.day == proposed_day:
-            existing_start = time_to_minutes(existing.time)
-            existing_end = existing_start + option.duration
+        for existing in existing_schedules:
+            # Only check schedules on the same day
+            if existing.day == proposed_day:
+                existing_start = time_to_minutes(existing.time)
+                existing_end = existing_start + option.duration
 
-            # Check time overlap
-            if (proposed_start < existing_end and proposed_end > existing_start):
-                return False, f"Schedule conflicts with existing class at {existing.time} on {existing.day}"
+                # Check time overlap
+                if (proposed_start < existing_end and proposed_end > existing_start):
+                    return False, f"Schedule conflicts with existing class at {existing.time} on {existing.day}"
 
-    return True, None
+        return True, None
+        
+    except (ValueError, KeyError) as e:
+        return False, f"Invalid schedule data: {str(e)}"
 
 class BusinessPermissionMixin:
     """Mixin to handle business-specific permissions"""

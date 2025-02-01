@@ -3,6 +3,8 @@ from rest_framework.routers import DefaultRouter
 from allauth.account.views import confirm_email
 from django.views.generic import TemplateView
 
+from quickstart.payments.views import ConfirmPaymentView, CreatePaymentIntentView
+
 from .views import (
     # Existing views
     CustomLoginView, CustomTokenObtainPairView, CustomTokenRefreshView,
@@ -91,4 +93,7 @@ urlpatterns = [
     ])),
 
     path('revenue/analytics/', RevenueAnalyticsView.as_view(), name='revenue-analytics'),
+
+    path('payments/create-payment-intent/', CreatePaymentIntentView.as_view(), name='create-payment-intent'),
+    path('payments/confirm-payment/', ConfirmPaymentView.as_view(), name='confirm-payment'),
 ]

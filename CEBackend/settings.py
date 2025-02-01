@@ -32,6 +32,9 @@ DEBUG = True
 
 ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'classeasily.com', '3.142.223.49']
 
+STRIPE_PUBLIC_KEY = 'pk_test_51Qn8JYFsNqYi8b0PAujbtEGNoTcLJTpaS2UefQxe5u4BquZyrIK48aRKbhHLRh45em0EFds7SNhlzys3sPxS5faR00Rj8lqQjg'
+STRIPE_SECRET_KEY = 'sk_test_51Qn8JYFsNqYi8b0P7fYDsXan82C6Q1CGWuwe9qHzaxnUf9lGW4G3cA0w2ks4svAnK9IivXKxpzOau6Kaj3N7Xx9Y00arIlzov1'
+
 
 # Application definition
 

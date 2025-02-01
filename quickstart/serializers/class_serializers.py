@@ -9,26 +9,50 @@ from ..models import BusinessInfo, ClassesMain, ClassImage, ClassOption, Reviews
 from django.db import transaction
 from .auth_serializers import CustomUserDetailsSerializer
 
+
 class ClassOptionCreateSerializer(serializers.ModelSerializer):
     image = serializers.ImageField(required=False)  # Add this line
     equipment = serializers.ListField(child=serializers.CharField(), required=False, default=list)
     tags = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+    type = serializers.CharField(source='booking_type')
+    recurrence_pattern = serializers.CharField(required=False, allow_null=True)
+    sessions_per_week = serializers.IntegerField(required=False, allow_null=True)
+    auto_renew_default = serializers.BooleanField(required=False, default=False)
+    total_sessions = serializers.IntegerField(required=False, allow_null=True)
+    start_date = serializers.DateField(required=False, allow_null=True)
+    end_date = serializers.DateField(required=False, allow_null=True)
     
     class Meta:
         model = ClassOption
         fields = [
-            'title', 'description', 'booking_type',
-            'duration', 'maxParticipants', 'level',
-            'price', 'price_type', 'total_sessions',
-            'start_date', 'end_date', 'recurrence_pattern',
-            'sessions_per_week', 'auto_renew_default',
-            'equipment', 'tags', 'cancellationPolicy',
-            'image', 'active'  # Add image to fields
+            'title', 
+            'description', 
+            'type',  
+            'booking_type',
+            'duration', 
+            'maxParticipants', 
+            'level',
+            'price', 
+            'price_type', 
+            'total_sessions',
+            'start_date', 
+            'end_date', 
+            'recurrence_pattern',
+            'sessions_per_week', 
+            'auto_renew_default',
+            'equipment', 
+            'tags', 
+            'cancellationPolicy',
+            'image', 
+            'active'
         ]
 
     def validate(self, data):
         booking_type = data.get('booking_type')
         price_type = data.get('price_type')
+        
+        if 'type' in data:
+            data['booking_type'] = data['type']
         
         # Validate booking type specific fields
         if booking_type == 'course':
@@ -45,7 +69,7 @@ class ClassOptionCreateSerializer(serializers.ModelSerializer):
                     raise serializers.ValidationError({
                         'course_dates': 'End date must be after start date'
                     })
-                if data['start_date'] < date.today():
+                if data['start_date'] < timezone.now().date():
                     raise serializers.ValidationError({
                         'start_date': 'Start date cannot be in the past'
                     })
@@ -154,6 +178,22 @@ class ClassOptionCreateSerializer(serializers.ModelSerializer):
         instance.save()
         return instance
 
+    def to_representation(self, instance):
+        """
+        Override to customize the serialized output
+        """
+        data = super().to_representation(instance)
+        
+        # Add any computed or custom fields
+        data['image_url'] = instance.get_image_url() if instance.image else None
+        
+        # Include schedule information if available
+        schedules = Schedule.objects.filter(option=instance)
+        if schedules.exists():
+            data['schedules'] = ScheduleSerializer(schedules, many=True).data
+            
+        return data
+
 class ClassCreateSerializer(serializers.ModelSerializer):
     images = serializers.ListField(
         child=serializers.ImageField(),
@@ -191,66 +231,103 @@ class ClassCreateSerializer(serializers.ModelSerializer):
         return data
 
     def create(self, validated_data):
-        # Pop images and options from validated data
         images = validated_data.pop('images', [])
         options_json = validated_data.pop('options', '[]')
         
-        # Get the current user's business
-        request = self.context.get('request')
-        if not request or not request.user.is_authenticated:
-            raise serializers.ValidationError("User must be authenticated to create a class")
+        def format_date(date_str):
+            """Convert ISO date string to YYYY-MM-DD format"""
+            if not date_str:
+                return None
+            try:
+                # Parse the ISO format date string
+                date_obj = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                # Convert to YYYY-MM-DD format
+                return date_obj.date()
+            except Exception as e:
+                raise serializers.ValidationError(f"Invalid date format: {date_str}. Must be in ISO format.")
 
         try:
-            # Try to get the business for the current user
-            business = BusinessInfo.objects.get(
-                Q(owner=request.user) | Q(managers=request.user)
-            )
-        except BusinessInfo.DoesNotExist:
-            raise serializers.ValidationError({
-                'businessId': ['No business found for the current user']
-            })
+            # Get the current user's business
+            request = self.context.get('request')
+            if not request or not request.user.is_authenticated:
+                raise serializers.ValidationError("User must be authenticated to create a class")
 
-        try:
-            options_data = json.loads(options_json)
-        except json.JSONDecodeError:
-            raise serializers.ValidationError("Invalid options format")
-
-        with transaction.atomic():
-            # Create the class instance with the business
-            class_instance = ClassesMain.objects.create(
-                businessId=business,  # Set the business here
-                **validated_data
-            )
-            
-            # Create ClassImage instances
-            for image in images:
-                ClassImage.objects.create(
-                    classId=class_instance,
-                    image=image
+            try:
+                business = BusinessInfo.objects.get(
+                    Q(owner=request.user) | Q(managers=request.user)
                 )
-            
-            # Create ClassOption instances
-            for option_index, option_data in enumerate(options_data):
-                # Get the image key from the option data
-                image_key = option_data.pop('image_key', None)
-                # Get the actual image file using the key
-                option_image = self.context['request'].FILES.get(image_key) if image_key else None
+            except BusinessInfo.DoesNotExist:
+                raise serializers.ValidationError({
+                    'businessId': ['No business found for the current user']
+                })
+
+            with transaction.atomic():
+                # Create the class instance
+                class_instance = ClassesMain.objects.create(
+                    businessId=business,
+                    **validated_data
+                )
                 
-                ClassOption.objects.create(
-                    classId=class_instance,
-                    title=option_data['title'],
-                    description=option_data['description'],
-                    maxParticipants=option_data['maxParticipants'],
-                    level=option_data['level'],
-                    price=option_data['price'],
-                    booking_type=option_data['type'],  # Changed from type to booking_type
-                    equipment=option_data.get('equipment', []),
-                    tags=option_data.get('tags', []),
-                    cancellationPolicy=option_data['cancellationPolicy'],
-                    image=option_image
-                )
-            
-            return class_instance
+                # Create ClassImage instances
+                for image in images:
+                    ClassImage.objects.create(
+                        classId=class_instance,
+                        image=image
+                    )
+                
+                # Parse and create options
+                try:
+                    options_data = json.loads(options_json)
+                except json.JSONDecodeError:
+                    raise serializers.ValidationError("Invalid options format")
+                
+                for option_data in options_data:
+                    # Remove course_dates if present
+                    course_dates = option_data.pop('course_dates', None)
+                    
+                    # Get the image key from the option data if it exists
+                    image_key = option_data.pop('image_key', None)
+                    # Remove image field if it exists in option_data
+                    option_data.pop('image', None)
+                    # Get the actual image file
+                    image = self.context['request'].FILES.get(image_key) if image_key else None
+                    
+                    # Convert type to booking_type if needed
+                    if 'type' in option_data:
+                        option_data['booking_type'] = option_data.pop('type')
+                    
+                    # Clean up any fields that aren't in the model
+                    valid_fields = [f.name for f in ClassOption._meta.get_fields()]
+                    cleaned_data = {k: v for k, v in option_data.items() if k in valid_fields}
+                    
+                    # Handle dates for course bookings
+                    if cleaned_data.get('booking_type') == 'course':
+                        if isinstance(course_dates, list) and len(course_dates) == 2:
+                            cleaned_data['start_date'] = format_date(course_dates[0])
+                            cleaned_data['end_date'] = format_date(course_dates[1])
+                        else:
+                            # Handle individual date fields if they exist
+                            if 'start_date' in cleaned_data:
+                                cleaned_data['start_date'] = format_date(cleaned_data['start_date'])
+                            if 'end_date' in cleaned_data:
+                                cleaned_data['end_date'] = format_date(cleaned_data['end_date'])
+                    
+                    # Remove image from cleaned_data if it exists
+                    cleaned_data.pop('image', None)
+                    
+                    # Create the option with valid fields and image
+                    ClassOption.objects.create(
+                        classId=class_instance,
+                        image=image,  # Add image separately
+                        **cleaned_data
+                    )
+                
+                return class_instance
+                
+        except Exception as e:
+            if isinstance(e, serializers.ValidationError):
+                raise
+            raise serializers.ValidationError(str(e))
         
 class ScheduleBreakSerializer(serializers.ModelSerializer):
     class Meta:

@@ -41,6 +41,7 @@ class BookingViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         status_filter = self.request.query_params.get('status')
+        enrollment_type = self.request.query_params.get('enrollment_type')
         
         # Start with base queryset
         queryset = Booking.objects.select_related(
@@ -56,6 +57,10 @@ class BookingViewSet(viewsets.ModelViewSet):
         if status_filter:
             status_values = [s.strip() for s in status_filter.split(',')]
             queryset = queryset.filter(status__in=status_values)
+
+        # Filter by enrollment type
+        if enrollment_type:
+            queryset = queryset.filter(enrollment_type=enrollment_type)
         
         # For business owners/managers - show all bookings for their business
         if check_user_role(user, ['Business Owner', 'Manager']):
@@ -73,33 +78,32 @@ class BookingViewSet(viewsets.ModelViewSet):
         return BookingDetailSerializer
 
     def create(self, request, *args, **kwargs):
+        print("BookingViewSet create - Request data:", request.data)  # Add this
+        
         serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            print("Serializer validation errors:", serializer.errors)  # Add this
+            raise ValidationError(serializer.errors)
         
         try:
             booking = serializer.save(
-                student=request.user.student_profile,
-                status='pending',
-                payment_status='pending'
+                student=request.user.student_profile
             )
             
-            # Here you would integrate with payment processing
-            # For now, we'll just confirm the booking
-            booking.status = 'confirmed'
-            booking.payment_status = 'paid'
-            booking.save()
-            
+            print(f"Successfully created booking {booking.id}")  # Add this
             return Response(
                 BookingDetailSerializer(booking).data,
                 status=status.HTTP_201_CREATED
             )
             
-        except ValidationError as e:
+        except DjangoValidationError as e:
+            print(f"Django validation error: {e.messages}")  # Add this
             return Response(
                 {'error': e.messages},
                 status=status.HTTP_400_BAD_REQUEST
             )
         except Exception as e:
+            print(f"Unexpected error: {str(e)}")  # Add this
             return Response(
                 {'error': str(e)},
                 status=status.HTTP_400_BAD_REQUEST
@@ -115,7 +119,30 @@ class BookingViewSet(viewsets.ModelViewSet):
                 {'error': ['Can only cancel confirmed bookings']},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+        # For course/recurring bookings, allow cancelling all future sessions
+        cancel_all = request.data.get('cancel_all', False)
+        if cancel_all and booking.enrollment_type in ['course', 'recurring']:
+            # Cancel all related future bookings
+            future_bookings = Booking.objects.filter(
+                student=booking.student,
+                booking_group_id=booking.booking_group_id,
+                schedule_instance__date__gte=booking.schedule_instance.date,
+                status='confirmed'
+            )
             
+            for b in future_bookings:
+                b.status = 'cancelled'
+                b.cancelled_at = timezone.now()
+                b.cancellation_reason = request.data.get('reason', '')
+                b.save()
+                
+            return Response({
+                'message': 'All future bookings cancelled',
+                'cancelled_count': future_bookings.count()
+            })
+            
+        # Regular single booking cancellation
         booking.status = 'cancelled'
         booking.cancelled_at = timezone.now()
         booking.cancellation_reason = request.data.get('reason', '')
@@ -123,34 +150,6 @@ class BookingViewSet(viewsets.ModelViewSet):
         
         return Response(BookingDetailSerializer(booking).data)
 
-    @action(detail=False, methods=['get'])
-    def schedule_availability(self, request):
-        """Get availability for a specific schedule"""
-        schedule_id = request.query_params.get('schedule_id')
-        if not schedule_id:
-            return Response(
-                {'error': ['schedule_id is required']},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-            
-        try:
-            schedule = Schedule.objects.get(id=schedule_id)
-            current_bookings = schedule.current_bookings
-            
-            return Response({
-                'schedule_id': schedule_id,
-                'total_capacity': schedule.effective_max_participants,
-                'booked': current_bookings,
-                'available': schedule.effective_max_participants - current_bookings,
-                'is_full': current_bookings >= schedule.effective_max_participants
-            })
-            
-        except Schedule.DoesNotExist:
-            return Response(
-                {'error': ['Schedule not found']},
-                status=status.HTTP_404_NOT_FOUND
-            )
-        
     @action(detail=False, methods=['get'])
     def analytics(self, request):
         """Get analytics for bookings"""
@@ -167,7 +166,8 @@ class BookingViewSet(viewsets.ModelViewSet):
                 'summary': self._get_summary_metrics(bookings),
                 'trends': self._get_booking_trends(bookings),
                 'by_day': self._get_weekday_distribution(bookings),
-                'by_type': self._get_class_type_distribution(bookings)
+                'by_type': self._get_class_type_distribution(bookings),
+                'by_enrollment': self._get_enrollment_distribution(bookings)
             }
             
             return Response(data)
@@ -275,7 +275,6 @@ class BookingViewSet(viewsets.ModelViewSet):
             bookings=Count('id')
         ).order_by('schedule_instance__schedule__day')
         
-        # Convert the distribution to the expected format
         return [
             {
                 'day': weekday_map[day_to_number[day['schedule_instance__schedule__day']]],
@@ -291,3 +290,127 @@ class BookingViewSet(viewsets.ModelViewSet):
         ).annotate(
             bookings=Count('id')
         ).order_by('-bookings')
+
+    def _get_enrollment_distribution(self, queryset):
+        """Get booking distribution by enrollment type"""
+        return queryset.values(
+            'enrollment_type'
+        ).annotate(
+            bookings=Count('id'),
+            revenue=Sum('amount_paid')
+        ).order_by('-bookings')
+
+    @action(detail=False, methods=['get'])
+    def schedule_availability(self, request):
+        """Get availability for a specific schedule"""
+        schedule_id = request.query_params.get('schedule_id')
+        if not schedule_id:
+            return Response(
+                {'error': ['schedule_id is required']},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        try:
+            schedule = Schedule.objects.get(id=schedule_id)
+            current_bookings = schedule.current_bookings
+            
+            return Response({
+                'schedule_id': schedule_id,
+                'total_capacity': schedule.effective_max_participants,
+                'booked': current_bookings,
+                'available': schedule.effective_max_participants - current_bookings,
+                'is_full': current_bookings >= schedule.effective_max_participants
+            })
+            
+        except Schedule.DoesNotExist:
+            return Response(
+                {'error': ['Schedule not found']},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+    @action(detail=True, methods=['post'])
+    def mark_attendance(self, request, pk=None):
+        booking = self.get_object()
+        
+        if booking.status != 'confirmed':
+            return Response(
+                {'error': 'Can only mark attendance for confirmed bookings'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        booking.attendance_marked = True
+        booking.attended = request.data.get('attended', False)
+        booking.save()
+        
+        return Response(BookingDetailSerializer(booking).data)
+    
+    @action(detail=True, methods=['get'])
+    def get_group_bookings(self, request, pk=None):
+        """
+        Retrieve all bookings in the same group
+        """
+        booking = self.get_object()
+        
+        if not booking.booking_group_id:
+            return Response(
+                {'error': 'This is not a group booking'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        group_bookings = Booking.objects.filter(
+            booking_group_id=booking.booking_group_id
+        )
+        
+        serializer = BookingDetailSerializer(group_bookings, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def cancel_series(self, request, pk=None):
+        """
+        Cancel all bookings in a booking group
+        """
+        booking = self.get_object()
+        
+        if not booking.booking_group_id:
+            return Response(
+                {'error': 'This is not a group booking'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Cancel all bookings in the group
+        group_bookings = Booking.objects.filter(
+            booking_group_id=booking.booking_group_id
+        )
+        
+        group_bookings.update(
+            status='cancelled', 
+            cancelled_at=timezone.now(),
+            cancellation_reason=request.data.get('reason', 'Series cancellation')
+        )
+        
+        return Response({
+            'message': f'Cancelled {group_bookings.count()} bookings',
+            'cancelled_bookings': BookingDetailSerializer(group_bookings, many=True).data
+        })
+
+    @action(detail=True, methods=['post'])
+    def renew(self, request, pk=None):
+        booking = self.get_object()
+        
+        if booking.enrollment_type != 'recurring':
+            return Response(
+                {'error': 'Can only renew recurring bookings'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        try:
+            booking.renew_recurring()
+            return Response({
+                'message': 'Recurring booking renewed successfully',
+                'next_period_end': booking.current_period_end
+            })
+        except Exception as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )

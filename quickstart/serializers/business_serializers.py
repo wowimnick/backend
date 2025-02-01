@@ -103,15 +103,23 @@ class BusinessStatsSerializer(serializers.ModelSerializer):
     average_rating = serializers.SerializerMethodField()
     recent_bookings = serializers.SerializerMethodField()
     class_categories = serializers.SerializerMethodField()
+    registration_date = serializers.DateTimeField(source='createdAt')
 
     class Meta:
         model = BusinessInfo
         fields = [
-            'businessId', 'businessName', 'totalReviews', 
+            'businessId', 'businessName', 'businessImage', 'totalReviews', 
             'total_revenue', 'total_students', 'total_classes',
             'total_instructors', 'average_rating', 'recent_bookings',
-            'class_categories'
+            'class_categories', 'registration_date'
         ]
+
+    def get_average_rating(self, obj):
+        return Reviews.objects.filter(
+            classId__businessId=obj
+        ).aggregate(
+            avg=Avg('rating')
+        )['avg'] or 0
 
     def get_total_revenue(self, obj):
         return Booking.objects.filter(
@@ -134,13 +142,6 @@ class BusinessStatsSerializer(serializers.ModelSerializer):
 
     def get_total_instructors(self, obj):
         return obj.instructors.count()
-
-    def get_average_rating(self, obj):
-        return Reviews.objects.filter(
-            classId__businessId=obj
-        ).aggregate(
-            avg=Avg('rating')
-        )['avg'] or 0
 
     def get_recent_bookings(self, obj):
         thirty_days_ago = timezone.now() - timedelta(days=30)
