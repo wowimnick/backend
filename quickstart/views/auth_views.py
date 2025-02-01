@@ -132,23 +132,32 @@ class LogoutView(APIView):
     def post(self, request):
         try:
             refresh_token = request.COOKIES.get(settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'])
-            if refresh_token:
-                token = RefreshToken(refresh_token)
-                token.blacklist()
             
             response = Response(status=status.HTTP_205_RESET_CONTENT)
             
-            # Delete both cookies
+            # Always delete cookies, even if token processing fails
             response.delete_cookie(settings.SIMPLE_JWT['AUTH_COOKIE'])
             response.delete_cookie(settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'])
+            
+            # Optional: Attempt to blacklist token if present
+            if refresh_token:
+                try:
+                    token = RefreshToken(refresh_token)
+                    token.blacklist()
+                except Exception as token_error:
+                    logger.warning(f"Token blacklist failed: {token_error}")
             
             return response
             
         except Exception as e:
-            return Response(
-                {"detail": str(e)},
+            logger.error(f"Logout error: {e}")
+            response = Response(
+                {"detail": "Logout failed"},
                 status=status.HTTP_400_BAD_REQUEST
             )
+            response.delete_cookie(settings.SIMPLE_JWT['AUTH_COOKIE'])
+            response.delete_cookie(settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'])
+            return response
 
 class CustomLoginView(APIView):
     serializer_class = CustomTokenObtainPairSerializer
