@@ -20,7 +20,6 @@ from .class_views import (
     ClassImageDetail,
     ClassOptionDetail,
     ScheduleViewSet,
-    toggle_option_active,
     ScheduleInstanceViewSet,
     ScheduleBreakViewSet,
     ClassViewSet,
@@ -43,7 +42,7 @@ from .role_views import (
     RoleViewSet
 )
 
-from .permissions import (
+from ..utils.permissions import (
     BaseUserDataPermission,
     IsAdminUser,
     IsBusinessOwner,
@@ -82,7 +81,6 @@ __all__ = [
     'ClassImageDetail',
     'ClassOptionDetail',
     'ScheduleViewSet',
-    'toggle_option_active',
     'ScheduleInstanceViewSet',
     'ScheduleBreakViewSet',
     'ClassViewSet',

@@ -4,7 +4,7 @@ from rest_framework import serializers
 from decimal import Decimal
 from django.utils import timezone
 from django.db.models import Q
-from ..views.permissions import check_user_role
+from ..utils.permissions import check_user_role
 from ..models import BusinessInfo, ClassesMain, ClassImage, ClassOption, Reviews, Schedule, ScheduleInstance, ScheduleBreak, Booking
 from django.db import transaction
 from .auth_serializers import CustomUserDetailsSerializer
@@ -372,7 +372,7 @@ class ScheduleInstanceSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'schedule', 'date', 'time', 'price',
             'max_participants', 'status', 'cancellation_reason',
-            'attendance_marked', 'instructor_notes',
+            'instructor_notes',
             'current_bookings', 'available_spots',
             'created_at', 'updated_at'
         ]
@@ -391,6 +391,7 @@ class ScheduleInstanceSerializer(serializers.ModelSerializer):
             })
             
         return data
+    
 
 class ScheduleSerializer(serializers.ModelSerializer):
     instances = ScheduleInstanceSerializer(many=True, read_only=True)

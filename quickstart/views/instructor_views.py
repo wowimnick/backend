@@ -15,7 +15,7 @@ from ..serializers import (
     CertificationSerializer, SkillSerializer,
     InstructorNoteSerializer
 )
-from .permissions import (
+from ..utils.permissions import (
     BaseUserDataPermission, IsManager, IsInstructor, check_user_role
 )
 

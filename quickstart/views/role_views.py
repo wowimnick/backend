@@ -7,7 +7,7 @@ import logging
 
 from ..models import Role
 from ..serializers import RoleSerializer
-from .permissions import IsAdminUser, check_user_role
+from ..utils.permissions import IsAdminUser, check_user_role
 
 logger = logging.getLogger(__name__)
 

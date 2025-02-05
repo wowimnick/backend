@@ -6,7 +6,7 @@ from django.contrib.contenttypes.models import ContentType
 from storages.backends.s3boto3 import S3Boto3Storage
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.core.exceptions import ValidationError
-from django.db.models import Count
+from django.db.models import Count, Case, When, DecimalField
 from decimal import Decimal
 from django.utils import timezone
 import uuid
@@ -257,6 +257,29 @@ class Student(models.Model):
     def __str__(self):
         return f"{self.user.first_name} {self.user.last_name}"
     
+    @classmethod
+    def annotate_metrics(cls, queryset):
+        """Add all required metrics in a single annotation"""
+        return queryset.annotate(
+            active_classes=Count(
+                'bookings',
+                filter=models.Q(bookings__status='confirmed')
+            ),
+            total_classes_taken=Count(
+                'bookings',
+                filter=models.Q(bookings__status='completed')
+            ),
+            average_attendance=Case(
+                When(
+                    total_finished_bookings__gt=0,
+                    then=100.0 * models.F('completed_bookings_count') / 
+                         models.F('total_finished_bookings')
+                ),
+                default=0,
+                output_field=DecimalField(max_digits=5, decimal_places=2)
+            )
+        )
+    
     @property
     def active_classes(self):
         """Count of currently confirmed bookings"""
@@ -329,6 +352,11 @@ class ClassesMain(models.Model):
 
     class Meta:
         db_table = 'classes'
+        indexes = [
+            models.Index(fields=['coordinates']),
+            models.Index(fields=['location']),
+            models.Index(fields=['businessId'])
+        ]
 
 class Favorites(models.Model):
     favoriteId = models.AutoField(primary_key=True)
@@ -365,14 +393,14 @@ class ClassOption(models.Model):
     description = models.TextField(null=True, blank=True)
     
     BOOKING_TYPES = [
-        ('single', 'Single Session'),
-        ('course', 'Full Course'),
-        ('recurring', 'Recurring Classes')
+        ('Single Session', 'Single Session'),
+        ('Full Course', 'Full Course'),
+        ('Recurring Classes', 'Recurring Classes')
     ]
     booking_type = models.CharField(
         max_length=20,
         choices=BOOKING_TYPES,
-        default='single'
+        default='Single Session'
     )
 
     image = models.ImageField(
@@ -456,6 +484,10 @@ class ClassOption(models.Model):
     
     class Meta:
         db_table = 'class_options'
+        indexes = [
+            models.Index(fields=['active', 'classId']),
+            models.Index(fields=['classId'])
+        ]
 
 class Schedule(models.Model):
     """Template for recurring schedules"""
@@ -536,6 +568,8 @@ class Schedule(models.Model):
         ordering = ['day', 'time']
         indexes = [
             models.Index(fields=['option', 'day', 'time']),
+            models.Index(fields=['option', 'is_active']),
+            models.Index(fields=['day', 'time'])
         ]
 
 class ScheduleInstance(models.Model):
@@ -563,25 +597,47 @@ class ScheduleInstance(models.Model):
 
     @property
     def current_bookings(self):
-        return self.bookings.filter(
-            status='confirmed'
-        ).aggregate(
-            total=models.Sum('participants')
-        )['total'] or 0
+        return getattr(self, 'booking_count', 0)
     
     @property
     def available_spots(self):
         return self.max_participants - self.current_bookings
 
+    @classmethod
+    def get_available_in_range(cls, option_id, start_date, end_date):
+        """Get available instances within a date range"""
+        return cls.objects.filter(
+            schedule__option_id=option_id,
+            schedule__is_active=True,
+            date__range=(start_date, end_date),
+            status='scheduled'
+        ).select_related('schedule').order_by('date', 'time')
+
     def can_accommodate(self, requested_participants):
+        """Check if instance can accommodate requested number of participants"""
         return self.available_spots >= requested_participants
+
+    def to_dict(self):
+        """Convert instance to dictionary format"""
+        return {
+            'instance_id': self.id,
+            'schedule_id': self.schedule.id,
+            'date': self.date,
+            'time': self.time,
+            'total_capacity': self.max_participants,
+            'available_spots': self.available_spots,
+            'price': str(self.price)
+        }
 
     class Meta:
         db_table = 'schedule_instances'
         unique_together = ['schedule', 'date']
         indexes = [
-            models.Index(fields=['date', 'time']),
             models.Index(fields=['schedule', 'date']),
+            models.Index(fields=['schedule', 'status']),
+            models.Index(fields=['date', 'time']),
+            models.Index(fields=['schedule', 'date', 'status']),
+            
         ]
 
 class ScheduleBreak(models.Model):
@@ -659,7 +715,6 @@ class Booking(models.Model):
         ('weekly', 'Weekly'),
         ('biweekly', 'Bi-weekly')
     ], null=True, blank=True)
-    current_period_end = models.DateField(null=True, blank=True)
     
     status = models.CharField(max_length=20, choices=[
         ('pending', 'Pending'),
@@ -696,134 +751,6 @@ class Booking(models.Model):
         if not self.pk and not self.booking_group_id:
             self.booking_group_id = uuid.uuid4()
         super().save(*args, **kwargs)
-
-    def generate_series_bookings(self):
-        """
-        Generate related bookings for recurring or course enrollments
-        """
-        from .schedule_utils import generate_recurring_dates
-        
-        bookings = []
-        
-        if self.enrollment_type == 'recurring':
-            dates = generate_recurring_dates(
-                timezone.now().date(),
-                self.current_period_end,
-                self.recurrence_pattern,
-                self.sessions_per_week
-            )
-        elif self.enrollment_type == 'course':
-            dates = generate_recurring_dates(
-                self.course_start_date,
-                self.course_end_date,
-                self.recurrence_pattern,
-                self.sessions_per_week
-            )
-        else:
-            return []
-
-        # Find or create schedule instances for these dates
-        for date in dates:
-            if date == self.schedule_instance.date:
-                continue  # Skip the original booking date
-            
-            schedule = self.schedule_instance.schedule
-            instance, _ = ScheduleInstance.objects.get_or_create(
-                schedule=schedule,
-                date=date,
-                defaults={
-                    'time': self.schedule_instance.time,
-                    'price': self.schedule_instance.price,
-                    'max_participants': self.schedule_instance.max_participants,
-                    'status': 'scheduled'
-                }
-            )
-            
-            bookings.append(Booking(
-                schedule_instance=instance,
-                student=self.student,
-                booking_group_id=self.booking_group_id,
-                enrollment_type=self.enrollment_type,
-                participants=self.participants,
-                amount_paid=instance.price * self.participants,
-                status='confirmed',
-                payment_status='paid',
-                # Copy relevant fields from original booking
-                course_start_date=self.course_start_date,
-                course_end_date=self.course_end_date,
-                total_sessions=self.total_sessions,
-                sessions_per_week=self.sessions_per_week,
-                recurrence_pattern=self.recurrence_pattern,
-                current_period_end=self.current_period_end
-            ))
-
-        if bookings:
-            Booking.objects.bulk_create(bookings)
-        
-        return bookings
-
-    def validate_availability(self):
-        """Ensure there are enough spots available"""
-        instance = self.schedule_instance
-        if instance.status != 'scheduled':
-            raise ValidationError('This class instance is not available for booking')
-            
-        if instance.date < timezone.now().date():
-            raise ValidationError('Cannot book past class instances')
-            
-        if not instance.can_accommodate(self.participants):
-            raise ValidationError(f'Only {instance.available_spots} spots remaining')
-
-    def renew_recurring(self):
-        """Generate next month's bookings for recurring enrollment"""
-        if self.enrollment_type != 'recurring':
-            raise ValidationError("Can only renew recurring bookings")
-
-        from .schedule_utils import generate_recurring_dates
-        
-        next_start = self.current_period_end + timedelta(days=1)
-        next_end = next_start + timedelta(days=30)
-        
-        dates = generate_recurring_dates(
-            next_start,
-            next_end,
-            self.recurrence_pattern,
-            self.sessions_per_week
-        )
-
-        # Create next month's bookings
-        bookings = []
-        schedule = self.schedule_instance.schedule
-        
-        for date in dates:
-            instance, _ = ScheduleInstance.objects.get_or_create(
-                schedule=schedule,
-                date=date,
-                defaults={
-                    'time': self.schedule_instance.time,
-                    'price': self.schedule_instance.price,
-                    'max_participants': self.schedule_instance.max_participants,
-                    'status': 'scheduled'
-                }
-            )
-            
-            bookings.append(Booking(
-                schedule_instance=instance,
-                student=self.student,
-                participants=self.participants,
-                enrollment_type='recurring',
-                recurrence_pattern=self.recurrence_pattern,
-                sessions_per_week=self.sessions_per_week,
-                current_period_end=next_end,
-                status='confirmed',
-                amount_paid=instance.price * self.participants,
-                payment_status='paid'
-            ))
-
-        if bookings:
-            Booking.objects.bulk_create(bookings)
-            self.current_period_end = next_end
-            self.save()
 
 class StudentEnrollment(models.Model):
     """Tracks student enrollment in classes"""

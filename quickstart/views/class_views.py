@@ -1,4 +1,5 @@
 from datetime import datetime, time
+from silk.profiling.profiler import silk_profile
 import json
 from django.forms import ValidationError
 from rest_framework import generics, viewsets, status, permissions
@@ -7,13 +8,11 @@ from rest_framework.permissions import BasePermission, IsAuthenticated, AllowAny
 
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django.db import transaction
-from django.db.models import Exists, OuterRef
+from django.db.models import Exists, OuterRef, Prefetch, Case, Sum, When, IntegerField, Q, Subquery, Count
+from django.db.models.functions import Coalesce
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.decorators import api_view, permission_classes
 from django.shortcuts import get_object_or_404
-from django.db.models import Exists, OuterRef
-from django.db.models import Q
-from django.db.models import Count, Sum
 from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
@@ -22,7 +21,7 @@ from rest_framework.response import Response
 import logging
 
 from ..models import (
-    BusinessInfo, ClassesMain, ClassImage, Reviews, ClassOption, Schedule, ScheduleBreak, ScheduleInstance
+    Booking, BusinessInfo, ClassesMain, ClassImage, Reviews, ClassOption, Schedule, ScheduleBreak, ScheduleInstance
 )
 from ..serializers import (
     ClassesMainSerializer,
@@ -36,48 +35,11 @@ from ..serializers import (
     ScheduleBreakSerializer
 )
 
-from .permissions import check_user_role, BaseUserDataPermission
+from ..utils.permissions import check_user_role, BaseUserDataPermission
 from .utils import haversine_distance
 
 logger = logging.getLogger(__name__)
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def toggle_option_active(request, pk, option_id):
-    try:
-        option = get_object_or_404(ClassOption, 
-            optionId=option_id,
-            classId_id=pk
-        )
-        
-        # Check permissions
-        if not check_user_role(request.user, ['Super Admin', 'Admin', 'Business Owner', 'Manager']):
-            return Response({
-                'error': 'Insufficient permissions'
-            }, status=status.HTTP_403_FORBIDDEN)
-            
-        # Verify business ownership/management
-        business = option.classId.businessId
-        if not (request.user == business.owner or 
-                business.managers.filter(userId=request.user.userId).exists()): # Changed id to userId
-            return Response({
-                'error': 'You do not have permission for this business'
-            }, status=status.HTTP_403_FORBIDDEN)
-
-        # Toggle the active status
-        option.active = not option.active
-        option.save()  # Make sure to save
-        
-        return Response({
-            'active': option.active,
-            'optionId': option.optionId  # Add optionId to response
-        })
-        
-    except Exception as e:
-        return Response({
-            'error': str(e)
-        }, status=status.HTTP_400_BAD_REQUEST)
-
+    
 def validate_schedule_conflicts(option, schedule_data, exclude_id=None):
     """
     Validate schedule for time conflicts within an option.
@@ -128,7 +90,7 @@ def validate_schedule_conflicts(option, schedule_data, exclude_id=None):
 
 class BusinessPermissionMixin:
     """Mixin to handle business-specific permissions"""
-    
+    @silk_profile(name='BusinessPermissionMixin_get_queryset')
     def get_business_queryset(self, queryset):
         """
         Filter queryset based on user type:
@@ -159,6 +121,7 @@ class BusinessPermissionMixin:
             Q(businessId__managers=user)
         ).distinct()
 
+    @silk_profile(name='BusinessPermissionMixin_check_business_permission')
     def check_business_permission(self, business_id):
         """Check if user has permission to modify business data"""
         user = self.request.user
@@ -195,7 +158,7 @@ class BusinessClassesPermission(permissions.BasePermission):
             return check_user_role(request.user, ['Business Owner', 'Manager'])
 
         return True
-
+    
     def has_object_permission(self, request, view, obj):
         """
         Object-level permission check for specific class instances.
@@ -216,6 +179,7 @@ class BusinessClassesPermission(permissions.BasePermission):
         except AttributeError:
             return False
     
+
 class ClassViewSet(viewsets.ModelViewSet):
     serializer_class = ClassesMainSerializer
     permission_classes = [BusinessClassesPermission]
@@ -229,14 +193,25 @@ class ClassViewSet(viewsets.ModelViewSet):
         if self.action == 'create':
             return ClassCreateSerializer
         return ClassesMainSerializer
-
+    
+    @silk_profile(name='ClassViewSet_get_queryset')
     def get_queryset(self):
         queryset = ClassesMain.objects.all()
         
-        # Add logging to track queryset filtering
-        logger.debug(f"Getting queryset for user {self.request.user}, business_context: {self.is_business_context}")
+        # Add select_related and prefetch_related
+        queryset = queryset.select_related('businessId').prefetch_related(
+            'options',
+            'options__schedules',
+            'options__schedules__instances',
+            'options__schedules__breaks',  # Add prefetch for breaks
+            Prefetch(
+                'options__schedules__instances__bookings',
+                queryset=Booking.objects.filter(status='confirmed'),
+                to_attr='confirmed_bookings'
+            )
+        )
         
-        # Business context - show only owned/managed classes
+        # The rest of your logic for filtering public/business classes
         if self.is_business_context:
             if check_user_role(self.request.user, ['Admin', 'Super Admin']):
                 return queryset
@@ -255,16 +230,12 @@ class ClassViewSet(viewsets.ModelViewSet):
                 )
             )
         )
-    
+
+    @silk_profile(name='ClassViewSet_search')
     @action(detail=False, methods=['get'])
     def search(self, request):
         """
-        Search for classes based on coordinates within a radius.
-        Required parameters: lat, lng
-        Optional parameters: 
-        - radius (in km, defaults to 10)
-        - location (text-based search)
-        - date (for filtering by availability)
+        Optimized search endpoint that returns minimal data needed for search results
         """
         try:
             # Get search parameters
@@ -272,100 +243,79 @@ class ClassViewSet(viewsets.ModelViewSet):
             lng = request.query_params.get('lng')
             radius = float(request.query_params.get('radius', 100))
             location = request.query_params.get('location')
-            date = request.query_params.get('date')
             
-            # Initialize queryset
-            queryset = ClassesMain.objects.all()
-            
-            # Apply location-based filtering
-            if location:
-                queryset = queryset.filter(
-                    Q(location__icontains=location) |
-                    Q(businessId__businessCity__icontains=location) |
-                    Q(businessId__businessState__icontains=location)
+            # Define base queryset
+            queryset = ClassesMain.objects.select_related(
+                'businessId'
+            ).prefetch_related(
+                'images',
+                Prefetch(
+                    'options',
+                    queryset=ClassOption.objects.filter(active=True),
+                    to_attr='active_options'
                 )
-            
-            # If coordinates provided, filter by distance
-            if lat and lng:
-                try:
-                    search_lat = float(lat)
-                    search_lng = float(lng)
-                    
-                    classes_with_distance = []
-                    for class_obj in queryset:
-                        try:
-                            if not class_obj.coordinates:
-                                continue
-                                
-                            class_lat, class_lng = map(
-                                float, 
-                                class_obj.coordinates.split(',')
-                            )
-                            
-                            distance = haversine_distance(
-                                search_lat, search_lng,
-                                class_lat, class_lng
-                            )
-                            
-                            if distance <= radius:
-                                classes_with_distance.append((class_obj, distance))
-                                    
-                        except (ValueError, AttributeError) as e:
-                            logger.warning(f"Error processing coordinates for class {class_obj.classId}: {str(e)}")
-                            continue
+            ).only(
+                'classId', 'title', 'location', 'coordinates',
+                'category', 'subcategory', 'studentContactEmail', 
+                'studentContactPhone', 'businessId__businessName',
+                'businessId__totalReviews'
+            )
 
-                    # Sort by distance
-                    classes_with_distance.sort(key=lambda x: x[1])
-                    
-                    # Prepare response data
-                    serialized_classes = []
-                    for class_obj, distance in classes_with_distance:
-                        class_data = ClassesMainSerializer(class_obj).data
-                        class_data['distance'] = round(distance, 2)
-                        class_data['distance_text'] = (
-                            f"{round(distance, 1)}km away" if distance >= 1 
-                            else f"{round(distance * 1000)}m away"
-                        )
-                        serialized_classes.append(class_data)
-                        
-                except ValueError:
-                    return Response({
-                        "error": "Invalid coordinates format",
-                        "message": "Latitude and longitude must be valid numbers"
-                    }, status=status.HTTP_400_BAD_REQUEST)
-                    
-            else:
-                # If no coordinates, just serialize the filtered queryset
-                serialized_classes = ClassesMainSerializer(queryset, many=True).data
+            # Apply location filters if provided
+            if location:
+                location_filter = Q()
+                location_terms = location.split()
                 
-            # Add search metadata
-            response_data = {
-                'results': serialized_classes,
-                'total': len(serialized_classes),
-                'filters_applied': {
-                    'location': bool(location),
-                    'coordinates': bool(lat and lng),
-                    'date': bool(date),
-                    'radius_km': radius if lat and lng else None
-                }
-            }
-            
-            # Add coordinates to response if provided
-            if lat and lng:
-                response_data['search_coordinates'] = {
-                    'lat': float(lat),
-                    'lng': float(lng)
+                for term in location_terms:
+                    location_filter |= (
+                        Q(location__icontains=term) |
+                        Q(businessId__businessCity__icontains=term) |
+                        Q(businessId__businessState__icontains=term)
+                    )
+                queryset = queryset.filter(location_filter)
+
+            # Process results
+            serialized_data = []
+            for cls in queryset:
+                class_data = {
+                    'classId': cls.classId,
+                    'title': cls.title,
+                    'location': cls.location,
+                    'coordinates': cls.coordinates,
+                    'category': cls.category,
+                    'subcategory': cls.subcategory,
+                    'rating': None,
+                    'totalReviews': cls.businessId.totalReviews if cls.businessId else 0,
+                    'image': None,
+                    'priceRange': {
+                        'min': None,
+                        'max': None
+                    }
                 }
 
-            return Response(response_data)
+                # Get first image if exists
+                images = list(cls.images.all())
+                if images:
+                    class_data['image'] = images[0].image.url
 
-        except Exception as e:
-            logger.error(f"Unexpected error in search: {str(e)}")
+                # Get price range from active options
+                active_options = getattr(cls, 'active_options', [])
+                if active_options:
+                    prices = [option.price for option in active_options if option.price is not None]
+                    if prices:
+                        class_data['priceRange']['min'] = min(prices)
+                        class_data['priceRange']['max'] = max(prices)
+
+                serialized_data.append(class_data)
+
             return Response({
-                "error": "Server error",
-                "message": "An unexpected error occurred while processing your request"
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+                'results': serialized_data
+            })
+            
+        except Exception as e:
+            logger.error(f"Search error: {str(e)}", exc_info=True)
+            return Response({"error": str(e)}, status=500)
+        
     @action(detail=False, methods=['get'])
     def business_classes(self, request):
         """Endpoint for business dashboard"""
@@ -382,6 +332,7 @@ class ClassViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
 
+    @silk_profile(name='ClassViewSet_images')
     @action(detail=True, methods=['get', 'post'])
     def images(self, request, pk=None):
         """Handle class images list and creation"""
@@ -445,7 +396,7 @@ class ClassViewSet(viewsets.ModelViewSet):
             'active': option.active,
             'optionId': option.optionId
         })
-
+    
     def create(self, request, *args, **kwargs):
         self.is_business_context = True
         return super().create(request, *args, **kwargs)
@@ -493,9 +444,10 @@ class ClassViewSet(viewsets.ModelViewSet):
 class ClassImageList(generics.ListCreateAPIView):
     serializer_class = ClassImageSerializer
 
+    @silk_profile(name='ClassImageList_get_queryset')
     def get_queryset(self):
         return ClassImage.objects.filter(classId=self.kwargs['pk'])
-
+    
     def perform_create(self, serializer):
         class_instance = ClassesMain.objects.get(pk=self.kwargs['pk'])
         serializer.save(classId=class_instance)
@@ -504,10 +456,12 @@ class ClassImageDetail(BusinessPermissionMixin, generics.RetrieveDestroyAPIView)
     queryset = ClassImage.objects.all()
     serializer_class = ClassImageSerializer
 
+    @silk_profile(name='ClassImageDetail_get_queryset')
     def get_queryset(self):
         queryset = super().get_queryset()
         return self.get_business_queryset(queryset)
-
+    
+    @silk_profile(name='ClassImageDetail_get_object')
     def get_object(self):
         obj = super().get_object()
         if self.request.method == 'DELETE':
@@ -531,7 +485,8 @@ class ScheduleViewSet(BusinessPermissionMixin, viewsets.ModelViewSet):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
             return [IsAuthenticated()]
         return []
-
+    
+    @silk_profile(name='ScheduleViewSet_get_queryset')
     def get_queryset(self):
         queryset = Schedule.objects.all()
         
@@ -545,7 +500,7 @@ class ScheduleViewSet(BusinessPermissionMixin, viewsets.ModelViewSet):
             queryset = queryset.filter(is_active=True)
             
         return queryset
-
+    
     def create(self, request, *args, **kwargs):
         # Extract and validate option_id first
         option_id = request.data.get('option_id')
@@ -582,7 +537,7 @@ class ScheduleViewSet(BusinessPermissionMixin, viewsets.ModelViewSet):
         serializer.save(option=option)
         
         return Response(serializer.data, status=status.HTTP_201_CREATED)
-
+    
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
@@ -604,7 +559,7 @@ class ScheduleViewSet(BusinessPermissionMixin, viewsets.ModelViewSet):
         self.perform_update(serializer)
         
         return Response(serializer.data)
-
+    
     def validate_conflicts(self, request):
         option_id = request.data.get('option_id')
         schedule_data = request.data
@@ -659,7 +614,7 @@ class ScheduleViewSet(BusinessPermissionMixin, viewsets.ModelViewSet):
                 {'error': str(e)},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
+    
     @action(detail=True, methods=['post'])
     def add_break(self, request, pk=None):
         """Add a break period to the schedule"""
@@ -673,36 +628,51 @@ class ScheduleViewSet(BusinessPermissionMixin, viewsets.ModelViewSet):
         serializer.save()
         
         return Response(serializer.data, status=status.HTTP_201_CREATED)
-
+    
     @action(detail=False, methods=['get'], url_path='availability')
     def availability(self, request):
-        """Get availability for specific option's schedules"""
+        """Get availability for specific option's schedules within a date range"""
         option_id = request.query_params.get('option_id')
-        date_str = request.query_params.get('date')
+        start_date_str = request.query_params.get('start_date')
+        end_date_str = request.query_params.get('end_date')
         
-        if not all([option_id, date_str]):
+        if not option_id:
             return Response(
-                {'error': 'option_id and date are required'},
+                {'error': 'option_id is required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
         try:
-            # Convert date string to date object
-            selected_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-            
-            # Get instances for the specified date
+            # Convert date strings to date objects
+            start_date = timezone.datetime.strptime(start_date_str, '%Y-%m-%d').date() if start_date_str else timezone.now().date()
+            end_date = timezone.datetime.strptime(end_date_str, '%Y-%m-%d').date() if end_date_str else (start_date + timezone.timedelta(days=7))
+
+            # Get instances with pre-calculated booking counts in a single query
             instances = ScheduleInstance.objects.filter(
                 schedule__option_id=option_id,
                 schedule__is_active=True,
-                date=selected_date,
+                date__range=(start_date, end_date),
                 status='scheduled'
-            ).select_related('schedule').order_by('time')
+            ).annotate(
+                current_bookings_count=Coalesce(
+                    Sum(
+                        Case(
+                            When(
+                                bookings__status='confirmed',
+                                then='bookings__participants'
+                            ),
+                            default=0
+                        )
+                    ),
+                    0,
+                    output_field=IntegerField()
+                )
+            ).select_related('schedule')
 
-            # Format instances with availability
+            # Format instances with pre-calculated availability
             available_instances = []
             for instance in instances:
-                current_bookings = instance.current_bookings
-                available_spots = instance.max_participants - current_bookings
+                available_spots = instance.max_participants - instance.current_bookings_count
                 
                 # Only include if spots are available
                 if available_spots > 0:
@@ -719,10 +689,13 @@ class ScheduleViewSet(BusinessPermissionMixin, viewsets.ModelViewSet):
             return Response({
                 'instances': available_instances,
                 'total_available': len(available_instances),
-                'selected_date': date_str
+                'date_range': {
+                    'start_date': start_date_str,
+                    'end_date': end_date_str
+                }
             })
 
-        except ValueError:
+        except ValueError as e:
             return Response(
                 {'error': 'Invalid date format. Use YYYY-MM-DD'},
                 status=status.HTTP_400_BAD_REQUEST
@@ -732,7 +705,8 @@ class ScheduleViewSet(BusinessPermissionMixin, viewsets.ModelViewSet):
                 {'error': str(e)},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
+    
+    @silk_profile()
     @action(detail=False, methods=['get'], url_path='available-days')
     def available_days(self, request):
         """Get available days for a month where schedules exist"""
@@ -789,6 +763,7 @@ class ScheduleInstanceViewSet(viewsets.ModelViewSet):
     permission_classes = [BaseUserDataPermission]
     serializer_class = ScheduleInstanceSerializer
     
+    @silk_profile()
     def get_queryset(self):
         queryset = ScheduleInstance.objects.all()
         
@@ -863,13 +838,15 @@ class ClassOptionDetail(BusinessPermissionMixin, generics.RetrieveUpdateDestroyA
     serializer_class = ClassOptionCreateSerializer
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     
+    @silk_profile()
     def get_queryset(self):
         # Match the URL parameter name
         return ClassOption.objects.filter(
             optionId=self.kwargs['option_id'],
             classId_id=self.kwargs['pk']
         )
-
+    
+    @silk_profile()
     def get_object(self):
         obj = get_object_or_404(
             ClassOption,

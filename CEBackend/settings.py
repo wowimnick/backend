@@ -34,7 +34,9 @@ ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'classeasily.com', '3.142.223.49']
 
 STRIPE_PUBLIC_KEY = 'pk_test_51Qn8JYFsNqYi8b0PAujbtEGNoTcLJTpaS2UefQxe5u4BquZyrIK48aRKbhHLRh45em0EFds7SNhlzys3sPxS5faR00Rj8lqQjg'
 STRIPE_SECRET_KEY = 'sk_test_51Qn8JYFsNqYi8b0P7fYDsXan82C6Q1CGWuwe9qHzaxnUf9lGW4G3cA0w2ks4svAnK9IivXKxpzOau6Kaj3N7Xx9Y00arIlzov1'
+STRIPE_WEBHOOK_SECRET = 'whsec_634bff67902f39537aeae7b8349d2368d278d2f0200d679e919425abbaac02ba'
 
+SILKY_PYTHON_PROFILER = True
 
 # Application definition
 
@@ -53,6 +55,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'quickstart',
     'storages',
+    'silk',
     'allauth',
     'allauth.account',
     'allauth.socialaccount',
@@ -62,6 +65,7 @@ INSTALLED_APPS = [
     'dj_rest_auth',
     'rest_framework.authtoken',
     'rest_auth',
+    'rest_framework_simplejwt.token_blacklist',
 ]
 
 LOGGING = {
@@ -186,6 +190,7 @@ SOCIALACCOUNT_PROVIDERS = {
 }
 
 MIDDLEWARE = [
+    'silk.middleware.SilkyMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'corsheaders.middleware.CorsMiddleware',

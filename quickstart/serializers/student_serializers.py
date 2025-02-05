@@ -54,10 +54,10 @@ class StudentEnrollmentSerializer(serializers.ModelSerializer):
     
 class StudentProfileSerializer(serializers.ModelSerializer):
     user = CustomUserDetailsSerializer(read_only=True)
-    notes = StudentNoteSerializer(many=True, read_only=True)
-    enrollments = StudentEnrollmentSerializer(many=True, read_only=True)
+    notes = serializers.SerializerMethodField()
+    enrollments = serializers.SerializerMethodField()
     active_classes = serializers.IntegerField(read_only=True)
-    total_classes_taken = serializers.IntegerField(read_only=True)
+    total_classes_taken = serializers.IntegerField(source='completed_bookings_count', read_only=True)
     average_attendance = serializers.DecimalField(
         max_digits=5, decimal_places=2, read_only=True
     )
@@ -76,6 +76,26 @@ class StudentProfileSerializer(serializers.ModelSerializer):
             'active_classes', 'total_classes_taken',
             'average_attendance', 'notes', 'enrollments'
         ]
+
+    def get_notes(self, obj):
+        return StudentNoteSerializer(
+            getattr(obj, 'prefetched_notes', []),
+            many=True
+        ).data
+
+    def get_enrollments(self, obj):
+        return StudentEnrollmentSerializer(
+            getattr(obj, 'prefetched_enrollments', []),
+            many=True
+        ).data
+
+    def to_representation(self, instance):
+        # Ensure we're using an annotated queryset
+        if not hasattr(instance, 'active_classes'):
+            instance = Student.annotate_metrics(
+                Student.objects.filter(id=instance.id)
+            ).get()
+        return super().to_representation(instance)
 
     def create(self, validated_data):
         """

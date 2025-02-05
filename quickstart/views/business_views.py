@@ -13,7 +13,7 @@ from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 import logging
 
-from .permissions import check_user_role
+from ..utils.permissions import check_user_role
 
 from ..models import (
     BusinessInfo, Booking, ClassesMain, Reviews
@@ -24,7 +24,7 @@ from ..serializers import (
     ClassesMainSerializer,
     BusinessRegistrationSerializer
 )
-from .permissions import IsBusinessOwner, IsManager
+from ..utils.permissions import IsBusinessOwner, IsManager
 
 logger = logging.getLogger(__name__)
 

@@ -11,7 +11,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 import csv
 from django.http import HttpResponse
 
-from .permissions import check_user_role
+from ..utils.permissions import check_user_role
 from ..models import Booking, ClassesMain, ClassOption, BusinessInfo
 
 import logging

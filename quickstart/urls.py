@@ -3,7 +3,7 @@ from rest_framework.routers import DefaultRouter
 from allauth.account.views import confirm_email
 from django.views.generic import TemplateView
 
-from quickstart.payments.views import ConfirmPaymentView, CreatePaymentIntentView
+from quickstart.payments.views import CreatePaymentIntentView, ProcessBookingWebhook
 
 from .views import (
     # Existing views
@@ -11,7 +11,7 @@ from .views import (
     LogoutView, UserUpdateView, CustomRegisterView, UserRoleView,
     BusinessInfoViewSet, InstructorViewSet, BookingViewSet,
     RoleViewSet, BusinessViewSet, register_business, 
-    ScheduleViewSet, toggle_option_active, ClassReviews, ClassImageList,
+    ScheduleViewSet, ClassReviews, ClassImageList,
     ClassImageDetail, ClassOptionDetail, StudentProfileViewSet,
     RevenueAnalyticsView, ClassViewSet, 
     
@@ -40,6 +40,7 @@ router.register(r'schedule-breaks', ScheduleBreakViewSet, basename='schedule-bre
 urlpatterns = [
     # Include router URLs
     path('', include(router.urls)),
+    path('silk/', include('silk.urls', namespace='silk')),
     
     # Existing auth URLs
     path('auth/', include([
@@ -71,9 +72,6 @@ urlpatterns = [
         path('images/<int:pk>/', ClassImageDetail.as_view(), name='class-image-detail'),
         path('<int:pk>/reviews/', ClassReviews.as_view(), name='class-reviews'),
         path('<int:pk>/images/', ClassImageList.as_view(), name='class-images'),
-        path('<int:pk>/options/<int:option_id>/toggle_active/', 
-            toggle_option_active, 
-            name='toggle-option-active'),
         path('<int:pk>/options/', 
             ClassOptionDetail.as_view(),
             name='class-option-create'),
@@ -94,6 +92,6 @@ urlpatterns = [
 
     path('revenue/analytics/', RevenueAnalyticsView.as_view(), name='revenue-analytics'),
 
+    path('payments/webhook/', ProcessBookingWebhook.as_view(), name='payment-webhook'),
     path('payments/create-payment-intent/', CreatePaymentIntentView.as_view(), name='create-payment-intent'),
-    path('payments/confirm-payment/', ConfirmPaymentView.as_view(), name='confirm-payment'),
 ]

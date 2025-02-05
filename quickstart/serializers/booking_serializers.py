@@ -1,185 +1,162 @@
-import uuid
 from rest_framework import serializers
+from django.utils import timezone
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework.exceptions import ValidationError as DRFValidationError
-from ..models import Booking, Schedule
-from datetime import datetime
-from django.utils import timezone
 from django.db import transaction
 
-class BookingCreateSerializer(serializers.ModelSerializer):
-    # Add fields for enrollment types
-    enrollment_type = serializers.ChoiceField(
-        choices=[
-            ('Single Session', 'Single Session'),
-            ('Full Course', 'Full Course'), 
-            ('Recurring Classes', 'Recurring Classes')
-        ], 
-        required=True
+from quickstart.constants import BookingChoices
+
+from ..models import Booking, Schedule, ScheduleInstance
+
+class BookingCreateSerializer(serializers.Serializer):
+    schedule_instances = serializers.ListField(
+        child=serializers.IntegerField(),
+        min_length=1
     )
-    course_start_date = serializers.DateField(required=False)
-    course_end_date = serializers.DateField(required=False)
-    total_sessions = serializers.IntegerField(required=False)
-    sessions_per_week = serializers.IntegerField(required=False)
-    recurrence_pattern = serializers.ChoiceField(choices=['weekly', 'biweekly'], required=False)
-    booking_group_id = serializers.UUIDField(read_only=True)
 
-    class Meta:
-        model = Booking
-        fields = [
-            'schedule_instance', 'participants', 'notes',
-            'enrollment_type', 'course_start_date', 'course_end_date',
-            'total_sessions', 'sessions_per_week', 'recurrence_pattern',
-            'booking_group_id'
-        ]
+    def validate_schedule_instances(self, value):
+        instances = ScheduleInstance.objects.select_related(
+            'schedule__option'
+        ).filter(id__in=value)
         
+        if len(instances) != len(value):
+            raise serializers.ValidationError('One or more schedule instances not found')
+
+        first_instance = instances[0]
+        booking_type = first_instance.schedule.option.booking_type
+
+        # Only validate number of slots for recurring bookings
+        if (booking_type == 'Recurring Classes' and 
+            len(instances) != first_instance.schedule.option.sessions_per_week):
+            raise serializers.ValidationError(
+                f'Must select {first_instance.schedule.option.sessions_per_week} slots per week'
+            )
+
+        # Check current instances' availability
+        for instance in instances:
+            if instance.status != 'scheduled':
+                raise serializers.ValidationError(
+                    f'Instance {instance.id} is not available for booking'
+                )
+            
+            if instance.date < timezone.now().date():
+                raise serializers.ValidationError(
+                    f'Cannot book past instance {instance.id}'
+                )
+            
+            if not instance.can_accommodate(1):
+                raise serializers.ValidationError(
+                    f'Not enough spots available for instance {instance.id}'
+                )
+        
+        return value
+
+    def _check_future_availability(self, initial_instances, recurrence_pattern):
+        """
+        Check availability for future recurring instances
+        Returns list of unavailable slots if any
+        """
+        weeks_to_check = 4  # One month
+        if recurrence_pattern == 'biweekly':
+            weeks_to_check = 8  # Two months to get 4 sessions
+
+        unavailable_slots = []
+        
+        for instance in initial_instances:
+            current_date = instance.date
+            schedule = instance.schedule
+            
+            # Calculate future dates based on pattern
+            future_dates = []
+            for week in range(1, weeks_to_check + 1):
+                if recurrence_pattern == 'biweekly' and week % 2 == 1:
+                    continue
+                future_date = current_date + timedelta(weeks=week)
+                future_dates.append(future_date)
+
+            # Check each future date
+            for future_date in future_dates:
+                future_instance = ScheduleInstance.objects.filter(
+                    schedule=schedule,
+                    date=future_date,
+                    time=instance.time
+                ).first()
+
+                if not future_instance or not future_instance.can_accommodate(1):
+                    unavailable_slots.append({
+                        'original_instance_id': instance.id,
+                        'date': future_date,
+                        'time': instance.time,
+                        'reason': 'No availability'
+                    })
+
+        return unavailable_slots
+
     def validate(self, data):
-        print("Starting validation with data:", data)  # Add this
-        instance = data['schedule_instance']
-        participants = data['participants']
-        enrollment_type = data.get('enrollment_type')  # Use get() to avoid KeyError
+        first_instance = ScheduleInstance.objects.select_related(
+            'schedule__option'
+        ).get(id=data['schedule_instances'][0])
         
-        print(f"Validating booking: type={enrollment_type}, participants={participants}, instance={instance}")  # Add this
+        option = first_instance.schedule.option
+        booking_type = option.booking_type  
         
-        # Validate basic booking requirements
-        if instance.status != 'scheduled':
-            print(f"Instance status validation failed: {instance.status}")  # Add this
-            raise serializers.ValidationError(
-                'This class instance is not available for booking'
-            )
+        # For single bookings, don't validate sessions_per_week
+        if booking_type == 'Single Session':
+            data['sessions_per_week'] = 1
+            data['recurrence_pattern'] = None
+        else:
+            data['sessions_per_week'] = option.sessions_per_week
+            data['recurrence_pattern'] = option.recurrence_pattern
             
-        if instance.date < timezone.now().date():
-            print(f"Date validation failed: {instance.date}")  # Add this
-            raise serializers.ValidationError(
-                'Cannot book past class instances'
-            )
-            
-        if not instance.can_accommodate(participants):
-            print(f"Capacity validation failed: available={instance.available_spots}, requested={participants}")  # Add this
-            raise serializers.ValidationError(
-                f'Only {instance.available_spots} spots remaining'
-            )
-
-        # Validate enrollment type specific fields
-        print(f"Checking enrollment type specific fields for: {enrollment_type}")  # Add this
-        if enrollment_type == 'Full Course':
-            required_fields = [
-                'course_start_date',
-                'course_end_date',
-                'total_sessions',
-                'sessions_per_week',
-                'recurrence_pattern'
-            ]
-            missing_fields = [field for field in required_fields if not data.get(field)]
-            if missing_fields:
-                print(f"Missing required fields for Full Course: {missing_fields}")  # Add this
-                raise serializers.ValidationError(
-                    'Course bookings require start_date, end_date, total_sessions, sessions_per_week, and recurrence_pattern'
-                )
-            if data['course_start_date'] >= data['course_end_date']:
-                print("Course date validation failed")  # Add this
-                raise serializers.ValidationError('End date must be after start date')
-            if data['sessions_per_week'] < 1:
-                print("Sessions per week validation failed")  # Add this
-                raise serializers.ValidationError('Must have at least one session per week')
-
-        elif enrollment_type == 'Recurring Classes':
-            required_fields = ['sessions_per_week', 'recurrence_pattern']
-            missing_fields = [field for field in required_fields if not data.get(field)]
-            if missing_fields:
-                print(f"Missing required fields for Recurring Classes: {missing_fields}")  # Add this
-                raise serializers.ValidationError(
-                    'Recurring bookings require sessions_per_week and recurrence_pattern'
-                )
-            if data['sessions_per_week'] < 1:
-                print("Sessions per week validation failed")  # Add this
-                raise serializers.ValidationError('Must have at least one session per week')
+        data['booking_type'] = booking_type
         
-        print("Validation successful")  # Add this
         return data
 
-    def create(self, validated_data):
-        print("Starting booking creation with data:", validated_data)  # Add this
-        with transaction.atomic():
-            try:
-                instance = validated_data['schedule_instance']
-                participants = validated_data['participants']
-                enrollment_type = validated_data['enrollment_type']
-                
-                print(f"Creating booking: type={enrollment_type}, participants={participants}")  # Add this
-                
-                if enrollment_type == 'Full Course':
-                    total_sessions = validated_data['total_sessions']
-                    amount_paid = instance.price * participants * total_sessions
-                else:
-                    amount_paid = instance.price * participants
-                
-                print(f"Calculated amount_paid: {amount_paid}")  # Add this
-                
-                # Create the booking
-                booking = Booking.objects.create(
-                    **validated_data,
-                    amount_paid=amount_paid
-                )
-                
-                print(f"Created booking: {booking.id}")  # Add this
-                
-                booking.status = 'confirmed'
-                booking.payment_status = 'paid'
-                booking.save()
-                
-                # Generate series bookings for recurring or course types
-                if booking.enrollment_type in ['Full Course', 'Recurring Classes']:
-                    print(f"Generating series bookings for {booking.enrollment_type}")  # Add this
-                    booking.generate_series_bookings()
-                
-                return booking
-            except Exception as e:
-                print(f"Error creating booking: {str(e)}")  # Add this
-                raise
-
-class BookingDetailSerializer(serializers.ModelSerializer):
-    student_name = serializers.SerializerMethodField()
-    student_email = serializers.SerializerMethodField()
-    class_name = serializers.SerializerMethodField()
-    business_name = serializers.SerializerMethodField()
+class RelatedBookingSerializer(serializers.ModelSerializer):
+    """Simplified serializer for related bookings to avoid recursion"""
     date = serializers.SerializerMethodField()
     time = serializers.SerializerMethodField()
-    enrollment_details = serializers.SerializerMethodField()
-    group_bookings = serializers.SerializerMethodField()
-    booking_group_id = serializers.UUIDField(read_only=True)
     
     class Meta:
         model = Booking
         fields = [
-            'id', 'schedule_instance', 'date', 'time',
-            'student_name', 'student_email', 'class_name', 
-            'business_name', 'participants', 'notes', 'status',
-            'booking_date', 'cancelled_at', 'cancellation_reason',
-            'amount_paid', 'payment_status', 'enrollment_type',
-            'enrollment_details', 'attendance_marked', 'attended',
-            'booking_group_id', 'group_bookings'
+            'id', 'date', 'time', 'status', 'participants',
+            'amount_paid', 'attendance_marked', 'attended'
         ]
-
-    def get_group_bookings(self, obj):
-        """
-        Retrieve all bookings in the same booking group
-        """
-        if not obj.booking_group_id:
-            return []
-        
-        group_bookings = Booking.objects.filter(
-            booking_group_id=obj.booking_group_id
-        ).exclude(id=obj.id)
-        
-        return BookingDetailSerializer(group_bookings, many=True).data
     
     def get_date(self, obj):
         return obj.schedule_instance.date if obj.schedule_instance else None
 
     def get_time(self, obj):
         return obj.schedule_instance.time if obj.schedule_instance else None
-        
+
+class BookingDetailSerializer(serializers.ModelSerializer):
+    class_name = serializers.SerializerMethodField()
+    business_name = serializers.SerializerMethodField()
+    date = serializers.SerializerMethodField()
+    time = serializers.SerializerMethodField()
+    student_name = serializers.SerializerMethodField()
+    student_email = serializers.SerializerMethodField()
+    enrollment_details = serializers.SerializerMethodField()
+    group_bookings = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Booking
+        fields = [
+            'id', 'booking_group_id', 'schedule_instance', 'date', 'time',
+            'student_name', 'student_email', 'class_name', 'business_name',
+            'participants', 'notes', 'status', 'booking_date', 'cancelled_at',
+            'cancellation_reason', 'amount_paid', 'payment_status',
+            'enrollment_type', 'enrollment_details', 'attendance_marked', 
+            'attended', 'group_bookings'
+        ]
+    
+    def get_date(self, obj):
+        return obj.schedule_instance.date if obj.schedule_instance else None
+
+    def get_time(self, obj):
+        return obj.schedule_instance.time if obj.schedule_instance else None
+
     def get_student_name(self, obj):
         if obj.student and obj.student.user:
             return f"{obj.student.user.first_name} {obj.student.user.last_name}".strip()
@@ -199,24 +176,35 @@ class BookingDetailSerializer(serializers.ModelSerializer):
         return None
 
     def get_enrollment_details(self, obj):
-        if obj.enrollment_type == 'single':
+        if not obj.booking_group_id:
             return None
             
         details = {
             'type': obj.enrollment_type,
-            'recurrence_pattern': obj.recurrence_pattern,
-            'sessions_per_week': obj.sessions_per_week
+            'sessions': [],
         }
         
-        if obj.enrollment_type == 'course':
-            details.update({
-                'start_date': obj.course_start_date,
-                'end_date': obj.course_end_date,
-                'total_sessions': obj.total_sessions
-            })
-        else:  # recurring
-            details.update({
-                'current_period_end': obj.current_period_end
+        # Get all related bookings for the same group
+        related_bookings = Booking.objects.filter(
+            booking_group_id=obj.booking_group_id
+        ).order_by('schedule_instance__date', 'schedule_instance__time')
+        
+        for booking in related_bookings:
+            details['sessions'].append({
+                'date': booking.schedule_instance.date,
+                'time': booking.schedule_instance.time,
+                'status': booking.status
             })
             
         return details
+
+    def get_group_bookings(self, obj):
+        """Get related bookings using the simplified serializer"""
+        if not obj.booking_group_id:
+            return []
+            
+        related_bookings = Booking.objects.filter(
+            booking_group_id=obj.booking_group_id
+        ).exclude(id=obj.id)
+        
+        return RelatedBookingSerializer(related_bookings, many=True).data
