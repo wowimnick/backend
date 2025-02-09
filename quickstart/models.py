@@ -744,6 +744,8 @@ class Booking(models.Model):
             models.Index(fields=['student', 'status']),
             models.Index(fields=['booking_date']),
             models.Index(fields=['enrollment_type', 'status']),
+            models.Index(fields=['status']),
+            models.Index(fields=['booking_group_id']),
         ]
 
     def save(self, *args, **kwargs):

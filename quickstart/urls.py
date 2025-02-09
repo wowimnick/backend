@@ -94,4 +94,8 @@ urlpatterns = [
 
     path('payments/webhook/', ProcessBookingWebhook.as_view(), name='payment-webhook'),
     path('payments/create-payment-intent/', CreatePaymentIntentView.as_view(), name='create-payment-intent'),
+
+    path('my_bookings/', BookingViewSet.as_view({'get': 'my_bookings'}), name='my-bookings'),
+    path('<int:pk>/student_cancel/', BookingViewSet.as_view({'post': 'student_cancel'}), name='student-cancel'),
+    path('<int:pk>/student_reschedule/', BookingViewSet.as_view({'post': 'student_reschedule'}), name='student-reschedule'),
 ]

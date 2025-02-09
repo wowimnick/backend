@@ -26,7 +26,8 @@ from .class_serializers import (
 
 from .booking_serializers import (
     BookingCreateSerializer,
-    BookingDetailSerializer
+    BookingDetailSerializer,
+    BookingListSerializer
 )
 
 from .instructor_serializers import (
@@ -77,6 +78,7 @@ __all__ = [
     # Booking Serializers
     'BookingCreateSerializer',
     'BookingDetailSerializer',
+    'BookingListSerializer',
 
     # Instructor Serializers
     'InstructorSerializer',

@@ -1,260 +1,255 @@
 from rest_framework import views, status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-import traceback
-from django.db.models import Sum, Count, F, ExpressionWrapper, FloatField, DecimalField, Q, Value, IntegerField, Case, When
-from django.db.models.functions import TruncDate, ExtractMonth, ExtractYear, Coalesce, Cast
+from django.db.models import (
+    Sum, Count, F, ExpressionWrapper, FloatField, DecimalField,
+    Q, Value, Case, When, IntegerField
+)
+from django.db.models.functions import (
+    TruncDate, ExtractMonth, ExtractYear, Coalesce
+)
 from django.utils import timezone
-from dateutil.relativedelta import relativedelta
-from datetime import datetime
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from datetime import datetime, timedelta
+from rest_framework.exceptions import ValidationError
 import csv
 from django.http import HttpResponse
-
-from ..utils.permissions import check_user_role
-from ..models import Booking, ClassesMain, ClassOption, BusinessInfo
-
 import logging
+
+from quickstart.models import Booking, BusinessInfo, ClassOption, ClassesMain
+
 logger = logging.getLogger(__name__)
 
 class RevenueAnalyticsView(views.APIView):
     permission_classes = [IsAuthenticated]
 
     def get_business(self, user):
+        """Get user's business with permission check."""
         business = BusinessInfo.objects.filter(
             Q(owner=user) | Q(managers=user)
         ).first()
         
-        if not business and not check_user_role(user, ['Admin', 'Super Admin']):
-            raise PermissionDenied("No associated business found")
+        if not business:
+            raise ValidationError("No associated business found")
             
         return business
 
     def get_date_range(self, request):
+        """Parse and validate date range from request."""
         try:
             start_date = request.query_params.get('start_date')
             end_date = request.query_params.get('end_date')
             
             if start_date and end_date:
-                # Convert to timezone-aware datetime
                 start_date = timezone.make_aware(datetime.strptime(start_date, '%Y-%m-%d'))
                 end_date = timezone.make_aware(datetime.strptime(end_date, '%Y-%m-%d'))
-                
-                return (
-                    start_date.date(),
-                    end_date.date()
-                )
+            else:
+                end_date = timezone.now()
+                start_date = end_date - timedelta(days=30)
             
-            # Default to current date range
-            end_date = timezone.now().date()
-            start_date = end_date - relativedelta(days=30)
-            return start_date, end_date
+            return start_date.date(), end_date.date()
             
         except ValueError as e:
             raise ValidationError("Invalid date format. Use YYYY-MM-DD")
 
     def calculate_metrics(self, business, start_date, end_date):
-        # Log the date range being used
-        logger.info(f"Calculating Metrics for Date Range: {start_date} to {end_date}")
-        
-        current_period = self.get_base_queryset(business).filter(
-            booking_date__range=[start_date, end_date]
-        )
-        
-        period_length = (end_date - start_date).days
-        previous_start = start_date - relativedelta(days=period_length)
-        previous_period = self.get_base_queryset(business).filter(
-            booking_date__range=[previous_start, start_date]
-        )
-        
-        logger.info(f"Current Period Bookings: {current_period.count()}")
-        logger.info(f"Previous Period Bookings: {previous_period.count()}")
-        
-        current_metrics = current_period.aggregate(
-            total_revenue=Coalesce(Sum('amount_paid'), Value(0), output_field=DecimalField()),
-            total_students=Coalesce(Count('student', distinct=True), Value(0), output_field=IntegerField())
-        )
-        
-        previous_metrics = previous_period.aggregate(
-            prev_revenue=Coalesce(Sum('amount_paid'), Value(0), output_field=DecimalField()),
-            prev_students=Coalesce(Count('student', distinct=True), Value(0), output_field=IntegerField())
-        )
-        
-        logger.info(f"Current Metrics: {current_metrics}")
-        logger.info(f"Previous Metrics: {previous_metrics}")
-        
-        return {
-            'total_revenue': current_metrics['total_revenue'],
-            'total_students': current_metrics['total_students'],
-            'revenue_growth': self.calculate_growth(
-                float(current_metrics['total_revenue']),
-                float(previous_metrics['prev_revenue'])
-            ),
-            'student_growth': self.calculate_growth(
-                current_metrics['total_students'],
-                previous_metrics['prev_students']
-            )
-        }
-
-    def get_base_queryset(self, business):
-        # Prefetch related data to avoid N+1 queries
-        return Booking.objects.select_related(
-            'schedule_instance__schedule__option__classId',
-            'student'
-        ).filter(
+        """Calculate key revenue metrics."""
+        current_period = Booking.objects.filter(
             schedule_instance__schedule__option__classId__businessId=business,
-            status='completed',
+            booking_date__range=[start_date, end_date],
             payment_status='paid'
         )
 
-    def calculate_growth(self, current, previous):
-        if not previous:
-            return float(100 if current else 0)
-        return float(((current - previous) / previous) * 100) if previous else 0
-
-    def get_time_series(self, business, start_date, end_date): 
-        bookings = self.get_base_queryset(business).filter(
-            booking_date__range=[start_date, end_date]
+        # Previous period for comparison
+        period_length = (end_date - start_date).days
+        previous_start = start_date - timedelta(days=period_length)
+        previous_period = Booking.objects.filter(
+            schedule_instance__schedule__option__classId__businessId=business,
+            booking_date__range=[previous_start, start_date],
+            payment_status='paid'
         )
-        
-        return bookings.annotate(
+
+        # Current period aggregations
+        current_metrics = current_period.aggregate(
+            total_revenue=Coalesce(Sum('amount_paid'), Value(0), output_field=DecimalField()),
+            total_bookings=Count('id'),
+            recurring_revenue=Coalesce(
+                Sum('amount_paid', 
+                    filter=Q(enrollment_type='Recurring Classes')),
+                Value(0),
+                output_field=DecimalField()
+            )
+        )
+
+        # Previous period aggregations
+        previous_metrics = previous_period.aggregate(
+            prev_revenue=Coalesce(Sum('amount_paid'), Value(0), output_field=DecimalField()),
+            prev_bookings=Count('id')
+        )
+
+        # Calculate revenue per student
+        unique_students = current_period.values('student').distinct().count()
+        revenue_per_student = (
+            float(current_metrics['total_revenue']) / unique_students
+            if unique_students > 0 else 0
+        )
+
+        # Calculate average order value
+        aov = (
+            float(current_metrics['total_revenue']) / current_metrics['total_bookings']
+            if current_metrics['total_bookings'] > 0 else 0
+        )
+
+        # Calculate growth rates
+        revenue_growth = (
+            ((float(current_metrics['total_revenue']) - float(previous_metrics['prev_revenue'])) 
+             / float(previous_metrics['prev_revenue']) * 100)
+            if previous_metrics['prev_revenue'] > 0 else 0
+        )
+
+        return {
+            'total_revenue': float(current_metrics['total_revenue']),
+            'average_order_value': round(aov, 2),
+            'recurring_revenue': float(current_metrics['recurring_revenue']),
+            'revenue_per_student': round(revenue_per_student, 2),
+            'revenue_growth': round(revenue_growth, 2)
+        }
+
+    def get_revenue_trends(self, business, start_date, end_date):
+        """Get daily revenue trends with recurring vs one-time breakdown."""
+        trends = Booking.objects.filter(
+            schedule_instance__schedule__option__classId__businessId=business,
+            booking_date__range=[start_date, end_date],
+            payment_status='paid'
+        ).annotate(
             date=TruncDate('booking_date')
         ).values('date').annotate(
-            revenue=Coalesce(Sum('amount_paid'), Value(0), output_field=DecimalField()),
-            students=Coalesce(Count('student', distinct=True), Value(0), output_field=IntegerField()),
-            bookings=Coalesce(Count('id'), Value(0), output_field=IntegerField()),
-            average_booking_value=ExpressionWrapper(
-                Cast(Sum('amount_paid'), FloatField()) / Cast(Count('id'), FloatField()),
-                output_field=FloatField()
+            recurring_revenue=Coalesce(
+                Sum('amount_paid',
+                    filter=Q(enrollment_type='Recurring Classes')),
+                Value(0),
+                output_field=DecimalField()
+            ),
+            one_time_revenue=Coalesce(
+                Sum('amount_paid',
+                    filter=Q(enrollment_type='Single Session')),
+                Value(0),
+                output_field=DecimalField()
             )
         ).order_by('date')
 
-    def get_distribution(self, business, start_date, end_date):
-        try:
-            bookings = self.get_base_queryset(business).filter(
-                booking_date__range=[start_date, end_date]
-            )
+        return [
+            {
+                'date': entry['date'].isoformat(),
+                'recurring_revenue': float(entry['recurring_revenue']),
+                'one_time_revenue': float(entry['one_time_revenue'])
+            }
+            for entry in trends
+        ]
+
+    def get_class_revenue(self, business, start_date, end_date):
+        """Get revenue breakdown by class and options."""
+        class_revenue = []
+        
+        classes = ClassesMain.objects.filter(businessId=business)
+        
+        for class_obj in classes:
+            class_total = Booking.objects.filter(
+                schedule_instance__schedule__option__classId=class_obj,
+                booking_date__range=[start_date, end_date],
+                payment_status='paid'
+            ).aggregate(
+                revenue=Coalesce(Sum('amount_paid'), Value(0), output_field=DecimalField())
+            )['revenue']
             
-            total_revenue = bookings.aggregate(
-                total=Coalesce(Sum('amount_paid'), Value(0), output_field=DecimalField())
-            )['total']
-            
-            # Simplified distribution calculation
-            class_distribution = []
-            
-            classes = ClassesMain.objects.filter(businessId=business)
-            
-            for class_obj in classes:
-                # Calculate class-level revenue and students
-                class_bookings = bookings.filter(
-                    schedule_instance__schedule__option__classId=class_obj
-                )
+            if class_total > 0:
+                class_revenue.append({
+                    'name': class_obj.title,
+                    'revenue': float(class_total),
+                    'id': class_obj.classId,
+                    'type': 'class'
+                })
                 
-                class_total_revenue = class_bookings.aggregate(
-                    revenue=Coalesce(Sum('amount_paid'), Value(0), output_field=DecimalField())
-                )['revenue']
-                
-                class_total_students = class_bookings.aggregate(
-                    students=Coalesce(Count('student', distinct=True), Value(0), output_field=IntegerField())
-                )['students']
-                
-                # Calculate percentage only if total_revenue is not zero
-                percentage = (float(class_total_revenue) / float(total_revenue) * 100) if total_revenue > 0 else 0
-                
-                # Prepare options distribution
-                options = []
-                class_options = ClassOption.objects.filter(classId=class_obj)
-                
-                for option in class_options:
-                    option_bookings = class_bookings.filter(
-                        schedule_instance__schedule__option=option
-                    )
-                    
-                    option_revenue = option_bookings.aggregate(
+                options = ClassOption.objects.filter(classId=class_obj)
+                for option in options:
+                    option_revenue = Booking.objects.filter(
+                        schedule_instance__schedule__option=option,
+                        booking_date__range=[start_date, end_date],
+                        payment_status='paid'
+                    ).aggregate(
                         revenue=Coalesce(Sum('amount_paid'), Value(0), output_field=DecimalField())
                     )['revenue']
                     
-                    option_students = option_bookings.aggregate(
-                        students=Coalesce(Count('student', distinct=True), Value(0), output_field=IntegerField())
-                    )['students']
-                    
-                    # Calculate option percentage
-                    option_percentage = (float(option_revenue) / float(class_total_revenue) * 100) if class_total_revenue > 0 else 0
-                    
-                    options.append({
-                        'optionId': option.optionId,
-                        'title': option.title,
-                        'revenue': option_revenue,
-                        'students': option_students,
-                        'percentage': option_percentage
-                    })
-                
-                # Only include classes with revenue
-                if class_total_revenue > 0:
-                    class_distribution.append({
-                        'classId': class_obj.classId,
-                        'title': class_obj.title,
-                        'total_revenue': class_total_revenue,
-                        'total_students': class_total_students,
-                        'percentage': percentage,
-                        'options': options
-                    })
-            
-            return class_distribution
+                    if option_revenue > 0:
+                        class_revenue.append({
+                            'name': f"  • {option.title}",
+                            'revenue': float(option_revenue),
+                            'id': f"{class_obj.classId}-{option.optionId}",
+                            'type': 'option'
+                        })
         
-        except Exception as e:
-            logger.error(f"Error in revenue distribution: {str(e)}")
-            return []
+        return sorted(class_revenue, key=lambda x: x['revenue'], reverse=True)
 
     def get(self, request):
+        """Handle GET request for revenue analytics."""
         try:
             business = self.get_business(request.user)
             start_date, end_date = self.get_date_range(request)
             
-            # Add logging for debugging
-            logger.info(f"Business: {business}")
-            logger.info(f"Start Date: {start_date}, End Date: {end_date}")
-            
             data = {
-                'metrics': {
-                    **self.calculate_metrics(business, start_date, end_date),
-                    'businessId': business.businessId if business else None,
-                    'businessName': business.businessName if business else None
-                },
-                'time_series': self.get_time_series(business, start_date, end_date),
-                'distribution': self.get_distribution(business, start_date, end_date)
+                'metrics': self.calculate_metrics(business, start_date, end_date),
+                'revenue_trends': self.get_revenue_trends(business, start_date, end_date),
+                'class_revenue': self.get_class_revenue(business, start_date, end_date)
             }
             
-            # Log the data before returning
-            logger.info(f"Returned Data: {data}")
-            
             return Response(data)
-        
+            
         except Exception as e:
-            logger.error(f"Error in RevenueAnalytics GET: {str(e)}")
-            return Response({
-                'error': str(e),
-                'details': str(traceback.format_exc())  # requires importing traceback
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            logger.error(f"Error in revenue analytics: {str(e)}")
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
     def post(self, request):
-        business = self.get_business(request.user)
-        start_date, end_date = self.get_date_range(request)
-        time_series = self.get_time_series(business, start_date, end_date)
-        
-        response = HttpResponse(content_type='text/csv')
-        response['Content-Disposition'] = f'attachment; filename="{business.businessName}_revenue_report.csv"'
-        
-        writer = csv.writer(response)
-        writer.writerow(['Date', 'Revenue', 'Students', 'Bookings', 'Average Booking Value'])
-        
-        for entry in time_series:
-            writer.writerow([
-                entry['date'],
-                entry['revenue'],
-                entry['students'],
-                entry['bookings'],
-                entry['average_booking_value']
-            ])
-        
-        return response
+        """Handle POST request for revenue report export."""
+        try:
+            business = self.get_business(request.user)
+            start_date, end_date = self.get_date_range(request)
+            
+            response = HttpResponse(content_type='text/csv')
+            response['Content-Disposition'] = f'attachment; filename="{business.businessName}_revenue_report.csv"'
+            
+            writer = csv.writer(response)
+            
+            # Write daily revenue data
+            writer.writerow(['Daily Revenue'])
+            writer.writerow(['Date', 'Recurring Revenue', 'One-time Revenue', 'Total Revenue'])
+            
+            revenue_trends = self.get_revenue_trends(business, start_date, end_date)
+            for entry in revenue_trends:
+                writer.writerow([
+                    entry['date'],
+                    entry['recurring_revenue'],
+                    entry['one_time_revenue'],
+                    entry['recurring_revenue'] + entry['one_time_revenue']
+                ])
+            
+            # Add separation
+            writer.writerow([])
+            
+            # Write class revenue data
+            writer.writerow(['Revenue by Class'])
+            writer.writerow(['Class/Option', 'Revenue'])
+            
+            class_revenue = self.get_class_revenue(business, start_date, end_date)
+            for entry in class_revenue:
+                writer.writerow([entry['name'], entry['revenue']])
+            
+            return response
+            
+        except Exception as e:
+            logger.error(f"Error exporting revenue report: {str(e)}")
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

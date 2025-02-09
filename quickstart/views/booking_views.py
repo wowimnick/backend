@@ -1,25 +1,20 @@
 # Django imports
 import uuid
 from django.db import models, transaction
-from django.db.models import Q, Sum, Count, Avg, F
-from django.db.models.functions import TruncDate, ExtractWeekDay, datetime
-from django.shortcuts import get_object_or_404
+from django.db.models import Q, Sum, Count, Avg, F, Prefetch, Window, Value, FloatField, ExpressionWrapper
+from django.db.models.functions import TruncDate, ExtractWeekDay, datetime, Concat, RowNumber, Cast, ExtractHour
 from django.utils import timezone
 from datetime import datetime, timedelta
+from rest_framework.pagination import PageNumberPagination
 
 # REST Framework imports
-from rest_framework import viewsets, status, permissions, views
-from rest_framework.decorators import action, api_view, permission_classes, parser_classes
-from rest_framework.generics import RetrieveUpdateDestroyAPIView
-from rest_framework.parsers import MultiPartParser, FormParser
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework import viewsets, status
+from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError, PermissionDenied
 
-from quickstart.constants import BookingChoices
-
 # Local imports
-from ..utils.permissions import check_user_role, IsBusinessOwner, IsManager
+from ..utils.permissions import check_user_role
 from ..models import (
     BusinessInfo,
     Booking,
@@ -30,12 +25,9 @@ from ..models import (
     Student
 )
 from ..serializers import (
-    BusinessInfoSerializer,
-    BusinessStatsSerializer,
-    ClassesMainSerializer,
-    BusinessRegistrationSerializer,
     BookingCreateSerializer,
-    BookingDetailSerializer
+    BookingDetailSerializer,
+    BookingListSerializer
 )
 
 # Python standard library
@@ -44,36 +36,121 @@ import logging
 logger = logging.getLogger(__name__)
 from datetime import timedelta
 
+class BookingPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
 class BookingViewSet(viewsets.ModelViewSet):
-    def get_queryset(self):
-        user = self.request.user
-        status_filter = self.request.query_params.get('status')
-        
-        queryset = Booking.objects.select_related(
-            'schedule_instance__schedule__option__classId__businessId',
-            'student__user'
-        )
-        
-        if status_filter:
-            status_values = [s.strip() for s in status_filter.split(',')]
-            queryset = queryset.filter(status__in=status_values)
-            
-        # For business owners/managers - show all bookings for their business
-        if check_user_role(user, ['Business Owner', 'Manager']):
-            return queryset.filter(
-                schedule_instance__schedule__option__classId__businessId__in=[
-                    b.businessId for b in user.owned_businesses.all()
-                ] +
-                [b.businessId for b in user.managed_businesses.all()]
-            ).distinct()
-                
-        # For students - show only their bookings
-        return queryset.filter(student__user=user)
+    pagination_class = BookingPagination
 
     def get_serializer_class(self):
+        if self.action == 'list':
+            return BookingListSerializer
         if self.action == 'create':
             return BookingCreateSerializer
         return BookingDetailSerializer
+    
+    def get_queryset(self):
+        # Base queryset with all necessary joins
+        queryset = Booking.objects.select_related(
+            'schedule_instance__schedule__option__classId__businessId',
+            'student__user'
+        ).prefetch_related(
+            models.Prefetch(
+                'student__bookings',
+                queryset=Booking.objects.filter(
+                    status__in=['completed', 'cancelled']
+                ).select_related('schedule_instance'),
+                to_attr='group_bookings'
+            )
+        )
+
+        # Apply filters
+        filters = {}
+        
+        # Handle status filter
+        if self.request.query_params.get('status'):
+            status_values = self.request.query_params['status'].split(',')
+            queryset = queryset.filter(status__in=status_values)
+        else:
+            # Default to confirmed bookings if no status specified
+            queryset = queryset.filter(status='confirmed')
+        
+        # Apply other filters
+        if self.request.query_params.get('student_email'):
+            filters['student__user__email'] = self.request.query_params['student_email']
+        if self.request.query_params.get('class_name'):
+            filters['schedule_instance__schedule__option__classId__title__icontains'] = self.request.query_params['class_name']
+                
+        start_date = self.request.query_params.get('start_date')
+        end_date = self.request.query_params.get('end_date')
+        if start_date and end_date:
+            filters['schedule_instance__date__range'] = [start_date, end_date]
+
+        # Apply search if provided
+        search = self.request.query_params.get('search')
+        if search:
+            queryset = queryset.filter(
+                Q(student__user__email__icontains=search) |
+                Q(schedule_instance__schedule__option__classId__title__icontains=search)
+            )
+
+        # Apply ordering
+        ordering = self.request.query_params.get('ordering')
+        if ordering:
+            order_fields = {
+                'date': 'schedule_instance__date',
+                '-date': '-schedule_instance__date',
+                'student_name': 'student__user__first_name',
+                '-student_name': '-student__user__first_name',
+                'class_name': 'schedule_instance__schedule__option__classId__title',
+                '-class_name': '-schedule_instance__schedule__option__classId__title'
+            }
+            
+            if ordering in order_fields:
+                queryset = queryset.order_by(order_fields[ordering])
+
+        # Apply remaining filters
+        return queryset.filter(**filters)
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        
+        # Cache completed and cancelled counts using efficient queries
+        if not hasattr(self, '_total_completed'):
+            self._total_completed = (
+                Booking.objects
+                .filter(status='completed')
+                .count()
+            )
+        if not hasattr(self, '_total_cancelled'):
+            self._total_cancelled = (
+                Booking.objects
+                .filter(status='cancelled')
+                .count()
+            )
+        
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            response = self.get_paginated_response(serializer.data)
+            response.data['total_completed'] = self._total_completed
+            response.data['total_cancelled'] = self._total_cancelled
+            return response
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            'results': serializer.data,
+            'count': queryset.count(),
+            'total_completed': self._total_completed,
+            'total_cancelled': self._total_cancelled
+        })
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['request'] = self.request
+        return context
 
     @action(detail=False, methods=['post'])
     def check_availability(self, request):
@@ -389,93 +466,229 @@ class BookingViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def analytics(self, request):
-        """Get analytics for bookings"""
+        """Get comprehensive booking analytics"""
         try:
             # Get business and date range
             business = self._get_business(request.user)
             start_date, end_date = self._get_date_range(request)
             
-            # Get base queryset
-            bookings = self._get_analytics_queryset(business, start_date, end_date)
-            
-            # Calculate summary metrics
-            daily_counts = bookings.annotate(
-                date=TruncDate('booking_date')
-            ).values('date').annotate(
-                count=Count('id')
+            # Get base queryset including all relevant statuses
+            bookings = (
+                Booking.objects.filter(
+                    schedule_instance__schedule__option__classId__businessId=business,
+                    booking_date__range=[start_date, end_date]
+                )
+                .select_related(
+                    'schedule_instance__schedule__option__classId',
+                    'student'
+                )
             )
             
+            # Basic counts
             total_bookings = bookings.count()
-            avg_daily = daily_counts.aggregate(avg=Avg('count'))['avg'] or 0
+            cancelled_bookings = bookings.filter(status='cancelled').count()
+            completed_bookings = bookings.filter(status='completed').count()
+            confirmed_bookings = bookings.filter(status='confirmed').count()
             
-            # Get most popular day
-            weekday_counts = bookings.annotate(
-                weekday=ExtractWeekDay('booking_date')
-            ).values('weekday').annotate(
-                count=Count('id')
-            ).order_by('-count')
+            # Calculate rates
+            cancellation_rate = (
+                (cancelled_bookings / total_bookings) * 100
+                if total_bookings > 0 else 0
+            )
             
-            weekday_map = {
-                1: 'Sunday', 2: 'Monday', 3: 'Tuesday', 4: 'Wednesday',
-                5: 'Thursday', 6: 'Friday', 7: 'Saturday'
-            }
+            # Attendance tracking
+            completed_with_attendance = bookings.filter(
+                status='completed',
+                attendance_marked=True
+            ).count()
             
-            most_popular_day = weekday_map[weekday_counts[0]['weekday']] if weekday_counts else 'N/A'
+            attended_bookings = bookings.filter(
+                status='completed',
+                attendance_marked=True,
+                attended=True
+            ).count()
             
-            # Get trends data
-            trends = bookings.annotate(
-                date=TruncDate('booking_date')
-            ).values('date').annotate(
-                bookings=Count('id')
-            ).order_by('date')
+            attendance_rate = (
+                (attended_bookings / completed_with_attendance) * 100
+                if completed_with_attendance > 0 else 0
+            )
 
-            # Get bookings by day
-            by_day = bookings.annotate(
-                day=ExtractWeekDay('booking_date')
-            ).values('day').annotate(
-                bookings=Count('id')
-            ).order_by('day')
-            
-            by_day_formatted = [
-                {
-                    'day': weekday_map[day['day']],
-                    'bookings': day['bookings']
-                }
-                for day in by_day
-            ]
+            # Calculate daily trends
+            daily_trends = (
+                bookings
+                .annotate(date=TruncDate('booking_date'))
+                .values('date')
+                .annotate(
+                    new_bookings=Count('id'),
+                    cancelled_count=Count('id', filter=Q(status='cancelled')),
+                    total_count=Count('id')
+                )
+                .order_by('date')
+            )
 
-            # Get bookings by type
-            by_type = bookings.values(
-                type=F('schedule_instance__schedule__option__classId__category')
-            ).annotate(
-                bookings=Count('id')
-            ).order_by('-bookings')
+            processed_trends = []
+            for trend in daily_trends:
+                cancellation_rate = (
+                    (trend['cancelled_count'] / trend['total_count']) * 100
+                    if trend['total_count'] > 0 else 0
+                )
+                processed_trends.append({
+                    'date': trend['date'].isoformat(),
+                    'new_bookings': trend['new_bookings'],
+                    'cancellation_rate': round(cancellation_rate, 1)
+                })
+
+            # Calculate class occupancy
+            class_occupancy = []
+            raw_occupancy = (
+                bookings
+                .values(
+                    'schedule_instance__schedule__option__classId__title'
+                )
+                .annotate(
+                    total_capacity=Sum('schedule_instance__max_participants'),
+                    actual_bookings=Count('id'),
+                    cancelled=Count('id', filter=Q(status='cancelled'))
+                )
+                .order_by('-actual_bookings')
+            )
             
+            for entry in raw_occupancy:
+                occupancy_rate = (
+                    (entry['actual_bookings'] - entry['cancelled']) / entry['total_capacity'] * 100
+                    if entry['total_capacity'] and entry['total_capacity'] > 0
+                    else 0
+                )
+                class_occupancy.append({
+                    'class_name': entry['schedule_instance__schedule__option__classId__title'],
+                    'occupancy_rate': round(occupancy_rate, 1),
+                    'total_bookings': entry['actual_bookings'],
+                    'cancelled': entry['cancelled']
+                })
+
+            # Time distribution analysis
+            time_distribution = (
+                bookings
+                .annotate(hour=ExtractHour('schedule_instance__time'))
+                .values('hour')
+                .annotate(
+                    bookings=Count('id'),
+                    cancelled=Count('id', filter=Q(status='cancelled')),
+                    completed=Count('id', filter=Q(status='completed'))
+                )
+                .order_by('hour')
+            )
+
+            # Booking type distribution
+            booking_types = []
+            raw_types = (
+                bookings
+                .values('enrollment_type')
+                .annotate(
+                    count=Count('id'),
+                    cancelled=Count('id', filter=Q(status='cancelled')),
+                    completed=Count('id', filter=Q(status='completed'))
+                )
+                .order_by('-count')
+            )
+
+            for entry in raw_types:
+                percentage = (
+                    (entry['count'] / total_bookings) * 100
+                    if total_bookings > 0 else 0
+                )
+                booking_types.append({
+                    'type': entry['enrollment_type'],
+                    'count': entry['count'],
+                    'cancelled': entry['cancelled'],
+                    'completed': entry['completed'],
+                    'percentage': round(percentage, 1)
+                })
+
+            # Student retention analysis
+            student_bookings = (
+                bookings
+                .values('student')
+                .annotate(booking_count=Count('id'))
+            )
+            
+            total_students = student_bookings.count()
+            repeat_students = student_bookings.filter(booking_count__gt=1).count()
+            
+            retention_rate = (
+                (repeat_students / total_students) * 100
+                if total_students > 0 else 0
+            )
+
+            # Popular classes analysis
+            popular_classes = []
+            raw_popular = (
+                bookings
+                .values(
+                    'schedule_instance__schedule__option__classId__title'
+                )
+                .annotate(
+                    total_bookings=Count('id'),
+                    unique_students=Count('student', distinct=True),
+                    cancelled=Count('id', filter=Q(status='cancelled')),
+                    completed=Count('id', filter=Q(status='completed')),
+                    attended=Count('id', filter=Q(status='completed', attended=True))
+                )
+                .order_by('-total_bookings')[:5]
+            )
+
+            for entry in raw_popular:
+                cancellation_rate = (
+                    (entry['cancelled'] / entry['total_bookings']) * 100
+                    if entry['total_bookings'] > 0 else 0
+                )
+                attendance_rate = (
+                    (entry['attended'] / entry['completed']) * 100
+                    if entry['completed'] > 0 else 0
+                )
+                popular_classes.append({
+                    'class_name': entry['schedule_instance__schedule__option__classId__title'],
+                    'total_bookings': entry['total_bookings'],
+                    'unique_students': entry['unique_students'],
+                    'cancellation_rate': round(cancellation_rate, 1),
+                    'attendance_rate': round(attendance_rate, 1)
+                })
+
+            # Prepare response
             response_data = {
                 'summary': {
                     'total_bookings': total_bookings,
-                    'average_daily': round(avg_daily, 1),
-                    'most_popular_day': most_popular_day
+                    'active_bookings': confirmed_bookings,
+                    'completed_bookings': completed_bookings,
+                    'cancelled_bookings': cancelled_bookings,
+                    'cancellation_rate': round(cancellation_rate, 1),
+                    'attendance_rate': round(attendance_rate, 1),
+                    'student_retention_rate': round(retention_rate, 1)
                 },
-                'trends': [
-                    {
-                        'date': entry['date'].isoformat(),
-                        'bookings': entry['bookings']
-                    }
-                    for entry in trends
-                ],
-                'by_day': by_day_formatted,
-                'by_type': list(by_type)
+                'trends': processed_trends,
+                'class_insights': {
+                    'occupancy_rates': class_occupancy,
+                    'popular_classes': popular_classes
+                },
+                'booking_patterns': {
+                    'time_distribution': [{
+                        'hour': entry['hour'],
+                        'bookings': entry['bookings'],
+                        'cancelled': entry['cancelled'],
+                        'completed': entry['completed']
+                    } for entry in time_distribution],
+                    'booking_types': booking_types
+                }
             }
             
             return Response(response_data)
-            
+                
         except Exception as e:
+            logger.exception("Error in booking analytics")
             return Response(
                 {'error': str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-
     def _get_business(self, user):
         """Get the business associated with the user"""
         business = BusinessInfo.objects.filter(
@@ -638,6 +851,155 @@ class BookingViewSet(viewsets.ModelViewSet):
             
         booking.attendance_marked = True
         booking.attended = request.data.get('attended', False)
+        booking.save()
+        
+        return Response(BookingDetailSerializer(booking).data)
+    
+    ################################################################################################
+
+    @action(detail=False, methods=['get'])
+    def my_bookings(self, request):
+        """
+        Get the current user's bookings with optional status filtering
+        """
+        try:
+            student = Student.objects.get(user=request.user)
+            status = request.query_params.get('status', 'confirmed')
+            
+            queryset = Booking.objects.select_related(
+                'schedule_instance__schedule__option__classId__businessId',
+                'student__user'
+            ).prefetch_related(
+                'schedule_instance__schedule__option__classId__images'
+            ).filter(
+                student=student,
+                status=status
+            ).order_by('schedule_instance__date', 'schedule_instance__time')
+
+            bookings = []
+            for booking in queryset:
+                class_info = booking.schedule_instance.schedule.option.classId
+                class_images = list(class_info.images.all())
+                
+                bookings.append({
+                    'id': booking.id,
+                    'booking_group_id': booking.booking_group_id,
+                    'class_name': class_info.title,
+                    'business_name': class_info.businessId.businessName,
+                    'date': booking.schedule_instance.date,
+                    'time': booking.schedule_instance.time,
+                    'status': booking.status,
+                    'amount_paid': float(booking.amount_paid),
+                    'participants': booking.participants,
+                    'coordinates': class_info.coordinates,  # Send the coordinates
+                    'notes': booking.notes,
+                    'attendance_marked': booking.attendance_marked,
+                    'attended': booking.attended,
+                    'enrollment_type': booking.enrollment_type,
+                    'images': [
+                        {'id': img.imageId, 'url': img.image.url}
+                        for img in class_images
+                    ] if class_images else []
+                })
+
+            return Response({
+                'bookings': bookings,
+                'total_confirmed': Booking.objects.filter(student=student, status='confirmed').count(),
+                'total_completed': Booking.objects.filter(student=student, status='completed').count(),
+                'total_cancelled': Booking.objects.filter(student=student, status='cancelled').count()
+            })
+            
+        except Student.DoesNotExist:
+            return Response({
+                'error': 'No student profile found'
+            }, status=400)
+        except Exception as e:
+            logger.error(f"Error fetching student bookings: {str(e)}")
+            return Response({
+                'error': 'Failed to fetch bookings'
+            }, status=500)
+
+    @action(detail=True, methods=['post'])
+    def student_cancel(self, request, pk=None):
+        """
+        Cancel a booking from the student side
+        """
+        booking = self.get_object()
+        
+        # Verify the booking belongs to the requesting student
+        student = Student.objects.get(user=request.user)
+        if booking.student != student:
+            raise PermissionDenied("This booking doesn't belong to you")
+
+        # Can only cancel confirmed bookings
+        if booking.status != 'confirmed':
+            return Response({
+                'error': 'Can only cancel confirmed bookings'
+            }, status=400)
+
+        # Check cancellation policy
+        class_option = booking.schedule_instance.schedule.option
+        cancellation_policy = class_option.cancellationPolicy
+        
+        current_time = timezone.now()
+        class_time = datetime.combine(
+            booking.schedule_instance.date,
+            booking.schedule_instance.time
+        )
+        class_time = timezone.make_aware(class_time)
+        
+        hours_until_class = (class_time - current_time).total_seconds() / 3600
+
+        policy_hours = {
+            '24h': 24,
+            '48h': 48,
+            '72h': 72,
+            'flexible': float('inf')
+        }
+
+        if hours_until_class < policy_hours.get(cancellation_policy, 0):
+            return Response({
+                'error': f'Cancellation not allowed within {cancellation_policy} of class start'
+            }, status=400)
+
+        # Process cancellation
+        booking.status = 'cancelled'
+        booking.cancelled_at = timezone.now()
+        booking.cancellation_reason = request.data.get('reason', '')
+        booking.save()
+        
+        return Response(BookingDetailSerializer(booking).data)
+
+    @action(detail=True, methods=['post'])
+    def student_reschedule(self, request, pk=None):
+        """
+        Reschedule a booking from the student side
+        """
+        booking = self.get_object()
+        
+        # Verify ownership
+        student = Student.objects.get(user=request.user)
+        if booking.student != student:
+            raise PermissionDenied("This booking doesn't belong to you")
+
+        # Validate new schedule instance
+        try:
+            new_instance = ScheduleInstance.objects.get(
+                id=request.data.get('schedule_instance_id')
+            )
+        except ScheduleInstance.DoesNotExist:
+            return Response({
+                'error': 'Invalid schedule instance'
+            }, status=400)
+
+        # Check if instance can accommodate the booking
+        if not new_instance.can_accommodate(booking.participants):
+            return Response({
+                'error': 'Selected time slot is full'
+            }, status=400)
+
+        # Update the booking
+        booking.schedule_instance = new_instance
         booking.save()
         
         return Response(BookingDetailSerializer(booking).data)

@@ -131,15 +131,15 @@ class RelatedBookingSerializer(serializers.ModelSerializer):
         return obj.schedule_instance.time if obj.schedule_instance else None
 
 class BookingDetailSerializer(serializers.ModelSerializer):
-    class_name = serializers.SerializerMethodField()
-    business_name = serializers.SerializerMethodField()
-    date = serializers.SerializerMethodField()
-    time = serializers.SerializerMethodField()
+    class_name = serializers.CharField(source='schedule_instance.schedule.option.classId.title')
+    business_name = serializers.CharField(source='schedule_instance.schedule.option.classId.businessId.businessName')
+    date = serializers.DateField(source='schedule_instance.date')
+    time = serializers.TimeField(source='schedule_instance.time')
     student_name = serializers.SerializerMethodField()
     student_email = serializers.SerializerMethodField()
     enrollment_details = serializers.SerializerMethodField()
     group_bookings = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = Booking
         fields = [
@@ -150,61 +150,104 @@ class BookingDetailSerializer(serializers.ModelSerializer):
             'enrollment_type', 'enrollment_details', 'attendance_marked', 
             'attended', 'group_bookings'
         ]
-    
-    def get_date(self, obj):
-        return obj.schedule_instance.date if obj.schedule_instance else None
-
-    def get_time(self, obj):
-        return obj.schedule_instance.time if obj.schedule_instance else None
 
     def get_student_name(self, obj):
-        if obj.student and obj.student.user:
-            return f"{obj.student.user.first_name} {obj.student.user.last_name}".strip()
-        return None
+        return f"{obj.student.user.first_name} {obj.student.user.last_name}".strip()
 
     def get_student_email(self, obj):
-        return obj.student.user.email if obj.student and obj.student.user else None
-
-    def get_class_name(self, obj):
-        if obj.schedule_instance and obj.schedule_instance.schedule:
-            return obj.schedule_instance.schedule.option.classId.title
-        return None
-
-    def get_business_name(self, obj):
-        if obj.schedule_instance and obj.schedule_instance.schedule:
-            return obj.schedule_instance.schedule.option.classId.businessId.businessName
-        return None
+        return obj.student.user.email
 
     def get_enrollment_details(self, obj):
         if not obj.booking_group_id:
             return None
-            
-        details = {
+
+        group_bookings = getattr(obj.student, 'group_bookings', [])
+        matching_bookings = [
+            booking for booking in group_bookings 
+            if booking.booking_group_id == obj.booking_group_id
+        ]
+        
+        if not matching_bookings:
+            return None
+
+        return {
             'type': obj.enrollment_type,
-            'sessions': [],
-        }
-        
-        # Get all related bookings for the same group
-        related_bookings = Booking.objects.filter(
-            booking_group_id=obj.booking_group_id
-        ).order_by('schedule_instance__date', 'schedule_instance__time')
-        
-        for booking in related_bookings:
-            details['sessions'].append({
+            'sessions': [{
                 'date': booking.schedule_instance.date,
                 'time': booking.schedule_instance.time,
                 'status': booking.status
-            })
-            
-        return details
+            } for booking in sorted(
+                matching_bookings,
+                key=lambda x: (x.schedule_instance.date, x.schedule_instance.time)
+            )]
+        }
 
     def get_group_bookings(self, obj):
-        """Get related bookings using the simplified serializer"""
         if not obj.booking_group_id:
             return []
-            
-        related_bookings = Booking.objects.filter(
-            booking_group_id=obj.booking_group_id
-        ).exclude(id=obj.id)
         
-        return RelatedBookingSerializer(related_bookings, many=True).data
+        group_bookings = getattr(obj.student, 'group_bookings', [])
+        return [{
+            'id': booking.id,
+            'date': booking.schedule_instance.date,
+            'time': booking.schedule_instance.time,
+            'status': booking.status,
+            'participants': booking.participants,
+            'amount_paid': booking.amount_paid,
+            'attendance_marked': booking.attendance_marked,
+            'attended': booking.attended
+        } for booking in sorted(
+            [b for b in group_bookings if b.booking_group_id == obj.booking_group_id and b.id != obj.id],
+            key=lambda x: (x.schedule_instance.date, x.schedule_instance.time)
+        )]
+    
+class BookingListSerializer(serializers.ModelSerializer):
+    class_name = serializers.CharField(source='schedule_instance.schedule.option.classId.title')
+    option_name = serializers.CharField(source='schedule_instance.schedule.option.title')
+    student_name = serializers.SerializerMethodField()
+    student_email = serializers.CharField(source='student.user.email')
+    date = serializers.DateField(source='schedule_instance.date')
+    time = serializers.TimeField(source='schedule_instance.time')
+    session_info = serializers.SerializerMethodField()
+    booking_type = serializers.CharField(source='enrollment_type')
+
+    class Meta:
+        model = Booking
+        fields = [
+            'id', 'student_name', 'student_email', 'class_name',
+            'option_name', 'date', 'time', 'participants', 'status',
+            'session_info', 'enrollment_type', 'booking_type',
+            'booking_group_id'
+        ]
+
+    def get_student_name(self, obj):
+        return f"{obj.student.user.first_name} {obj.student.user.last_name}".strip()
+
+    def get_session_info(self, obj):
+        """Return session information for recurring bookings"""
+        if obj.enrollment_type != 'Recurring Classes' or not obj.booking_group_id:
+            return None
+
+        # Get all related bookings in the same group
+        group_bookings = Booking.objects.filter(
+            booking_group_id=obj.booking_group_id,
+            status='confirmed'
+        ).order_by('schedule_instance__date')
+
+        total_sessions = group_bookings.count()
+        
+        if total_sessions <= 1:
+            return None
+
+        # Find current session number
+        current_session = 1
+        for idx, booking in enumerate(group_bookings, 1):
+            if booking.id == obj.id:
+                current_session = idx
+                break
+
+        return {
+            'current_session': current_session,
+            'total_sessions': total_sessions,
+            'is_recurring': True
+        }
