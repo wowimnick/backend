@@ -73,7 +73,12 @@ class CustomTokenRefreshView(APIView):
             }
 
             if settings.SIMPLE_JWT['ROTATE_REFRESH_TOKENS']:
-                new_refresh = RefreshToken.for_user(refresh.user)
+                # Access user via the token's validated claims
+                user_id = refresh.payload.get('user_id')  # Or 'user_id', depending on your setup
+                from django.contrib.auth import get_user_model
+                User = get_user_model()
+                user = User.objects.get(id=user_id)
+                new_refresh = RefreshToken.for_user(user)
                 data['refresh'] = str(new_refresh)
 
             response = Response(data, status=status.HTTP_200_OK)

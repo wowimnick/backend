@@ -9,11 +9,11 @@ from .views import (
     # Existing views
     CustomLoginView, CustomTokenObtainPairView, CustomTokenRefreshView,
     LogoutView, UserUpdateView, CustomRegisterView, UserRoleView,
-    BusinessInfoViewSet, InstructorViewSet, BookingViewSet,
+    BusinessInfoViewSet, BookingViewSet,
     RoleViewSet, BusinessViewSet, register_business, 
     ScheduleViewSet, ClassReviews, ClassImageList,
     ClassImageDetail, ClassOptionDetail, StudentProfileViewSet,
-    RevenueAnalyticsView, ClassViewSet, 
+    RevenueAnalyticsView, ClassViewSet, ReviewSubmission,
     
     # New views for instance-based system
     ScheduleInstanceViewSet,
@@ -26,7 +26,6 @@ router = DefaultRouter()
 # Register existing viewsets
 router.register(r'businesses', BusinessInfoViewSet, basename='business')
 router.register(r'business-stats', BusinessViewSet, basename='business-stats')
-router.register(r'instructors', InstructorViewSet, basename='instructor')
 router.register(r'bookings', BookingViewSet, basename='booking')
 router.register(r'roles', RoleViewSet, basename='role')
 router.register(r'students', StudentProfileViewSet, basename='student')
@@ -80,6 +79,8 @@ urlpatterns = [
             name='class-option-detail'),
     ])),
 
+    path('reviews/submit/', ReviewSubmission.as_view(), name='submit-review'),
+
     # New schedule instance-specific URLs
     path('schedule-instances/<int:pk>/', include([
         path('mark-attendance/', 
@@ -97,5 +98,4 @@ urlpatterns = [
 
     path('my_bookings/', BookingViewSet.as_view({'get': 'my_bookings'}), name='my-bookings'),
     path('<int:pk>/student_cancel/', BookingViewSet.as_view({'post': 'student_cancel'}), name='student-cancel'),
-    path('<int:pk>/student_reschedule/', BookingViewSet.as_view({'post': 'student_reschedule'}), name='student-reschedule'),
 ]

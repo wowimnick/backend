@@ -1,4 +1,5 @@
 from datetime import timedelta
+import datetime
 import json
 from django.db import models
 from django.contrib.auth.models import AbstractUser, Permission
@@ -47,9 +48,50 @@ class CustomUser(AbstractUser):
         if self.avatar:
             return self.avatar.url
         return None
-
-    def has_role(self, role_name):
-        return self.role and self.role.name == role_name
+    
+    @classmethod
+    def annotate_metrics(cls, queryset):
+        """Add all required metrics in a single annotation"""
+        return queryset.annotate(
+            active_classes=Count(
+                'bookings',
+                filter=models.Q(bookings__status='confirmed')
+            ),
+            total_classes_taken=Count(
+                'bookings',
+                filter=models.Q(bookings__status='completed')
+            ),
+            average_attendance=Case(
+                When(
+                    total_finished_bookings__gt=0,
+                    then=100.0 * models.F('completed_bookings_count') / 
+                         models.F('total_finished_bookings')
+                ),
+                default=0,
+                output_field=DecimalField(max_digits=5, decimal_places=2)
+            )
+        )
+    
+    @property
+    def active_classes(self):
+        """Count of currently confirmed bookings"""
+        return self.bookings.filter(status='confirmed').count()
+    
+    @property
+    def total_classes_taken(self):
+        """Count of completed bookings"""
+        return self.bookings.filter(status='completed').count()
+    
+    @property
+    def average_attendance(self):
+        """Calculate attendance rate from completed vs total finished bookings"""
+        total_finished = self.bookings.filter(
+            status__in=['completed', 'cancelled']
+        ).count()
+        if total_finished == 0:
+            return Decimal('0.00')
+        completed = self.bookings.filter(status='completed').count()
+        return Decimal(str(round((completed / total_finished) * 100, 2)))
     
     class Meta:
         db_table = 'users'
@@ -139,18 +181,6 @@ class BusinessInfo(models.Model):
     def __str__(self):
         return self.businessName
 
-    def get_subcategories(self):
-        return [x.strip() for x in self.subcategories.split(',')] if self.subcategories else []
-
-    def get_class_formats(self):
-        return [x.strip() for x in self.classFormats.split(',')] if self.classFormats else []
-
-    def get_skill_levels(self):
-        return [x.strip() for x in self.skillLevels.split(',')] if self.skillLevels else []
-
-    def get_age_groups(self):
-        return [x.strip() for x in self.ageGroups.split(',')] if self.ageGroups else []
-
     def update_total_reviews(self):
         """Update total reviews count efficiently using annotation"""
         from .models import Reviews
@@ -175,146 +205,21 @@ class BusinessInfo(models.Model):
             models.Index(fields=['isActive']),
         ]
 
-
-class Instructor(models.Model):
-    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='instructor_profile')
-    business = models.ForeignKey(BusinessInfo, on_delete=models.CASCADE, related_name='instructors')
-    specialization = models.CharField(max_length=100)
-    employment_type = models.CharField(max_length=20, choices=[
-        ('full-time', 'Full-time'),
-        ('part-time', 'Part-time'),
-        ('contract', 'Contract')
-    ])
-    department = models.CharField(max_length=100)
-    hire_date = models.DateField()
-    active_classes = models.IntegerField(default=0)
-    total_students = models.IntegerField(default=0)
-    performance_score = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
-    next_review_date = models.DateField(null=True, blank=True)
-
-    def __str__(self):
-        return f"{self.user.first_name} {self.user.last_name}"
-    
-    class Meta:
-        db_table = 'instructors'
-
-class Education(models.Model):
-    instructor = models.ForeignKey(Instructor, on_delete=models.CASCADE, related_name='education')
-    degree = models.CharField(max_length=100)
-    institution = models.CharField(max_length=100)
-    year = models.IntegerField()
-
-    def __str__(self):
-        return f"{self.degree} from {self.institution}"
-    
-    class Meta:
-        db_table = 'instructor_education'
-
-class Certification(models.Model):
-    instructor = models.ForeignKey(Instructor, on_delete=models.CASCADE, related_name='certifications')
-    name = models.CharField(max_length=100)
-
-    def __str__(self):
-        return self.name
-    
-    class Meta:
-        db_table = 'instructor_certifications'
-
-class Skill(models.Model):
-    instructor = models.ForeignKey(Instructor, on_delete=models.CASCADE, related_name='skills')
-    name = models.CharField(max_length=50)
-
-    def __str__(self):
-        return self.name
-    
-    class Meta:
-        db_table = 'instructor_skills'
-
-class InstructorNote(models.Model):
-    instructor = models.ForeignKey(Instructor, on_delete=models.CASCADE, related_name='notes')
-    author = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True)
-    content = models.TextField()
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    def __str__(self):
-        return f"Note for {self.instructor} by {self.author}"
-    
-    class Meta:
-        db_table = 'instructor_notes'
-    
-
-
-class Student(models.Model):
-    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='student_profile')
-    enrollment_date = models.DateField()
-    parent_guardian_name = models.CharField(max_length=100)
-    parent_guardian_phone = models.CharField(max_length=20)
-    emergency_contact = models.CharField(max_length=100)
-    emergency_phone = models.CharField(max_length=20)
-    allergies = models.TextField(blank=True)
-    medical_conditions = models.TextField(blank=True)
-
-    def __str__(self):
-        return f"{self.user.first_name} {self.user.last_name}"
-    
-    @classmethod
-    def annotate_metrics(cls, queryset):
-        """Add all required metrics in a single annotation"""
-        return queryset.annotate(
-            active_classes=Count(
-                'bookings',
-                filter=models.Q(bookings__status='confirmed')
-            ),
-            total_classes_taken=Count(
-                'bookings',
-                filter=models.Q(bookings__status='completed')
-            ),
-            average_attendance=Case(
-                When(
-                    total_finished_bookings__gt=0,
-                    then=100.0 * models.F('completed_bookings_count') / 
-                         models.F('total_finished_bookings')
-                ),
-                default=0,
-                output_field=DecimalField(max_digits=5, decimal_places=2)
-            )
-        )
-    
-    @property
-    def active_classes(self):
-        """Count of currently confirmed bookings"""
-        return self.bookings.filter(status='confirmed').count()
-    
-    @property
-    def total_classes_taken(self):
-        """Count of completed bookings"""
-        return self.bookings.filter(status='completed').count()
-    
-    @property
-    def average_attendance(self):
-        """Calculate attendance rate from completed vs total finished bookings"""
-        total_finished = self.bookings.filter(
-            status__in=['completed', 'cancelled']
-        ).count()
-        if total_finished == 0:
-            return Decimal('0.00')
-        completed = self.bookings.filter(status='completed').count()
-        return Decimal(str(round((completed / total_finished) * 100, 2)))
-    
-    class Meta:
-        db_table = 'students'
-
 class StudentNote(models.Model):
-    student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='notes')
-    author = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True)
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='business_notes')
+    business = models.ForeignKey(BusinessInfo, on_delete=models.CASCADE, related_name='user_notes')
+    author = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, related_name='authored_notes')
     content = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"Note for {self.student} by {self.author}"
+        return f"Note for {self.user} by {self.author} ({self.business.businessName})"
     
     class Meta:
         db_table = 'student_notes'
+        indexes = [
+            models.Index(fields=['user', 'business']),
+        ]
 
 class ClassImage(models.Model):
     imageId = models.AutoField(primary_key=True)
@@ -367,22 +272,7 @@ class Favorites(models.Model):
     class Meta:
         db_table = 'favorites'
 
-class Reviews(models.Model):
-    reviewId = models.AutoField(primary_key=True)
-    userId = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='reviews')
-    businessId = models.ForeignKey(BusinessInfo, models.DO_NOTHING, db_column='businessId', blank=True, null=True)
-    classId = models.ForeignKey(ClassesMain, models.DO_NOTHING, db_column='classId', blank=True, null=True)
-    rating = models.IntegerField()
-    comment = models.TextField(blank=True, null=True)
-    createdAt = models.DateTimeField(auto_now_add=True)
 
-    def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)
-        if self.classId and self.classId.businessId:
-            self.classId.businessId.update_total_reviews()
-
-    class Meta:
-        db_table = 'reviews'
 
 class ClassOption(models.Model):
     optionId = models.AutoField(primary_key=True)
@@ -394,8 +284,7 @@ class ClassOption(models.Model):
     
     BOOKING_TYPES = [
         ('Single Session', 'Single Session'),
-        ('Full Course', 'Full Course'),
-        ('Recurring Classes', 'Recurring Classes')
+        ('Full Course', 'Full Course')
     ]
     booking_type = models.CharField(
         max_length=20,
@@ -410,14 +299,6 @@ class ClassOption(models.Model):
         blank=True
     )
     
-    # Common Fields
-    duration = models.IntegerField(default=60)
-    maxParticipants = models.IntegerField(
-        validators=[MinValueValidator(1)],
-        null=True,
-        blank=True
-    )
-
     level = models.CharField(
         max_length=20,
         choices=[
@@ -429,10 +310,8 @@ class ClassOption(models.Model):
     )
 
     # Pricing
-    price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     PRICE_TYPES = [
         ('per_session', 'Per Session'),
-        ('per_month', 'Monthly'),
         ('full_course', 'Full Course')
     ]
     price_type = models.CharField(
@@ -440,26 +319,6 @@ class ClassOption(models.Model):
         choices=PRICE_TYPES,
         default='per_session'
     )
-
-    # Course Specific
-    total_sessions = models.IntegerField(null=True, blank=True)
-    start_date = models.DateField(null=True, blank=True)
-    end_date = models.DateField(null=True, blank=True)
-
-    # Recurring Specific
-    RECURRENCE_PATTERNS = [
-        ('weekly', 'Weekly'),
-        ('biweekly', 'Bi-weekly'),
-        ('monthly', 'Monthly')
-    ]
-    recurrence_pattern = models.CharField(
-        max_length=20,
-        choices=RECURRENCE_PATTERNS,
-        null=True,
-        blank=True
-    )
-    sessions_per_week = models.IntegerField(null=True, blank=True)
-    auto_renew_default = models.BooleanField(default=False)
     
     # Additional Info
     equipment = models.JSONField(default=list)
@@ -490,7 +349,6 @@ class ClassOption(models.Model):
         ]
 
 class Schedule(models.Model):
-    """Template for recurring schedules"""
     option = models.ForeignKey(ClassOption, on_delete=models.CASCADE, related_name='schedules')
     day = models.CharField(
         max_length=3,
@@ -502,74 +360,119 @@ class Schedule(models.Model):
             ('Fri', 'Friday'),
             ('Sat', 'Saturday'),
             ('Sun', 'Sunday')
-        ]
+        ],
+        null=True,  # Make day optional for single sessions
+        blank=True
     )
     time = models.TimeField()
-    price = models.DecimalField(
-        max_digits=10, 
-        decimal_places=2, 
-        null=True, 
-        blank=True,
-        help_text="Override price for this schedule. If not set, uses ClassOption default price"
-    )
-    maxParticipants = models.IntegerField(
-        null=True, 
-        blank=True,
-        help_text="Override max participants for this schedule. If not set, uses ClassOption default"
-    )
+    duration = models.IntegerField(default=60)
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    maxParticipants = models.IntegerField(validators=[MinValueValidator(1)])
+
+    # Only used for courses
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
+    
+    # Only used for single sessions
+    date = models.DateField(null=True, blank=True)
+    
     is_active = models.BooleanField(default=True)
+    allow_late_enrollment = models.BooleanField(default=False)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    @property
-    def effective_max_participants(self):
-        return self.maxParticipants if self.maxParticipants is not None else self.option.maxParticipants
+    def save(self, *args, **kwargs):
+        is_new = self.pk is None
+        
+        # For single sessions, derive day from date
+        if self.option.booking_type != 'Full Course' and self.date:
+            if self.date:
+                self.day = self.date.strftime('%a')
+            
+        super().save(*args, **kwargs)
+        
+        if is_new:
+            if self.option.booking_type == 'Full Course':
+                self.generate_course_instances()
+            else:
+                # For single sessions, create just one instance
+                if self.date:
+                    ScheduleInstance.objects.create(
+                        schedule=self,
+                        date=self.date,
+                        time=self.time,
+                        duration=self.duration,
+                        price=self.price,
+                        max_participants=self.maxParticipants,
+                        status='scheduled'
+                    )
 
-    @property
-    def effective_price(self):
-        return self.price if self.price is not None else self.option.price
+    def generate_course_instances(self):
+        """Generate all instances for a course between start and end date"""
+        if self.option.booking_type != 'Full Course':
+            return []
+            
+        if not (self.start_date and self.end_date and self.day):
+            raise ValidationError("Start date, end date, and day required for course schedules")
 
-    def generate_instances(self, start_date, weeks_ahead=12):
         day_to_number = {
             'Mon': 0, 'Tue': 1, 'Wed': 2, 'Thu': 3, 
             'Fri': 4, 'Sat': 5, 'Sun': 6
         }
-        target_weekday = day_to_number[self.day]
         
-        current_date = start_date
+        target_weekday = day_to_number[self.day]
+        current_date = self.start_date
+        
+        # Move to first occurrence of target weekday if needed
         while current_date.weekday() != target_weekday:
             current_date += timedelta(days=1)
         
-        end_date = start_date + timedelta(weeks=weeks_ahead)
         instances = []
-        
-        while current_date < end_date:
-            # Check if an instance already exists for this date
-            existing = ScheduleInstance.objects.filter(
+        while current_date <= self.end_date:
+            instance = ScheduleInstance(
                 schedule=self,
-                date=current_date
-            ).exists()
-            
-            if not existing:
-                instance = ScheduleInstance(
-                    schedule=self,
-                    date=current_date,
-                    time=self.time,
-                    price=self.effective_price,
-                    max_participants=self.effective_max_participants
-                )
-                instances.append(instance)
+                date=current_date,
+                time=self.time,
+                price=self.price,
+                max_participants=self.maxParticipants,
+                duration=self.duration
+            )
+            instances.append(instance)
             current_date += timedelta(weeks=1)
             
         return ScheduleInstance.objects.bulk_create(instances)
 
+    def clean(self):
+        if self.option.booking_type == 'Full Course':
+            if not all([self.start_date, self.end_date, self.day]):
+                raise ValidationError({
+                    'course_dates': 'Start date, end date, and day required for courses'
+                })
+            if self.start_date and self.end_date and self.start_date >= self.end_date:
+                raise ValidationError({
+                    'course_dates': 'End date must be after start date'
+                })
+            if self.start_date and self.start_date < timezone.now().date():
+                raise ValidationError({
+                    'start_date': 'Course cannot start in the past'
+                })
+        else:
+            if not self.date:
+                raise ValidationError({
+                    'date': 'Date is required for single sessions'
+                })
+            if self.date < timezone.now().date():
+                raise ValidationError({
+                    'date': 'Session cannot be scheduled in the past'
+                })
+            
     class Meta:
         db_table = 'schedules'
         ordering = ['day', 'time']
         indexes = [
             models.Index(fields=['option', 'day', 'time']),
-            models.Index(fields=['option', 'is_active']),
-            models.Index(fields=['day', 'time'])
+            models.Index(fields=['option', 'is_active'])
         ]
 
 class ScheduleInstance(models.Model):
@@ -577,6 +480,7 @@ class ScheduleInstance(models.Model):
     schedule = models.ForeignKey(Schedule, on_delete=models.CASCADE, related_name='instances')
     date = models.DateField()
     time = models.TimeField()
+    duration = models.IntegerField(default=60)
     price = models.DecimalField(max_digits=10, decimal_places=2)
     max_participants = models.IntegerField()
     
@@ -617,18 +521,6 @@ class ScheduleInstance(models.Model):
         """Check if instance can accommodate requested number of participants"""
         return self.available_spots >= requested_participants
 
-    def to_dict(self):
-        """Convert instance to dictionary format"""
-        return {
-            'instance_id': self.id,
-            'schedule_id': self.schedule.id,
-            'date': self.date,
-            'time': self.time,
-            'total_capacity': self.max_participants,
-            'available_spots': self.available_spots,
-            'price': str(self.price)
-        }
-
     class Meta:
         db_table = 'schedule_instances'
         unique_together = ['schedule', 'date']
@@ -667,54 +559,20 @@ class ScheduleBreak(models.Model):
             models.Index(fields=['schedule', 'start_date', 'end_date']),
         ]
 
-class Attendance(models.Model):
-    """Tracks attendance for schedule instances"""
-    schedule_instance = models.ForeignKey(ScheduleInstance, on_delete=models.CASCADE, related_name='attendance_records')
-    student = models.ForeignKey('Student', on_delete=models.CASCADE, related_name='attendance_records')
-    STATUS_CHOICES = [
-        ('present', 'Present'),
-        ('absent', 'Absent'),
-        ('late', 'Late')
-    ]
-    status = models.CharField(max_length=10, choices=STATUS_CHOICES)
-    notes = models.TextField(blank=True)
-    marked_at = models.DateTimeField(auto_now_add=True)
-    marked_by = models.ForeignKey('CustomUser', on_delete=models.SET_NULL, null=True)
-
-    class Meta:
-        db_table = 'attendance'
-        unique_together = ['schedule_instance', 'student']
-        indexes = [
-            models.Index(fields=['schedule_instance', 'student']),
-            models.Index(fields=['status', 'marked_at']),
-        ]
-
 class Booking(models.Model):
     id = models.AutoField(primary_key=True)
     booking_group_id = models.UUIDField(null=True, blank=True)
     schedule_instance = models.ForeignKey(ScheduleInstance, on_delete=models.CASCADE, related_name='bookings')
-    student = models.ForeignKey('Student', on_delete=models.CASCADE, related_name='bookings')
-    participants = models.IntegerField(validators=[MinValueValidator(1), MaxValueValidator(4)])
-    notes = models.TextField(blank=True)
+    user = models.ForeignKey('CustomUser', on_delete=models.CASCADE, related_name='bookings')
     
-    # Enrollment tracking
     enrollment_type = models.CharField(
         max_length=20, 
         choices=[
             ('Single Session', 'Single Session'),
             ('Full Course', 'Full Course'),
-            ('Recurring Classes', 'Recurring Classes')
         ], 
         default='Single Session'
     )
-    course_start_date = models.DateField(null=True, blank=True)
-    course_end_date = models.DateField(null=True, blank=True)
-    total_sessions = models.IntegerField(null=True, blank=True)
-    sessions_per_week = models.IntegerField(null=True, blank=True)
-    recurrence_pattern = models.CharField(max_length=20, choices=[
-        ('weekly', 'Weekly'),
-        ('biweekly', 'Bi-weekly')
-    ], null=True, blank=True)
     
     status = models.CharField(max_length=20, choices=[
         ('pending', 'Pending'),
@@ -724,6 +582,8 @@ class Booking(models.Model):
     ], default='pending')
     
     booking_date = models.DateTimeField(auto_now_add=True)
+    participants = models.IntegerField(validators=[MinValueValidator(1), MaxValueValidator(4)])
+    notes = models.TextField(blank=True)
     cancelled_at = models.DateTimeField(null=True, blank=True)
     cancellation_reason = models.TextField(blank=True)
     
@@ -741,36 +601,33 @@ class Booking(models.Model):
         db_table = 'bookings'
         indexes = [
             models.Index(fields=['schedule_instance', 'status']),
-            models.Index(fields=['student', 'status']),
+            models.Index(fields=['user', 'status']),  # Changed from student to user
             models.Index(fields=['booking_date']),
             models.Index(fields=['enrollment_type', 'status']),
             models.Index(fields=['status']),
             models.Index(fields=['booking_group_id']),
         ]
 
-    def save(self, *args, **kwargs):
-        # If this is a new booking and no group ID exists, generate one
-        if not self.pk and not self.booking_group_id:
-            self.booking_group_id = uuid.uuid4()
-        super().save(*args, **kwargs)
+class Reviews(models.Model):
+    reviewId = models.AutoField(primary_key=True)
+    userId = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='reviews')
+    businessId = models.ForeignKey(BusinessInfo, models.CASCADE, db_column='businessId')
+    classId = models.ForeignKey(ClassesMain, models.CASCADE, db_column='classId')
+    classOption = models.ForeignKey(ClassOption, models.CASCADE, related_name='reviews')
+    booking = models.OneToOneField(Booking, on_delete=models.CASCADE, related_name='review')
+    rating = models.IntegerField(validators=[MinValueValidator(1), MaxValueValidator(5)])
+    comment = models.TextField()
+    image = models.ImageField(
+        upload_to='review_images/',
+        storage=S3Boto3Storage(),
+        null=True,
+        blank=True
+    )
+    createdAt = models.DateTimeField(auto_now_add=True)
 
-class StudentEnrollment(models.Model):
-    """Tracks student enrollment in classes"""
-    student = models.ForeignKey('Student', on_delete=models.CASCADE, related_name='enrollments')
-    class_option = models.ForeignKey('ClassOption', on_delete=models.CASCADE, related_name='enrollments')
-    start_date = models.DateField()
-    end_date = models.DateField(null=True, blank=True)
-    status = models.CharField(max_length=20, choices=[
-        ('active', 'Active'),
-        ('completed', 'Completed'),
-        ('dropped', 'Dropped'),
-        ('pending', 'Pending')
-    ], default='pending')
-    created_at = models.DateTimeField(auto_now_add=True)
-    
     class Meta:
-        db_table = 'student_enrollments'
+        db_table = 'reviews'
         indexes = [
-            models.Index(fields=['student', 'status']),
-            models.Index(fields=['class_option', 'status']),
+            models.Index(fields=['classId', 'classOption']),
+            models.Index(fields=['booking']),
         ]

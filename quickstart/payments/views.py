@@ -9,7 +9,7 @@ from django.db import transaction
 from decimal import Decimal
 import stripe
 from django.conf import settings
-from ..models import CustomUser, Student, Booking, ScheduleInstance
+from ..models import CustomUser, Booking, ScheduleInstance
 from ..serializers import BookingCreateSerializer, BookingDetailSerializer
 
 import logging
@@ -33,17 +33,17 @@ class PaymentBookingSerializer(BookingCreateSerializer):
         for instance in instances:
             if instance.status != 'scheduled':
                 raise ValidationError(
-                    f'Instance {instance.id} is not available for booking'
+                    f'Instance {instance.pk} is not available for booking'
                 )
             
             if instance.date < timezone.now().date():
                 raise ValidationError(
-                    f'Cannot book past instance {instance.id}'
+                    f'Cannot book past instance {instance.pk}'
                 )
             
             if not instance.can_accommodate(1):
                 raise ValidationError(
-                    f'Not enough spots available for instance {instance.id}'
+                    f'Not enough spots available for instance {instance.pk}'
                 )
         
         return value  # Return IDs as expected by the serializer
@@ -54,9 +54,22 @@ class CreatePaymentIntentView(APIView):
 
     def post(self, request):
         try:
-            # Use regular BookingCreateSerializer for initial validation
+            # Log the incoming request data
+            logger.info(f"Received payment intent request: {request.data}")
+            
+            # Get the selected slots
+            selected_slots = request.data.get('selectedSlots')
+            if not selected_slots or not isinstance(selected_slots, list) or len(selected_slots) == 0:
+                return Response(
+                    {'error': 'selectedSlots is required and must not be empty'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Validate the booking data with new structure
             serializer = BookingCreateSerializer(data={
-                'schedule_instances': request.data.get('schedule_instances', [])
+                'selectedSlots': selected_slots,
+                'participants': request.data.get('participants', 1),
+                'notes': request.data.get('notes', '')
             })
             
             if not serializer.is_valid():
@@ -65,111 +78,79 @@ class CreatePaymentIntentView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            validated_data = serializer.validated_data
-            schedule_instances = validated_data['schedule_instances']
-            
-            # Get first instance to determine booking type
-            first_instance = ScheduleInstance.objects.select_related(
+            # Get the first schedule instance
+            first_slot = selected_slots[0]
+            instance = ScheduleInstance.objects.select_related(
                 'schedule__option'
-            ).get(id=schedule_instances[0])
+            ).get(id=first_slot['id'])
             
-            option = first_instance.schedule.option
+            option = instance.schedule.option
             booking_type = option.booking_type
             
-            # Initialize list of all instances to be booked
+            # Get all instances if this is a course booking
             all_instances = []
-            
-            if booking_type == 'Recurring Classes':
-                # For recurring bookings, generate future instances
-                weeks = 4  # Default to 4 weeks
-                if option.recurrence_pattern == 'biweekly':
-                    weeks = 8  # 8 weeks for biweekly to get 4 sessions
-                
-                for instance_id in schedule_instances:
-                    instance = ScheduleInstance.objects.get(id=instance_id)
-                    schedule = instance.schedule
-                    current_date = instance.date
-                    
-                    # Add initial instance
-                    all_instances.append(instance)
-                    
-                    # Add future instances
-                    for week in range(1, weeks):
-                        if option.recurrence_pattern == 'biweekly' and week % 2 == 1:
-                            continue
-                            
-                        future_date = current_date + timezone.timedelta(weeks=week)
-                        try:
-                            future_instance = ScheduleInstance.objects.get(
-                                schedule=schedule,
-                                date=future_date,
-                                time=instance.time
-                            )
-                        except ScheduleInstance.DoesNotExist:
-                            future_instance = ScheduleInstance.objects.create(
-                                schedule=schedule,
-                                date=future_date,
-                                time=instance.time,
-                                price=instance.price,
-                                max_participants=instance.max_participants,
-                                status='scheduled'
-                            )
-                        all_instances.append(future_instance)
+            if booking_type == 'Full Course':
+                all_instances = ScheduleInstance.objects.filter(
+                    schedule=instance.schedule,
+                    date__gte=instance.date,
+                    date__lte=instance.schedule.end_date,
+                    status='scheduled'
+                ).order_by('date')
             else:
-                # For single sessions, just use the provided instances
-                all_instances = [
-                    ScheduleInstance.objects.get(id=instance_id)
-                    for instance_id in schedule_instances
-                ]
+                all_instances = [instance]
             
-            # Calculate total amount
+            # Calculate total amount for all instances
             participants = request.data.get('participants', 1)
             base_total = sum(
-                float(instance.price) * participants 
-                for instance in all_instances
+                float(inst.price) * participants 
+                for inst in all_instances
             )
             
             # Apply service fee
-            service_fee_rate = Decimal('0.13')  # 13% service fee
+            service_fee_rate = Decimal('0.13')
             service_fee = Decimal(str(base_total)) * service_fee_rate
-            total_amount = int((Decimal(str(base_total)) + service_fee) * 100)  # Convert to cents
+            total_amount = int((Decimal(str(base_total)) + service_fee) * 100)
 
-            # Create payment intent with complete booking details
+            # Create payment intent with course info
             intent = stripe.PaymentIntent.create(
                 amount=total_amount,
                 currency='usd',
                 payment_method_types=['card'],
                 metadata={
-                    'user_id': request.user.userId,
-                    'schedule_instances': ','.join(str(i.id) for i in all_instances),
-                    'participants': participants,
-                    'base_total': float(base_total),
-                    'service_fee': float(service_fee),
-                    'booking_type': booking_type,
-                    'sessions_per_week': option.sessions_per_week if booking_type == 'Recurring Classes' else None,
-                    'recurrence_pattern': option.recurrence_pattern if booking_type == 'Recurring Classes' else None
+                    'user_id': str(request.user.userId),
+                    'first_slot_id': str(first_slot['id']), 
+                    'participants': str(participants),
+                    'base_total': str(float(base_total)),
+                    'service_fee': str(float(service_fee)),
+                    'booking_type': str(booking_type),
+                    'notes': str(request.data.get('notes', '')),
+                    'is_course': str(booking_type == 'Full Course'),
+                    'schedule_id': str(instance.schedule.pk),
+                    'start_date': instance.date.isoformat(),
+                    'end_date': instance.schedule.end_date.isoformat() if booking_type == 'Full Course' and instance.schedule.end_date else ''
                 }
             )
 
             return Response({
                 'clientSecret': intent.client_secret,
-                'amount': total_amount / 100,  # Convert back to dollars
-                'currency': 'USD',
-                'base_total': float(base_total),
+                'amount': total_amount / 100,
                 'service_fee': float(service_fee),
+                'base_total': float(base_total),
                 'total_sessions': len(all_instances),
-                'booking_details': {
-                    'type': booking_type,
-                    'sessions_per_week': option.sessions_per_week if booking_type == 'Recurring Classes' else None,
-                    'recurrence_pattern': option.recurrence_pattern if booking_type == 'Recurring Classes' else None
-                }
+                'booking_type': booking_type
             })
 
+        except ScheduleInstance.DoesNotExist:
+            return Response(
+                {'error': 'Invalid schedule instance'},
+                status=status.HTTP_404_NOT_FOUND
+            )
         except Exception as e:
             logger.error(f"Error creating payment intent: {str(e)}", exc_info=True)
-            return Response({
-                'error': str(e)
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 class ProcessBookingWebhook(APIView):
     authentication_classes = []
@@ -200,70 +181,53 @@ class ProcessBookingWebhook(APIView):
 
     def handle_successful_payment(self, payment_intent):
         try:
-            logger.info(f"Processing successful payment: {payment_intent.id}")
-            
             with transaction.atomic():
                 metadata = payment_intent.metadata
+                booking_type = metadata['booking_type']
                 
-                # Get instance IDs from metadata
-                instance_ids = [
-                    int(id) for id in metadata['schedule_instances'].split(',')
-                ]
-                
-                # First validate using the serializer (which works with IDs)
-                booking_data = {
-                    'schedule_instances': instance_ids
-                }
-
-                # Use PaymentBookingSerializer that skips weekly validation
-                serializer = PaymentBookingSerializer(data=booking_data)
-                if not serializer.is_valid():
-                    logger.error(f"Invalid booking data: {serializer.errors}")
-                    raise ValidationError(serializer.errors)
-
-                # After validation, fetch all instances for creating bookings
-                schedule_instances = ScheduleInstance.objects.select_related(
+                # Get initial instance for validation using first_slot_id
+                first_slot_id = int(metadata['first_slot_id'])
+                initial_instance = ScheduleInstance.objects.select_related(
                     'schedule__option'
-                ).filter(id__in=instance_ids)
+                ).get(id=first_slot_id)
                 
-                if len(schedule_instances) != len(instance_ids):
-                    logger.error("Some schedule instances not found")
-                    raise ValidationError("One or more schedule instances not found")
+                # Get all instances to book
+                instances_to_book = []
+                if metadata.get('is_course') == 'True':
+                    instances_to_book = ScheduleInstance.objects.filter(
+                        schedule=initial_instance.schedule,
+                        date__gte=metadata['start_date'],
+                        date__lte=metadata['end_date'],
+                        status='scheduled'
+                    ).order_by('date')
+                else:
+                    instances_to_book = [initial_instance]
+
+                # Get user directly
+                user = CustomUser.objects.get(userId=metadata['user_id'])
+
+                # Create bookings for all instances
+                booking_group_id = uuid.uuid4() if len(instances_to_book) > 1 else None
+                amount_per_booking = Decimal(str(metadata['base_total'])) / len(instances_to_book)
                 
-                # Get user and create student profile
-                try:
-                    user = CustomUser.objects.get(userId=metadata['user_id'])
-                    student, _ = Student.objects.get_or_create(
-                        user=user,
-                        defaults={'enrollment_date': timezone.now().date()}
-                    )
-                except CustomUser.DoesNotExist:
-                    logger.error(f"User not found: {metadata['user_id']}")
-                    raise ValidationError("User not found")
-
-                # Create bookings using the actual ScheduleInstance objects
-                booking_group_id = uuid.uuid4()
-                amount_per_booking = Decimal(str(metadata['base_total'])) / len(schedule_instances)
-
                 bookings = []
-                for instance in schedule_instances:
+                for instance in instances_to_book:
                     booking = Booking.objects.create(
-                        schedule_instance=instance,  # Using actual instance object
-                        student=student,
+                        schedule_instance=instance,
+                        user=user,
                         booking_group_id=booking_group_id,
                         participants=int(metadata['participants']),
+                        notes=metadata.get('notes', ''),
                         amount_paid=amount_per_booking,
                         status='confirmed',
                         payment_status='paid',
-                        enrollment_type=metadata['booking_type'],
-                        sessions_per_week=metadata.get('sessions_per_week'),
-                        recurrence_pattern=metadata.get('recurrence_pattern')
+                        enrollment_type=booking_type
                     )
                     bookings.append(booking)
-                    logger.info(f"Created booking {booking.id} for instance {instance.id}")
 
+                # Return first booking as response
                 return Response(BookingDetailSerializer(bookings[0]).data)
 
         except Exception as e:
             logger.error(f"Failed to process payment: {str(e)}", exc_info=True)
-            raise
+            raise ValidationError("Failed to process payment")

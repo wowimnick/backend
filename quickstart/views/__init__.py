@@ -15,7 +15,6 @@ from .business_views import (
 )
 
 from .class_views import (
-    ClassReviews,
     ClassImageList,
     ClassImageDetail,
     ClassOptionDetail,
@@ -23,10 +22,6 @@ from .class_views import (
     ScheduleInstanceViewSet,
     ScheduleBreakViewSet,
     ClassViewSet,
-)
-
-from .instructor_views import (
-    InstructorViewSet,
 )
 
 from .student_views import (
@@ -56,6 +51,11 @@ from .revenue_analytics_views import (
     RevenueAnalyticsView,
 )
 
+from .review_views import (
+    ReviewSubmission,
+    ClassReviews,
+)
+
 from .utils import (
     haversine_distance,
 )
@@ -76,7 +76,6 @@ __all__ = [
     'register_business',
 
     # Class Views
-    'ClassReviews',
     'ClassImageList',
     'ClassImageDetail',
     'ClassOptionDetail',
@@ -84,9 +83,6 @@ __all__ = [
     'ScheduleInstanceViewSet',
     'ScheduleBreakViewSet',
     'ClassViewSet',
-
-    # Instructor Views
-    'InstructorViewSet',
 
     # Student Views
     'StudentProfileViewSet',
@@ -109,6 +105,10 @@ __all__ = [
 
     # Revenue Analytics
     'RevenueAnalyticsView',
+
+    # Review Views
+    'ReviewSubmission',
+    'ClassReviews',
 
     # Utils
     'haversine_distance',

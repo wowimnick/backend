@@ -15,7 +15,6 @@ from .business_serializers import (
 from .class_serializers import (
     ClassOptionSerializer,
     ClassImageSerializer,
-    ReviewSerializer,
     ClassesMainSerializer,
     ClassCreateSerializer,
     ClassOptionCreateSerializer,
@@ -27,21 +26,13 @@ from .class_serializers import (
 from .booking_serializers import (
     BookingCreateSerializer,
     BookingDetailSerializer,
-    BookingListSerializer
-)
-
-from .instructor_serializers import (
-    InstructorSerializer,
-    EducationSerializer,
-    CertificationSerializer,
-    SkillSerializer,
-    InstructorNoteSerializer
+    BookingListSerializer,
+    StudentBookingSerializer
 )
 
 from .student_serializers import (
     StudentProfileSerializer,
     StudentNoteSerializer,
-    StudentEnrollmentSerializer
 )
 
 from .revenue_analytics_serializers import (
@@ -49,6 +40,11 @@ from .revenue_analytics_serializers import (
     RevenueMetricsSerializer,
     RevenueReportSerializer,
     RevenueTimeSeriesSerializer
+)
+
+from .review_serializers import (
+    ReviewSubmissionSerializer,
+    ReviewSerializer
 )
 
 __all__ = [
@@ -79,22 +75,18 @@ __all__ = [
     'BookingCreateSerializer',
     'BookingDetailSerializer',
     'BookingListSerializer',
-
-    # Instructor Serializers
-    'InstructorSerializer',
-    'EducationSerializer',
-    'CertificationSerializer',
-    'SkillSerializer',
-    'InstructorNoteSerializer',
+    'StudentBookingSerializer',
 
     # Student Serializers
     'StudentProfileSerializer',
     'StudentNoteSerializer',
-    'StudentEnrollmentSerializer',
 
     # Revenue Analytics Serializers
     'RevenueDistributionSerializer',
     'RevenueMetricsSerializer',
     'RevenueReportSerializer',
     'RevenueTimeSeriesSerializer',
+
+    # Review Serializers
+    'ReviewSubmissionSerializer'
 ]

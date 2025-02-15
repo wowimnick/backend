@@ -3,7 +3,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.db.models import (
     Sum, Count, F, ExpressionWrapper, FloatField, DecimalField,
-    Q, Value, Case, When, IntegerField
+    Q, Value, Case, When, IntegerField, Subquery, Min
 )
 from django.db.models.functions import (
     TruncDate, ExtractMonth, ExtractYear, Coalesce
@@ -21,6 +21,27 @@ logger = logging.getLogger(__name__)
 
 class RevenueAnalyticsView(views.APIView):
     permission_classes = [IsAuthenticated]
+
+    def get_bookings_queryset(self, business, start_date, end_date):
+        """Get base queryset for bookings, handling course bookings correctly"""
+        # First get all bookings in the period
+        base_bookings = Booking.objects.filter(
+            schedule_instance__schedule__option__classId__businessId=business,
+            booking_date__range=[start_date, end_date],
+            payment_status='paid'
+        )
+
+        # For course bookings (those with booking_group_id), only take the first booking
+        # from each group to avoid counting the same course multiple times
+        return base_bookings.filter(
+            Q(booking_group_id__isnull=True) |  # Include all non-course bookings
+            Q(id__in=Subquery(  # For course bookings, take only the first booking of each group
+                base_bookings.filter(booking_group_id__isnull=False)
+                .values('booking_group_id')
+                .annotate(min_id=Min('id'))
+                .values('min_id')
+            ))
+        )
 
     def get_business(self, user):
         """Get user's business with permission check."""
@@ -53,31 +74,17 @@ class RevenueAnalyticsView(views.APIView):
 
     def calculate_metrics(self, business, start_date, end_date):
         """Calculate key revenue metrics."""
-        current_period = Booking.objects.filter(
-            schedule_instance__schedule__option__classId__businessId=business,
-            booking_date__range=[start_date, end_date],
-            payment_status='paid'
-        )
+        current_period = self.get_bookings_queryset(business, start_date, end_date)
 
         # Previous period for comparison
         period_length = (end_date - start_date).days
         previous_start = start_date - timedelta(days=period_length)
-        previous_period = Booking.objects.filter(
-            schedule_instance__schedule__option__classId__businessId=business,
-            booking_date__range=[previous_start, start_date],
-            payment_status='paid'
-        )
+        previous_period = self.get_bookings_queryset(business, previous_start, start_date)
 
         # Current period aggregations
         current_metrics = current_period.aggregate(
             total_revenue=Coalesce(Sum('amount_paid'), Value(0), output_field=DecimalField()),
-            total_bookings=Count('id'),
-            recurring_revenue=Coalesce(
-                Sum('amount_paid', 
-                    filter=Q(enrollment_type='Recurring Classes')),
-                Value(0),
-                output_field=DecimalField()
-            )
+            total_bookings=Count('id')
         )
 
         # Previous period aggregations
@@ -86,11 +93,11 @@ class RevenueAnalyticsView(views.APIView):
             prev_bookings=Count('id')
         )
 
-        # Calculate revenue per student
-        unique_students = current_period.values('student').distinct().count()
-        revenue_per_student = (
-            float(current_metrics['total_revenue']) / unique_students
-            if unique_students > 0 else 0
+        # Calculate revenue per unique booking user
+        unique_users = current_period.values('user').distinct().count()
+        revenue_per_user = (
+            float(current_metrics['total_revenue']) / unique_users
+            if unique_users > 0 else 0
         )
 
         # Calculate average order value
@@ -109,39 +116,24 @@ class RevenueAnalyticsView(views.APIView):
         return {
             'total_revenue': float(current_metrics['total_revenue']),
             'average_order_value': round(aov, 2),
-            'recurring_revenue': float(current_metrics['recurring_revenue']),
-            'revenue_per_student': round(revenue_per_student, 2),
+            'revenue_per_user': round(revenue_per_user, 2),
             'revenue_growth': round(revenue_growth, 2)
         }
 
     def get_revenue_trends(self, business, start_date, end_date):
-        """Get daily revenue trends with recurring vs one-time breakdown."""
-        trends = Booking.objects.filter(
-            schedule_instance__schedule__option__classId__businessId=business,
-            booking_date__range=[start_date, end_date],
-            payment_status='paid'
-        ).annotate(
+        """Get daily revenue trends."""
+        bookings = self.get_bookings_queryset(business, start_date, end_date)
+        
+        trends = bookings.annotate(
             date=TruncDate('booking_date')
         ).values('date').annotate(
-            recurring_revenue=Coalesce(
-                Sum('amount_paid',
-                    filter=Q(enrollment_type='Recurring Classes')),
-                Value(0),
-                output_field=DecimalField()
-            ),
-            one_time_revenue=Coalesce(
-                Sum('amount_paid',
-                    filter=Q(enrollment_type='Single Session')),
-                Value(0),
-                output_field=DecimalField()
-            )
+            total_revenue=Coalesce(Sum('amount_paid'), Value(0), output_field=DecimalField())
         ).order_by('date')
 
         return [
             {
                 'date': entry['date'].isoformat(),
-                'recurring_revenue': float(entry['recurring_revenue']),
-                'one_time_revenue': float(entry['one_time_revenue'])
+                'revenue': float(entry['total_revenue'])
             }
             for entry in trends
         ]
@@ -149,15 +141,16 @@ class RevenueAnalyticsView(views.APIView):
     def get_class_revenue(self, business, start_date, end_date):
         """Get revenue breakdown by class and options."""
         class_revenue = []
+        base_bookings = self.get_bookings_queryset(business, start_date, end_date)
         
         classes = ClassesMain.objects.filter(businessId=business)
         
         for class_obj in classes:
-            class_total = Booking.objects.filter(
-                schedule_instance__schedule__option__classId=class_obj,
-                booking_date__range=[start_date, end_date],
-                payment_status='paid'
-            ).aggregate(
+            class_bookings = base_bookings.filter(
+                schedule_instance__schedule__option__classId=class_obj
+            )
+            
+            class_total = class_bookings.aggregate(
                 revenue=Coalesce(Sum('amount_paid'), Value(0), output_field=DecimalField())
             )['revenue']
             
@@ -169,12 +162,11 @@ class RevenueAnalyticsView(views.APIView):
                     'type': 'class'
                 })
                 
+                # Get revenue by option
                 options = ClassOption.objects.filter(classId=class_obj)
                 for option in options:
-                    option_revenue = Booking.objects.filter(
-                        schedule_instance__schedule__option=option,
-                        booking_date__range=[start_date, end_date],
-                        payment_status='paid'
+                    option_revenue = class_bookings.filter(
+                        schedule_instance__schedule__option=option
                     ).aggregate(
                         revenue=Coalesce(Sum('amount_paid'), Value(0), output_field=DecimalField())
                     )['revenue']
@@ -223,15 +215,13 @@ class RevenueAnalyticsView(views.APIView):
             
             # Write daily revenue data
             writer.writerow(['Daily Revenue'])
-            writer.writerow(['Date', 'Recurring Revenue', 'One-time Revenue', 'Total Revenue'])
+            writer.writerow(['Date', 'Revenue'])
             
             revenue_trends = self.get_revenue_trends(business, start_date, end_date)
             for entry in revenue_trends:
                 writer.writerow([
                     entry['date'],
-                    entry['recurring_revenue'],
-                    entry['one_time_revenue'],
-                    entry['recurring_revenue'] + entry['one_time_revenue']
+                    entry['revenue']
                 ])
             
             # Add separation

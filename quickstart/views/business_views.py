@@ -64,7 +64,7 @@ def get_user_businesses(request):
     """Get businesses user can manage"""
     user = request.user
     
-    if user.has_role(['Admin', 'Super Admin']):
+    if check_user_role(user, ['Admin', 'Super Admin']):
         businesses = BusinessInfo.objects.all()
     else:
         businesses = BusinessInfo.objects.filter(

@@ -6,7 +6,7 @@ from django.db.models import Prefetch, Q, Count, Value, Case, DecimalField, When
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 
-from quickstart.models import Booking, BusinessInfo, Student, StudentEnrollment, StudentNote
+from quickstart.models import Booking, BusinessInfo, CustomUser, StudentNote
 
 from ..utils.permissions import check_user_role
 from ..serializers import StudentProfileSerializer, StudentNoteSerializer
@@ -17,11 +17,18 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         user = self.request.user
+        
+        # Get the business context
+        business = None
+        if check_user_role(user, ['Business Owner', 'Manager']):
+            business = BusinessInfo.objects.filter(
+                Q(owner=user) | Q(managers=user)
+            ).first()
 
         # Prepare subqueries for bookings
         booking_counts = Booking.objects.filter(
-            student=OuterRef('pk')
-        ).values('student').annotate(
+            user=OuterRef('pk')
+        ).values('user').annotate(
             confirmed_count=Count('id', filter=Q(status='confirmed')),
             completed_count=Count('id', filter=Q(status='completed')),
             finished_count=Count('id', filter=Q(status__in=['completed', 'cancelled']))
@@ -32,26 +39,23 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
         )
         
         # Base queryset with efficient joins and annotations
-        queryset = Student.objects.select_related(
-            'user',
-            'user__role'
-        ).prefetch_related(
-            # Prefetch notes with author data
-            Prefetch(
-                'notes',
-                queryset=StudentNote.objects.select_related('author').order_by('-created_at'),
-                to_attr='prefetched_notes'
-            ),
-            # Prefetch enrollments with class data
-            Prefetch(
-                'enrollments',
-                queryset=StudentEnrollment.objects.select_related(
-                    'class_option',
-                    'class_option__classId'
-                ).order_by('-created_at'),
-                to_attr='prefetched_enrollments'
-            ),
-            # Prefetch bookings with all related data
+        queryset = CustomUser.objects.select_related(
+            'role'
+        )
+        
+        if business:
+            # Prefetch only notes for this business
+            queryset = queryset.prefetch_related(
+                Prefetch(
+                    'business_notes',
+                    queryset=StudentNote.objects.filter(business=business)
+                        .select_related('author')
+                        .order_by('-created_at'),
+                    to_attr='prefetched_notes'
+                )
+            )
+        
+        queryset = queryset.prefetch_related(
             Prefetch(
                 'bookings',
                 queryset=Booking.objects.select_related(
@@ -63,7 +67,6 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
                 to_attr='prefetched_bookings'
             )
         ).annotate(
-            # Use subquery for counts to avoid multiple queries
             active_bookings_count=Coalesce(
                 Subquery(booking_counts.values('confirmed_count')[:1]),
                 Value(0)
@@ -76,7 +79,6 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
                 Subquery(booking_counts.values('finished_count')[:1]),
                 Value(0)
             ),
-            # Calculate attendance rate in the same query
             attendance_rate=ExpressionWrapper(
                 Case(
                     When(
@@ -89,88 +91,33 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
             )
         )
 
-        # Apply role-based filtering
-        if check_user_role(user, ['Business Owner', 'Manager']):
-            managed_businesses = BusinessInfo.objects.filter(
-                Q(owner=user) | Q(managers=user)
-            ).values('businessId')
-            
+        # Filter users based on business context
+        if business:
             return queryset.filter(
-                bookings__schedule_instance__schedule__option__classId__businessId__in=Subquery(managed_businesses)
+                bookings__schedule_instance__schedule__option__classId__businessId=business
             ).distinct()
         
-        return queryset.filter(user=user)
-    
-    @action(detail=False, methods=['get', 'patch'])
-    def me(self, request):
-        """Get or update current user's student profile"""
-        try:
-            student = self.get_queryset().get(user=request.user)
-            
-            if request.method == 'PATCH':
-                serializer = self.get_serializer(
-                    student, 
-                    data=request.data, 
-                    partial=True
-                )
-                serializer.is_valid(raise_exception=True)
-                serializer.save()
-            else:
-                serializer = self.get_serializer(student)
-            
-            return Response(serializer.data)
-            
-        except Student.DoesNotExist:
-            new_student_data = {
-                'enrollment_date': timezone.now().date(),
-                'parent_guardian_name': '',
-                'parent_guardian_phone': '',
-                'emergency_contact': '',
-                'emergency_phone': '',
-                'allergies': '',
-                'medical_conditions': '',
-                **(request.data if request.method == 'PATCH' else {})
-            }
-            
-            serializer = self.get_serializer(
-                data=new_student_data,
-                context={'user': request.user}
-            )
-            serializer.is_valid(raise_exception=True)
-            serializer.save(user=request.user)
-            
-            return Response(
-                serializer.data,
-                status=status.HTTP_201_CREATED
-            )
+        return queryset.filter(userId=user.pk)
     
     @action(detail=True, methods=['post'])
     def add_note(self, request, pk=None):
-        student = self.get_object()
+        user = self.get_object()
+        business = BusinessInfo.objects.filter(
+            Q(owner=request.user) | Q(managers=request.user)
+        ).first()
+        
+        if not business:
+            return Response(
+                {"error": "You must be associated with a business to add notes"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+            
         serializer = StudentNoteSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(
-                student=student,
+                user=user,
+                business=business,
                 author=request.user
             )
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
-
-    def perform_update(self, serializer):
-        # Clear 'Pending Update' values if they're being updated
-        instance = serializer.instance
-        data = serializer.validated_data
-        
-        pending_fields = ['parent_guardian_phone', 'emergency_phone']
-        for field in pending_fields:
-            if field in data and instance.__dict__.get(field) == 'Pending Update':
-                # Value is being updated from the default
-                pass  # Let the update proceed
-            elif field in data and data[field] == 'Pending Update':
-                # Don't allow setting back to pending
-                data[field] = instance.__dict__[field]
-                
-        serializer.save()

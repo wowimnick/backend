@@ -8,21 +8,21 @@ from ..models import Booking, ClassesMain, ClassOption, BusinessInfo
 
 class RevenueMetricsSerializer(serializers.ModelSerializer):
     total_revenue = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
-    total_students = serializers.IntegerField(read_only=True)
+    total_users = serializers.IntegerField(read_only=True) 
     revenue_growth = serializers.FloatField(read_only=True)
-    student_growth = serializers.FloatField(read_only=True)
+    user_growth = serializers.FloatField(read_only=True) 
     
     class Meta:
         model = BusinessInfo
         fields = [
-            'businessId', 'businessName', 'total_revenue', 'total_students',
-            'revenue_growth', 'student_growth'
+            'businessId', 'businessName', 'total_revenue', 'total_users', 
+            'revenue_growth', 'user_growth' 
         ]
 
 class RevenueTimeSeriesSerializer(serializers.Serializer):
     date = serializers.DateField()
     revenue = serializers.DecimalField(max_digits=10, decimal_places=2)
-    students = serializers.IntegerField()
+    users = serializers.IntegerField()  # Changed from students
     bookings = serializers.IntegerField()
     average_booking_value = serializers.DecimalField(max_digits=10, decimal_places=2)
 
@@ -30,14 +30,14 @@ class RevenueDistributionSerializer(serializers.Serializer):
     class_id = serializers.IntegerField(source='classId')
     class_title = serializers.CharField(source='title')
     total_revenue = serializers.DecimalField(max_digits=10, decimal_places=2)
-    total_students = serializers.IntegerField()
+    total_users = serializers.IntegerField()  # Changed from total_students
     percentage = serializers.FloatField()
     
     class OptionDistributionSerializer(serializers.Serializer):
         option_id = serializers.IntegerField(source='optionId')
         option_title = serializers.CharField(source='title')
         revenue = serializers.DecimalField(max_digits=10, decimal_places=2)
-        students = serializers.IntegerField()
+        users = serializers.IntegerField()  # Changed from students
         percentage = serializers.FloatField()
     
     options = OptionDistributionSerializer(many=True)

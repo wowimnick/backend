@@ -5,10 +5,10 @@ from django.forms import ValidationError
 from rest_framework import generics, viewsets, status, permissions
 from rest_framework.response import Response
 from rest_framework.permissions import BasePermission, IsAuthenticated, AllowAny
-
+from rest_framework.request import Request
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django.db import transaction
-from django.db.models import Exists, OuterRef, Prefetch, Case, Sum, When, IntegerField, Q, Subquery, Count
+from django.db.models import Exists, OuterRef, Prefetch, Case, Sum, When, IntegerField, Q, Subquery, Count, F
 from django.db.models.functions import Coalesce
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.decorators import api_view, permission_classes
@@ -26,7 +26,6 @@ from ..models import (
 from ..serializers import (
     ClassesMainSerializer,
     ClassImageSerializer,
-    ReviewSerializer,
     ClassOptionSerializer,
     ClassCreateSerializer,
     ScheduleSerializer,
@@ -46,7 +45,9 @@ def validate_schedule_conflicts(option, schedule_data, exclude_id=None):
     
     Args:
         option: ClassOption instance
-        schedule_data: Dict containing 'day' string and 'time' (string or time object)
+        schedule_data: Dict containing time (string or time object), and duration (int)
+                      For courses: also contains 'day' string
+                      For single sessions: contains 'date' string
         exclude_id: Optional ID to exclude from conflict check (for updates)
     
     Returns:
@@ -56,7 +57,7 @@ def validate_schedule_conflicts(option, schedule_data, exclude_id=None):
     def time_to_minutes(time_val):
         if isinstance(time_val, str):
             time_obj = datetime.strptime(time_val, '%H:%M').time()
-        elif isinstance(time_val, time):  # Using the properly imported time type
+        elif isinstance(time_val, time):
             time_obj = time_val
         else:
             raise ValueError(f"Invalid time format: {time_val}")
@@ -65,23 +66,39 @@ def validate_schedule_conflicts(option, schedule_data, exclude_id=None):
     # Get time range for the proposed schedule
     try:
         proposed_start = time_to_minutes(schedule_data['time'])
-        proposed_end = proposed_start + option.duration
-        proposed_day = schedule_data['day']
+        duration = int(schedule_data.get('duration', 60))
+        proposed_end = proposed_start + duration
 
-        # Check against existing schedules
+        # Check against existing schedules based on booking type
         existing_schedules = option.schedules.all()
         if exclude_id:
             existing_schedules = existing_schedules.exclude(id=exclude_id)
 
-        for existing in existing_schedules:
-            # Only check schedules on the same day
-            if existing.day == proposed_day:
-                existing_start = time_to_minutes(existing.time)
-                existing_end = existing_start + option.duration
-
-                # Check time overlap
-                if (proposed_start < existing_end and proposed_end > existing_start):
-                    return False, f"Schedule conflicts with existing class at {existing.time} on {existing.day}"
+        if option.booking_type == 'Full Course':
+            if 'day' not in schedule_data:
+                return False, "Day is required for course schedules"
+            proposed_day = schedule_data['day']
+            
+            # Check conflicts with other course schedules on the same day
+            for existing in existing_schedules:
+                if existing.day == proposed_day:
+                    existing_start = time_to_minutes(existing.time)
+                    existing_end = existing_start + existing.duration
+                    if (proposed_start < existing_end and proposed_end > existing_start):
+                        return False, f"Schedule conflicts with existing class at {existing.time} on {existing.day}"
+        else:
+            # For single sessions, check date conflicts
+            if 'date' not in schedule_data:
+                return False, "Date is required for single sessions"
+            proposed_date = schedule_data['date']
+            
+            # Check conflicts with other sessions on the same date
+            for existing in existing_schedules:
+                if existing.date == proposed_date:
+                    existing_start = time_to_minutes(existing.time)
+                    existing_end = existing_start + existing.duration
+                    if (proposed_start < existing_end and proposed_end > existing_start):
+                        return False, f"Schedule conflicts with existing session at {existing.time} on {existing.date}"
 
         return True, None
         
@@ -90,6 +107,8 @@ def validate_schedule_conflicts(option, schedule_data, exclude_id=None):
 
 class BusinessPermissionMixin:
     """Mixin to handle business-specific permissions"""
+    request: Request
+
     @silk_profile(name='BusinessPermissionMixin_get_queryset')
     def get_business_queryset(self, queryset):
         """
@@ -196,31 +215,95 @@ class ClassViewSet(viewsets.ModelViewSet):
     
     @silk_profile(name='ClassViewSet_get_queryset')
     def get_queryset(self):
+        # Base queryset
         queryset = ClassesMain.objects.all()
-        
-        # Add select_related and prefetch_related
-        queryset = queryset.select_related('businessId').prefetch_related(
-            'options',
-            'options__schedules',
-            'options__schedules__instances',
-            'options__schedules__breaks',  # Add prefetch for breaks
-            Prefetch(
-                'options__schedules__instances__bookings',
-                queryset=Booking.objects.filter(status='confirmed'),
-                to_attr='confirmed_bookings'
+
+        # Calculate confirmed bookings per schedule instance
+        confirmed_bookings_subquery = Subquery(
+            Booking.objects.filter(
+                schedule_instance_id=OuterRef('id'),
+                status='confirmed'
             )
+            .values('schedule_instance_id')
+            .annotate(total=Count('id'))
+            .values('total')
         )
-        
-        # The rest of your logic for filtering public/business classes
+
+        # Calculate total users per option
+        user_count_subquery = Subquery(
+            Booking.objects.filter(
+                schedule_instance__schedule__option=OuterRef('pk'),
+                status='confirmed'
+            )
+            .values('schedule_instance__schedule__option')
+            .annotate(count=Count('user', distinct=True))
+            .values('count')[:1]
+        )
+
+        # Add all necessary prefetches and annotations
+        queryset = queryset.select_related('businessId').prefetch_related(
+            # Prefetch options with annotations
+            Prefetch(
+                'options',
+                queryset=ClassOption.objects.annotate(
+                    total_students=Coalesce(user_count_subquery, 0)
+                ).prefetch_related(
+                    # Prefetch schedules
+                    Prefetch(
+                        'schedules',
+                        queryset=Schedule.objects.filter(
+                            is_active=True
+                        ).select_related('option')
+                    ),
+                    # Prefetch schedule instances with booking counts
+                    Prefetch(
+                        'schedules__instances',
+                        queryset=ScheduleInstance.objects.annotate(
+                            confirmed_bookings=Coalesce(confirmed_bookings_subquery, 0)
+                        ).filter(
+                            date__gte=timezone.now().date(),
+                            status='scheduled'
+                        )
+                    ),
+                    # Prefetch schedule breaks
+                    'schedules__breaks'
+                )
+            ),
+            # Prefetch images
+            'images'
+        ).annotate(
+            # Add class-level annotations
+            total_students=Count(
+                'options__schedules__instances__bookings__user',
+                filter=Q(
+                    options__schedules__instances__bookings__status='confirmed'
+                ),
+                distinct=True
+            ),
+            total_bookings=Count(
+                'options__schedules__instances__bookings',
+                filter=Q(
+                    options__schedules__instances__bookings__status='confirmed'
+                )
+            ),
+            active_options_count=Count(
+                'options',
+                filter=Q(options__active=True)
+            ),
+            # Add business name annotation
+            business_name=F('businessId__businessName')
+        )
+
+        # Apply business context filtering if needed
         if self.is_business_context:
             if check_user_role(self.request.user, ['Admin', 'Super Admin']):
                 return queryset
-                
+
             return queryset.filter(
                 Q(businessId__owner=self.request.user) |
                 Q(businessId__managers=self.request.user)
             ).distinct()
-        
+
         # Public context - show only active classes
         return queryset.filter(
             Exists(
@@ -443,8 +526,8 @@ class ClassViewSet(viewsets.ModelViewSet):
 
 class ClassImageList(generics.ListCreateAPIView):
     serializer_class = ClassImageSerializer
+    parser_classes = [MultiPartParser, FormParser]
 
-    @silk_profile(name='ClassImageList_get_queryset')
     def get_queryset(self):
         return ClassImage.objects.filter(classId=self.kwargs['pk'])
     
@@ -468,14 +551,6 @@ class ClassImageDetail(BusinessPermissionMixin, generics.RetrieveDestroyAPIView)
             if not self.check_business_permission(obj.classId.businessId.businessId):
                 raise PermissionDenied("You don't have permission to delete this image")
         return obj
-
-class ClassReviews(generics.ListAPIView):
-    serializer_class = ReviewSerializer
-
-    def get_queryset(self):
-        class_id = self.kwargs['pk']
-        return Reviews.objects.filter(classId=class_id).select_related('userId')
-
 
 
 class ScheduleViewSet(BusinessPermissionMixin, viewsets.ModelViewSet):
@@ -521,7 +596,7 @@ class ScheduleViewSet(BusinessPermissionMixin, viewsets.ModelViewSet):
         if not self.check_business_permission(option.classId.businessId.businessId):
             raise PermissionDenied("You don't have permission to create schedules for this class")
 
-        # Validate conflicts before creating
+        # Validate conflicts using schedule data (which now includes duration)
         is_valid, error_message = validate_schedule_conflicts(option, request.data)
         if not is_valid:
             return Response(
@@ -560,61 +635,6 @@ class ScheduleViewSet(BusinessPermissionMixin, viewsets.ModelViewSet):
         
         return Response(serializer.data)
     
-    def validate_conflicts(self, request):
-        option_id = request.data.get('option_id')
-        schedule_data = request.data
-        
-        try:
-            option = ClassOption.objects.get(id=option_id)
-            is_valid, error_message = validate_schedule_conflicts(
-                option, 
-                schedule_data,
-                exclude_id=schedule_data.get('id')
-            )
-            
-            if not is_valid:
-                return Response(
-                    {'valid': False, 'error': error_message},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-                
-            return Response({'valid': True})
-            
-        except ClassOption.DoesNotExist:
-            return Response(
-                {'error': 'Option not found'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-        except Exception as e:
-            return Response(
-                {'error': str(e)},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-    
-    @action(detail=True, methods=['post'])
-    def regenerate_instances(self, request, pk=None):
-        """Regenerate future instances for a schedule"""
-        schedule = self.get_object()
-        start_date = timezone.now().date()
-        weeks_ahead = int(request.data.get('weeks_ahead', 12))
-        
-        try:
-            instances = schedule.generate_instances(
-                start_date=start_date,
-                weeks_ahead=weeks_ahead
-            )
-            
-            return Response({
-                'message': f'Generated {len(instances)} new instances',
-                'instances': ScheduleInstanceSerializer(instances, many=True).data
-            })
-            
-        except Exception as e:
-            return Response(
-                {'error': str(e)},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-    
     @action(detail=True, methods=['post'])
     def add_break(self, request, pk=None):
         """Add a break period to the schedule"""
@@ -635,6 +655,7 @@ class ScheduleViewSet(BusinessPermissionMixin, viewsets.ModelViewSet):
         option_id = request.query_params.get('option_id')
         start_date_str = request.query_params.get('start_date')
         end_date_str = request.query_params.get('end_date')
+        is_course = request.query_params.get('is_course', 'false').lower() == 'true'
         
         if not option_id:
             return Response(
@@ -643,64 +664,107 @@ class ScheduleViewSet(BusinessPermissionMixin, viewsets.ModelViewSet):
             )
 
         try:
+            # Get the option to check booking type
+            option = ClassOption.objects.get(optionId=option_id)
+            
             # Convert date strings to date objects
             start_date = timezone.datetime.strptime(start_date_str, '%Y-%m-%d').date() if start_date_str else timezone.now().date()
-            end_date = timezone.datetime.strptime(end_date_str, '%Y-%m-%d').date() if end_date_str else (start_date + timezone.timedelta(days=7))
+            end_date = timezone.datetime.strptime(end_date_str, '%Y-%m-%d').date() if end_date_str else (start_date + timezone.timedelta(days=30 if is_course else 7))
 
-            # Get instances with pre-calculated booking counts in a single query
-            instances = ScheduleInstance.objects.filter(
-                schedule__option_id=option_id,
-                schedule__is_active=True,
-                date__range=(start_date, end_date),
-                status='scheduled'
-            ).annotate(
-                current_bookings_count=Coalesce(
-                    Sum(
-                        Case(
-                            When(
-                                bookings__status='confirmed',
-                                then='bookings__participants'
-                            ),
-                            default=0
-                        )
-                    ),
-                    0,
-                    output_field=IntegerField()
-                )
-            ).select_related('schedule')
+            if is_course:
+                # For courses, get unique schedules first
+                schedules = Schedule.objects.filter(
+                    option_id=option_id,
+                    is_active=True,
+                    start_date__gte=start_date,
+                ).select_related('option')
 
-            # Format instances with pre-calculated availability
-            available_instances = []
-            for instance in instances:
-                available_spots = instance.max_participants - instance.current_bookings_count
+                available_instances = []
                 
-                # Only include if spots are available
-                if available_spots > 0:
-                    available_instances.append({
-                        'instance_id': instance.id,
-                        'schedule_id': instance.schedule.id,
-                        'date': instance.date,
-                        'time': instance.time,
-                        'total_capacity': instance.max_participants,
-                        'available_spots': available_spots,
-                        'price': str(instance.price)
-                    })
+                for schedule in schedules:
+                    # Get first instance of each course schedule
+                    first_instance = ScheduleInstance.objects.filter(
+                        schedule=schedule,
+                        status='scheduled'
+                    ).annotate(
+                        current_bookings_count=Coalesce(
+                            Sum(Case(
+                                When(bookings__status='confirmed', then='bookings__participants'),
+                                default=0
+                            )),
+                            0,
+                            output_field=IntegerField()
+                        )
+                    ).order_by('date').first()
+
+                    if first_instance:
+                        available_spots = first_instance.max_participants - first_instance.current_bookings_count
+                        if available_spots > 0:
+                            available_instances.append({
+                                'id': first_instance.pk,
+                                'date': first_instance.date,
+                                'time': first_instance.time,
+                                'start_date': schedule.start_date,
+                                'duration': first_instance.duration,
+                                'day': schedule.day,
+                                'available_spots': available_spots,
+                                'price': str(first_instance.price),
+                                'end_date': schedule.end_date
+                            })
+            else:
+                # Original single session logic
+                instances = ScheduleInstance.objects.filter(
+                    schedule__option_id=option_id,
+                    schedule__is_active=True,
+                    date__range=(start_date, end_date),
+                    status='scheduled'
+                ).annotate(
+                    current_bookings_count=Coalesce(
+                        Sum(Case(
+                            When(bookings__status='confirmed', then='bookings__participants'),
+                            default=0
+                        )),
+                        0,
+                        output_field=IntegerField()
+                    )
+                ).select_related('schedule')
+
+                available_instances = []
+                for instance in instances:
+                    available_spots = instance.max_participants - instance.current_bookings_count
+                    if available_spots > 0:
+                        available_instances.append({
+                            'id': instance.pk,
+                            'date': instance.date,
+                            'time': instance.time,
+                            'duration': instance.duration,
+                            'day': instance.schedule.day,
+                            'available_spots': available_spots,
+                            'price': str(instance.price),
+                            'end_date': None
+                        })
 
             return Response({
-                'instances': available_instances,
+                'schedules': available_instances,
                 'total_available': len(available_instances),
                 'date_range': {
-                    'start_date': start_date_str,
-                    'end_date': end_date_str
+                    'start_date': start_date,
+                    'end_date': end_date
                 }
             })
 
+        except ClassOption.DoesNotExist:
+            return Response(
+                {'error': 'Invalid option ID'},
+                status=status.HTTP_404_NOT_FOUND
+            )
         except ValueError as e:
             return Response(
                 {'error': 'Invalid date format. Use YYYY-MM-DD'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         except Exception as e:
+            logger.error(f"Error fetching availability: {str(e)}")
             return Response(
                 {'error': str(e)},
                 status=status.HTTP_400_BAD_REQUEST
@@ -735,7 +799,7 @@ class ScheduleViewSet(BusinessPermissionMixin, viewsets.ModelViewSet):
             }
 
             # Get all days of week that have schedules
-            schedule_days = set([day_to_number[schedule.day] for schedule in schedules])
+            schedule_days = set([day_to_number[schedule.day] for schedule in schedules if schedule.day and schedule.day in day_to_number])
 
             # Get all dates for the given month
             import calendar
