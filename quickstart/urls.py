@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 from allauth.account.views import confirm_email
 from django.views.generic import TemplateView
 
+from quickstart.monitoring.consumers import MetricsConsumer
 from quickstart.payments.views import CreatePaymentIntentView, ProcessBookingWebhook
 
 from .views import (
@@ -40,6 +41,7 @@ urlpatterns = [
     # Include router URLs
     path('', include(router.urls)),
     path('silk/', include('silk.urls', namespace='silk')),
+    path('ws/system_metrics/', MetricsConsumer.as_asgi()),
     
     # Existing auth URLs
     path('auth/', include([
@@ -71,12 +73,8 @@ urlpatterns = [
         path('images/<int:pk>/', ClassImageDetail.as_view(), name='class-image-detail'),
         path('<int:pk>/reviews/', ClassReviews.as_view(), name='class-reviews'),
         path('<int:pk>/images/', ClassImageList.as_view(), name='class-images'),
-        path('<int:pk>/options/', 
-            ClassOptionDetail.as_view(),
-            name='class-option-create'),
-        path('<int:pk>/options/<int:option_id>/', 
-            ClassOptionDetail.as_view(),
-            name='class-option-detail'),
+        path('<int:pk>/options/', ClassOptionDetail.as_view(), name='class-option-create'),
+        path('<int:pk>/options/<int:option_id>/', ClassOptionDetail.as_view(), name='class-option-detail'),
     ])),
 
     path('reviews/submit/', ReviewSubmission.as_view(), name='submit-review'),

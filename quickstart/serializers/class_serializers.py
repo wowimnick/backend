@@ -1,5 +1,6 @@
 from datetime import date, datetime
 import json
+from random import uniform
 from rest_framework import serializers
 from decimal import Decimal
 from django.utils import timezone
@@ -410,10 +411,45 @@ class ClassImageSerializer(serializers.ModelSerializer):
         return ClassImage.objects.create(**validated_data)
 
 class ClassesMainSerializer(serializers.ModelSerializer):
-    options = ClassOptionSerializer(many=True, read_only=True)
+    options = ClassOptionSerializer(many=True, read_only=True)  # Add this back
     images = ClassImageSerializer(many=True, read_only=True)
-    business_name = serializers.CharField(read_only=True) 
+    business_name = serializers.CharField(read_only=True)
+    business_image = serializers.SerializerMethodField()
+    coordinates = serializers.SerializerMethodField()
+    average_rating = serializers.FloatField(read_only=True)
+    review_count = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = ClassesMain
-        fields = '__all__'
+        fields = [
+            'classId', 'businessId', 'title', 'description',
+            'features', 'category', 'subcategory', 'coordinates',
+            'saltLocation', 'studentContactEmail', 'studentContactPhone',
+            'createdAt', 'updatedAt', 'images', 'business_name',
+            'business_image', 'options', 'average_rating',
+            'review_count'
+        ]
+
+    def get_business_image(self, obj):
+        if obj.businessId and obj.businessId.businessImage:
+            return obj.businessId.businessImage.url
+        return None
+
+    def get_coordinates(self, obj):
+        if not obj.coordinates:
+            return None
+            
+        try:
+            lat, lng = map(float, obj.coordinates.split(','))
+            
+            if obj.saltLocation:
+                # Salt coordinates by a small random amount (approximately 100-200 meters)
+                # 0.001 degree is approximately 111 meters
+                lat_salt = uniform(-0.0005, 0.0005)
+                lng_salt = uniform(-0.0005, 0.0005)
+                lat += lat_salt
+                lng += lng_salt
+                
+            return f"{lat:.8f},{lng:.8f}"
+        except:
+            return None

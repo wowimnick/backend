@@ -556,6 +556,9 @@ class BookingViewSet(viewsets.ModelViewSet):
         ).order_by('-bookings')
     
     ################################################################################################
+    # Student booking views
+    ################################################################################################
+    
     @action(detail=False, methods=['get'])
     def my_bookings(self, request):
         """Get the current user's bookings"""
@@ -565,7 +568,8 @@ class BookingViewSet(viewsets.ModelViewSet):
             user=request.user,
             status=status_filter
         ).select_related(
-            'schedule_instance__schedule__option__classId__businessId'
+            'schedule_instance__schedule__option__classId__businessId',
+            'review'  # Add this to efficiently load review status
         ).prefetch_related(
             'schedule_instance__schedule__option__classId__images'
         ).order_by('schedule_instance__date', 'schedule_instance__time')

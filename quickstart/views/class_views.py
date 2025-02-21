@@ -8,7 +8,7 @@ from rest_framework.permissions import BasePermission, IsAuthenticated, AllowAny
 from rest_framework.request import Request
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django.db import transaction
-from django.db.models import Exists, OuterRef, Prefetch, Case, Sum, When, IntegerField, Q, Subquery, Count, F
+from django.db.models import Exists, OuterRef, Prefetch, Case, Sum, When, IntegerField, Q, Subquery, Count, F, Avg
 from django.db.models.functions import Coalesce
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.decorators import api_view, permission_classes
@@ -36,6 +36,7 @@ from ..serializers import (
 
 from ..utils.permissions import check_user_role, BaseUserDataPermission
 from .utils import haversine_distance
+from quickstart import models
 
 logger = logging.getLogger(__name__)
     
@@ -240,6 +241,26 @@ class ClassViewSet(viewsets.ModelViewSet):
             .values('count')[:1]
         )
 
+        # Calculate average rating for each class
+        average_rating_subquery = Subquery(
+            Reviews.objects.filter(
+                classId=OuterRef('pk')
+            )
+            .values('classId')
+            .annotate(avg_rating=Avg('rating'))
+            .values('avg_rating')[:1]
+        )
+
+        # Calculate total reviews for each class
+        review_count_subquery = Subquery(
+            Reviews.objects.filter(
+                classId=OuterRef('pk')
+            )
+            .values('classId')
+            .annotate(count=Count('reviewId'))
+            .values('count')[:1]
+        )
+
         # Add all necessary prefetches and annotations
         queryset = queryset.select_related('businessId').prefetch_related(
             # Prefetch options with annotations
@@ -290,6 +311,9 @@ class ClassViewSet(viewsets.ModelViewSet):
                 'options',
                 filter=Q(options__active=True)
             ),
+            # Add review statistics
+            average_rating=Coalesce(average_rating_subquery, 0.0),
+            review_count=Coalesce(review_count_subquery, 0),
             # Add business name annotation
             business_name=F('businessId__businessName')
         )
@@ -313,12 +337,12 @@ class ClassViewSet(viewsets.ModelViewSet):
                 )
             )
         )
-
+    
     @silk_profile(name='ClassViewSet_search')
     @action(detail=False, methods=['get'])
     def search(self, request):
         """
-        Optimized search endpoint that returns minimal data needed for search results
+        Optimized search endpoint that returns search results using the main serializer
         """
         try:
             # Get search parameters
@@ -327,22 +351,8 @@ class ClassViewSet(viewsets.ModelViewSet):
             radius = float(request.query_params.get('radius', 100))
             location = request.query_params.get('location')
             
-            # Define base queryset
-            queryset = ClassesMain.objects.select_related(
-                'businessId'
-            ).prefetch_related(
-                'images',
-                Prefetch(
-                    'options',
-                    queryset=ClassOption.objects.filter(active=True),
-                    to_attr='active_options'
-                )
-            ).only(
-                'classId', 'title', 'location', 'coordinates',
-                'category', 'subcategory', 'studentContactEmail', 
-                'studentContactPhone', 'businessId__businessName',
-                'businessId__totalReviews'
-            )
+            # Use the same optimized queryset from get_queryset()
+            queryset = self.get_queryset()
 
             # Apply location filters if provided
             if location:
@@ -357,44 +367,13 @@ class ClassViewSet(viewsets.ModelViewSet):
                     )
                 queryset = queryset.filter(location_filter)
 
-            # Process results
-            serialized_data = []
-            for cls in queryset:
-                class_data = {
-                    'classId': cls.classId,
-                    'title': cls.title,
-                    'location': cls.location,
-                    'coordinates': cls.coordinates,
-                    'category': cls.category,
-                    'subcategory': cls.subcategory,
-                    'rating': None,
-                    'totalReviews': cls.businessId.totalReviews if cls.businessId else 0,
-                    'image': None,
-                    'priceRange': {
-                        'min': None,
-                        'max': None
-                    }
-                }
-
-                # Get first image if exists
-                images = list(cls.images.all())
-                if images:
-                    class_data['image'] = images[0].image.url
-
-                # Get price range from active options
-                active_options = getattr(cls, 'active_options', [])
-                if active_options:
-                    prices = [option.price for option in active_options if option.price is not None]
-                    if prices:
-                        class_data['priceRange']['min'] = min(prices)
-                        class_data['priceRange']['max'] = max(prices)
-
-                serialized_data.append(class_data)
-
-            return Response({
-                'results': serialized_data
-            })
+            # Use the main serializer
+            serializer = ClassesMainSerializer(queryset, many=True)
             
+            return Response({
+                'results': serializer.data
+            })
+                
         except Exception as e:
             logger.error(f"Search error: {str(e)}", exc_info=True)
             return Response({"error": str(e)}, status=500)

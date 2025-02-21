@@ -192,6 +192,9 @@ class StudentBookingSerializer(serializers.ModelSerializer):
     price = serializers.DecimalField(source='amount_paid', max_digits=10, decimal_places=2)
     class_image = serializers.SerializerMethodField()
     booking_id = serializers.IntegerField(source='id')
+    has_review = serializers.SerializerMethodField()
+    enrollment_type = serializers.CharField()
+    session_info = serializers.SerializerMethodField()
 
     class Meta:
         model = Booking
@@ -199,8 +202,24 @@ class StudentBookingSerializer(serializers.ModelSerializer):
             'booking_id',
             'class_name', 'option_name', 'date', 'time',
             'coordinates', 'business_name', 'price', 'status',
-            'class_image'
+            'class_image', 'has_review', 'session_info', 'enrollment_type'
         ]
+
+    def get_session_info(self, obj):
+        if obj.enrollment_type == 'Full Course':
+            # Get all bookings in the same group
+            related_bookings = Booking.objects.filter(
+                booking_group_id=obj.booking_group_id
+            ).order_by('schedule_instance__date')
+            
+            total_sessions = related_bookings.count()
+            current_session = list(related_bookings).index(obj) + 1
+            
+            return {
+                'current_session': current_session,
+                'total_sessions': total_sessions
+            }
+        return None
 
     def get_class_image(self, obj):
         first_image = ClassImage.objects.filter(
@@ -209,6 +228,9 @@ class StudentBookingSerializer(serializers.ModelSerializer):
         if first_image:
             return first_image.image.url
         return None
+
+    def get_has_review(self, obj):
+        return hasattr(obj, 'review')
 
 # Booking detail serializer for booking details, has more information
 class BookingDetailSerializer(serializers.ModelSerializer):

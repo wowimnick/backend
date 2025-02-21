@@ -56,6 +56,7 @@ INSTALLED_APPS = [
     'quickstart',
     'storages',
     'silk',
+    'channels',
     'allauth',
     'allauth.account',
     'allauth.socialaccount',
@@ -138,7 +139,7 @@ SESSION_COOKIE_SAMESITE = 'Lax'  # CSRF protection
 CSRF_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_HTTPONLY = True
 CSRF_COOKIE_SAMESITE = 'Lax'
-CSRF_TRUSTED_ORIGINS = ['https://classeasily.com', 'http://localhost:5173']
+CSRF_TRUSTED_ORIGINS = ['https://classeasily.com', 'http://localhost:5173', 'http://localhost:8000']
 
 ACCOUNT_EMAIL_VERIFICATION = 'mandatory'
 EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
@@ -203,7 +204,26 @@ MIDDLEWARE = [
     'quickstart.middleware.JWTCookieMiddleware'
 ]
 
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels.layers.InMemoryChannelLayer"
+    }
+}
+
+
+# Silk configuration
+SILKY_PYTHON_PROFILER_RESULT_PATH = os.path.join(BASE_DIR, 'quickstart/monitoring/profiler')
+SILKY_PYTHON_PROFILER = True
+SILKY_PYTHON_PROFILER_BINARY = True
+SILKY_AUTHENTICATION = False  # Requires users to login
+SILKY_AUTHORISATION = False  # Only allows admin users
+SILKY_META = True
+SILKY_INTERCEPT_PERCENT = 100  # Log all requests
+SILKY_MAX_RECORDED_REQUESTS = 10000
+SILKY_MAX_RECORDED_REQUESTS_CHECK_PERCENT = 10
+
 ROOT_URLCONF = 'CEBackend.urls'
+ASGI_APPLICATION = 'CEBackend.asgi.application'
 
 TEMPLATES = [
     {
@@ -224,6 +244,7 @@ TEMPLATES = [
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:5173',
     'https://classeasily.com',
+    'http://localhost:8000',
 ]
 
 CORS_ALLOW_CREDENTIALS = True
