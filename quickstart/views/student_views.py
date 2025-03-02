@@ -25,26 +25,19 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
                 Q(owner=user) | Q(managers=user)
             ).first()
 
-        # Prepare subqueries for bookings
-        booking_counts = Booking.objects.filter(
-            user=OuterRef('pk')
-        ).values('user').annotate(
-            confirmed_count=Count('id', filter=Q(status='confirmed')),
-            completed_count=Count('id', filter=Q(status='completed')),
-            finished_count=Count('id', filter=Q(status__in=['completed', 'cancelled']))
-        ).values(
-            'confirmed_count',
-            'completed_count',
-            'finished_count'
-        )
+        # Base queryset with efficient joins
+        queryset = CustomUser.objects.select_related('role')
         
-        # Base queryset with efficient joins and annotations
-        queryset = CustomUser.objects.select_related(
-            'role'
-        )
-        
+        # Apply business filter first if applicable to reduce the dataset
         if business:
-            # Prefetch only notes for this business
+            queryset = queryset.filter(
+                bookings__schedule_instance__schedule__option__classId__businessId=business
+            ).distinct()
+        else:
+            queryset = queryset.filter(userId=user.pk)
+        
+        # Prefetch notes if business context exists
+        if business:
             queryset = queryset.prefetch_related(
                 Prefetch(
                     'business_notes',
@@ -55,6 +48,7 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
                 )
             )
         
+        # Efficient prefetch of bookings with all related data
         queryset = queryset.prefetch_related(
             Prefetch(
                 'bookings',
@@ -66,38 +60,37 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
                 ).order_by('-booking_date'),
                 to_attr='prefetched_bookings'
             )
-        ).annotate(
-            active_bookings_count=Coalesce(
-                Subquery(booking_counts.values('confirmed_count')[:1]),
-                Value(0)
+        )
+        
+        # Use a more efficient approach for booking metrics using conditional aggregation
+        queryset = queryset.annotate(
+            active_bookings_count=Count(
+                'bookings',
+                filter=Q(bookings__status='confirmed')
             ),
-            completed_bookings_count=Coalesce(
-                Subquery(booking_counts.values('completed_count')[:1]),
-                Value(0)
+            completed_bookings_count=Count(
+                'bookings',
+                filter=Q(bookings__status='completed')
             ),
-            total_finished_bookings=Coalesce(
-                Subquery(booking_counts.values('finished_count')[:1]),
-                Value(0)
-            ),
-            attendance_rate=ExpressionWrapper(
-                Case(
-                    When(
-                        total_finished_bookings__gt=0,
-                        then=100.0 * F('completed_bookings_count') / F('total_finished_bookings')
-                    ),
-                    default=Value(0.0)
+            total_finished_bookings=Count(
+                'bookings',
+                filter=Q(bookings__status__in=['completed', 'cancelled'])
+            )
+        )
+        
+
+        queryset = queryset.annotate(
+            attendance_rate=Case(
+                When(
+                    total_finished_bookings__gt=0,
+                    then=100.0 * F('completed_bookings_count') / F('total_finished_bookings')
                 ),
+                default=Value(0.0),
                 output_field=DecimalField(max_digits=5, decimal_places=2)
             )
         )
 
-        # Filter users based on business context
-        if business:
-            return queryset.filter(
-                bookings__schedule_instance__schedule__option__classId__businessId=business
-            ).distinct()
-        
-        return queryset.filter(userId=user.pk)
+        return queryset
     
     @action(detail=True, methods=['post'])
     def add_note(self, request, pk=None):

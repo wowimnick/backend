@@ -47,6 +47,13 @@ from .review_serializers import (
     ReviewSerializer
 )
 
+from .support_chat_serializer import (
+    ChatMessageSerializer, 
+    ChatRequestSerializer,
+    ChatSessionSerializer,
+    SupportTicketSerializer
+)
+
 __all__ = [
     # Auth Serializers
     'CustomLoginSerializer',
@@ -88,5 +95,11 @@ __all__ = [
     'RevenueTimeSeriesSerializer',
 
     # Review Serializers
-    'ReviewSubmissionSerializer'
+    'ReviewSubmissionSerializer',
+
+    # Chat Serializers
+    'ChatMessageSerializer',
+    'ChatRequestSerializer',
+    'ChatSessionSerializer',
+    'SupportTicketSerializer'
 ]

@@ -66,6 +66,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             'bio': self.user.bio,
             'phone_number': self.user.phone_number,
             'avatar_url': self.user.get_avatar_url(),
+            'role': self.user.role.name,
             'favorited': self.user.favorited.all().values_list('classId', flat=True) if self.user and hasattr(self.user, 'favorited') else []
         }
         data['role'] = self.user.role.name if self.user.role else None

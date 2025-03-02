@@ -56,6 +56,10 @@ from .review_views import (
     ClassReviews,
 )
 
+from .support_chat_views import (
+    ChatMessageView,
+)
+
 from .utils import (
     haversine_distance,
 )
@@ -109,6 +113,8 @@ __all__ = [
     # Review Views
     'ReviewSubmission',
     'ClassReviews',
+
+    'ChatMessageView',
 
     # Utils
     'haversine_distance',

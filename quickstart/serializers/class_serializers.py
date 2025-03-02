@@ -91,6 +91,7 @@ class ClassCreateSerializer(serializers.ModelSerializer):
         required=False
     )
     options = serializers.CharField(write_only=True)
+    active = serializers.BooleanField(default=True)
 
     class Meta:
         model = ClassesMain
@@ -99,7 +100,7 @@ class ClassCreateSerializer(serializers.ModelSerializer):
             'location', 'coordinates', 'saltLocation',
             'studentContactEmail', 'studentContactPhone',
             'adminContactEmail', 'adminContactPhone',
-            'images', 'options'
+            'images', 'options', 'active'
         ]
 
     def validate(self, data):
@@ -150,6 +151,9 @@ class ClassCreateSerializer(serializers.ModelSerializer):
                 for index, option_data in enumerate(options_data):
                     option_image = self.context['request'].FILES.get(f'option_{index}_image')
                     
+                    if 'active' in option_data:
+                        option_data.pop('active')
+                        
                     ClassOption.objects.create(
                         classId=class_instance,
                         image=option_image,
@@ -356,7 +360,7 @@ class ClassOptionSerializer(serializers.ModelSerializer):
             'optionId', 'title', 'description', 
             'booking_type', 'level',
             'equipment', 'tags',
-            'cancellationPolicy', 'active', 'schedules',
+            'cancellationPolicy', 'schedules',
             'image', 'image_url', 'total_students'
         ]
     
@@ -411,13 +415,14 @@ class ClassImageSerializer(serializers.ModelSerializer):
         return ClassImage.objects.create(**validated_data)
 
 class ClassesMainSerializer(serializers.ModelSerializer):
-    options = ClassOptionSerializer(many=True, read_only=True)  # Add this back
+    options = ClassOptionSerializer(many=True, read_only=True)
     images = ClassImageSerializer(many=True, read_only=True)
     business_name = serializers.CharField(read_only=True)
     business_image = serializers.SerializerMethodField()
     coordinates = serializers.SerializerMethodField()
     average_rating = serializers.FloatField(read_only=True)
     review_count = serializers.IntegerField(read_only=True)
+    active = serializers.BooleanField(default=True)
 
     class Meta:
         model = ClassesMain
@@ -427,7 +432,7 @@ class ClassesMainSerializer(serializers.ModelSerializer):
             'saltLocation', 'studentContactEmail', 'studentContactPhone',
             'createdAt', 'updatedAt', 'images', 'business_name',
             'business_image', 'options', 'average_rating',
-            'review_count'
+            'review_count', 'active'
         ]
 
     def get_business_image(self, obj):

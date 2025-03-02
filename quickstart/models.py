@@ -1,6 +1,7 @@
 from datetime import timedelta
 import datetime
 import json
+from django.conf import settings
 from django.db import models
 from django.contrib.auth.models import AbstractUser, Permission
 from django.contrib.contenttypes.models import ContentType
@@ -10,11 +11,173 @@ from django.core.exceptions import ValidationError
 from django.db.models import Count, Case, When, DecimalField
 from decimal import Decimal
 from django.utils import timezone
+import jsonfield
 import uuid
+
+class PermissionGroup(models.Model):
+    """Group related permissions together for better organization in the UI"""
+    name = models.CharField(max_length=100)
+    description = models.TextField(blank=True)
+    sort_order = models.IntegerField(default=0)
+    
+    def __str__(self):
+        return self.name
+    
+    class Meta:
+        ordering = ['sort_order', 'name']
+        db_table = 'permission_groups'
+
+class EnhancedPermission(models.Model):
+    """Extends the Django Permission system with additional metadata"""
+    permission = models.OneToOneField(Permission, on_delete=models.CASCADE, related_name='enhanced')
+    group = models.ForeignKey(PermissionGroup, on_delete=models.SET_NULL, null=True, related_name='permissions')
+    description = models.TextField(blank=True)
+    is_sensitive = models.BooleanField(default=False)
+    requires_mfa = models.BooleanField(default=False)
+    
+    def __str__(self):
+        return f"{self.permission.name} ({self.group.name if self.group else 'Ungrouped'})"
+    
+    class Meta:
+        db_table = 'enhanced_permissions'
+
+class VerificationRequest(models.Model):
+    """Stores verification requests for business owners and instructors"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='verification_requests')
+    business = models.ForeignKey('BusinessInfo', on_delete=models.CASCADE, related_name='verification_requests', null=True, blank=True)
+    
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected')
+    ]
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    
+    submitted_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    reviewed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, 
+                                    null=True, blank=True, related_name='reviewed_verifications')
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True)
+    notes = models.TextField(blank=True)
+    
+    def __str__(self):
+        return f"Verification Request for {self.user.email} ({self.status})"
+    
+    class Meta:
+        db_table = 'verification_requests'
+        ordering = ['-submitted_at']
+
+class VerificationDocument(models.Model):
+    """Stores documents submitted as part of a verification request"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    verification_request = models.ForeignKey(VerificationRequest, on_delete=models.CASCADE, related_name='documents')
+    
+    DOCUMENT_TYPES = [
+        ('business_license', 'Business License'),
+        ('id_verification', 'ID Verification'),
+        ('certification', 'Professional Certification'),
+        ('insurance', 'Insurance Documentation'),
+        ('address_proof', 'Proof of Address'),
+        ('other', 'Other Document')
+    ]
+    document_type = models.CharField(max_length=30, choices=DOCUMENT_TYPES)
+    
+    file = models.FileField(upload_to='verification_documents/')
+    filename = models.CharField(max_length=255)
+    file_type = models.CharField(max_length=50)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+    
+    def __str__(self):
+        return f"{self.get_document_type_display()} for {self.verification_request.user.email}"
+    
+    class Meta:
+        db_table = 'verification_documents'
+
+class AuditLog(models.Model):
+    """Comprehensive audit log for user actions"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    # Who performed the action
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        related_name='audit_logs'
+    )
+    user_email = models.EmailField()  # Store separately in case user is deleted
+    
+    # What was done
+    ACTION_CHOICES = [
+        ('login', 'Login'),
+        ('logout', 'Logout'),
+        ('user_create', 'User Created'),
+        ('user_update', 'User Updated'),
+        ('user_delete', 'User Deleted'),
+        ('role_change', 'Role Changed'),
+        ('permission_change', 'Permission Changed'),
+        ('account_lock', 'Account Locked'),
+        ('account_unlock', 'Account Unlocked'),
+        ('password_reset', 'Password Reset'),
+        ('failed_login', 'Failed Login'),
+        ('verification_submit', 'Verification Submitted'),
+        ('verification_approve', 'Verification Approved'),
+        ('verification_reject', 'Verification Rejected'),
+        ('system_setting_change', 'System Setting Changed'),
+        ('data_export', 'Data Exported')
+    ]
+    action = models.CharField(max_length=30, choices=ACTION_CHOICES)
+    
+    # Details of the action
+    timestamp = models.DateTimeField(auto_now_add=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(blank=True)
+    details = models.TextField(blank=True)
+    
+    # Target of the action (if applicable)
+    target_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='targeted_logs'
+    )
+    target_model = models.CharField(max_length=100, blank=True)
+    target_id = models.CharField(max_length=100, blank=True)
+    
+    # Additional metadata
+    metadata = jsonfield.JSONField(default=dict, blank=True)
+    
+    def __str__(self):
+        return f"{self.get_action_display()} by {self.user_email} at {self.timestamp}"
+    
+    class Meta:
+        db_table = 'audit_logs'
+        ordering = ['-timestamp']
+        indexes = [
+            models.Index(fields=['user']),
+            models.Index(fields=['action']),
+            models.Index(fields=['timestamp']),
+            models.Index(fields=['target_user']),
+            # Add these new indexes for better performance
+            models.Index(fields=['user_email']),
+            models.Index(fields=['ip_address']),
+            # Compound index for common filter combinations
+            models.Index(fields=['action', 'timestamp']),
+            models.Index(fields=['user', 'action']),
+        ]
 
 class Role(models.Model):
     name = models.CharField(max_length=50, unique=True)
     permissions = models.ManyToManyField(Permission, blank=True)
+    is_system = models.BooleanField(default=False, help_text="System roles cannot be deleted")
+    is_default = models.BooleanField(default=False, help_text="Default role for new users")
+    description = models.TextField(blank=True)
+    color = models.CharField(max_length=20, default="#64748b", help_text="HEX color code for this role")
+    hierarchy_level = models.IntegerField(default=0, help_text="Higher number = higher privileges")
+    created_at = models.DateTimeField(auto_now_add=True, null=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True)
 
     def __str__(self):
         return self.name
@@ -240,6 +403,7 @@ class ClassesMain(models.Model):
     features = models.JSONField(default=list)  # Store as JSON array
     category = models.CharField(max_length=50)
     subcategory = models.CharField(max_length=50, null=True, blank=True)
+    active = models.BooleanField(default=True)
     
     # Location Fields
     location = models.CharField(max_length=255)
@@ -271,8 +435,6 @@ class Favorites(models.Model):
 
     class Meta:
         db_table = 'favorites'
-
-
 
 class ClassOption(models.Model):
     optionId = models.AutoField(primary_key=True)
@@ -332,7 +494,6 @@ class ClassOption(models.Model):
             ('flexible', 'Flexible')
         ]
     )
-    active = models.BooleanField(default=True)
     createdAt = models.DateTimeField(auto_now_add=True)
     updatedAt = models.DateTimeField(auto_now=True)
 
@@ -344,7 +505,6 @@ class ClassOption(models.Model):
     class Meta:
         db_table = 'class_options'
         indexes = [
-            models.Index(fields=['active', 'classId']),
             models.Index(fields=['classId'])
         ]
 
@@ -631,3 +791,67 @@ class Reviews(models.Model):
             models.Index(fields=['classId', 'classOption']),
             models.Index(fields=['booking']),
         ]
+
+class ChatSession(models.Model):
+    userId = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='chat_session')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'chat_sessions'
+
+class ChatMessage(models.Model):
+    session = models.ForeignKey(ChatSession, on_delete=models.CASCADE)
+    content = models.TextField()
+    is_user = models.BooleanField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'chat_messages'
+        ordering = ['created_at']
+
+class SupportTicket(models.Model):
+    ticket_id = models.AutoField(primary_key=True)
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='support_tickets')
+    chat_session = models.ForeignKey(ChatSession, on_delete=models.SET_NULL, null=True, related_name='tickets')
+    
+    # Ticket categorization
+    category = models.CharField(max_length=50, choices=[
+        ('account', 'Account Issues'),
+        ('booking', 'Booking Problems'),
+        ('payment', 'Payment Issues'),
+        ('technical', 'Technical Support'),
+        ('feature', 'Feature Request'),
+        ('other', 'Other')
+    ])
+    
+    subject = models.CharField(max_length=100)
+    description = models.TextField()
+    
+    # Status tracking
+    status = models.CharField(max_length=20, choices=[
+        ('open', 'Open'),
+        ('in_progress', 'In Progress'),
+        ('resolved', 'Resolved'),
+        ('closed', 'Closed')
+    ], default='open')
+    
+    priority = models.CharField(max_length=20, choices=[
+        ('low', 'Low'),
+        ('medium', 'Medium'),
+        ('high', 'High'),
+        ('urgent', 'Urgent')
+    ], default='medium')
+    
+    # Timestamps and management
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    assigned_to = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, related_name='assigned_tickets')
+    resolution_notes = models.TextField(blank=True)
+    
+    class Meta:
+        db_table = 'support_tickets'
+        ordering = ['-created_at']
+        
+    def __str__(self):
+        return f"Ticket #{self.ticket_id}: {self.subject}"

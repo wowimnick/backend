@@ -309,7 +309,6 @@ class ClassViewSet(viewsets.ModelViewSet):
             ),
             active_options_count=Count(
                 'options',
-                filter=Q(options__active=True)
             ),
             # Add review statistics
             average_rating=Coalesce(average_rating_subquery, 0.0),
@@ -318,7 +317,6 @@ class ClassViewSet(viewsets.ModelViewSet):
             business_name=F('businessId__businessName')
         )
 
-        # Apply business context filtering if needed
         if self.is_business_context:
             if check_user_role(self.request.user, ['Admin', 'Super Admin']):
                 return queryset
@@ -328,21 +326,14 @@ class ClassViewSet(viewsets.ModelViewSet):
                 Q(businessId__managers=self.request.user)
             ).distinct()
 
-        # Public context - show only active classes
-        return queryset.filter(
-            Exists(
-                ClassOption.objects.filter(
-                    classId=OuterRef('pk'),
-                    active=True
-                )
-            )
-        )
-    
+        # Public context - show only active classes directly
+        return queryset.filter(active=True)
+        
     @silk_profile(name='ClassViewSet_search')
     @action(detail=False, methods=['get'])
     def search(self, request):
         """
-        Optimized search endpoint that returns search results using the main serializer
+        Optimized search endpoint that returns filtered search results
         """
         try:
             # Get search parameters
@@ -351,7 +342,15 @@ class ClassViewSet(viewsets.ModelViewSet):
             radius = float(request.query_params.get('radius', 100))
             location = request.query_params.get('location')
             
-            # Use the same optimized queryset from get_queryset()
+            # Get filter parameters
+            price_min = request.query_params.get('price_min')
+            price_max = request.query_params.get('price_max')
+            distance_max = request.query_params.get('distance_max')
+            time_preferences = request.query_params.getlist('time_preference')
+            days = request.query_params.getlist('days')
+            class_type = request.query_params.get('class_type')
+            
+            # Start with base queryset
             queryset = self.get_queryset()
 
             # Apply location filters if provided
@@ -367,9 +366,63 @@ class ClassViewSet(viewsets.ModelViewSet):
                     )
                 queryset = queryset.filter(location_filter)
 
-            # Use the main serializer
+            # Apply price filter
+            if price_max:
+                queryset = queryset.filter(
+                    options__schedules__price__lte=price_max
+                )
+
+            # Apply distance filter if coordinates provided
+            if lat and lng and distance_max:
+                # Implementation depends on your distance calculation method
+                pass
+
+            # Apply time preference filter
+            if time_preferences:
+                time_ranges = {
+                    'Morning (6am-12pm)': (time(6, 0), time(12, 0)),
+                    'Afternoon (12pm-5pm)': (time(12, 0), time(17, 0)),
+                    'Evening (5pm-10pm)': (time(17, 0), time(22, 0))
+                }
+                
+                time_filter = Q()
+                for pref in time_preferences:
+                    if pref in time_ranges:
+                        start, end = time_ranges[pref]
+                        time_filter |= Q(
+                            options__schedules__time__gte=start,
+                            options__schedules__time__lte=end
+                        )
+                
+                if time_filter:
+                    queryset = queryset.filter(time_filter)
+
+            # Apply days filter
+            if days:
+                day_map = {
+                    'Monday': 'Mon',
+                    'Tuesday': 'Tue',
+                    'Wednesday': 'Wed',
+                    'Thursday': 'Thu',
+                    'Friday': 'Fri',
+                    'Saturday': 'Sat',
+                    'Sunday': 'Sun'
+                }
+                short_days = [day_map[day] for day in days if day in day_map]
+                if short_days:
+                    queryset = queryset.filter(options__schedules__day__in=short_days)
+
+            # Apply class type filter
+            if class_type:
+                if class_type == 'course':
+                    queryset = queryset.filter(options__booking_type='Full Course')
+                else:
+                    queryset = queryset.filter(options__booking_type='Single Session')
+
+            # Ensure distinct results
+            queryset = queryset.distinct()
+
             serializer = ClassesMainSerializer(queryset, many=True)
-            
             return Response({
                 'results': serializer.data
             })
@@ -445,18 +498,22 @@ class ClassViewSet(viewsets.ModelViewSet):
             )
         
     @action(detail=True, methods=['post'])
-    def toggle_option_active(self, request, pk=None):
-        """Toggle option active status"""
+    def toggle_class_active(self, request, pk=None):
+        """Toggle class active status directly"""
         self.is_business_context = True
-        option_id = request.data.get('option_id')
-        option = get_object_or_404(ClassOption, optionId=option_id, classId_id=pk)
+        class_instance = self.get_object()
         
-        option.active = not option.active
-        option.save()
+        # Get active status from request or toggle current value
+        active = request.data.get('active')
+        if active is None:
+            active = not class_instance.active
+        
+        class_instance.active = active
+        class_instance.save()
         
         return Response({
-            'active': option.active,
-            'optionId': option.optionId
+            'active': class_instance.active,
+            'classId': class_instance.classId
         })
     
     def create(self, request, *args, **kwargs):
