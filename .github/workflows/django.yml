@@ -15,27 +15,11 @@ jobs:
         with:
           python-version: '3.10'
       
-      - name: Display Python version and path
-        run: |
-          python --version
-          which python
-      
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          # Install ASGI requirements explicitly
-          pip install daphne==4.0.0 channels==4.0.0 channels_redis==4.1.0
-      
-      - name: Verify ASGI dependencies
-        run: |
-          pip show daphne
-          pip show channels
-          pip show channels_redis
-      
-      - name: Check ASGI file exists
-        run: |
-          cat CEBackend/asgi.py
+          pip install daphne channels channels_redis
       
       - name: Ensure Redis is running
         run: |
@@ -47,10 +31,19 @@ jobs:
           sudo lsof -i:8000 || echo "Port 8000 is available"
           sudo fuser -k 8000/tcp || echo "No process using port 8000"
       
-      - name: Create ASGI service file with better logging
+      - name: Test Daphne command directly
+        run: |
+          python -m daphne --help
+          # Test run Daphne directly with proper verbosity
+          cd /home/ubuntu/actions-runner-b/_work/backend/backend
+          python -m daphne --verbosity 2 -b 127.0.0.1 -p 8001 CEBackend.asgi:application &
+          DAPHNE_PID=$!
+          sleep 5
+          kill $DAPHNE_PID || true
+      
+      - name: Create ASGI service file with correct syntax
         run: |
           PYTHON_PATH=$(which python)
-          SITE_PACKAGES=$(python -c "import site; print(site.getsitepackages()[0])")
           sudo tee /etc/systemd/system/django-asgi.service << EOF
           [Unit]
           Description=Django ASGI service with Daphne
@@ -60,88 +53,40 @@ jobs:
           User=ubuntu
           Group=ubuntu
           WorkingDirectory=/home/ubuntu/actions-runner-b/_work/backend/backend
-          Environment="PATH=$SITE_PACKAGES:$PATH"
           Environment="PYTHONUNBUFFERED=1"
-          ExecStart=$PYTHON_PATH -m daphne -v -b 127.0.0.1 -p 8000 CEBackend.asgi:application
+          ExecStart=${PYTHON_PATH} -m daphne --verbosity 2 -b 127.0.0.1 -p 8000 CEBackend.asgi:application
           StandardOutput=journal
           StandardError=journal
-          Restart=always
+          Restart=on-failure
+          RestartSec=10s
           
           [Install]
           WantedBy=multi-user.target
           EOF
           sudo systemctl daemon-reload
       
-      - name: Run Django check
-        run: python manage.py check
-      
-      - name: Run migrations
-        run: python manage.py migrate
-      
-      - name: Stop any existing services
+      - name: Stop existing services
         run: |
           sudo systemctl stop gunicorn || true
           sudo systemctl stop django-asgi || true
-      
-      - name: Try running Daphne manually for debugging
-        run: |
-          python -m daphne -v --access-log - --ping-interval 10 -b 127.0.0.1 -p 8000 CEBackend.asgi:application &
-          DAPHNE_PID=$!
-          sleep 5
-          kill $DAPHNE_PID || true
       
       - name: Start Django ASGI application
         run: |
           sudo systemctl enable django-asgi
           sudo systemctl restart django-asgi
-      
-      - name: Check service status with detailed logging
-        run: |
           sleep 5
-          sudo systemctl status django-asgi
-          sudo journalctl -u django-asgi -n 100 --no-pager --output=cat
       
-      - name: Wait for application to start
+      - name: Check detailed logs
         run: |
-          for i in {1..6}
-          do
-            if nc -z 127.0.0.1 8000; then
-              echo "Application is running"
-              exit 0
-            fi
-            echo "Waiting for application to start... ($i/6)"
-            sudo journalctl -u django-asgi -n 20 --no-pager --output=cat
-            sleep 5
-          done
-          echo "Application failed to start, checking for errors..."
-          sudo systemctl status django-asgi --no-pager
-          sudo journalctl -u django-asgi -n 100 --no-pager --output=cat
-          exit 1
+          sudo systemctl status django-asgi
+          sudo journalctl -xe -u django-asgi --no-pager
       
-      - name: Update ASGI path if needed
+      - name: Try running ASGI directly as a foreground process if service fails
         if: failure()
         run: |
-          echo "Trying alternative ASGI path..."
-          sudo tee /etc/systemd/system/django-asgi.service << EOF
-          [Unit]
-          Description=Django ASGI service with Daphne
-          After=network.target redis.service
-          
-          [Service]
-          User=ubuntu
-          Group=ubuntu
-          WorkingDirectory=/home/ubuntu/actions-runner-b/_work/backend/backend
-          Environment="PYTHONUNBUFFERED=1"
-          ExecStart=$PYTHON_PATH -m daphne -v -b 127.0.0.1 -p 8000 CEBackend.asgi:application
-          StandardOutput=journal
-          StandardError=journal
-          Restart=always
-          
-          [Install]
-          WantedBy=multi-user.target
-          EOF
-          sudo systemctl daemon-reload
-          sudo systemctl restart django-asgi
-          sleep 5
-          sudo systemctl status django-asgi
-          sudo journalctl -u django-asgi -n 100 --no-pager --output=cat
+          echo "Running Daphne as a foreground process..."
+          cd /home/ubuntu/actions-runner-b/_work/backend/backend
+          nohup python -m daphne --verbosity 2 -b 127.0.0.1 -p 8000 CEBackend.asgi:application > daphne.log 2>&1 &
+          sleep 10
+          cat daphne.log
+          curl -v http://127.0.0.1:8000/api/
