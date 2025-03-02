@@ -1,4 +1,4 @@
-name: Django CI with WebSockets Support
+name: Fix Django App Config and Setup ASGI
 
 on:
   push:
@@ -15,33 +15,41 @@ jobs:
         with:
           python-version: '3.10'
       
+      - name: Fix QuickStart AppConfig
+        run: |
+          # Create or update apps.py in the quickstart app
+          mkdir -p quickstart
+          cat > quickstart/apps.py << 'EOF'
+          from django.apps import AppConfig
+          import os
+
+          class QuickstartConfig(AppConfig):
+              name = 'quickstart'
+              path = os.path.dirname(os.path.abspath(__file__))
+              default_auto_field = 'django.db.models.BigAutoField'
+          EOF
+          
+          # Make sure __init__.py exists
+          touch quickstart/__init__.py
+          
+          # Update INSTALLED_APPS in settings.py to use the AppConfig
+          sed -i "s/'quickstart',/'quickstart.apps.QuickstartConfig',/g" CEBackend/settings.py
+          
+          # Verify the change
+          grep -A1 -B1 'QuickstartConfig' CEBackend/settings.py
+      
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install daphne channels channels_redis
       
-      - name: Ensure Redis is running
+      - name: Stop existing services
         run: |
-          sudo systemctl status redis || sudo systemctl start redis
-          redis-cli ping
+          sudo systemctl stop gunicorn || true
+          sudo systemctl stop django-asgi || true
       
-      - name: Check for port conflicts
-        run: |
-          sudo lsof -i:8000 || echo "Port 8000 is available"
-          sudo fuser -k 8000/tcp || echo "No process using port 8000"
-      
-      - name: Test Daphne command directly
-        run: |
-          python -m daphne --help
-          # Test run Daphne directly with proper verbosity
-          cd /home/ubuntu/actions-runner-b/_work/backend/backend
-          python -m daphne --verbosity 2 -b 127.0.0.1 -p 8001 CEBackend.asgi:application &
-          DAPHNE_PID=$!
-          sleep 5
-          kill $DAPHNE_PID || true
-      
-      - name: Create ASGI service file with correct syntax
+      - name: Create ASGI service file
         run: |
           PYTHON_PATH=$(which python)
           sudo tee /etc/systemd/system/django-asgi.service << EOF
@@ -65,28 +73,53 @@ jobs:
           EOF
           sudo systemctl daemon-reload
       
-      - name: Stop existing services
+      - name: Test ASGI setup
         run: |
-          sudo systemctl stop gunicorn || true
-          sudo systemctl stop django-asgi || true
+          cd /home/ubuntu/actions-runner-b/_work/backend/backend
+          python -c "from django.apps import apps; print('QuickstartConfig in apps:', 'quickstart.apps.QuickstartConfig' in [app.name for app in apps.get_app_configs()])"
+          python -c "import os; from CEBackend.asgi import application; print('ASGI application imported successfully')"
       
       - name: Start Django ASGI application
         run: |
           sudo systemctl enable django-asgi
           sudo systemctl restart django-asgi
           sleep 5
-      
-      - name: Check detailed logs
-        run: |
           sudo systemctl status django-asgi
-          sudo journalctl -xe -u django-asgi --no-pager
       
-      - name: Try running ASGI directly as a foreground process if service fails
-        if: failure()
+      - name: Wait for application to start
         run: |
-          echo "Running Daphne as a foreground process..."
-          cd /home/ubuntu/actions-runner-b/_work/backend/backend
-          nohup python -m daphne --verbosity 2 -b 127.0.0.1 -p 8000 CEBackend.asgi:application > daphne.log 2>&1 &
-          sleep 10
-          cat daphne.log
-          curl -v http://127.0.0.1:8000/api/
+          for i in {1..12}
+          do
+            if nc -z 127.0.0.1 8000; then
+              echo "✅ Application is running successfully!"
+              break
+            fi
+            echo "Waiting for application to start... ($i/12)"
+            sleep 5
+          done
+          
+          if nc -z 127.0.0.1 8000; then
+            echo "✅ Application is running successfully!"
+          else
+            echo "❌ Application failed to start"
+            sudo journalctl -u django-asgi -n 50 --no-pager
+            exit 1
+          fi
+      
+      - name: Configure Nginx for WebSockets
+        run: |
+          sudo tee -a /etc/nginx/sites-available/default << 'EOF'
+          
+          # WebSocket configuration
+          location /ws/ {
+              proxy_pass http://127.0.0.1:8000;
+              proxy_http_version 1.1;
+              proxy_set_header Upgrade $http_upgrade;
+              proxy_set_header Connection "Upgrade";
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_read_timeout 86400;
+          }
+          EOF
+          
+          sudo nginx -t && sudo systemctl restart nginx
