@@ -9,7 +9,7 @@ from .auth_serializers import (
 from .business_serializers import (
     BusinessInfoSerializer,
     BusinessStatsSerializer,
-    BusinessRegistrationSerializer
+    BusinessRegistrationSerializer,
 )
 
 from .class_serializers import (

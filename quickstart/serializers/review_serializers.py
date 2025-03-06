@@ -40,6 +40,7 @@ class UserReviewSerializer(serializers.ModelSerializer):
 class ReviewSerializer(serializers.ModelSerializer):
     user = UserReviewSerializer(source='userId', read_only=True)
     image_url = serializers.SerializerMethodField()
+    booking_info = serializers.SerializerMethodField()
 
     class Meta:
         model = Reviews
@@ -49,10 +50,21 @@ class ReviewSerializer(serializers.ModelSerializer):
             'rating',
             'comment',
             'image_url',
-            'createdAt'
+            'createdAt',
+            'booking_info'
         ]
     
     def get_image_url(self, obj):
         if obj.image:
             return obj.image.url
+        return None
+        
+    def get_booking_info(self, obj):
+        """Return booking information if available"""
+        if obj.booking:
+            return {
+                'booking_id': obj.booking.id,
+                'booking_date': obj.booking.booking_date,
+                'status': obj.booking.status
+            }
         return None

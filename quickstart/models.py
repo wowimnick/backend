@@ -1,6 +1,5 @@
 from datetime import timedelta
-import datetime
-import json
+from django.db import transaction
 from django.conf import settings
 from django.db import models
 from django.contrib.auth.models import AbstractUser, Permission
@@ -64,6 +63,19 @@ class VerificationRequest(models.Model):
     
     def __str__(self):
         return f"Verification Request for {self.user.email} ({self.status})"
+    
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        # Sync with the business model if status changed
+        if self.business and hasattr(self, '_original_status') and self._original_status != self.status:
+            self.business.verificationStatus = self.status
+            self.business.save(update_fields=['verificationStatus'])
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Track the original status for change detection
+        if self.id:
+            self._original_status = self.status
     
     class Meta:
         db_table = 'verification_requests'
@@ -274,6 +286,7 @@ class BusinessInfo(models.Model):
     businessImage = models.ImageField(upload_to='business_images/', storage=S3Boto3Storage(), blank=True, null=True)
     openingTime = models.TimeField()
     closingTime = models.TimeField()
+    featured = models.BooleanField(default=False)
     cancellationPolicy = models.CharField(max_length=20, choices=[
         ('24h', '24 Hours Notice'),
         ('48h', '48 Hours Notice'),
@@ -337,9 +350,9 @@ class BusinessInfo(models.Model):
     managers = models.ManyToManyField(CustomUser, related_name='managed_businesses', blank=True)
     isActive = models.BooleanField(default=True)
     totalReviews = models.IntegerField(default=0)
+    last_booking_date = models.DateTimeField(null=True, blank=True)
     createdAt = models.DateTimeField(auto_now_add=True)
     updatedAt = models.DateTimeField(auto_now=True)
-
 
     def __str__(self):
         return self.businessName
@@ -366,6 +379,7 @@ class BusinessInfo(models.Model):
             models.Index(fields=['businessType']),
             models.Index(fields=['classCategory']),
             models.Index(fields=['isActive']),
+            models.Index(fields=['featured']),
         ]
 
 class StudentNote(models.Model):
@@ -521,7 +535,7 @@ class Schedule(models.Model):
             ('Sat', 'Saturday'),
             ('Sun', 'Sunday')
         ],
-        null=True,  # Make day optional for single sessions
+        null=True,
         blank=True
     )
     time = models.TimeField()
@@ -568,6 +582,47 @@ class Schedule(models.Model):
                         status='scheduled'
                     )
 
+    def delete(self, *args, **kwargs):
+        """
+        Override delete method to mark schedules and instances as inactive
+        instead of actually deleting them to preserve booking relationships.
+        """
+        force_delete = kwargs.pop('force_delete', False)
+        
+        # If force_delete is True, perform actual deletion
+        if force_delete:
+            return super().delete(*args, **kwargs)
+        
+        with transaction.atomic():
+            # Get all related schedule instances
+            instance_ids = list(self.instances.values_list('id', flat=True))
+            
+            if instance_ids:
+                # Cancel all related bookings that are still confirmed
+                Booking.objects.filter(
+                    schedule_instance_id__in=instance_ids,
+                    status='confirmed'
+                ).update(
+                    status='cancelled',
+                    cancelled_at=timezone.now(),
+                    cancellation_reason='Schedule was removed by the instructor'
+                )
+                
+                # Mark all schedule instances as cancelled
+                self.instances.filter(
+                    status='scheduled'
+                ).update(
+                    status='cancelled',
+                    cancellation_reason='Schedule was deactivated by the instructor'
+                )
+                
+            # Mark the schedule as inactive rather than deleting it
+            self.is_active = False
+            self.save(update_fields=['is_active'])
+            
+            return (0, {})
+
+    # Rest of the methods remain unchanged
     def generate_course_instances(self):
         """Generate all instances for a course between start and end date"""
         if self.option.booking_type != 'Full Course':
@@ -658,6 +713,20 @@ class ScheduleInstance(models.Model):
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    def delete(self, *args, **kwargs):
+        with transaction.atomic():
+            Booking.objects.filter(
+                schedule_instance=self,
+                status='confirmed'
+            ).update(
+                status='cancelled',
+                cancelled_at=timezone.now(),
+                cancellation_reason='Schedule instance was removed by the instructor'
+            )
+            
+            # Now proceed with deletion
+            super().delete(*args, **kwargs)
 
     @property
     def current_bookings(self):
@@ -772,9 +841,14 @@ class Reviews(models.Model):
     reviewId = models.AutoField(primary_key=True)
     userId = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='reviews')
     businessId = models.ForeignKey(BusinessInfo, models.CASCADE, db_column='businessId')
-    classId = models.ForeignKey(ClassesMain, models.CASCADE, db_column='classId')
-    classOption = models.ForeignKey(ClassOption, models.CASCADE, related_name='reviews')
-    booking = models.OneToOneField(Booking, on_delete=models.CASCADE, related_name='review')
+    classId = models.ForeignKey(ClassesMain, models.CASCADE, db_column='classId', related_name='reviews')
+    booking = models.OneToOneField(
+        Booking, 
+        on_delete=models.SET_NULL, 
+        related_name='review', 
+        null=True, 
+        blank=True
+    )
     rating = models.IntegerField(validators=[MinValueValidator(1), MaxValueValidator(5)])
     comment = models.TextField()
     image = models.ImageField(
@@ -788,7 +862,7 @@ class Reviews(models.Model):
     class Meta:
         db_table = 'reviews'
         indexes = [
-            models.Index(fields=['classId', 'classOption']),
+            models.Index(fields=['classId']),
             models.Index(fields=['booking']),
         ]
 

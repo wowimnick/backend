@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 from allauth.account.views import confirm_email
 from django.views.generic import TemplateView
 
+
 from quickstart.monitoring.consumers import MetricsConsumer
 from quickstart.payments.views import CreatePaymentIntentView, ProcessBookingWebhook
 
@@ -23,6 +24,7 @@ from .views.user_management.user_admin_views import UserAdminViewSet
 from .views.user_management.role_views import RoleManagementViewSet
 from .views.user_management.verification_views import VerificationRequestViewSet
 from .views.user_management.audit_views import AuditLogViewSet
+from .views.business_management.business_admin_views import BusinessAdminViewSet
 
 # Initialize the router
 router = DefaultRouter()
@@ -38,11 +40,12 @@ router.register(r'schedules', ScheduleViewSet, basename='schedule')
 router.register(r'schedule-instances', ScheduleInstanceViewSet, basename='schedule-instance')
 router.register(r'schedule-breaks', ScheduleBreakViewSet, basename='schedule-break')
 
-user_management_router = DefaultRouter()
-user_management_router.register(r'admin/users', UserAdminViewSet, basename='admin-users')
-user_management_router.register(r'admin/roles', RoleManagementViewSet, basename='admin-roles')
-user_management_router.register(r'admin/verification', VerificationRequestViewSet, basename='admin-verification')
-user_management_router.register(r'admin/audit-logs', AuditLogViewSet, basename='admin-audit-logs')
+router.register(r'admin/users', UserAdminViewSet, basename='admin-users')
+router.register(r'admin/roles', RoleManagementViewSet, basename='admin-roles')
+router.register(r'admin/verification', VerificationRequestViewSet, basename='admin-verification')
+router.register(r'admin/audit-logs', AuditLogViewSet, basename='admin-audit-logs')
+
+router.register(r'admin/businesses', BusinessAdminViewSet, basename='admin-businesses')
 
 
 # URL Patterns
@@ -93,15 +96,10 @@ urlpatterns = [
     path('my_bookings/', BookingViewSet.as_view({'get': 'my_bookings'}), name='my-bookings'),
     path('<int:pk>/student_cancel/', BookingViewSet.as_view({'post': 'student_cancel'}), name='student-cancel'),
 
-
-    # Platform Management
-    path('', include(user_management_router.urls)),
-
     path('admin/users/<int:pk>/lock/', UserAdminViewSet.as_view({'post': 'lock_account'}), name='admin-lock-user'),
     path('admin/users/<int:pk>/unlock/', UserAdminViewSet.as_view({'post': 'unlock_account'}), name='admin-unlock-user'),
     path('admin/users/<int:pk>/reset-password/', UserAdminViewSet.as_view({'post': 'reset_password'}), name='admin-reset-password'),
-    path('admin/users/metrics/', UserAdminViewSet.as_view({'get': 'user_metrics'}), name='admin-user-metrics'),
-    
+
     path('admin/roles/<int:pk>/duplicate/', RoleManagementViewSet.as_view({'post': 'duplicate'}), name='admin-duplicate-role'),
     path('admin/roles/permissions/', RoleManagementViewSet.as_view({'get': 'permissions'}), name='admin-role-permissions'),
     
@@ -110,4 +108,10 @@ urlpatterns = [
     
     path('admin/audit-logs/export/', AuditLogViewSet.as_view({'get': 'export'}), name='export-audit-logs'),
     path('admin/audit-logs/activity-summary/', AuditLogViewSet.as_view({'get': 'activity_summary'}), name='audit-activity-summary'),
+
+    path('admin/businesses/<int:pk>/toggle-feature/', BusinessAdminViewSet.as_view({'post': 'toggle_feature'}), name='business-toggle-feature'),
+    path('admin/businesses/metrics/', BusinessAdminViewSet.as_view({'get': 'metrics'}), name='business-metrics'),
+    path('admin/businesses/geographical/', BusinessAdminViewSet.as_view({'get': 'geographical'}), name='business-geographical'),
+    path('admin/businesses/export/', BusinessAdminViewSet.as_view({'get': 'export'}), name='business-export'),
+    path('admin/businesses/announcements/', BusinessAdminViewSet.as_view({'post': 'announcements'}), name='business-announcements'),
 ]

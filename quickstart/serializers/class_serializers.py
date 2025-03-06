@@ -117,7 +117,7 @@ class ClassCreateSerializer(serializers.ModelSerializer):
                 
             # Validate each option has required fields
             for option in options:
-                if not all(key in option for key in ['title', 'description', 'booking_type']):
+                if not all(key in option for key in ['title', 'booking_type']):
                     raise serializers.ValidationError({
                         'options': ['Each option must have title, description, and booking type']
                     })

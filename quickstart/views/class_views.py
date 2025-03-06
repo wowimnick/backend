@@ -534,24 +534,21 @@ class ClassViewSet(viewsets.ModelViewSet):
                 ClassImage.objects.create(classId=instance, image=image)
 
     def destroy(self, request, *args, **kwargs):
-        self.is_business_context = True
+        """
+        Override destroy method to deactivate schedules instead of deleting them.
+        """
         instance = self.get_object()
         
+        # Check if force_delete parameter is passed (for admin use only)
+        force_delete = request.query_params.get('force_delete', 'false').lower() == 'true'
+        
+        # Only allow force delete for admin users
+        if force_delete and not check_user_role(request.user, ['Admin', 'Super Admin']):
+            force_delete = False
+        
         try:
-            with transaction.atomic():
-                # Delete related data
-                Schedule.objects.filter(option__classId=instance).delete()
-                ClassOption.objects.filter(classId=instance).delete()
-                
-                # Delete images
-                for image in instance.images.all():
-                    if image.image:
-                        image.image.delete(save=False)
-                    image.delete()
-                
-                Reviews.objects.filter(classId=instance).delete()
-                instance.delete()
-                
+            # Use our custom delete method which deactivates instead of deleting
+            instance.delete(force_delete=force_delete)
             return Response(status=status.HTTP_204_NO_CONTENT)
             
         except Exception as e:
@@ -866,6 +863,11 @@ class ScheduleInstanceViewSet(viewsets.ModelViewSet):
     @silk_profile()
     def get_queryset(self):
         queryset = ScheduleInstance.objects.all()
+        
+        # Only include instances from active schedules by default
+        include_inactive = self.request.query_params.get('include_inactive', 'false').lower() == 'true'
+        if not include_inactive:
+            queryset = queryset.filter(schedule__is_active=True)
         
         # Filter by schedule if provided
         schedule_id = self.request.query_params.get('schedule_id')

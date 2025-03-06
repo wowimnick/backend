@@ -67,6 +67,12 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
         return BusinessInfo.objects.create(owner=user, **validated_data)
 
 class BusinessInfoSerializer(serializers.ModelSerializer):
+    classes_count = serializers.IntegerField(read_only=True)
+    bookings_count = serializers.IntegerField(read_only=True)
+    revenue = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    status = serializers.CharField(read_only=True)
+    rating = serializers.FloatField(read_only=True)
+    
     class Meta:
         model = BusinessInfo
         fields = '__all__'

@@ -6,16 +6,6 @@ from quickstart.models import BusinessInfo
 logger = logging.getLogger(__name__)
 
 def check_user_role(user, allowed_roles):
-    """
-    Check if user has any of the allowed roles
-    
-    Args:
-        user: User object
-        allowed_roles: List of role names
-    Returns:
-        bool: True if user has any of the allowed roles
-    """
-    # First check if user is authenticated and has a role
     if not user or not hasattr(user, 'role') or not user.role:
         return False
         

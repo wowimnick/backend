@@ -68,12 +68,12 @@ class ReviewSubmission(APIView):
             if image:
                 validated_data['image'] = image
 
-            # Create review with all related fields
+            # Create review with all related fields except classOption
             review = Reviews.objects.create(
                 userId=request.user,
                 businessId=booking.schedule_instance.schedule.option.classId.businessId,
                 classId=booking.schedule_instance.schedule.option.classId,
-                classOption=booking.schedule_instance.schedule.option,
+                # Removed classOption field
                 booking=booking,
                 **validated_data  
             )

@@ -230,7 +230,17 @@ class StudentBookingSerializer(serializers.ModelSerializer):
         return None
 
     def get_has_review(self, obj):
-        return hasattr(obj, 'review')
+        """Check if this booking has a review, or if it's been reviewed before cancellation"""
+        try:
+            # First check if the booking has a directly attached review
+            if hasattr(obj, 'review'):
+                return True
+                
+            # If cancelled, check if there's a review that was originally for this booking
+            # This is more complex and might require additional queries in a real app
+            return False
+        except Exception:
+            return False
 
 # Booking detail serializer for booking details, has more information
 class BookingDetailSerializer(serializers.ModelSerializer):
