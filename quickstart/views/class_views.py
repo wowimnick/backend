@@ -21,7 +21,7 @@ from rest_framework.response import Response
 import logging
 
 from ..models import (
-    Booking, BusinessInfo, ClassesMain, ClassImage, Reviews, ClassOption, Schedule, ScheduleBreak, ScheduleInstance
+    Booking, BusinessInfo, ClassCategory, ClassSubcategory, ClassesMain, ClassImage, Reviews, ClassOption, Schedule, ScheduleBreak, ScheduleInstance
 )
 from ..serializers import (
     ClassesMainSerializer,
@@ -114,22 +114,15 @@ class BusinessPermissionMixin:
     def get_business_queryset(self, queryset):
         """
         Filter queryset based on user type:
-        - Public users/students see classes with at least one active option
+        - Public users/students see only active classes
         - Business owners/managers see their own classes
         - Admins see everything
         """
         user = self.request.user
         
-        # For unauthenticated users or regular students, show only classes with active options
+        # For unauthenticated users or regular students, show only active classes
         if not user.is_authenticated or (user.role and user.role.name == 'Student'):
-            return queryset.filter(
-                Exists(
-                    ClassOption.objects.filter(
-                        classId=OuterRef('pk'),
-                        active=True
-                    )
-                )
-            )
+            return queryset.filter(status='active')
         
         # Admins can see everything
         if check_user_role(user, ['Admin', 'Super Admin']):
@@ -327,7 +320,7 @@ class ClassViewSet(viewsets.ModelViewSet):
             ).distinct()
 
         # Public context - show only active classes directly
-        return queryset.filter(active=True)
+        return queryset.filter(status='active')
         
     @silk_profile(name='ClassViewSet_search')
     @action(detail=False, methods=['get'])
@@ -499,29 +492,77 @@ class ClassViewSet(viewsets.ModelViewSet):
         
     @action(detail=True, methods=['post'])
     def toggle_class_active(self, request, pk=None):
-        """Toggle class active status directly"""
+        """Toggle class active status directly (between active and inactive only)"""
         self.is_business_context = True
         class_instance = self.get_object()
         
-        # Get active status from request or toggle current value
-        active = request.data.get('active')
-        if active is None:
-            active = not class_instance.active
+        # Toggle between active and inactive only
+        if class_instance.status == 'active':
+            new_status = 'inactive'
+        else:
+            new_status = 'active'
         
-        class_instance.active = active
-        class_instance.save()
+        class_instance.status = new_status
+        class_instance.save(update_fields=['status'])
         
         return Response({
-            'active': class_instance.active,
+            'status': class_instance.status,
             'classId': class_instance.classId
         })
     
     def create(self, request, *args, **kwargs):
         self.is_business_context = True
-        return super().create(request, *args, **kwargs)
+        
+        data = request.data.copy()
+        print("Request data:", data)
+        print("Category key received:", data.get('category'))
+        print("Subcategory key received:", data.get('subcategory'))
+        # Handle category and subcategory
+        category_key = data.get('category')
+        subcategory_key = data.get('subcategory')
+        
+        try:
+            if category_key:
+                # Find the category by key
+                category = ClassCategory.objects.get(key=category_key)
+                data['category'] = category.pk
+                
+                # Find the subcategory by key if provided
+                if subcategory_key:
+                    subcategory = ClassSubcategory.objects.get(
+                        category=category, 
+                        key=subcategory_key
+                    )
+                    data['subcategory'] = subcategory.pk
+        except ClassCategory.DoesNotExist:
+            return Response(
+                {'error': f"Category '{category_key}' not found"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except ClassSubcategory.DoesNotExist:
+            return Response(
+                {'error': f"Subcategory '{subcategory_key}' not found in category '{category_key}'"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Continue with the parent implementation using the modified data
+        serializer = self.get_serializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     def update(self, request, *args, **kwargs):
         self.is_business_context = True
+        
+        # Only admins can set a class to suspended
+        if 'status' in request.data and request.data['status'] == 'suspended':
+            if not check_user_role(request.user, ['Admin', 'Super Admin']):
+                return Response(
+                    {'error': 'Only administrators can suspend a class'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+                
         return super().update(request, *args, **kwargs)
     
     def perform_update(self, serializer):

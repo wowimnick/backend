@@ -182,10 +182,6 @@ Be rather strict in your judgement.
   </TERMINATE_CHAT>
 """
 
-SILKY_PYTHON_PROFILER = True
-
-# Application definition
-
 INSTALLED_APPS = [
     'admin_interface',
     'colorfield',
@@ -362,7 +358,7 @@ CHANNEL_LAYERS = {
 
 # Silk configuration
 SILKY_PYTHON_PROFILER_RESULT_PATH = os.path.join(BASE_DIR, 'quickstart/monitoring/profiler')
-SILKY_PYTHON_PROFILER = True
+SILKY_PYTHON_PROFILER = False
 SILKY_PYTHON_PROFILER_BINARY = True
 SILKY_AUTHENTICATION = False  # Requires users to login
 SILKY_AUTHORISATION = False  # Only allows admin users

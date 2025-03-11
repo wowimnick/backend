@@ -407,6 +407,36 @@ class ClassImage(models.Model):
     class Meta:
         db_table = 'class_images'
 
+
+class ClassCategory(models.Model):
+    """Class category model"""
+    name = models.CharField(max_length=100)
+    key = models.CharField(max_length=100, unique=True)
+    color = models.CharField(max_length=20, default="#3b82f6")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    def __str__(self):
+        return self.name
+    
+    class Meta:
+        db_table = 'class_categories'
+        verbose_name_plural = 'Class Categories'
+
+class ClassSubcategory(models.Model):
+    """Class subcategory model"""
+    category = models.ForeignKey(ClassCategory, on_delete=models.CASCADE, related_name='subcategories')
+    name = models.CharField(max_length=100)
+    key = models.CharField(max_length=100)
+    description = models.TextField(blank=True)
+    
+    def __str__(self):
+        return f"{self.name} ({self.category.name})"
+    
+    class Meta:
+        db_table = 'class_subcategories'
+        unique_together = ['category', 'key']
+
 class ClassesMain(models.Model):
     classId = models.AutoField(primary_key=True)
     businessId = models.ForeignKey('BusinessInfo', on_delete=models.CASCADE)
@@ -415,10 +445,20 @@ class ClassesMain(models.Model):
     title = models.CharField(max_length=100)
     description = models.TextField(max_length=2000)
     features = models.JSONField(default=list)  # Store as JSON array
-    category = models.CharField(max_length=50)
-    subcategory = models.CharField(max_length=50, null=True, blank=True)
-    active = models.BooleanField(default=True)
+    category = models.ForeignKey(ClassCategory, on_delete=models.SET_NULL, null=True, related_name='classes')
+    subcategory = models.ForeignKey(ClassSubcategory, on_delete=models.SET_NULL, null=True, blank=True, related_name='classes')
     
+    STATUS_CHOICES = [
+        ('active', 'Active'),
+        ('inactive', 'Inactive'),
+        ('suspended', 'Suspended')
+    ]
+    status = models.CharField(
+        max_length=20, 
+        choices=STATUS_CHOICES, 
+        default='active'
+    )
+
     # Location Fields
     location = models.CharField(max_length=255)
     coordinates = models.CharField(max_length=50)  # "lat,long" format
@@ -438,7 +478,8 @@ class ClassesMain(models.Model):
         indexes = [
             models.Index(fields=['coordinates']),
             models.Index(fields=['location']),
-            models.Index(fields=['businessId'])
+            models.Index(fields=['businessId']),
+            models.Index(fields=['status'])
         ]
 
 class Favorites(models.Model):
@@ -837,6 +878,75 @@ class Booking(models.Model):
             models.Index(fields=['booking_group_id']),
         ]
 
+class Payment(models.Model):
+    """Stores detailed payment information"""
+    id = models.AutoField(primary_key=True)
+    booking = models.ForeignKey(Booking, on_delete=models.CASCADE, related_name='payments')
+    
+    # Stripe specific fields
+    stripe_payment_intent_id = models.CharField(max_length=255, unique=True)
+    stripe_charge_id = models.CharField(max_length=255, null=True, blank=True)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    service_fee_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+    currency = models.CharField(max_length=3, default='USD')
+    
+    # Status tracking
+    status = models.CharField(max_length=20, choices=[
+        ('pending', 'Pending'),
+        ('succeeded', 'Succeeded'),
+        ('failed', 'Failed'),
+        ('refunded', 'Refunded'),
+        ('partially_refunded', 'Partially Refunded')
+    ], default='pending')
+    
+    # Payment method details
+    payment_method_type = models.CharField(max_length=20, default='card')
+    card_brand = models.CharField(max_length=20, null=True, blank=True)
+    card_last4 = models.CharField(max_length=4, null=True, blank=True)
+    card_exp_month = models.IntegerField(null=True, blank=True)
+    card_exp_year = models.IntegerField(null=True, blank=True)
+    
+    # Refund tracking
+    refunded_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    refund_reason = models.TextField(blank=True)
+    refund_date = models.DateTimeField(null=True, blank=True)
+    
+    # Receipt and metadata
+    receipt_url = models.URLField(max_length=500, null=True, blank=True)
+    receipt_number = models.CharField(max_length=100, null=True, blank=True)
+    failure_message = models.TextField(blank=True)
+    billing_details = models.JSONField(default=dict, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    def __str__(self):
+        return f"Payment {self.id} - {self.stripe_payment_intent_id} ({self.status})"
+    
+    @property
+    def formatted_status(self):
+        return self.status.replace('_', ' ').title()
+    
+    @property
+    def is_refundable(self):
+        return self.status == 'succeeded' and self.refunded_amount < self.amount
+    
+    @property
+    def available_refund_amount(self):
+        return self.amount - self.refunded_amount
+    
+    class Meta:
+        db_table = 'payments'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['stripe_payment_intent_id']),
+            models.Index(fields=['stripe_charge_id']),
+            models.Index(fields=['status']),
+            models.Index(fields=['created_at']),
+        ]
+
 class Reviews(models.Model):
     reviewId = models.AutoField(primary_key=True)
     userId = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='reviews')
@@ -857,6 +967,18 @@ class Reviews(models.Model):
         null=True,
         blank=True
     )
+    status = models.CharField(
+        max_length=20, 
+        choices=[
+            ('approved', 'Approved'),
+            ('under_review', 'Under Review'),
+            ('hidden', 'Hidden')
+        ],
+        default='approved'
+    )
+    reported = models.BooleanField(default=False)
+    report_reason = models.TextField(blank=True)
+    business_response = models.TextField(blank=True)
     createdAt = models.DateTimeField(auto_now_add=True)
 
     class Meta:

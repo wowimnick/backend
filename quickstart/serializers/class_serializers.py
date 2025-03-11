@@ -6,7 +6,7 @@ from decimal import Decimal
 from django.utils import timezone
 from django.db.models import Q
 from ..utils.permissions import check_user_role
-from ..models import BusinessInfo, ClassesMain, ClassImage, ClassOption, Schedule, ScheduleInstance, ScheduleBreak, Booking
+from ..models import BusinessInfo, ClassCategory, ClassSubcategory, ClassesMain, ClassImage, ClassOption, Schedule, ScheduleInstance, ScheduleBreak, Booking
 from django.db import transaction
 from .auth_serializers import CustomUserDetailsSerializer
 
@@ -91,7 +91,9 @@ class ClassCreateSerializer(serializers.ModelSerializer):
         required=False
     )
     options = serializers.CharField(write_only=True)
-    active = serializers.BooleanField(default=True)
+    status = serializers.CharField(default='active')
+    category = serializers.CharField() # Keep this as CharField
+    subcategory = serializers.CharField(required=False) # Keep this as CharField
 
     class Meta:
         model = ClassesMain
@@ -100,7 +102,7 @@ class ClassCreateSerializer(serializers.ModelSerializer):
             'location', 'coordinates', 'saltLocation',
             'studentContactEmail', 'studentContactPhone',
             'adminContactEmail', 'adminContactPhone',
-            'images', 'options', 'active'
+            'images', 'options', 'status'
         ]
 
     def validate(self, data):
@@ -111,49 +113,94 @@ class ClassCreateSerializer(serializers.ModelSerializer):
         try:
             options = json.loads(data.get('options', '[]'))
             if not options:
-                raise serializers.ValidationError({
-                    'options': ['At least one class option is required']
-                })
-                
-            # Validate each option has required fields
+                raise serializers.ValidationError({'options': ['At least one class option is required']})
             for option in options:
                 if not all(key in option for key in ['title', 'booking_type']):
-                    raise serializers.ValidationError({
-                        'options': ['Each option must have title, description, and booking type']
-                    })
+                    raise serializers.ValidationError({'options': ['Each option must have title and booking type']})
         except json.JSONDecodeError:
             raise serializers.ValidationError("Invalid options format")
+
+        # Validate status
+        status_val = data.get('status')
+        if status_val not in ['active', 'inactive', 'suspended']:
+            raise serializers.ValidationError({
+                'status': f"Invalid status '{status_val}'. Must be one of: active, inactive, suspended"
+            })
+            
+        # Non-admin users can't create suspended classes
+        if status_val == 'suspended' and not check_user_role(request.user, ['Admin', 'Super Admin']):
+            raise serializers.ValidationError({
+                'status': "Only administrators can set a class as suspended"
+            })
+
+        category_key = data.get('category')
+        if category_key:
+            try:
+                # Look up by key first
+                category = ClassCategory.objects.get(key=category_key)
+            except ClassCategory.DoesNotExist:
+                # Check if category_key is an ID
+                if category_key.isdigit():
+                    try:
+                        category = ClassCategory.objects.get(id=int(category_key))
+                        # Update data with the actual key
+                        data['category'] = category.key
+                        category_key = category.key  # Update for subcategory checks
+                    except ClassCategory.DoesNotExist:
+                        raise serializers.ValidationError({'category': [f"Category with ID '{category_key}' does not exist"]})
+                else:
+                    raise serializers.ValidationError({'category': [f"Category with key '{category_key}' does not exist"]})
+
+            # Validate subcategory
+            subcategory_key = data.get('subcategory')
+            if subcategory_key:
+                try:
+                    subcategory = ClassSubcategory.objects.get(category=category, key=subcategory_key)
+                except ClassSubcategory.DoesNotExist:
+                    if subcategory_key.isdigit():
+                        try:
+                            subcategory = ClassSubcategory.objects.get(category=category, id=int(subcategory_key))
+                            # Update data with the actual key
+                            data['subcategory'] = subcategory.key
+                        except ClassSubcategory.DoesNotExist:
+                            raise serializers.ValidationError({'subcategory': [f"Subcategory with ID '{subcategory_key}' does not exist in category '{category_key}'"]})
+                    else:
+                        raise serializers.ValidationError({'subcategory': [f"Subcategory with key '{subcategory_key}' does not exist in category '{category_key}'"]})
 
         return data
 
     def create(self, validated_data):
-        images = self.context['request'].FILES.getlist('class_images')
+        images = self.context['request'].FILES.getlist('images')  # Ensure correct field name
         options_data = json.loads(validated_data.pop('options'))
+        
+        category_key = validated_data.pop('category')
+        subcategory_key = validated_data.pop('subcategory', None)
         
         try:
             with transaction.atomic():
                 user = self.context['request'].user
-                business = BusinessInfo.objects.get(
-                    Q(owner=user) | Q(managers=user)
-                )
+                business = BusinessInfo.objects.get(Q(owner=user) | Q(managers=user))
+                
+                # Get category by key (already resolved in validation)
+                category = ClassCategory.objects.get(key=category_key)
+                subcategory = None
+                if subcategory_key:
+                    subcategory = ClassSubcategory.objects.get(category=category, key=subcategory_key)
                 
                 class_instance = ClassesMain.objects.create(
                     businessId=business,
+                    category=category,
+                    subcategory=subcategory,
                     **validated_data
                 )
 
                 for image in images:
-                    ClassImage.objects.create(
-                        classId=class_instance,
-                        image=image
-                    )
+                    ClassImage.objects.create(classId=class_instance, image=image)
 
                 for index, option_data in enumerate(options_data):
                     option_image = self.context['request'].FILES.get(f'option_{index}_image')
-                    
                     if 'active' in option_data:
                         option_data.pop('active')
-                        
                     ClassOption.objects.create(
                         classId=class_instance,
                         image=option_image,
@@ -162,6 +209,12 @@ class ClassCreateSerializer(serializers.ModelSerializer):
 
                 return class_instance
 
+        except BusinessInfo.DoesNotExist:
+            raise serializers.ValidationError("No business found for this user")
+        except ClassCategory.DoesNotExist:
+            raise serializers.ValidationError(f"Category '{category_key}' not found")
+        except ClassSubcategory.DoesNotExist:
+            raise serializers.ValidationError(f"Subcategory '{subcategory_key}' not found in category '{category_key}'")
         except Exception as e:
             raise serializers.ValidationError(str(e))
         
@@ -422,7 +475,7 @@ class ClassesMainSerializer(serializers.ModelSerializer):
     coordinates = serializers.SerializerMethodField()
     average_rating = serializers.FloatField(read_only=True)
     review_count = serializers.IntegerField(read_only=True)
-    active = serializers.BooleanField(default=True)
+    featured = serializers.BooleanField(source='businessId.featured', read_only=True)
 
     class Meta:
         model = ClassesMain
@@ -432,7 +485,7 @@ class ClassesMainSerializer(serializers.ModelSerializer):
             'saltLocation', 'studentContactEmail', 'studentContactPhone',
             'createdAt', 'updatedAt', 'images', 'business_name',
             'business_image', 'options', 'average_rating',
-            'review_count', 'active'
+            'review_count', 'status', 'featured'
         ]
 
     def get_business_image(self, obj):

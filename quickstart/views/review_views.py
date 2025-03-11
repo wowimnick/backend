@@ -99,7 +99,7 @@ class ClassReviews(generics.ListAPIView):
     def get_queryset(self):
         class_id = self.kwargs['pk']
         return Reviews.objects.filter(
-            classId=class_id
+            Q(classId=class_id) & (Q(status='approved') | Q(status='under_review'))
         ).select_related(
             'userId'
         ).only(

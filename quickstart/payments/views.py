@@ -9,7 +9,7 @@ from django.db import transaction
 from decimal import Decimal
 import stripe
 from django.conf import settings
-from ..models import CustomUser, Booking, ScheduleInstance
+from ..models import CustomUser, Booking, Payment, ScheduleInstance
 from ..serializers import BookingCreateSerializer, BookingDetailSerializer
 
 import logging
@@ -208,8 +208,10 @@ class ProcessBookingWebhook(APIView):
 
                 # Create bookings for all instances
                 booking_group_id = uuid.uuid4() if len(instances_to_book) > 1 else None
-                amount_per_booking = Decimal(str(metadata['base_total'])) / len(instances_to_book)
                 
+                total_amount_with_fees = Decimal(payment_intent.amount) / 100  # Convert from cents
+                amount_per_booking = total_amount_with_fees / len(instances_to_book)
+
                 bookings = []
                 for instance in instances_to_book:
                     booking = Booking.objects.create(
@@ -218,14 +220,50 @@ class ProcessBookingWebhook(APIView):
                         booking_group_id=booking_group_id,
                         participants=int(metadata['participants']),
                         notes=metadata.get('notes', ''),
-                        amount_paid=amount_per_booking,
+                        amount_paid=amount_per_booking,  # Now includes fees proportionally
                         status='confirmed',
                         payment_status='paid',
                         enrollment_type=booking_type
                     )
                     bookings.append(booking)
+                
+                # Create the payment record but link it only to the admin system
+                charge = None
+                if payment_intent.latest_charge:
+                    charge = stripe.Charge.retrieve(payment_intent.latest_charge)
+                
+                payment = Payment.objects.create(
+                    booking=bookings[0], 
+                    stripe_payment_intent_id=payment_intent.id,
+                    stripe_charge_id=payment_intent.latest_charge,
+                    amount=Decimal(payment_intent.amount) / 100, 
+                    service_fee_amount=Decimal(metadata.get('service_fee', 0)), 
+                    currency=payment_intent.currency.upper(),
+                    status='succeeded',
+                    payment_method_type=payment_intent.payment_method_types[0] if payment_intent.payment_method_types else 'card',
+                    metadata={
+                        'booking_group_id': str(booking_group_id) if booking_group_id else None,
+                        'booking_ids': [str(b.id) for b in bookings],
+                        'original_metadata': metadata
+                    }
+                )
+                
+                # If we have charge details, add them to the payment record
+                if charge:
+                    payment_method_details = charge.payment_method_details
+                    if payment_method_details.type == 'card':
+                        card = payment_method_details.card
+                        payment.card_brand = card.brand
+                        payment.card_last4 = card.last4
+                        payment.card_exp_month = card.exp_month
+                        payment.card_exp_year = card.exp_year
+                    
+                    payment.receipt_url = charge.receipt_url
+                    payment.receipt_number = charge.receipt_number
+                    payment.billing_details = charge.billing_details.to_dict() if hasattr(charge, 'billing_details') else {}
+                    payment.save()
 
-                # Return first booking as response
+                # Return first booking as response - do NOT modify customer-facing serializer
                 return Response(BookingDetailSerializer(bookings[0]).data)
 
         except Exception as e:

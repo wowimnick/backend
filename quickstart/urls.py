@@ -4,6 +4,9 @@ from allauth.account.views import confirm_email
 from django.views.generic import TemplateView
 
 
+from quickstart.views.booking_management.booking_views import AdminBookingViewSet
+from quickstart.views.booking_management.payment_views import AdminPaymentViewSet
+from quickstart.views.class_management.class_management_views import AdminCategoryViewSet, AdminClassViewSet, AdminReviewViewSet
 from quickstart.monitoring.consumers import MetricsConsumer
 from quickstart.payments.views import CreatePaymentIntentView, ProcessBookingWebhook
 
@@ -44,9 +47,12 @@ router.register(r'admin/users', UserAdminViewSet, basename='admin-users')
 router.register(r'admin/roles', RoleManagementViewSet, basename='admin-roles')
 router.register(r'admin/verification', VerificationRequestViewSet, basename='admin-verification')
 router.register(r'admin/audit-logs', AuditLogViewSet, basename='admin-audit-logs')
-
 router.register(r'admin/businesses', BusinessAdminViewSet, basename='admin-businesses')
-
+router.register(r'admin/classes', AdminClassViewSet, basename='admin-classes')
+router.register(r'admin/categories', AdminCategoryViewSet, basename='admin-categories')
+router.register(r'admin/reviews', AdminReviewViewSet, basename='admin-reviews')
+router.register(r'admin/bookings', AdminBookingViewSet, basename='admin-bookings')
+router.register(r'admin/payments', AdminPaymentViewSet, basename='admin-payments')
 
 # URL Patterns
 urlpatterns = [
@@ -114,4 +120,17 @@ urlpatterns = [
     path('admin/businesses/geographical/', BusinessAdminViewSet.as_view({'get': 'geographical'}), name='business-geographical'),
     path('admin/businesses/export/', BusinessAdminViewSet.as_view({'get': 'export'}), name='business-export'),
     path('admin/businesses/announcements/', BusinessAdminViewSet.as_view({'post': 'announcements'}), name='business-announcements'),
+    
+    path('admin/classes/analytics/', AdminClassViewSet.as_view({'get': 'analytics'}), name='admin-class-analytics'),
+    path('admin/classes/export/', AdminClassViewSet.as_view({'get': 'export'}), name='admin-class-export'),
+    path('admin/categories/stats/', AdminCategoryViewSet.as_view({'get': 'stats'}), name='admin-category-stats'),
+
+    path('admin/payments/stats/', AdminPaymentViewSet.as_view({'get': 'stats'}), name='admin-payment-stats'),
+    path('admin/payments/<int:pk>/mark-paid/', AdminPaymentViewSet.as_view({'post': 'mark_paid'}), name='admin-mark-payment-paid'),
+    path('admin/payments/<int:pk>/history/', AdminPaymentViewSet.as_view({'get': 'history'}), name='admin-payment-history'),
+    path('admin/payments/<int:pk>/receipt/', AdminPaymentViewSet.as_view({'get': 'receipt'}), name='admin-payment-receipt'),
+    path('admin/payments/export/', AdminPaymentViewSet.as_view({'get': 'export'}), name='admin-export-payments'),
+    path('admin/bookings/analytics/', AdminBookingViewSet.as_view({'get': 'analytics'}), name='admin-booking-analytics'),
+    path('admin/bookings/export/', AdminBookingViewSet.as_view({'get': 'export'}), name='admin-export-bookings'),
+    path('admin/bookings/<int:pk>/cancel/', AdminBookingViewSet.as_view({'post': 'cancel'}), name='admin-cancel-booking'),
 ]
