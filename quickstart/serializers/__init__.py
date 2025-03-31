@@ -51,7 +51,11 @@ from .support_chat_serializer import (
     ChatMessageSerializer, 
     ChatRequestSerializer,
     ChatSessionSerializer,
-    SupportTicketSerializer
+    SupportTicketSerializer,
+    SupportTicketDetailSerializer,
+    SupportTicketStatsSerializer,
+    CreateSupportTicketSerializer,
+    UserSupportTicketSerializer
 )
 
 __all__ = [
@@ -101,5 +105,9 @@ __all__ = [
     'ChatMessageSerializer',
     'ChatRequestSerializer',
     'ChatSessionSerializer',
-    'SupportTicketSerializer'
+    'SupportTicketSerializer',
+    'SupportTicketDetailSerializer',
+    'SupportTicketStatsSerializer',
+    'CreateSupportTicketSerializer',
+    'UserSupportTicketSerializer',
 ]

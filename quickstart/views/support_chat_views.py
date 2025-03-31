@@ -6,7 +6,6 @@ from django.conf import settings
 import logging
 import re
 
-from quickstart.utils.support_ticket_utils import process_for_ticket_creation
 from quickstart.models import ChatMessage, ChatSession
 from ..serializers import ChatRequestSerializer, ChatMessageSerializer, ChatSessionSerializer, SupportTicketSerializer
 
@@ -36,9 +35,23 @@ class ChatMessageView(views.APIView):
             # Log the API key being used (masked)
             logger.info(f"Using API key: ...{settings.OPENROUTER_API_KEY[-4:]}")
             
-            chat_session = ChatSession.objects.get_or_create(
-                userId_id=request.user.userId
-            )[0]
+            # Check for session_id in the request
+            session_id = request.data.get('session_id')
+            is_new_session = False
+            
+            if session_id:
+                try:
+                    chat_session = ChatSession.objects.get(id=session_id, userId=request.user)
+                    logger.info(f"Using existing chat session: {session_id}")
+                except ChatSession.DoesNotExist:
+                    logger.warning(f"Session {session_id} not found, creating new session")
+                    chat_session = ChatSession.objects.create(userId=request.user)
+                    is_new_session = True
+            else:
+                # Create a new session when no session_id is provided
+                logger.info(f"Creating new chat session for user: {request.user.userId}")
+                chat_session = ChatSession.objects.create(userId=request.user)
+                is_new_session = True
             
             user_message = serializer.validated_data['messages'][-1]
             user_content = user_message['content']
@@ -47,26 +60,55 @@ class ChatMessageView(views.APIView):
             emoji_pattern = r'^\s*:(\w+):\s*$'
             is_emoji_only = bool(re.match(emoji_pattern, user_content))
             
-            # Handle single emoji case (store the shortcode itself)
+            # Store user message in database
             ChatMessage.objects.create(
                 session=chat_session,
                 content=user_content,
-                is_user=True
+                is_user=True,
+                sender_type='user'
             )
             
-            # Create message array with system prompt including chat termination instructions
-            all_messages = [
-                {"role": "system", "content": settings.AI_SYSTEM_PROMPT + settings.TICKET_CREATION_PROMPT + settings.CHAT_TERMINATION_INSTRUCTIONS}
-            ]
+            # Create message array for the AI request
+            all_messages = []
             
-            # Add all user and assistant messages
-            for msg in serializer.validated_data['messages']:
-                all_messages.append(msg)
+            # Only add system prompt for new sessions
+            if is_new_session:
+                all_messages.append({
+                    "role": "system",
+                    "content": settings.AI_SYSTEM_PROMPT
+                })
+            
+            # For existing sessions, retrieve recent conversation history
+            if not is_new_session:
+                # Get the last N messages (adjust the number as needed)
+                recent_messages = ChatMessage.objects.filter(
+                    session=chat_session
+                ).order_by('-created_at')[:10]
+                
+                # Add messages in chronological order
+                for msg in reversed(recent_messages):
+                    all_messages.append({
+                        "role": "user" if msg.is_user else "assistant",
+                        "content": msg.content
+                    })
+                
+                # Also include system prompt to maintain context and instructions
+                system_message = {
+                    "role": "system",
+                    "content": settings.AI_SYSTEM_PROMPT
+                }
+                
+                # Insert system prompt at the beginning
+                all_messages.insert(0, system_message)
+            
+            # Add current user message if not already included in history
+            if user_message not in all_messages:
+                all_messages.append(user_message)
             
             # Log the exact request being made
             request_data = {
                 "extra_body": {},
-                "model": "google/gemini-2.0-flash-thinking-exp:free",
+                "model": "google/gemini-2.0-pro-exp-02-05:free",
                 "messages": all_messages
             }
             logger.info(f"OpenRouter request data: {request_data}")
@@ -78,64 +120,19 @@ class ChatMessageView(views.APIView):
             # Get the AI response
             ai_content = completion.choices[0].message.content
             
-            # Check if AI wants to terminate the chat
-            terminate_match = re.search(r'<TERMINATE_CHAT>\s*(.*?)\s*</TERMINATE_CHAT>', ai_content, re.DOTALL)
-
-            if terminate_match:
-                # Extract termination reason
-                termination_reason = terminate_match.group(1).strip()
-                
-                # Clean the response by removing the termination tags
-                # This ensures we don't show empty messages if that's all there was
-                cleaned_content = re.sub(r'<TERMINATE_CHAT>.*?</TERMINATE_CHAT>', '', ai_content, flags=re.DOTALL).strip()
-                
-                # Create a response that includes both the termination flag and cleaned content
-                response_data = {
-                    'text': cleaned_content,  # This might be empty if the entire message was just the termination tag
-                    'isUser': False,
-                    'timestamp': ChatMessage.objects.create(
-                        session=chat_session,
-                        content=cleaned_content if cleaned_content else "Chat terminated.",
-                        is_user=False
-                    ).created_at.isoformat(),
-                    'terminate_chat': True,
-                    'termination_reason': termination_reason
-                }
-                
-                # Log the termination
-                logger.info(f"Chat terminated by AI. Reason: {termination_reason}")
-                
-                return Response(response_data)
-            
-            # Process for ticket creation if not terminated
-            processed_content, ticket = process_for_ticket_creation(
-                ai_content,
-                request.user,
-                chat_session
-            )
-            
             # Create the message
             ai_message = ChatMessage.objects.create(
                 session=chat_session,
-                content=processed_content,
-                is_user=False
+                content=ai_content,
+                is_user=False,
+                sender_type='ai'
             )
             
             # Create response data
             response_data = ChatMessageSerializer(ai_message).data
             
-            # Add ticket info if a ticket was created and log it
-            if ticket:
-                logger.info(f"Adding ticket {ticket.ticket_id} to response")
-                response_data['ticket'] = {
-                    'id': ticket.ticket_id,
-                    'subject': ticket.subject,
-                    'category': ticket.category,
-                    'priority': ticket.priority
-                }
-                
-                # Log the full response data
-                logger.info(f"Response with ticket: {response_data}")
+            # Add session ID to response
+            response_data['session_id'] = chat_session.id
             
             return Response(response_data)
             
@@ -148,6 +145,19 @@ class ChatMessageView(views.APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+    def get(self, request):
+        """Get all chat sessions for the current user"""
+        try:
+            chat_sessions = ChatSession.objects.filter(userId=request.user).order_by('-updated_at')
+            serializer = ChatSessionSerializer(chat_sessions, many=True)
+            return Response(serializer.data)
+        except Exception as e:
+            logger.error(f"Error fetching chat sessions: {str(e)}")
+            return Response(
+                {'error': 'Failed to fetch chat sessions'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
     def notify_support_staff(self, ticket):
         """
         Send notification to support staff about new ticket
@@ -156,11 +166,3 @@ class ChatMessageView(views.APIView):
         logger.info(f"Support ticket #{ticket.ticket_id} created by {ticket.user.email}: {ticket.subject}")
         # In a real implementation, you might send an email, Slack notification, etc.
         # You could implement this with Django signals or a task queue like Celery
-
-    def get(self, request):
-        try:
-            chat_session = ChatSession.objects.get(userId_id=request.user.userId)
-            serializer = ChatSessionSerializer(chat_session)
-            return Response(serializer.data)
-        except ChatSession.DoesNotExist:
-            return Response([])

@@ -997,9 +997,18 @@ class ChatSession(models.Model):
         db_table = 'chat_sessions'
 
 class ChatMessage(models.Model):
-    session = models.ForeignKey(ChatSession, on_delete=models.CASCADE)
+    session = models.ForeignKey(ChatSession, on_delete=models.CASCADE, related_name='messages')
     content = models.TextField()
     is_user = models.BooleanField()
+    sender_type = models.CharField(
+        max_length=10, 
+        choices=[
+            ('user', 'User'),
+            ('ai', 'AI'),
+            ('agent', 'Agent')
+        ],
+        default='user'
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:
@@ -1021,7 +1030,7 @@ class SupportTicket(models.Model):
         ('other', 'Other')
     ])
     
-    subject = models.CharField(max_length=100)
+    subject = models.CharField(max_length=600)
     description = models.TextField()
     
     # Status tracking
@@ -1051,3 +1060,114 @@ class SupportTicket(models.Model):
         
     def __str__(self):
         return f"Ticket #{self.ticket_id}: {self.subject}"
+
+class NotificationCampaign(models.Model):
+    """Notification campaign records"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    title = models.CharField(max_length=255)
+    
+    NOTIFICATION_TYPES = [
+        ('email', 'Email'),
+        ('push', 'Push Notification'),
+        ('in_app', 'In-App Notification'),
+        ('sms', 'SMS')
+    ]
+    notification_type = models.CharField(max_length=20, choices=NOTIFICATION_TYPES)
+    
+    # Content
+    subject = models.CharField(max_length=255)
+    content = models.TextField()
+    
+    # For email content
+    html_content = models.TextField(blank=True, null=True)
+    
+    # Audience targeting
+    AUDIENCE_TYPES = [
+        ('all_users', 'All Users'),
+        ('segment', 'User Segment'),
+        ('individual', 'Individual Users')
+    ]
+    audience_type = models.CharField(max_length=20, choices=AUDIENCE_TYPES)
+    segment = models.CharField(max_length=100, blank=True, null=True)
+    
+    # For individual users targeting - store as JSON array of user IDs
+    target_user_ids = models.JSONField(default=list, blank=True, null=True)
+    
+    # Status
+    STATUS_CHOICES = [
+        ('draft', 'Draft'),
+        ('scheduled', 'Scheduled'),
+        ('sent', 'Sent'),
+        ('failed', 'Failed')
+    ]
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+    
+    # Scheduling
+    scheduled_for = models.DateTimeField(null=True, blank=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    
+    # Metadata
+    recipient_count = models.IntegerField(default=0)
+    delivered_count = models.IntegerField(default=0)
+    success_rate = models.FloatField(default=0.0)  # Percentage of successful deliveries
+    
+    created_by = models.ForeignKey('CustomUser', on_delete=models.SET_NULL, null=True, related_name='created_notifications')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    # For error tracking
+    error_message = models.TextField(blank=True, null=True)
+    
+    def __str__(self):
+        return f"{self.title} ({self.get_status_display()})"
+    
+    class Meta:
+        db_table = 'notification_campaigns'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['status']),
+            models.Index(fields=['notification_type']),
+            models.Index(fields=['scheduled_for']),
+            models.Index(fields=['sent_at']),
+            models.Index(fields=['created_at']),
+        ]
+
+class NotificationAttachment(models.Model):
+    """Attachments for email notifications"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    campaign = models.ForeignKey(NotificationCampaign, on_delete=models.CASCADE, related_name='attachments')
+    name = models.CharField(max_length=255)
+    file = models.FileField(upload_to='notification_attachments/', storage=S3Boto3Storage())
+    content_type = models.CharField(max_length=100)
+    size = models.IntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    def __str__(self):
+        return self.name
+    
+    class Meta:
+        db_table = 'notification_attachments'
+
+class UserSegment(models.Model):
+    """User segments for targeting notifications"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=100)
+    description = models.TextField(blank=True)
+    
+    # Define the criteria for this segment as a JSON object
+    criteria = models.JSONField(default=dict)
+    
+    # Cache the number of users in this segment
+    user_count = models.IntegerField(default=0)
+    
+    created_by = models.ForeignKey('CustomUser', on_delete=models.SET_NULL, null=True, related_name='created_segments')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    def __str__(self):
+        return f"{self.name} ({self.user_count} users)"
+    
+    class Meta:
+        db_table = 'user_segments'
+        ordering = ['name']

@@ -60,6 +60,12 @@ from .support_chat_views import (
     ChatMessageView,
 )
 
+from .support_ticket_views import (
+    UserSupportTicketViewSet,
+    SupportTicketViewSet,
+    CreateSupportTicketView,
+)
+
 from .utils import (
     haversine_distance,
 )
@@ -107,6 +113,11 @@ __all__ = [
     'check_user_role',
     'check_user_can_create_class',
 
+    # Support Ticket Views
+    'UserSupportTicketViewSet',
+    'SupportTicketViewSet',
+    'CreateSupportTicketView',
+
     # Revenue Analytics
     'RevenueAnalyticsView',
 
@@ -114,6 +125,7 @@ __all__ = [
     'ReviewSubmission',
     'ClassReviews',
 
+    # Chat Views
     'ChatMessageView',
 
     # Utils

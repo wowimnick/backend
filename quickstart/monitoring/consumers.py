@@ -32,23 +32,42 @@ class MetricsConsumer(AsyncWebsocketConsumer):
         self.is_connected = False
         self.db_refresh_task = None
         self.silk_refresh_task = None
+        self.client_id = None
+        # Track what data has been sent
+        self.last_sent_metrics = None
 
     async def connect(self):
         """Handle initial connection"""
         print("Client attempting to connect")
         await self.accept()
         self.is_connected = True
-        print("Client connected successfully")
+        self.client_id = id(self)  # Unique ID for this client
+        print(f"Client connected successfully, ID: {self.client_id}")
+        
+        # Send initial full data payload
+        await self.send_initial_data()
         
         # Create background tasks to refresh cached data
         self.db_refresh_task = asyncio.create_task(self.refresh_db_metrics_loop())
         self.silk_refresh_task = asyncio.create_task(self.refresh_silk_data_loop())
         self.send_task = asyncio.create_task(self.send_metrics())
 
+    async def send_initial_data(self):
+        """Send the initial full data payload to the client"""
+        # Get current metrics
+        metrics = await self.get_full_metrics()
+        self.last_sent_metrics = metrics
+        
+        # Send with special initialData flag
+        await self.send(text_data=json.dumps({
+            "initialData": True,
+            "data": metrics
+        }))
+
     async def disconnect(self, close_code):
         """Handle disconnection"""
         self.is_connected = False
-        print(f"Client disconnected with code {close_code}")
+        print(f"Client disconnected with code {close_code}, ID: {self.client_id}")
         
         # Cancel all background tasks
         for task in [self.send_task, self.db_refresh_task, self.silk_refresh_task]:
@@ -61,7 +80,132 @@ class MetricsConsumer(AsyncWebsocketConsumer):
 
     async def receive(self, text_data):
         """Handle received messages"""
+        try:
+            message = json.loads(text_data)
+            
+            # Handle request for historical data
+            if message.get('type') == 'request_historical':
+                await self.send_historical_data(message.get('timespan', 300))
+            
+            # Handle change in update frequency
+            elif message.get('type') == 'set_frequency':
+                new_frequency = message.get('frequency', self.SYSTEM_METRICS_INTERVAL)
+                # Validate frequency to prevent abuse
+                if 1 <= new_frequency <= 30:
+                    self.SYSTEM_METRICS_INTERVAL = new_frequency
+        except json.JSONDecodeError:
+            pass
+
+    async def send_historical_data(self, timespan):
+        """Send historical data for a specific timespan"""
+        # Implement this method to retrieve and send historical data
+        # This would fetch from your database or cache based on the requested timespan
         pass
+
+    async def get_full_metrics(self):
+        """Get the complete metrics data"""
+        # Get system metrics
+        cpu_times = psutil.cpu_times_percent()
+        disk = psutil.disk_usage('/')
+        network = psutil.net_io_counters()
+        current_time = time.time()
+        
+        # Calculate network rates
+        if self.prev_network is None:
+            network_rates = {
+                'bytes_sent': 0,
+                'bytes_recv': 0,
+                'packets_sent': network.packets_sent,
+                'packets_recv': network.packets_recv
+            }
+        else:
+            time_diff = current_time - self.prev_network['timestamp']
+            if time_diff > 0:  # Prevent division by zero
+                network_rates = {
+                    'bytes_sent': round((network.bytes_sent - self.prev_network['bytes_sent']) / time_diff),
+                    'bytes_recv': round((network.bytes_recv - self.prev_network['bytes_recv']) / time_diff),
+                    'packets_sent': network.packets_sent,
+                    'packets_recv': network.packets_recv
+                }
+            else:
+                network_rates = {
+                    'bytes_sent': 0,
+                    'bytes_recv': 0,
+                    'packets_sent': network.packets_sent,
+                    'packets_recv': network.packets_recv
+                }
+
+        self.prev_network = {
+            'bytes_sent': network.bytes_sent,
+            'bytes_recv': network.bytes_recv,
+            'timestamp': current_time
+        }
+        
+        # Use cached database metrics
+        db_metrics = self.__class__._cached_db_metrics
+        if db_metrics is None:
+            # If not cached yet, try to get from Redis
+            db_metrics = cache.get('monitoring_db_metrics', {
+                'active_connections': 0,
+                'slow_queries': 0,
+                'connection_pool': "0/0",
+                'pool_usage_percent': 0
+            })
+            # And update class cache
+            self.__class__._cached_db_metrics = db_metrics
+            self.__class__._cached_db_metrics_timestamp = current_time
+        
+        # Use cached Silk data
+        silk_data = self.__class__._cached_silk_data
+        if silk_data is None:
+            # If not cached yet, try to get from Redis
+            silk_data = cache.get('monitoring_silk_data', {
+                'requests': [],
+                'avg_response_time': 0,
+                'avg_queries_per_request': 0,
+                'error_analysis': {'top_error_paths': [], 'status_distribution': {}},
+                'sql_analysis': {'slow_queries': [], 'query_types': {}}
+            })
+            # And update class cache
+            self.__class__._cached_silk_data = silk_data
+            self.__class__._cached_silk_data_timestamp = current_time
+        
+        # Compile all metrics
+        return {
+            "system": {
+                "cpu_usage": psutil.cpu_percent(),
+                "cpu_detailed": {
+                    "user": cpu_times.user,
+                    "system": cpu_times.system,
+                    "idle": cpu_times.idle
+                },
+                "memory": {
+                    "total": psutil.virtual_memory().total,
+                    "available": psutil.virtual_memory().available,
+                    "percent": psutil.virtual_memory().percent,
+                    "used": psutil.virtual_memory().used
+                },
+                "disk": {
+                    "total": disk.total,
+                    "used": disk.used,
+                    "free": disk.free,
+                    "percent": disk.percent
+                },
+                "network": network_rates
+            },
+            "database": db_metrics,
+            "application": {
+                "active_users": cache.get('active_users', 0),
+                "error_rate": cache.get('error_rate', 0),
+                "requests_per_minute": cache.get('requests_per_minute', 0),
+                "uptime": str(datetime.datetime.now() - cache.get('start_time', datetime.datetime.now()))
+            },
+            "cache": {
+                "hits": cache.get('cache_hits', 0),
+                "misses": cache.get('cache_misses', 0)
+            },
+            "profiling": silk_data
+        }
 
     @classmethod
     async def refresh_db_metrics_loop(cls):
@@ -318,118 +462,64 @@ class MetricsConsumer(AsyncWebsocketConsumer):
             }
 
     async def send_metrics(self):
-        """Periodically send metrics to client"""
+        """Periodically send incremental metrics to client"""
         try:
             while self.is_connected:
                 try:
-                    # Get system metrics (fast, can refresh more frequently)
-                    cpu_times = psutil.cpu_times_percent()
-                    disk = psutil.disk_usage('/')
-                    network = psutil.net_io_counters()
-                    current_time = time.time()
+                    # Get current metrics
+                    current_metrics = await self.get_full_metrics()
                     
-                    # Calculate network rates
-                    if self.prev_network is None:
-                        network_rates = {
-                            'bytes_sent': 0,
-                            'bytes_recv': 0,
-                            'packets_sent': network.packets_sent,
-                            'packets_recv': network.packets_recv
+                    # Only calculate the diff for system metrics, which changes most frequently
+                    # For other metrics, we'll check if they've changed at all
+                    if self.last_sent_metrics:
+                        # Create a data structure just for the incremental update
+                        update = {
+                            "timestamp": time.time(),
+                            "metrics": {}
                         }
-                    else:
-                        time_diff = current_time - self.prev_network['timestamp']
-                        if time_diff > 0:  # Prevent division by zero
-                            network_rates = {
-                                'bytes_sent': round((network.bytes_sent - self.prev_network['bytes_sent']) / time_diff),
-                                'bytes_recv': round((network.bytes_recv - self.prev_network['bytes_recv']) / time_diff),
-                                'packets_sent': network.packets_sent,
-                                'packets_recv': network.packets_recv
-                            }
-                        else:
-                            network_rates = {
-                                'bytes_sent': 0,
-                                'bytes_recv': 0,
-                                'packets_sent': network.packets_sent,
-                                'packets_recv': network.packets_recv
-                            }
-
-                    self.prev_network = {
-                        'bytes_sent': network.bytes_sent,
-                        'bytes_recv': network.bytes_recv,
-                        'timestamp': current_time
-                    }
-                    
-                    # Use cached database metrics
-                    db_metrics = self.__class__._cached_db_metrics
-                    if db_metrics is None:
-                        # If not cached yet, try to get from Redis
-                        db_metrics = cache.get('monitoring_db_metrics', {
-                            'active_connections': 0,
-                            'slow_queries': 0,
-                            'connection_pool': "0/0",
-                            'pool_usage_percent': 0
-                        })
-                        # And update class cache
-                        self.__class__._cached_db_metrics = db_metrics
-                        self.__class__._cached_db_metrics_timestamp = current_time
-                    
-                    # Use cached Silk data
-                    silk_data = self.__class__._cached_silk_data
-                    if silk_data is None:
-                        # If not cached yet, try to get from Redis
-                        silk_data = cache.get('monitoring_silk_data', {
-                            'requests': [],
-                            'avg_response_time': 0,
-                            'avg_queries_per_request': 0,
-                            'error_analysis': {'top_error_paths': [], 'status_distribution': {}},
-                            'sql_analysis': {'slow_queries': [], 'query_types': {}}
-                        })
-                        # And update class cache
-                        self.__class__._cached_silk_data = silk_data
-                        self.__class__._cached_silk_data_timestamp = current_time
-                    
-                    # Compile all metrics
-                    metrics = {
-                        "system": {
-                            "cpu_usage": psutil.cpu_percent(),
-                            "cpu_detailed": {
-                                "user": cpu_times.user,
-                                "system": cpu_times.system,
-                                "idle": cpu_times.idle
-                            },
+                        
+                        # System metrics - always include as they change frequently
+                        update["metrics"]["system"] = {
+                            "cpu_usage": current_metrics["system"]["cpu_usage"],
                             "memory": {
-                                "total": psutil.virtual_memory().total,
-                                "available": psutil.virtual_memory().available,
-                                "percent": psutil.virtual_memory().percent,
-                                "used": psutil.virtual_memory().used
+                                "percent": current_metrics["system"]["memory"]["percent"],
+                                "used": current_metrics["system"]["memory"]["used"],
+                                "available": current_metrics["system"]["memory"]["available"],
+                                "total": current_metrics["system"]["memory"]["total"]
                             },
-                            "disk": {
-                                "total": disk.total,
-                                "used": disk.used,
-                                "free": disk.free,
-                                "percent": disk.percent
-                            },
-                            "network": network_rates
-                        },
-                        "database": db_metrics,
-                        "application": {
-                            "active_users": cache.get('active_users', 0),
-                            "error_rate": cache.get('error_rate', 0),
-                            "requests_per_minute": cache.get('requests_per_minute', 0),
-                            "uptime": str(datetime.datetime.now() - cache.get('start_time', datetime.datetime.now()))
-                        },
-                        "cache": {
-                            "hits": cache.get('cache_hits', 0),
-                            "misses": cache.get('cache_misses', 0)
-                        },
-                        "profiling": silk_data
-                    }
+                            "network": current_metrics["system"]["network"]
+                        }
+                        
+                        # For database metrics, only include if changed
+                        if current_metrics["database"] != self.last_sent_metrics["database"]:
+                            update["metrics"]["database"] = current_metrics["database"]
+                        
+                        # For application metrics, only include if changed
+                        if current_metrics["application"] != self.last_sent_metrics["application"]:
+                            update["metrics"]["application"] = current_metrics["application"]
+                        
+                        # For profiling, check if avg_response_time changed
+                        current_time = time.time()
+                        if not hasattr(self, 'last_profiling_update') or current_time - self.last_profiling_update >= 15:
+                            update["metrics"]["profiling"] = current_metrics["profiling"]
+                            self.last_profiling_update = current_time
+                        # If something important changed, also send it immediately
+                        elif (current_metrics["profiling"]["avg_response_time"] != 
+                            self.last_sent_metrics["profiling"]["avg_response_time"]):
+                            update["metrics"]["profiling"] = current_metrics["profiling"]
+                            self.last_profiling_update = current_time
+                        
+                        # Only send if we have connections and there's data to send
+                        if self.is_connected and len(update["metrics"]) > 0:
+                            await self.send(text_data=json.dumps({
+                                "incrementalUpdate": True,
+                                "data": update
+                            }))
                     
-                    # Only try to send if still connected
-                    if self.is_connected:
-                        await self.send(text_data=json.dumps(metrics))
+                    # Update last sent metrics
+                    self.last_sent_metrics = current_metrics
                     
-                    await asyncio.sleep(self.SYSTEM_METRICS_INTERVAL)  # Refresh system metrics more frequently
+                    await asyncio.sleep(self.SYSTEM_METRICS_INTERVAL)
                     
                 except asyncio.CancelledError:
                     # Re-raise to handle task cancellation

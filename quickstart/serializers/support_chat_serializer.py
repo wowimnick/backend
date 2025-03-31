@@ -1,24 +1,199 @@
 import re
 from rest_framework import serializers
 
-from ..models import ChatMessage, ChatSession, SupportTicket
+from ..models import ChatMessage, ChatSession, CustomUser, SupportTicket
+
+class UserBriefSerializer(serializers.ModelSerializer):
+    """Brief user information serializer"""
+    full_name = serializers.SerializerMethodField()
+    avatar_url = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = CustomUser
+        fields = ['userId', 'email', 'full_name', 'avatar_url']
+        
+    def get_full_name(self, obj):
+        return f"{obj.first_name} {obj.last_name}"
+        
+    def get_avatar_url(self, obj):
+        if obj.avatar:
+            return obj.avatar.url
+        return None
 
 class ChatMessageSerializer(serializers.ModelSerializer):
+    """Serializer for chat messages"""
     isUser = serializers.BooleanField(source='is_user')
     timestamp = serializers.DateTimeField(source='created_at')
     text = serializers.CharField(source='content')
-
+    senderType = serializers.CharField(source='sender_type')
+    
     class Meta:
-        model = ChatMessage 
-        fields = ['id', 'text', 'isUser', 'timestamp']
+        model = ChatMessage
+        fields = ['id', 'text', 'isUser', 'timestamp', 'senderType']
+
+class SupportTicketSerializer(serializers.ModelSerializer):
+    """Basic serializer for support tickets"""
+    user_details = UserBriefSerializer(source='user', read_only=True)
+    assigned_to_details = UserBriefSerializer(source='assigned_to', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    category_display = serializers.CharField(source='get_category_display', read_only=True)
+    priority_display = serializers.CharField(source='get_priority_display', read_only=True)
+    
+    class Meta:
+        model = SupportTicket
+        fields = [
+            'ticket_id', 'subject', 'category', 'category_display', 
+            'description', 'status', 'status_display', 'priority', 
+            'priority_display', 'created_at', 'updated_at',
+            'user', 'user_details', 'assigned_to', 'assigned_to_details',
+            'resolution_notes'
+        ]
+        read_only_fields = ['ticket_id', 'created_at', 'updated_at']
 
 class ChatSessionSerializer(serializers.ModelSerializer):
+    """Serializer for chat sessions with messages"""
     messages = ChatMessageSerializer(many=True, read_only=True)
     
     class Meta:
         model = ChatSession
         fields = ['id', 'userId', 'created_at', 'updated_at', 'messages']
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+class SupportTicketDetailSerializer(serializers.ModelSerializer):
+    """Detailed serializer for support tickets including conversation"""
+    user_details = UserBriefSerializer(source='user', read_only=True)
+    assigned_to_details = UserBriefSerializer(source='assigned_to', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    category_display = serializers.CharField(source='get_category_display', read_only=True)
+    priority_display = serializers.CharField(source='get_priority_display', read_only=True)
+    conversation = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = SupportTicket
+        fields = [
+            'ticket_id', 'subject', 'category', 'category_display', 
+            'description', 'status', 'status_display', 'priority', 
+            'priority_display', 'created_at', 'updated_at',
+            'user', 'user_details', 'assigned_to', 'assigned_to_details',
+            'resolution_notes', 'conversation'
+        ]
+        read_only_fields = ['ticket_id', 'created_at', 'updated_at']
+    
+    def get_conversation(self, obj):
+        """Get conversation messages if chat session exists"""
+        if not obj.chat_session:
+            return []
+            
+        messages = obj.chat_session.messages.all().order_by('created_at')
+        return ChatMessageSerializer(messages, many=True).data
+
+class SupportTicketStatsSerializer(serializers.Serializer):
+    """Serializer for support ticket statistics"""
+    open_tickets = serializers.IntegerField()
+    in_progress_tickets = serializers.IntegerField()
+    tickets_today = serializers.IntegerField()
+    avg_resolution_time = serializers.CharField()
+    category_distribution = serializers.ListField(
+        child=serializers.DictField()
+    )
+    response_times = serializers.DictField()
+
+
+class UserSupportTicketSerializer(serializers.ModelSerializer):
+    """Support ticket serializer for user-facing views"""
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    category_display = serializers.CharField(source='get_category_display', read_only=True)
+    priority_display = serializers.CharField(source='get_priority_display', read_only=True)
+    assigned_to_details = UserBriefSerializer(source='assigned_to', read_only=True)
+    
+    class Meta:
+        model = SupportTicket
+        fields = [
+            'ticket_id', 'subject', 'description', 
+            'category', 'category_display',
+            'priority', 'priority_display',
+            'status', 'status_display',
+            'created_at', 'updated_at',
+            'assigned_to_details', 'resolution_notes'
+        ]
+        read_only_fields = [
+            'ticket_id', 'status', 'status_display',
+            'created_at', 'updated_at', 'assigned_to_details'
+        ]
+
+class UserChatMessageSerializer(serializers.ModelSerializer):
+    """Chat message serializer for user-facing views"""
+    isUser = serializers.BooleanField(source='is_user')
+    timestamp = serializers.DateTimeField(source='created_at')
+    text = serializers.CharField(source='content')
+    
+    class Meta:
+        model = ChatMessage
+        fields = ['id', 'text', 'isUser', 'timestamp']
+
+class UserSupportTicketDetailSerializer(serializers.ModelSerializer):
+    """Detailed ticket serializer for user-facing view with conversation"""
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    category_display = serializers.CharField(source='get_category_display', read_only=True)
+    priority_display = serializers.CharField(source='get_priority_display', read_only=True)
+    assigned_to_details = UserBriefSerializer(source='assigned_to', read_only=True)
+    conversation = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = SupportTicket
+        fields = [
+            'ticket_id', 'subject', 'description', 
+            'category', 'category_display',
+            'priority', 'priority_display',
+            'status', 'status_display',
+            'created_at', 'updated_at',
+            'assigned_to_details', 'resolution_notes',
+            'conversation'
+        ]
+        read_only_fields = [
+            'ticket_id', 'status', 'status_display',
+            'created_at', 'updated_at', 'assigned_to_details'
+        ]
+    
+    def get_conversation(self, obj):
+        """Get conversation messages if chat session exists"""
+        if not obj.chat_session:
+            return []
+            
+        messages = obj.chat_session.messages.all().order_by('created_at')
+        return UserChatMessageSerializer(messages, many=True).data
+
+class CreateSupportTicketSerializer(serializers.ModelSerializer):
+    """Serializer for creating new support tickets"""
+    class Meta:
+        model = SupportTicket
+        fields = [
+            'subject', 'description', 'category', 'priority'
+        ]
+        
+    def create(self, validated_data):
+        # Add user from request context
+        user = self.context['request'].user
+        validated_data['user'] = user
+        
+        # Create ticket
+        ticket = SupportTicket.objects.create(**validated_data)
+        
+        # Create chat session with initial message
+        chat_session = ChatSession.objects.create(userId=user)
+        
+        # Add the description as the first message
+        ChatMessage.objects.create(
+            session=chat_session,
+            content=validated_data['description'],
+            is_user=True
+        )
+        
+        # Connect session to ticket
+        ticket.chat_session = chat_session
+        ticket.save(update_fields=['chat_session'])
+        
+        return ticket
 
 class ChatRequestSerializer(serializers.Serializer):
     messages = serializers.ListField(
@@ -28,6 +203,15 @@ class ChatRequestSerializer(serializers.Serializer):
         ),
         min_length=1
     )
+    session_id = serializers.IntegerField(required=False, allow_null=False)
+
+    def validate(self, data):
+        """
+        Remove session_id if it's None to avoid validation errors
+        """
+        if 'session_id' in data and data['session_id'] is None:
+            data.pop('session_id')
+        return data
 
     def validate_messages(self, value):
         """
@@ -56,20 +240,9 @@ class ChatRequestSerializer(serializers.Serializer):
                 )
         
         return value
-    
-class SupportTicketSerializer(serializers.ModelSerializer):
-    username = serializers.CharField(source='user.username', read_only=True)
-    user_email = serializers.CharField(source='user.email', read_only=True)
-    
-    class Meta:
-        model = SupportTicket
-        fields = [
-            'ticket_id', 'category', 'subject', 'description', 
-            'status', 'priority', 'created_at', 'username', 'user_email'
-        ]
-        read_only_fields = ['ticket_id', 'created_at']
 
 class TicketCreationResponseSerializer(serializers.Serializer):
     """Serializer for including ticket information in chat responses"""
     message = ChatMessageSerializer()
     ticket = SupportTicketSerializer()
+

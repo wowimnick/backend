@@ -1,6 +1,7 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from django.db import transaction
 from rest_framework.permissions import IsAuthenticated
 from django.contrib.auth.models import Permission
 from django.db.models import Count, Prefetch
@@ -218,6 +219,74 @@ class RoleManagementViewSet(viewsets.ModelViewSet):
                 logger.error(f"Failed to create audit log: {str(e)}")
         
         return Response(RoleDetailSerializer(updated_instance).data)
+    
+    @action(detail=False, methods=['post'])
+    def update_order(self, request):
+        """Update the hierarchy levels of multiple roles at once"""
+        roles_data = request.data
+        
+        if not isinstance(roles_data, list):
+            return Response(
+                {'detail': 'Invalid data format. Expected a list of role objects.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Verify that all required fields are present and valid
+        for item in roles_data:
+            if not isinstance(item, dict) or 'id' not in item or 'hierarchy_level' not in item:
+                return Response(
+                    {'detail': 'Each item must contain id and hierarchy_level fields.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        # Update roles in a single transaction
+        try:
+            with transaction.atomic():
+                updated_roles = []
+                for item in roles_data:
+                    role_id = item['id']
+                    hierarchy_level = item['hierarchy_level']
+                    
+                    role = Role.objects.get(id=role_id)
+                    
+                    user_role = request.user.role
+                    if user_role and user_role.hierarchy_level < role.hierarchy_level:
+                        return Response(
+                            {'detail': f'You cannot modify role {role.name} with higher privileges than your own.'},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
+                    
+                    role.hierarchy_level = hierarchy_level
+                    role.save(update_fields=['hierarchy_level'])
+                    updated_roles.append(role)
+                
+                # Log the action
+                try:
+                    AuditLog.objects.create(
+                        user=self.request.user,
+                        user_email=self.request.user.email,
+                        action='role_update',
+                        details=f"Role hierarchy order updated for {len(updated_roles)} roles",
+                        target_model='Role',
+                        ip_address=request.META.get('REMOTE_ADDR'),
+                        user_agent=request.META.get('HTTP_USER_AGENT', '')
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to create audit log: {str(e)}")
+                    
+                serializer = RoleDetailSerializer(updated_roles, many=True)
+                return Response(serializer.data)
+        except Role.DoesNotExist:
+            return Response(
+                {'detail': 'One or more roles not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            logger.error(f"Error updating role hierarchy: {str(e)}")
+            return Response(
+                {'detail': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
     
     @action(detail=True, methods=['post'])
     def duplicate(self, request, pk=None):
