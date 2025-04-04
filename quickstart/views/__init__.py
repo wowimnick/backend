@@ -62,7 +62,6 @@ from .support_chat_views import (
 
 from .support_ticket_views import (
     UserSupportTicketViewSet,
-    SupportTicketViewSet,
     CreateSupportTicketView,
 )
 
@@ -115,7 +114,6 @@ __all__ = [
 
     # Support Ticket Views
     'UserSupportTicketViewSet',
-    'SupportTicketViewSet',
     'CreateSupportTicketView',
 
     # Revenue Analytics

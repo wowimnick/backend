@@ -1,456 +1,240 @@
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
-from rest_framework import viewsets, permissions
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
-from django.db.models import Q, Count, Avg, F, ExpressionWrapper, fields
-from django.utils import timezone
+from rest_framework.permissions import IsAuthenticated, BasePermission
 from rest_framework.views import APIView
-import csv
-from django.http import HttpResponse
+from django.db.models import Count, Q # Added Q
+from django.utils import timezone # Added timezone
+import logging
 
-from quickstart.models import SupportTicket, ChatMessage, ChatSession, CustomUser
-from quickstart.utils.permissions import check_user_role
-from ..serializers import SupportTicketSerializer, ChatMessageSerializer, SupportTicketDetailSerializer, SupportTicketStatsSerializer, CreateSupportTicketSerializer, UserSupportTicketSerializer
+# Assuming models are in the parent app directory structure
+from ..models import SupportTicket, ChatMessage, ChatSession, CustomUser
+# Assuming serializers are structured similarly
+from ..serializers import ( # Example path
+    SupportTicketSerializer, ChatMessageSerializer, SupportTicketDetailSerializer,
+    CreateSupportTicketSerializer, UserSupportTicketSerializer # UserSupportTicketSerializer might be same as SupportTicketSerializer
+)
 
-class IsOwnerOrSupport(permissions.BasePermission):
-    """
-    Custom permission to only allow owners of a ticket or support staff to view/edit it
-    """
+logger = logging.getLogger(__name__)
+
+# --- Custom Permission Class (for object-level checks if needed) ---
+class IsTicketOwner(BasePermission):
+    """ Allows access only to the user who owns the ticket. """
+    message = "You do not have permission to access this ticket."
     def has_object_permission(self, request, view, obj):
-        # Support roles can access any ticket
-        if request.user.role and request.user.role.name in ['admin', 'support']:
-            return True
-        # Otherwise, users can only access their own tickets
+        # obj is the SupportTicket instance
+        if not request.user or not request.user.is_authenticated or not request.user.is_active:
+             return False
+        # Check if the request user is the owner of the ticket
         return obj.user == request.user
 
-class SupportTicketViewSet(viewsets.ModelViewSet):
-    """
-    API endpoint for managing support tickets
-    """
-    serializer_class = SupportTicketSerializer
-    permission_classes = [IsAuthenticated]
-    filter_backends = [filters.SearchFilter]
-    search_fields = ['subject', 'description', 'user__email', 'user__first_name', 'user__last_name']
-    
-    def get_serializer_class(self):
-        if self.action == 'retrieve':
-            return SupportTicketDetailSerializer
-        if self.action == 'stats':
-            return SupportTicketStatsSerializer
-        return SupportTicketSerializer
-    
-    def get_queryset(self):
-        """
-        Return tickets based on user role:
-        - Admin/support: all tickets
-        - Regular users: only their own tickets
-        """
-        user = self.request.user
-        
-        # Base query with annotations
-        queryset = SupportTicket.objects.select_related(
-            'user', 'assigned_to', 'chat_session'
-        ).prefetch_related(
-            'chat_session__messages'
-        )
-        
-        # Apply filters based on query parameters
-        category = self.request.query_params.get('category')
-        status_param = self.request.query_params.get('status')
-        priority = self.request.query_params.get('priority')
-        view_mode = self.request.query_params.get('view')
-        
-        if category and category != 'all':
-            queryset = queryset.filter(category=category)
-            
-        if status_param and status_param != 'all':
-            queryset = queryset.filter(status=status_param)
-            
-        if priority and priority != 'all':
-            queryset = queryset.filter(priority=priority)
-            
-        if view_mode == 'assigned_to_me':
-            queryset = queryset.filter(assigned_to=user)
-        elif view_mode == 'created_today':
-            today = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            queryset = queryset.filter(created_at__gte=today)
-            
-        return queryset.order_by('-created_at')
-    
-    @action(detail=True, methods=['post'])
-    def reply(self, request, pk=None):
-        """Add a reply to a support ticket"""
-        ticket = self.get_object()
-        
-        # Validate request data
-        if 'message' not in request.data or not request.data['message'].strip():
-            return Response(
-                {'error': 'Message content is required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-            
-        # Get or create chat session if needed
-        chat_session = ticket.chat_session
-        if not chat_session:
-            chat_session = ChatSession.objects.create(userId=ticket.user)
-            ticket.chat_session = chat_session
-            ticket.save(update_fields=['chat_session'])
-        
-        # Create agent message
-        message = ChatMessage.objects.create(
-            session=chat_session,
-            content=request.data['message'],
-            is_user=False,
-            sender_type='agent'
-        )
-        
-        # If ticket is open, move to in_progress
-        if ticket.status == 'open':
-            ticket.status = 'in_progress'
-            ticket.assigned_to = request.user
-            ticket.save(update_fields=['status', 'assigned_to'])
-        
-        return Response(
-            ChatMessageSerializer(message).data,
-            status=status.HTTP_201_CREATED
-        )
-    
-    @action(detail=True, methods=['post'])
-    def assign(self, request, pk=None):
-        """Assign ticket to an agent"""
-        ticket = self.get_object()
-        
-        if 'agent_id' not in request.data:
-            return Response(
-                {'error': 'agent_id is required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-            
-        try:
-            agent = CustomUser.objects.get(userId=request.data['agent_id'])
-            
-            # Check if agent has support role
-            if not check_user_role(agent, ['Admin', 'Manager', 'Business Owner']):
-                return Response(
-                    {'error': 'Selected user does not have permission to handle tickets'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-                
-            # Update ticket
-            ticket.assigned_to = agent
-            if ticket.status == 'open':
-                ticket.status = 'in_progress'
-            ticket.save(update_fields=['assigned_to', 'status'])
-            
-            # Add system message in chat about assignment
-            if ticket.chat_session:
-                ChatMessage.objects.create(
-                    session=ticket.chat_session,
-                    content=f"Ticket assigned to {agent.first_name} {agent.last_name}",
-                    is_user=False,
-                    sender_type='system'
-                )
-            
-            return Response(
-                SupportTicketSerializer(ticket).data,
-                status=status.HTTP_200_OK
-            )
-            
-        except CustomUser.DoesNotExist:
-            return Response(
-                {'error': 'Agent not found'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-    
-    @action(detail=True, methods=['post'])
-    def resolve(self, request, pk=None):
-        """Resolve a ticket"""
-        ticket = self.get_object()
-        
-        # Can't resolve already resolved tickets
-        if ticket.status in ['resolved', 'closed']:
-            return Response(
-                {'error': 'Ticket is already resolved or closed'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-            
-        # Get resolution notes
-        resolution_notes = request.data.get('resolution_notes', '')
-        
-        # Update ticket
-        ticket.status = 'resolved'
-        ticket.resolution_notes = resolution_notes
-        ticket.assigned_to = request.user  # Assign to current user if not already assigned
-        ticket.save(update_fields=['status', 'resolution_notes', 'assigned_to'])
-        
-        # Add resolution note to chat
-        if ticket.chat_session and resolution_notes:
-            ChatMessage.objects.create(
-                session=ticket.chat_session,
-                content=f"Ticket resolved: {resolution_notes}",
-                is_user=False,
-                sender_type='system'
-            )
-        
-        return Response(
-            SupportTicketSerializer(ticket).data,
-            status=status.HTTP_200_OK
-        )
-    
-    @action(detail=True, methods=['post'])
-    def close(self, request, pk=None):
-        """Close a resolved ticket"""
-        ticket = self.get_object()
-        
-        # Can only close resolved tickets
-        if ticket.status != 'resolved':
-            return Response(
-                {'error': 'Only resolved tickets can be closed'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-            
-        # Update ticket
-        ticket.status = 'closed'
-        ticket.save(update_fields=['status'])
-        
-        # Add system message to chat
-        if ticket.chat_session:
-            ChatMessage.objects.create(
-                session=ticket.chat_session,
-                content="Ticket has been closed",
-                is_user=False,
-                sender_type='system'
-            )
-        
-        return Response(
-            SupportTicketSerializer(ticket).data,
-            status=status.HTTP_200_OK
-        )
-    
-    @action(detail=False, methods=['get'])
-    def stats(self, request):
-        """Get ticket statistics for dashboard"""
-        # Ensure user has appropriate permissions
-        if not check_user_role(request.user, ['Admin', 'Super Admin']):
-            return Response(
-                {'error': 'You do not have permission to view ticket statistics'},
-                status=status.HTTP_403_FORBIDDEN
-            )
-            
-        # Get current counts by status
-        status_counts = SupportTicket.objects.values('status').annotate(count=Count('status'))
-        status_dict = {item['status']: item['count'] for item in status_counts}
-        
-        # Get count of tickets created today
-        today = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        tickets_today = SupportTicket.objects.filter(created_at__gte=today).count()
-        
-        # Calculate average resolution time for tickets created in last 30 days
-        thirty_days_ago = timezone.now() - timezone.timedelta(days=30)
-        resolved_tickets = SupportTicket.objects.filter(
-            status__in=['resolved', 'closed'],
-            created_at__gte=thirty_days_ago
-        )
-        
-        # Calculate time difference between created_at and updated_at for resolved tickets
-        resolution_time_expr = ExpressionWrapper(
-            F('updated_at') - F('created_at'),
-            output_field=fields.DurationField()
-        )
-        avg_resolution = resolved_tickets.annotate(
-            resolution_time=resolution_time_expr
-        ).aggregate(avg=Avg('resolution_time'))
-        
-        # Format average resolution time
-        avg_resolution_days = None
-        if avg_resolution['avg']:
-            avg_resolution_days = round(avg_resolution['avg'].total_seconds() / 86400, 1)
-            
-        # Get category distribution
-        categories = SupportTicket.objects.values('category').annotate(
-            count=Count('category')
-        ).order_by('-count')
-        
-        # Get weekly metrics for response times
-        # (In a real implementation, would calculate based on actual response times)
-        # For now, using mock data for demonstration
-        
-        response_times = {
-            'last_week': '4.5 hours',
-            'this_week': '3.2 hours',
-            'improvement': '28.9%'
-        }
-        
-        data = {
-            'open_tickets': status_dict.get('open', 0),
-            'in_progress_tickets': status_dict.get('in_progress', 0),
-            'tickets_today': tickets_today,
-            'avg_resolution_time': f"{avg_resolution_days} days" if avg_resolution_days else "N/A",
-            'category_distribution': [
-                {'name': item['category'].capitalize(), 'value': item['count']}
-                for item in categories
-            ],
-            'response_times': response_times
-        }
-        
-        return Response(data, status=status.HTTP_200_OK)
-    
-    @action(detail=False, methods=['get'])
-    def export(self, request):
-        """Export tickets to CSV"""
-        # Ensure user has appropriate permissions
-        if not check_user_role(request.user, ['Admin', 'Manager', 'Business Owner']):
-            return Response(
-                {'error': 'You do not have permission to export tickets'},
-                status=status.HTTP_403_FORBIDDEN
-            )
-            
-        # Get filtered queryset
-        queryset = self.filter_queryset(self.get_queryset())
-        
-        # Create the HttpResponse with CSV header
-        response = HttpResponse(content_type='text/csv')
-        response['Content-Disposition'] = 'attachment; filename="support_tickets.csv"'
-        
-        # Create CSV writer
-        writer = csv.writer(response)
-        writer.writerow([
-            'Ticket ID', 'Subject', 'Category', 'Status', 'Priority',
-            'User', 'Email', 'Created Date', 'Assigned To', 'Resolution Notes'
-        ])
-        
-        # Add data rows
-        for ticket in queryset:
-            writer.writerow([
-                ticket.ticket_id,
-                ticket.subject,
-                ticket.get_category_display(),
-                ticket.get_status_display(),
-                ticket.get_priority_display(),
-                f"{ticket.user.first_name} {ticket.user.last_name}",
-                ticket.user.email,
-                ticket.created_at.strftime('%Y-%m-%d %H:%M'),
-                f"{ticket.assigned_to.first_name} {ticket.assigned_to.last_name}" if ticket.assigned_to else "Unassigned",
-                ticket.resolution_notes
-            ])
-            
-        return response
-    
+# --- UserSupportTicketViewSet ---
 class UserSupportTicketViewSet(viewsets.ModelViewSet):
     """
-    API endpoint for users to view their own support tickets
+    API endpoint for users to view and manage their OWN support tickets
     """
-    serializer_class = SupportTicketSerializer
-    permission_classes = [IsAuthenticated]
-    filter_backends = [filters.SearchFilter]
-    search_fields = ['subject', 'description']
-    
+    serializer_class = SupportTicketSerializer # Base serializer for list/update
+    permission_classes = [IsAuthenticated] # Base permission: user must be logged in
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter] # Add ordering
+    search_fields = ['subject', 'description'] # Allow searching own tickets
+    ordering_fields = ['created_at', 'updated_at', 'status', 'priority', 'category']
+    ordering = ['-created_at'] # Default order
+
+    # Restrict HTTP methods allowed for users
+    http_method_names = ['get', 'post', 'head', 'options'] # Allow GET (list, retrieve), POST (reply, potentially create)
+
     def get_serializer_class(self):
-        if self.action == 'create':
-            return CreateSupportTicketSerializer
+        # Use detail serializer for retrieve action
         if self.action == 'retrieve':
             return SupportTicketDetailSerializer
-        return SupportTicketSerializer
-    
+        # Use specific serializer for create if handled here
+        # if self.action == 'create': # Typically handled by CreateSupportTicketView now
+        #     return CreateSupportTicketSerializer
+        return SupportTicketSerializer # Default for list
+
     def get_queryset(self):
         """
-        Return only tickets belonging to the current user
+        Return only tickets belonging to the current authenticated user.
         """
         user = self.request.user
-        
-        # Base query with annotations
+        if not user or not user.is_authenticated:
+            return SupportTicket.objects.none() # Return empty if not authenticated
+
+        # Base query filtered by user, with optimizations
         queryset = SupportTicket.objects.select_related(
-            'user', 'assigned_to', 'chat_session'
+            'user', 'assigned_to', 'chat_session' # Still select related for display
         ).prefetch_related(
-            'chat_session__messages'
+            'chat_session__messages' # Prefetch messages for detail view efficiency
         ).filter(user=user)
-        
-        # Filter based on query parameters
+
+        # --- Filtering Logic for User's Tickets ---
         status_param = self.request.query_params.get('status')
-        category = self.request.query_params.get('category')
-        
         if status_param and status_param != 'all':
             queryset = queryset.filter(status=status_param)
-            
+
+        category = self.request.query_params.get('category')
         if category and category != 'all':
             queryset = queryset.filter(category=category)
-            
-        return queryset.order_by('-created_at')
-    
-    @action(detail=True, methods=['post'])
+
+        # Search and Ordering handled by filter backends
+
+        return queryset
+
+    # Override standard methods to ensure ownership or apply specific permissions
+
+    def list(self, request, *args, **kwargs):
+        # Basic auth already checked, get_queryset filters by owner
+        return super().list(request, *args, **kwargs)
+
+    def retrieve(self, request, *args, **kwargs):
+        # Use IsTicketOwner permission to ensure user owns this specific ticket
+        # This check happens automatically if added to permission_classes,
+        # but we can be explicit or add it just for this action if needed.
+        instance = self.get_object() # get_object applies queryset filtering first
+        # Optionally, add extra check if IsTicketOwner isn't globally applied
+        # if instance.user != request.user:
+        #    self.permission_denied(request, message="You do not own this ticket.")
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
+
+    # Block standard create/update/delete if handled elsewhere or not allowed
+    def create(self, request, *args, **kwargs):
+        # Usually handled by CreateSupportTicketView, block here
+        return Response({"detail": "Method \"POST\" not allowed."}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    def update(self, request, *args, **kwargs):
+        # Users typically shouldn't update tickets directly, only reply
+        return Response({"detail": "Method \"PUT\" not allowed."}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    def partial_update(self, request, *args, **kwargs):
+        # Users typically shouldn't update tickets directly, only reply
+        return Response({"detail": "Method \"PATCH\" not allowed."}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    def destroy(self, request, *args, **kwargs):
+        # Decide if users can delete their own tickets
+        # return Response({"detail": "Method \"DELETE\" not allowed."}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
+        # OR implement with IsTicketOwner check:
+        instance = self.get_object() # Verifies ownership via get_queryset filter
+        logger.warning(f"User {request.user.email} deleted their own Support Ticket {instance.pk}")
+        # Add AuditLog?
+        return super().destroy(request, *args, **kwargs)
+
+
+    # --- Custom Actions for Users ---
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated, IsTicketOwner]) # Ensure owner
     def reply(self, request, pk=None):
-        """Add a user reply to a support ticket"""
-        ticket = self.get_object()
-        
-        # Validate request data
-        if 'message' not in request.data or not request.data['message'].strip():
-            return Response(
-                {'error': 'Message content is required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-            
-        # Get or create chat session if needed
-        chat_session = ticket.chat_session
-        if not chat_session:
-            chat_session = ChatSession.objects.create(userId=request.user)
-            ticket.chat_session = chat_session
-            ticket.save(update_fields=['chat_session'])
-        
+        """Add a user reply to their own support ticket"""
+        # Check specific permission if defined, otherwise rely on IsTicketOwner
+        if not request.user.has_perm('quickstart.reply_own_support_ticket'):
+             # Fallback check if permission exists but wasn't assigned (should not happen if assigned correctly)
+             # self.permission_denied(request, message="You do not have permission to reply to tickets.")
+             # For now, rely on IsTicketOwner decorator check
+             pass
+
+
+        ticket = self.get_object() # Ownership checked by decorator/get_object
+        message_content = request.data.get('message', '').strip()
+
+        if not message_content:
+            return Response({'error': 'Message content is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Prevent replying to closed tickets? Optional rule.
+        # if ticket.status == 'closed':
+        #    return Response({'error': 'Cannot reply to a closed ticket.'}, status=400)
+
+        # Get or create chat session
+        with transaction.atomic(): # Use atomic transaction
+             chat_session, created = ChatSession.objects.get_or_create(userId=request.user) # Use request.user
+             if not ticket.chat_session:
+                 ticket.chat_session = chat_session
+                 ticket.save(update_fields=['chat_session'])
+
         # Create user message
         message = ChatMessage.objects.create(
             session=chat_session,
-            content=request.data['message'],
-            is_user=True,
-            sender_type='user' 
+            content=message_content,
+            is_user=True, # User message
+            sender_type='user'
         )
-        
+
+        # If user replies to a 'resolved' ticket, maybe reopen it to 'in_progress'?
+        if ticket.status == 'resolved':
+            ticket.status = 'in_progress'
+            # Maybe unassign agent if user replies after resolution? Optional.
+            # ticket.assigned_to = None
+            ticket.save(update_fields=['status'])
+            logger.info(f"Ticket {pk} reopened to 'in_progress' due to user reply.")
+            # Add system message?
+            # ChatMessage.objects.create(session=chat_session, content="Ticket reopened by user reply.", is_user=False, sender_type='system')
+
+
+        logger.info(f"User {request.user.email} replied to Ticket {pk}")
+
         return Response(
             ChatMessageSerializer(message).data,
             status=status.HTTP_201_CREATED
         )
-    
+
     @action(detail=False, methods=['get'])
     def summary(self, request):
-        """Get summary counts of user tickets by status"""
+        """Get summary counts of the current user's tickets by status"""
         user = request.user
-        
+        if not user or not user.is_authenticated:
+             # Should be caught by IsAuthenticated permission class, but good safety check
+              return Response({"error": "Authentication required."}, status=status.HTTP_401_UNAUTHORIZED)
+
+
+        # Use the filtered queryset logic from get_queryset
+        base_queryset = self.get_queryset() # Already filtered for the user
+
         # Get counts by status
-        status_counts = SupportTicket.objects.filter(user=user).values('status').annotate(count=Count('status'))
-        
+        status_counts = base_queryset.values('status').annotate(count=Count('id'))
+
         # Format as dictionary
         result = {
-            'total': SupportTicket.objects.filter(user=user).count(),
+            'total': base_queryset.count(), # Total count for this user
             'counts': {item['status']: item['count'] for item in status_counts}
         }
-        
-        return Response(result)
-    
 
+        return Response(result)
+
+# --- CreateSupportTicketView ---
 class CreateSupportTicketView(APIView):
     """
-    API view for users to create support tickets
+    API view for authenticated users to create support tickets.
+    Checks 'add_supportticket' permission.
     """
-    permission_classes = [IsAuthenticated]
-    
+    permission_classes = [IsAuthenticated] # Base: Must be logged in
+
     def post(self, request):
-        # Create serializer with context containing request
+        # Check specific permission to create tickets
+        if not request.user.has_perm('quickstart.add_supportticket'):
+            return Response(
+                 {"detail": "You do not have permission to create support tickets."},
+                 status=status.HTTP_403_FORBIDDEN
+             )
+
+        # Pass request context to serializer to automatically set the user
         serializer = CreateSupportTicketSerializer(
             data=request.data,
             context={'request': request}
         )
-        
+
         if serializer.is_valid():
-            # Create the ticket
-            ticket = serializer.save()
-            
-            # Return the created ticket
-            return Response(
-                UserSupportTicketSerializer(ticket).data,
-                status=status.HTTP_201_CREATED
-            )
-        
-        return Response(
-            serializer.errors,
-            status=status.HTTP_400_BAD_REQUEST
-        )
+            try:
+                 # Serializer's save method should handle setting user=request.user
+                 ticket = serializer.save()
+                 logger.info(f"User {request.user.email} created Support Ticket {ticket.pk}")
+                 # Add to AuditLog if needed for user actions
+
+                 # Return data using the appropriate detail or user-facing serializer
+                 response_serializer = UserSupportTicketSerializer(ticket, context={'request': request}) # Or SupportTicketDetailSerializer
+                 return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+            except Exception as e:
+                 logger.error(f"Error creating support ticket for user {request.user.email}: {e}", exc_info=True)
+                 return Response({"detail": "An error occurred while creating the ticket."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # Return validation errors
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

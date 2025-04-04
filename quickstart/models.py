@@ -270,6 +270,14 @@ class CustomUser(AbstractUser):
     
     class Meta:
         db_table = 'users'
+        permissions = [
+            ("change_user_role", "Can change the role assigned to any user"),
+            ("lock_user", "Can lock/unlock any user account"),
+            ("reset_user_password", "Can initiate password reset for any user"),
+            ("view_user_metrics", "Can view user management metrics"),
+            ("access_user_admin", "Can access the user administration section"),
+            ("view_system_metrics", "Can view real-time system performance metrics"),
+        ]
 
 class BusinessInfo(models.Model):
     # Basic Info (BusinessInfoStep)
@@ -381,6 +389,18 @@ class BusinessInfo(models.Model):
             models.Index(fields=['isActive']),
             models.Index(fields=['featured']),
         ]
+        permissions = [
+            ("toggle_business_feature", "Can toggle the featured status for any business"),
+            ("view_business_metrics", "Can view aggregated business management statistics"),
+            ("export_business_data", "Can export business data as CSV"),
+            ("send_business_announcements", "Can send platform announcements to businesses"),
+            ("access_business_admin", "Can access the Business Administration section"),
+            ("manage_own_classes", "Can create/edit classes, options, schedules for own business"),
+            ("manage_own_schedule_instances", "Can manage instances (attendance, cancel) for own classes"),
+            ("view_own_business_bookings", "Can view bookings for own business"),
+            ("manage_own_business_profile", "Can edit own business profile details"),
+            ("manage_business_staff", "Can manage staff (instructors, managers) for own business"),
+        ]
 
 class StudentNote(models.Model):
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='business_notes')
@@ -422,6 +442,10 @@ class ClassCategory(models.Model):
     class Meta:
         db_table = 'class_categories'
         verbose_name_plural = 'Class Categories'
+        permissions = [
+            ("view_category_stats", "Can view category statistics"),
+            ("access_category_admin", "Can access the Category Administration section"),
+        ]
 
 class ClassSubcategory(models.Model):
     """Class subcategory model"""
@@ -480,6 +504,12 @@ class ClassesMain(models.Model):
             models.Index(fields=['location']),
             models.Index(fields=['businessId']),
             models.Index(fields=['status'])
+        ]
+        permissions = [
+            ("change_class_status", "Can change the status (active/inactive/suspended) of any class"),
+            ("view_class_analytics", "Can view aggregated class analytics"),
+            ("export_class_data", "Can export class data"),
+            ("access_class_admin", "Can access the Class Administration section"),
         ]
 
 class Favorites(models.Model):
@@ -877,6 +907,14 @@ class Booking(models.Model):
             models.Index(fields=['status']),
             models.Index(fields=['booking_group_id']),
         ]
+        permissions = [
+            ("cancel_own_booking", "Can cancel their own booking"),
+            ("mark_booking_attendance", "Can mark attendance for this booking"),
+            ("cancel_any_booking", "Can cancel any user's booking (Admin)"),
+            ("view_booking_analytics", "Can view aggregated booking analytics"),
+            ("export_booking_data", "Can export booking data"),
+            ("access_booking_admin", "Can access the Booking Administration section"),
+        ]
 
 class Payment(models.Model):
     """Stores detailed payment information"""
@@ -946,6 +984,13 @@ class Payment(models.Model):
             models.Index(fields=['status']),
             models.Index(fields=['created_at']),
         ]
+        permissions = [
+            ("process_refund", "Can process refunds for any payment"),
+            ("mark_payment_paid", "Can manually mark a payment as paid"),
+            ("view_payment_stats", "Can view aggregated payment statistics"),
+            ("export_payment_data", "Can export payment data"),
+            ("access_payment_admin", "Can access the Payment Administration section"),
+        ]
 
 class Reviews(models.Model):
     reviewId = models.AutoField(primary_key=True)
@@ -986,6 +1031,9 @@ class Reviews(models.Model):
         indexes = [
             models.Index(fields=['classId']),
             models.Index(fields=['booking']),
+        ]
+        permissions = [
+            ("access_review_admin", "Can access the Review Moderation section"),
         ]
 
 class ChatSession(models.Model):
@@ -1057,6 +1105,17 @@ class SupportTicket(models.Model):
     class Meta:
         db_table = 'support_tickets'
         ordering = ['-created_at']
+        permissions = [
+            # Admin Permissions
+            ("reply_any_support_ticket", "Can reply to any support ticket (Admin/Agent)"),
+            ("assign_support_ticket", "Can assign any support ticket to an agent"),
+            ("resolve_support_ticket", "Can resolve/close any support ticket"),
+            ("view_support_ticket_stats", "Can view aggregated support ticket statistics"),
+            ("export_support_ticket_data", "Can export support ticket data"),
+            ("access_support_admin", "Can access Support Ticket Administration"),
+            # User Permissions
+            ("reply_own_support_ticket", "Can reply to own support tickets"),
+        ]
         
     def __str__(self):
         return f"Ticket #{self.ticket_id}: {self.subject}"
@@ -1132,6 +1191,13 @@ class NotificationCampaign(models.Model):
             models.Index(fields=['sent_at']),
             models.Index(fields=['created_at']),
         ]
+        permissions = [
+            ("send_notification_campaign", "Can send notification campaigns"),
+            ("cancel_notification_campaign", "Can cancel scheduled campaigns"),
+            ("duplicate_notification_campaign", "Can duplicate campaigns"),
+            ("view_notification_metrics", "Can view notification campaign metrics"),
+            ("access_notification_admin", "Can access Notification Management section"),
+        ]
 
 class NotificationAttachment(models.Model):
     """Attachments for email notifications"""
@@ -1171,3 +1237,8 @@ class UserSegment(models.Model):
     class Meta:
         db_table = 'user_segments'
         ordering = ['name']
+        permissions = [
+             ("view_segment_users", "Can view users within a segment"),
+             ("refresh_segment_counts", "Can trigger recalculation of segment counts"),
+             ("access_segment_admin", "Can access User Segment Management section"),
+        ]

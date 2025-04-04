@@ -237,6 +237,11 @@ REST_FRAMEWORK = {
     ],
 }
 
+AUTHENTICATION_BACKENDS = [
+    'quickstart.backends.RolePermissionBackend',
+    'django.contrib.auth.backends.ModelBackend',
+]
+
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=2000),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),

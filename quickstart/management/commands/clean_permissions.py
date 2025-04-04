@@ -12,6 +12,15 @@ class Command(BaseCommand):
         # Define which Django app content types to exclude
         excluded_apps = [
             'admin', 
+            'theme',
+            'admin_interface',
+            'silk',
+            'allauth',          
+            'account',          
+            'socialaccount',  
+            'rest_framework.authtoken', 
+            'authtoken',      
+            'token_blacklist', 
             'auth', 
             'contenttypes', 
             'sessions', 
@@ -26,7 +35,6 @@ class Command(BaseCommand):
             'blacklistedtoken',
             'outstandingtoken'
         ]
-        
         # Get content types to exclude
         excluded_content_types = ContentType.objects.filter(app_label__in=excluded_apps)
         

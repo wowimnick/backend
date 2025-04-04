@@ -1,5 +1,8 @@
 # monitoring/consumers.py
+import logging
 from channels.generic.websocket import AsyncWebsocketConsumer
+from channels.db import database_sync_to_async
+from django.contrib.auth import get_user_model
 import json
 import asyncio
 import psutil
@@ -12,6 +15,9 @@ from silk.models import Request as SilkRequest, SQLQuery
 from django.db import connection, transaction
 import traceback
 from collections import Counter
+
+logger = logging.getLogger(__name__) 
+User = get_user_model() 
 
 class MetricsConsumer(AsyncWebsocketConsumer):
     # Class variable for shared caching
@@ -37,70 +43,108 @@ class MetricsConsumer(AsyncWebsocketConsumer):
         self.last_sent_metrics = None
 
     async def connect(self):
-        """Handle initial connection"""
-        print("Client attempting to connect")
-        await self.accept()
-        self.is_connected = True
-        self.client_id = id(self)  # Unique ID for this client
-        print(f"Client connected successfully, ID: {self.client_id}")
-        
-        # Send initial full data payload
-        await self.send_initial_data()
-        
-        # Create background tasks to refresh cached data
-        self.db_refresh_task = asyncio.create_task(self.refresh_db_metrics_loop())
-        self.silk_refresh_task = asyncio.create_task(self.refresh_silk_data_loop())
-        self.send_task = asyncio.create_task(self.send_metrics())
+        user = self.scope.get("user")
+        logger.info(f"Connect attempt. User: {user.email if user and user.is_authenticated else 'Anonymous'}")
+        is_authenticated = user and user.is_authenticated
+        has_perm_result = await self.check_user_permission(user, 'quickstart.view_system_metrics')
+        logger.info(f"Auth check: Authenticated={is_authenticated}, HasPerm={has_perm_result}")
 
+        if is_authenticated and has_perm_result:
+            await self.accept()
+            self.is_connected = True
+            self.client_id = id(self)
+            logger.info(f"Metrics connection accepted for user: {self.user.email} (ID: {self.client_id})")
+
+            # Send initial data and start tasks
+            await self.send_initial_data()
+            self.db_refresh_task = asyncio.create_task(self.refresh_db_metrics_loop())
+            self.silk_refresh_task = asyncio.create_task(self.refresh_silk_data_loop())
+            self.send_task = asyncio.create_task(self.send_metrics())
+        else:
+            # Reject connection
+            await self.close()
+            if not is_authenticated:
+                 logger.warning("Metrics connection rejected: User not authenticated.")
+            else:
+                 logger.warning(f"Metrics connection rejected: User {self.user.email} lacks 'view_system_metrics' permission.")
+
+    @database_sync_to_async
+    def check_user_permission(self, user, perm_string):
+        """Checks permission asynchronously."""
+        if user and user.is_authenticated:
+            return user.has_perm(perm_string)
+        return False
+    
     async def send_initial_data(self):
         """Send the initial full data payload to the client"""
-        # Get current metrics
-        metrics = await self.get_full_metrics()
-        self.last_sent_metrics = metrics
-        
-        # Send with special initialData flag
-        await self.send(text_data=json.dumps({
-            "initialData": True,
-            "data": metrics
-        }))
+        try:
+            metrics = await self.get_full_metrics()
+            self.last_sent_metrics = metrics
+            await self.send(text_data=json.dumps({
+                "initialData": True,
+                "data": metrics
+            }))
+            logger.debug(f"Sent initial metrics data to client {self.client_id}")
+        except Exception as e:
+             logger.error(f"Error sending initial metrics data: {e}", exc_info=True)
+
 
     async def disconnect(self, close_code):
         """Handle disconnection"""
         self.is_connected = False
-        print(f"Client disconnected with code {close_code}, ID: {self.client_id}")
-        
-        # Cancel all background tasks
+        user_email = self.user.email if self.user else "Unknown"
+        logger.info(f"Metrics client disconnected: User {user_email}, Code {close_code}, ID: {self.client_id}")
+
+        # Cancel tasks
         for task in [self.send_task, self.db_refresh_task, self.silk_refresh_task]:
-            if task is not None:
+            if task is not None and not task.done():
                 task.cancel()
                 try:
                     await task
                 except asyncio.CancelledError:
-                    pass
+                    logger.debug(f"Task {task.get_name()} cancelled for client {self.client_id}")
+                except Exception as e:
+                     logger.error(f"Error during task cancellation for client {self.client_id}: {e}")
+
 
     async def receive(self, text_data):
-        """Handle received messages"""
+        """Handle received messages (remains the same)"""
+        # Important: Ensure any actions triggered here also respect permissions if necessary
         try:
             message = json.loads(text_data)
-            
-            # Handle request for historical data
+            logger.debug(f"Received message from client {self.client_id}: {message}")
+
             if message.get('type') == 'request_historical':
-                await self.send_historical_data(message.get('timespan', 300))
-            
-            # Handle change in update frequency
+                # Add permission check if historical data is sensitive
+                if await self.check_user_permission(self.user, 'quickstart.view_system_metrics'): # Example check
+                     await self.send_historical_data(message.get('timespan', 300))
+                else:
+                     logger.warning(f"Permission denied for historical data request from user {self.user.email}")
+
             elif message.get('type') == 'set_frequency':
-                new_frequency = message.get('frequency', self.SYSTEM_METRICS_INTERVAL)
-                # Validate frequency to prevent abuse
-                if 1 <= new_frequency <= 30:
-                    self.SYSTEM_METRICS_INTERVAL = new_frequency
+                # Allow changing frequency only if permitted? Maybe allow all authenticated admins?
+                 if await self.check_user_permission(self.user, 'quickstart.view_system_metrics'):
+                     new_frequency = message.get('frequency', self.SYSTEM_METRICS_INTERVAL)
+                     if 1 <= new_frequency <= 30: # Keep validation
+                         self.SYSTEM_METRICS_INTERVAL = new_frequency
+                         logger.info(f"Client {self.client_id} set metrics frequency to {new_frequency}s")
+                     else:
+                          logger.warning(f"Client {self.client_id} requested invalid frequency: {new_frequency}")
+
         except json.JSONDecodeError:
-            pass
+            logger.warning(f"Received invalid JSON from client {self.client_id}")
+        except Exception as e:
+             logger.error(f"Error processing received message: {e}", exc_info=True)
 
     async def send_historical_data(self, timespan):
-        """Send historical data for a specific timespan"""
-        # Implement this method to retrieve and send historical data
-        # This would fetch from your database or cache based on the requested timespan
-        pass
+        """Send historical data (Placeholder - Implement actual logic)"""
+        logger.info(f"Sending historical data for timespan {timespan}s to client {self.client_id}")
+        # Placeholder: Send dummy data or fetch from a time-series DB/cache
+        await self.send(text_data=json.dumps({
+            "historicalData": True,
+            "timespan": timespan,
+            "data": {"message": f"Historical data for {timespan}s not yet implemented."}
+        }))
 
     async def get_full_metrics(self):
         """Get the complete metrics data"""

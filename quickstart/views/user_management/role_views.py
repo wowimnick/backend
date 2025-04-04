@@ -83,8 +83,29 @@ class RoleManagementViewSet(viewsets.ModelViewSet):
     def _get_excluded_content_types(self):
         """Get content types to exclude in a single query"""
         excluded_apps = [
-            'admin', 'auth', 'contenttypes', 'sessions', 'sites',
-            'theme', 'silk', 'allauth', 'account', 'socialaccount'
+            'admin', 
+            'theme',
+            'admin_interface',
+            'silk',
+            'allauth',          
+            'account',          
+            'socialaccount',  
+            'rest_framework.authtoken', 
+            'authtoken',      
+            'token_blacklist', 
+            'auth', 
+            'contenttypes', 
+            'sessions', 
+            'sites',
+            'theme',  
+            'silk',
+            'allauth',
+            'account',
+            'socialaccount',
+            'token',
+            'tokenproxy',
+            'blacklistedtoken',
+            'outstandingtoken'
         ]
         
         return ContentType.objects.filter(app_label__in=excluded_apps)

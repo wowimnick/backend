@@ -1,16 +1,16 @@
-# notification_views.py - Updated to reflect the simplified model structure
-
 import time
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, filters # Added filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, BasePermission # Added BasePermission
 from django.utils import timezone
-from django.db.models import Q, Count
+from django.db import transaction # Added transaction
+from django.db.models import Q, Count, Sum, Avg, F # Added F, Sum, Avg
+from django.db.models.functions import Coalesce # Added Coalesce
 from ...models import (
     NotificationCampaign,
-    NotificationAttachment, 
-    UserSegment, 
+    NotificationAttachment,
+    UserSegment,
     CustomUser,
     BusinessInfo,
     Role,
@@ -19,150 +19,225 @@ from ...models import (
 )
 from ...serializers.notifications.notification_serializers import (
     NotificationCampaignSerializer,
-    NotificationCampaignDetailSerializer, 
+    NotificationCampaignDetailSerializer,
     NotificationCampaignCreateSerializer,
     NotificationAttachmentSerializer,
     UserSegmentSerializer
 )
-from ...utils.permissions import IsAdminUser
 import resend
 from django.conf import settings
 import json
 import logging
 from datetime import timedelta
+from decimal import Decimal # Added Decimal
 
 # Configure Resend
 resend.api_key = settings.RESEND_API_KEY
 logger = logging.getLogger(__name__)
 
+# --- Custom Permission Classes ---
+
+class CanAccessNotificationAdmin(BasePermission):
+    message = "You do not have permission to access notification management."
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated or not request.user.is_active: return False
+        return request.user.has_perm('quickstart.access_notification_admin')
+
+class CanAccessSegmentAdmin(BasePermission):
+    message = "You do not have permission to access user segment management."
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated or not request.user.is_active: return False
+        return request.user.has_perm('quickstart.access_segment_admin')
+
+# --- AdminNotificationCampaignViewSet ---
+
 class AdminNotificationCampaignViewSet(viewsets.ModelViewSet):
     """
     Admin viewset for managing notification campaigns
     """
-    permission_classes = [IsAuthenticated, IsAdminUser]
-    
+    permission_classes = [IsAuthenticated, CanAccessNotificationAdmin] 
+    queryset = NotificationCampaign.objects.select_related('created_by').prefetch_related('attachments').all() # Optimize base queryset
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['title', 'subject', 'content', 'created_by__email']
+    ordering_fields = ['title', 'created_at', 'scheduled_for', 'sent_at', 'status', 'notification_type']
+    ordering = ['-created_at']
+
     def get_serializer_class(self):
         if self.action == 'retrieve':
             return NotificationCampaignDetailSerializer
         elif self.action in ['create', 'update', 'partial_update']:
             return NotificationCampaignCreateSerializer
-        return NotificationCampaignSerializer
-    
+        return NotificationCampaignSerializer # Default for list
+
     def get_queryset(self):
-        queryset = NotificationCampaign.objects.all()
-        
-        # Filter by status
+        # Apply base permission check first
+        if not self.request.user.has_perm('quickstart.view_notificationcampaign'):
+            logger.warning(f"User {self.request.user.email} denied access to list campaigns (missing view_notificationcampaign perm).")
+            return NotificationCampaign.objects.none()
+
+        queryset = super().get_queryset() # Get queryset from class attribute
+
+        # --- Filtering Logic ---
         status_filter = self.request.query_params.get('status')
         if status_filter and status_filter != 'all':
-            queryset = queryset.filter(status=status_filter)
-        
-        # Filter by notification type
+            # Ensure valid status
+            valid_statuses = [choice[0] for choice in NotificationCampaign.STATUS_CHOICES]
+            if status_filter in valid_statuses:
+                 queryset = queryset.filter(status=status_filter)
+
         notification_type = self.request.query_params.get('notification_type')
         if notification_type and notification_type != 'all':
-            queryset = queryset.filter(notification_type=notification_type)
-            
-        # Filter by date range
+             # Ensure valid type
+            valid_types = [choice[0] for choice in NotificationCampaign.NOTIFICATION_TYPES]
+            if notification_type in valid_types:
+                 queryset = queryset.filter(notification_type=notification_type)
+
         start_date = self.request.query_params.get('start_date')
         end_date = self.request.query_params.get('end_date')
         if start_date and end_date:
-            queryset = queryset.filter(created_at__range=[start_date, end_date])
-        
-        # Search
-        search = self.request.query_params.get('search')
-        if search:
-            queryset = queryset.filter(
-                Q(title__icontains=search) |
-                Q(subject__icontains=search) |
-                Q(content__icontains=search)
-            )
-            
+             try:
+                 start_dt = timezone.datetime.strptime(start_date, '%Y-%m-%d').replace(tzinfo=timezone.utc)
+                 end_dt = timezone.datetime.strptime(end_date, '%Y-%m-%d').replace(hour=23, minute=59, second=59, tzinfo=timezone.utc)
+                 # Filter based on created_at or maybe sent_at/scheduled_for depending on context?
+                 queryset = queryset.filter(created_at__range=[start_dt, end_dt])
+             except ValueError:
+                 logger.warning(f"Invalid date format for campaign filter: start={start_date}, end={end_date}")
+
         return queryset
-    
-    def perform_create(self, serializer):
-        # Save with 'draft' status initially if meant to be sent now
+
+    # --- Standard Action Overrides with Permissions ---
+
+    def create(self, request, *args, **kwargs):
+        if not request.user.has_perm('quickstart.add_notificationcampaign'):
+            self.permission_denied(request, message="You do not have permission to create notification campaigns.")
+
+        serializer = self.get_serializer(data=request.data, context={'request': request}) # Pass context for created_by
+        serializer.is_valid(raise_exception=True)
+
+        # Handle immediate send logic from perform_create
         should_send_now = serializer.validated_data.get('status') == 'sent'
         if should_send_now:
-            serializer.validated_data['status'] = 'draft' # Save as draft first
+            if not request.user.has_perm('quickstart.send_notification_campaign'):
+                 self.permission_denied(request, message="You have permission to create, but not to send campaigns immediately.")
+            # Save as draft first, send logic will happen after save
+            serializer.validated_data['status'] = 'draft'
 
-        campaign = serializer.save(created_by=self.request.user)
+        # Use perform_create which now handles the created_by field
+        self.perform_create(serializer)
+        campaign = serializer.instance 
 
+        # Trigger immediate send if requested and permitted
         if should_send_now:
-            # Trigger the send logic immediately after creation
             try:
                 logger.info(f"Triggering immediate send for new campaign {campaign.id}")
-                # Reuse the send logic but bypass the view action context
-                self._process_and_send_campaign(campaign, self.request.data.get('template_variables', {}))
+                # Note: _process_and_send_campaign doesn't check permissions, assumes check happened before call
+                self._process_and_send_campaign(campaign, request.data.get('template_variables', {}))
                 campaign.status = 'sent' # Update status after sending attempt
                 campaign.save(update_fields=['status', 'sent_at', 'recipient_count', 'delivered_count', 'success_rate', 'error_message'])
+                logger.info(f"Campaign {campaign.id} marked as sent after immediate creation.")
             except Exception as e:
                 logger.error(f"Immediate send failed for campaign {campaign.id}: {str(e)}")
                 campaign.status = 'failed'
                 campaign.error_message = str(e)
                 campaign.save(update_fields=['status', 'error_message'])
-                # Optionally raise the error or handle it
-                # raise serializers.ValidationError({"detail": f"Failed to send notification: {str(e)}"})
+                # Return detail but indicate send failure? Or raise validation error?
+                # For now, let creation succeed but log the error.
+
+        # Return detail view of the created campaign
+        detail_serializer = NotificationCampaignDetailSerializer(campaign, context={'request': request})
+        headers = self.get_success_headers(detail_serializer.data)
+        return Response(detail_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+
+    def perform_create(self, serializer):
+        # Saves instance and sets created_by
+        instance = serializer.save(created_by=self.request.user)
+        logger.info(f"Campaign '{instance.title}' created by Admin {self.request.user.email}")
+
+
+    def update(self, request, *args, **kwargs):
+        if not request.user.has_perm('quickstart.change_notificationcampaign'):
+            self.permission_denied(request, message="You do not have permission to update campaigns.")
+
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+
+        if instance.status in ['sent', 'failed']:
+            return Response({"detail": f"Cannot update a campaign with status '{instance.status}'."}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+
+        # --- Handle immediate send on update ---
+        should_send_now = serializer.validated_data.get('status') == 'sent' and instance.status != 'sent'
+        if should_send_now:
+            if not request.user.has_perm('quickstart.send_notification_campaign'):
+                 self.permission_denied(request, message="You have permission to update, but not to send this campaign immediately.")
+
+            # Save changes BEFORE sending, marking as draft temporarily
+            original_status = instance.status
+            temp_data = serializer.validated_data.copy()
+            temp_data['status'] = 'draft' # Set to draft before sending attempt
+
+            # Apply all validated changes
+            for attr, value in temp_data.items():
+                 setattr(instance, attr, value)
+            instance.save() # Save changes as draft
+
+            # Now attempt to send
+            try:
+                logger.info(f"Triggering immediate send for updated campaign {instance.id}")
+                self._process_and_send_campaign(instance, request.data.get('template_variables', {}))
+                instance.status = 'sent' # Update status after sending attempt
+                instance.save(update_fields=['status', 'sent_at', 'recipient_count', 'delivered_count', 'success_rate', 'error_message'])
+                logger.info(f"Campaign {instance.id} marked as sent after immediate update.")
+            except Exception as e:
+                logger.error(f"Immediate send failed for campaign {instance.id}: {str(e)}")
+                instance.status = 'failed'
+                instance.error_message = str(e)
+                instance.save(update_fields=['status', 'error_message'])
+                # Decide if this should prevent the 200 OK response, maybe return 207?
+        else:
+             # If not sending now, just save validated data
+             self.perform_update(serializer) # This saves the instance from the serializer
+
+        # Return detail view
+        detail_serializer = NotificationCampaignDetailSerializer(instance, context={'request': request})
+        return Response(detail_serializer.data)
+
 
     def perform_update(self, serializer):
-        # Save with 'draft' status initially if meant to be sent now
-        should_send_now = serializer.validated_data.get('status') == 'sent' and serializer.instance.status != 'sent'
-
-        original_status = serializer.instance.status # Get status before saving
-        if should_send_now:
-            serializer.validated_data['status'] = 'draft' # Update as draft first
-
-        campaign = serializer.save()
-
-        if should_send_now:
-            # Trigger the send logic immediately after update
-            try:
-                logger.info(f"Triggering immediate send for updated campaign {campaign.id}")
-                # Reuse the send logic
-                self._process_and_send_campaign(campaign, self.request.data.get('template_variables', {}))
-                campaign.status = 'sent' # Update status after sending attempt
-                campaign.save(update_fields=['status', 'sent_at', 'recipient_count', 'delivered_count', 'success_rate', 'error_message'])
-            except Exception as e:
-                logger.error(f"Immediate send failed for campaign {campaign.id}: {str(e)}")
-                campaign.status = 'failed'
-                campaign.error_message = str(e)
-                campaign.save(update_fields=['status', 'error_message'])
-                # Optionally raise the error or handle it
-
-    # Add a helper method to encapsulate the sending logic from the 'send' action
-    def _process_and_send_campaign(self, campaign, template_variables):
-        """Processes recipients and calls the appropriate send method."""
-        logger.info(f"Processing campaign {campaign.id} for sending.")
-
-        # Get recipients (reuse logic from the 'send' action)
-        recipients = []
-        if campaign.audience_type == 'all_users':
-            recipients = CustomUser.objects.all()
-        elif campaign.audience_type == 'segment' and campaign.segment:
-            try:
-                segment = UserSegment.objects.get(id=campaign.segment)
-                recipients = self._get_segment_users(segment) # Use existing helper
-            except UserSegment.DoesNotExist:
-                raise ValueError(f"Segment {campaign.segment} not found")
-        elif campaign.audience_type == 'individual' and campaign.target_user_ids:
-            recipients = CustomUser.objects.filter(userId__in=campaign.target_user_ids)
-
-        campaign.recipient_count = len(recipients)
-        campaign.sent_at = timezone.now() # Set send time
-
-        # Call the correct sender based on type
-        if campaign.notification_type == 'email':
-            self._send_email_notifications(campaign, recipients, template_variables)
-
-        logger.info(f"Finished processing send for campaign {campaign.id}")
-        # Note: The campaign status is updated *after* this method returns
+        # Saves instance
+        instance = serializer.save()
+        logger.info(f"Campaign '{instance.title}' (ID: {instance.pk}) updated by Admin {self.request.user.email}")
 
 
-    # Keep the existing send action for sending drafts/scheduled later
+    def destroy(self, request, *args, **kwargs):
+        if not request.user.has_perm('quickstart.delete_notificationcampaign'):
+            self.permission_denied(request, message="You do not have permission to delete campaigns.")
+        instance = self.get_object()
+        if instance.status == 'sent':
+            return Response({"detail":"Cannot delete a sent campaign."}, status=400)
+        logger.warning(f"Campaign '{instance.title}' (ID: {instance.pk}) deleted by Admin {request.user.email}")
+        return super().destroy(request, *args, **kwargs)
+
+
+    def retrieve(self, request, *args, **kwargs):
+        if not request.user.has_perm('quickstart.view_notificationcampaign'):
+            self.permission_denied(request, message="You cannot view campaign details.")
+        return super().retrieve(request, *args, **kwargs)
+
+
+    # --- Custom Actions with Permissions ---
+
     @action(detail=True, methods=['post'])
     def send(self, request, pk=None):
         """Send a notification campaign (for drafts/scheduled)"""
+        if not request.user.has_perm('quickstart.send_notification_campaign'):
+             self.permission_denied(request, message="You do not have permission to send campaigns.")
+
         campaign = self.get_object()
         logger.info(f"Received request to send campaign {pk} via dedicated /send endpoint.")
-        logger.info(f"Request data: {request.data}")
 
         if campaign.status == 'sent':
             logger.warning(f"Campaign {pk} has already been sent.")
@@ -170,520 +245,649 @@ class AdminNotificationCampaignViewSet(viewsets.ModelViewSet):
                 {'error': 'This campaign has already been sent'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        if campaign.status == 'failed':
-            logger.warning(f"Attempting to resend failed campaign {pk}.")
-            # Allow resending failed campaigns if desired
+        # Allow resending failed? Or require duplication? Current logic allows resend.
 
         template_variables = request.data.get('template_variables', {})
 
         try:
-            # Use the helper method
+            # Mark as 'sending' maybe? Or keep draft until success/fail
+            # campaign.status = 'sending'
+            # campaign.save(update_fields=['status'])
+
             self._process_and_send_campaign(campaign, template_variables)
 
-            # Update status after sending
-            campaign.status = 'sent'
+            campaign.status = 'sent' # Update status after successful processing
             campaign.save(update_fields=['status', 'sent_at', 'recipient_count', 'delivered_count', 'success_rate', 'error_message'])
             logger.info(f"Campaign {pk} marked as sent via dedicated endpoint.")
 
-            serializer = self.get_serializer(campaign) # Return updated campaign data
+            # Use detail serializer for response
+            serializer = NotificationCampaignDetailSerializer(campaign, context={'request': request})
             return Response(serializer.data)
 
         except Exception as e:
+            # Log error and update campaign status to failed
             logger.error(f"Error sending campaign {pk} via dedicated endpoint: {str(e)}", exc_info=True)
             campaign.status = 'failed'
             campaign.error_message = str(e)
             campaign.save(update_fields=['status', 'error_message'])
-
             return Response(
                 {'error': f'Failed to send campaign: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-    
-    def _get_segment_users(self, segment):
-        """Get users for a given segment based on segment type"""
-        segment_type = segment.name.split(':')[0] if ':' in segment.name else ''
-        
-        if segment_type == 'role':
-            # Get role name from segment name (format: "role:Admin")
-            role_name = segment.name.split(':', 1)[1] if ':' in segment.name else ''
-            role = Role.objects.filter(name=role_name).first()
-            if role:
-                return CustomUser.objects.filter(role=role)
-        
-        elif segment_type == 'category':
-            # Get category name from segment name (format: "category:Music")
-            category_name = segment.name.split(':', 1)[1] if ':' in segment.name else ''
-            category = ClassCategory.objects.filter(name=category_name).first()
-            if category:
-                # Find users who have bookings in classes of this category
-                return CustomUser.objects.filter(
-                    bookings__schedule_instance__schedule__option__classId__category=category
-                ).distinct()
-        
-        elif segment_type == 'new_users':
-            # Users who joined in the last 30 days
-            thirty_days_ago = timezone.now() - timedelta(days=30)
-            return CustomUser.objects.filter(createdAt__gte=thirty_days_ago)
-        
-        elif segment_type == 'inactive_users':
-            # Users who haven't booked in the last 60 days but have booked before
-            sixty_days_ago = timezone.now() - timedelta(days=60)
-            return CustomUser.objects.filter(
-                bookings__isnull=False
-            ).exclude(
-                bookings__booking_date__gte=sixty_days_ago
-            ).distinct()
-        
-        # Default to empty queryset
-        return CustomUser.objects.none()
-    
-    def _send_email_notifications(self, campaign, recipients, template_variables=None):
-        """Send email notifications using Resend's batch API"""
-        successful_sends = 0
-        
-        logger.info(f"Sending email notifications for campaign {campaign.id}")
-        logger.info(f"Recipients: {len(recipients)}")
-        
-        # Get email template defaults - fallback if no template variables provided
-        template_defaults = getattr(settings, 'EMAIL_TEMPLATE_DEFAULTS', {})
-        
-        # Use provided template variables or fallback to defaults
-        template_vars = template_variables or template_defaults
-        logger.info(f"Using template variables: {template_vars}")
-        
-        # Get attachments
-        attachments = []
-        for attachment in campaign.attachments.all():
-            attachments.append({
-                "filename": attachment.name,
-                "content": attachment.file.read(),
-                "path": attachment.file.name
-            })
-        logger.info(f"Attachments: {len(attachments)}")
-        
-        # Get default sending parameters
-        notification_settings = getattr(settings, 'NOTIFICATION_SETTINGS', {})
-        default_from_email = notification_settings.get('default_from_email', 'notifications@yourdomain.com')
-        default_from_name = notification_settings.get('default_from_name', 'Your Company Notifications')
-        from_email = f"{default_from_name} <{default_from_email}>"
-        logger.info(f"Sending from: {from_email}")
-        
-        # Process in batches of 100 (Resend's batch API limit)
-        batch_size = 100
-        
-        for i in range(0, len(recipients), batch_size):
-            batch = recipients[i:i+batch_size]
-            batch_emails = []
-            
-            logger.info(f"Processing batch {i//batch_size + 1}, size: {len(batch)}")
-            
-            # Prepare batch of emails
-            for recipient in batch:
-                try:
-                    # Basic email parameters
-                    email_params = {
-                        "from": from_email,
-                        "to": recipient.email,
-                        "subject": campaign.subject,
-                        "text": campaign.content
-                    }
-                    
-                    # Use HTML content if available
-                    if campaign.html_content:
-                        # Process HTML template with variables
-                        html_content = campaign.html_content
-                        
-                        # Replace template variables
-                        html_content = html_content.replace("{{subject}}", campaign.subject)
-                        html_content = html_content.replace("{{content}}", campaign.content)
-                        
-                        # Replace any other template variables from provided dictionary
-                        for key, value in template_vars.items():
-                            html_content = html_content.replace(f"{{{{{key}}}}}", str(value))
-                        
-                        # Set processed HTML as email content
-                        email_params["html"] = html_content
-                    
-                    # Add to batch
-                    batch_emails.append(email_params)
-                    
-                except Exception as e:
-                    logger.error(f"Error preparing email for {recipient.email}: {str(e)}")
-            
-            # Send batch
-            try:
-                # Verify Resend API key is set
-                if not resend.api_key:
-                    logger.error("Resend API key is not set!")
-                else:
-                    logger.info(f"Resend API key is set, first few chars: {resend.api_key[:5]}...")
-                
-                logger.info(f"Sending batch of {len(batch_emails)} emails via Resend")
-                
-                # Use the batch send endpoint (instead of individual sends)
-                results = resend.Batch.send(batch_emails)
-                
-                # Count successful sends
-                success_count = 0
-                for result in results:
-                    if result and 'id' in result:
-                        successful_sends += 1
-                        success_count += 1
-                    else:
-                        logger.warning(f"Failed to send email, result: {result}")
-                
-                logger.info(f"Batch sent, successful: {success_count}/{len(batch_emails)}")
-                    
-            except Exception as e:
-                logger.error(f"Error sending batch {i//batch_size + 1}: {str(e)}", exc_info=True)
-            
-            # Add a delay between batches to avoid hitting rate limits
-            if i + batch_size < len(recipients):
-                time.sleep(0.5)  # Wait 0.5 second between batches
-        
-        # Update campaign with delivery stats
-        campaign.delivered_count = successful_sends
-        if campaign.recipient_count > 0:
-            campaign.success_rate = (successful_sends / campaign.recipient_count) * 100
-        
-        logger.info(f"Email sending complete. Delivered: {successful_sends}/{campaign.recipient_count}, Success rate: {campaign.success_rate}%")
-    
-    def _send_sms_notifications(self, campaign, recipients):
-        """Send SMS notifications"""
-        # In a real implementation, this would use Twilio, AWS SNS,
-        # or another SMS service
-        
-        # For this example, we'll simulate 95% successful delivery
-        delivered = int(len(recipients) * 0.95)
-        campaign.delivered_count = delivered
-        campaign.success_rate = (delivered / len(recipients)) * 100 if recipients else 0.0
-    
-    @action(detail=True, methods=['post'])
-    def cancel(self, request, pk=None):
-        """Cancel a scheduled notification campaign"""
-        campaign = self.get_object()
-        
-        if campaign.status != 'scheduled':
-            return Response(
-                {'error': 'Only scheduled campaigns can be cancelled'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        campaign.status = 'draft'
-        campaign.scheduled_for = None
-        campaign.save()
-        
-        return Response({'success': True})
-    
-    @action(detail=True, methods=['post'])
-    def duplicate(self, request, pk=None):
-        """Duplicate a notification campaign"""
-        campaign = self.get_object()
-        
-        # Create a new campaign with same data
-        new_campaign = NotificationCampaign.objects.create(
-            title=f"Copy of {campaign.title}",
-            notification_type=campaign.notification_type,
-            subject=campaign.subject,
-            content=campaign.content,
-            html_content=campaign.html_content,
-            audience_type=campaign.audience_type,
-            segment=campaign.segment,
-            target_user_ids=campaign.target_user_ids,
-            status='draft',
-            recipient_count=campaign.recipient_count,
-            created_by=request.user
-        )
-        
-        # Copy attachments if any
-        for attachment in campaign.attachments.all():
-            NotificationAttachment.objects.create(
-                campaign=new_campaign,
-                name=attachment.name,
-                file=attachment.file,
-                content_type=attachment.content_type,
-                size=attachment.size
-            )
-        
-        serializer = self.get_serializer(new_campaign)
-        return Response(serializer.data)
-    
-    @action(detail=False, methods=['get'])
-    def metrics(self, request):
-        """Get notification metrics for dashboard"""
-        total_sent = NotificationCampaign.objects.filter(status='sent').count()
-        pending = NotificationCampaign.objects.filter(status='scheduled').count()
-        
-        by_type = NotificationCampaign.objects.filter(
-            status='sent'
-        ).values('notification_type').annotate(
-            count=Count('id')
-        )
-        
-        by_audience = NotificationCampaign.objects.filter(
-            status='sent'
-        ).values('audience_type').annotate(
-            count=Count('id')
-        )
-        
-        return Response({
-            'total_sent': total_sent,
-            'pending': pending,
-            'by_type': by_type,
-            'by_audience': by_audience
-        })
 
-class AdminUserSegmentViewSet(viewsets.ModelViewSet):
-    """
-    Admin viewset for managing user segments
-    """
-    permission_classes = [IsAuthenticated, IsAdminUser]
-    serializer_class = UserSegmentSerializer
-    queryset = UserSegment.objects.all()
-    
-    def list(self, request, *args, **kwargs):
-        """Override list to handle hardcoded segments if none exist in DB and refresh counts"""
-        queryset = self.get_queryset()
-        
-        # If no segments exist, create hardcoded segments
-        if not queryset.exists():
-            self._create_default_segments()
-            queryset = self.get_queryset()
-        
-        # Update counts for all segments
-        self._update_segment_counts()
-        
-        # Re-fetch after update
-        queryset = self.get_queryset()
-        
-        serializer = self.get_serializer(queryset, many=True)
-        return Response(serializer.data)
-    
-    def _update_segment_counts(self):
-        """Update user counts for all segments"""
-        segments = UserSegment.objects.all()
-        
-        # Make sure we have an all_users segment
-        all_users_count = CustomUser.objects.count()
-        all_users_segment, created = UserSegment.objects.get_or_create(
-            name="all_users",
-            defaults={
-                'description': "All users in the system",
-                'user_count': all_users_count
-            }
-        )
-        
-        # If it wasn't just created, update the count
-        if not created and all_users_segment.user_count != all_users_count:
-            all_users_segment.user_count = all_users_count
-            all_users_segment.save(update_fields=['user_count'])
-        
-        for segment in segments:
-            # Get users for this segment
-            users = self._get_segment_users(segment)
-            count = users.count()
-            
-            # Only update if count has changed
-            if segment.user_count != count:
-                segment.user_count = count
-                segment.save(update_fields=['user_count'])
-        
-        return segments
-    
-    def _create_default_segments(self):
-        """Create default hardcoded segments"""
-        created_segments = []
-        
-        # All users segment
-        all_users_segment, created = UserSegment.objects.get_or_create(
-            name="all_users",
-            defaults={
-                'description': "All users in the system",
-                'user_count': CustomUser.objects.count()
-            }
-        )
-        if created:
-            created_segments.append(all_users_segment)
-        
-        # Role-based segments
-        for role in Role.objects.all():
-            segment, created = UserSegment.objects.get_or_create(
-                name=f"role:{role.name}",
-                defaults={
-                    'description': f"All users with the {role.name} role",
-                    'criteria': {'role': role.pk},
-                    'user_count': CustomUser.objects.filter(role=role).count()
-                }
-            )
-            if created:
-                created_segments.append(segment)
-        
-        # Category-based segments
-        for category in ClassCategory.objects.all():
-            segment, created = UserSegment.objects.get_or_create(
-                name=f"category:{category.name}",
-                defaults={
-                    'description': f"Users who have booked classes in the {category.name} category",
-                    'criteria': {'class_category': category.pk},
-                    'user_count': CustomUser.objects.filter(
-                        bookings__schedule_instance__schedule__option__classId__category=category
-                    ).distinct().count()
-                }
-            )
-            if created:
-                created_segments.append(segment)
-        
-        # Special segments
-        # New users (last 30 days)
-        thirty_days_ago = timezone.now() - timedelta(days=30)
-        segment, created = UserSegment.objects.get_or_create(
-            name="new_users",
-            defaults={
-                'description': "Users who joined in the last 30 days",
-                'criteria': {'joined_after': thirty_days_ago.isoformat()},
-                'user_count': CustomUser.objects.filter(createdAt__gte=thirty_days_ago).count()
-            }
-        )
-        if created:
-            created_segments.append(segment)
-        
-        # Inactive users (no bookings in 60 days)
-        sixty_days_ago = timezone.now() - timedelta(days=60)
-        segment, created = UserSegment.objects.get_or_create(
-            name="inactive_users",
-            defaults={
-                'description': "Users who haven't booked a class in the last 60 days",
-                'criteria': {'no_bookings_since': sixty_days_ago.isoformat()},
-                'user_count': CustomUser.objects.filter(
-                    bookings__isnull=False
-                ).exclude(
-                    bookings__booking_date__gte=sixty_days_ago
-                ).distinct().count()
-            }
-        )
-        if created:
-            created_segments.append(segment)
-        
-        return created_segments
-    
-    @action(detail=True, methods=['get'])
-    def users(self, request, pk=None):
-        """Get users in this segment"""
-        segment = self.get_object()
-        segment_type = segment.name.split(':')[0] if ':' in segment.name else segment.name
-        
-        # Get users based on segment type
-        users = self._get_segment_users(segment)
-        
-        return Response({
-            'count': users.count(),
-            'users': [
-                {
-                    'id': user.userId,
-                    'email': user.email,
-                    'name': user.get_full_name() or user.username
-                }
-                for user in users[:100]  # Limit to 100 users in response
-            ]
-        })
-    
+    # Internal helper, no direct permission check needed here (checked before calling)
+    def _process_and_send_campaign(self, campaign, template_variables):
+        """Processes recipients and calls the appropriate send method."""
+        logger.info(f"Processing campaign {campaign.id} ('{campaign.title}') for sending.")
+        recipients = []
+        recipient_ids = set() # Use set for efficient uniqueness check
+
+        if campaign.audience_type == 'all_users':
+            # Optimization: Use values_list for large user bases if only email is needed
+            recipients_data = CustomUser.objects.filter(is_active=True, email__isnull=False).exclude(email='').values('userId', 'email', 'first_name') # Add first_name if needed for templates
+            recipient_ids.update([r['userId'] for r in recipients_data])
+        elif campaign.audience_type == 'segment' and campaign.segment:
+            try:
+                # Use the segment helper which should return a queryset
+                segment_qs = self._get_segment_users_by_id(campaign.segment)
+                recipients_data = segment_qs.filter(is_active=True, email__isnull=False).exclude(email='').values('userId', 'email', 'first_name')
+                recipient_ids.update([r['userId'] for r in recipients_data])
+            except UserSegment.DoesNotExist:
+                logger.error(f"Segment {campaign.segment} not found for campaign {campaign.id}")
+                raise ValueError(f"Segment {campaign.segment} not found") # Raise error to mark campaign as failed
+        elif campaign.audience_type == 'individual' and campaign.target_user_ids:
+            target_ids = [int(uid) for uid in campaign.target_user_ids if isinstance(uid, (int, str)) and str(uid).isdigit()]
+            recipients_data = CustomUser.objects.filter(userId__in=target_ids, is_active=True, email__isnull=False).exclude(email='').values('userId', 'email', 'first_name')
+            recipient_ids.update([r['userId'] for r in recipients_data])
+        else:
+             logger.warning(f"Campaign {campaign.id} has invalid or missing audience configuration.")
+             recipients_data = [] # Ensure it's an empty list
+
+        # Convert recipient_data list of dicts to list of objects or pass dicts directly if sender supports it
+        # For simplicity, let's assume sender needs email and potentially name
+        final_recipients_info = list(recipients_data)
+
+        campaign.recipient_count = len(recipient_ids) # Count unique recipients
+        campaign.sent_at = timezone.now() # Set send time
+
+        # Call the correct sender based on type
+        if not final_recipients_info:
+             logger.warning(f"No valid recipients found for campaign {campaign.id}. Skipping send.")
+             campaign.delivered_count = 0
+             campaign.success_rate = 0.0
+             campaign.error_message = "No valid recipients found for the selected audience."
+        elif campaign.notification_type == 'email':
+            self._send_email_notifications(campaign, final_recipients_info, template_variables)
+        elif campaign.notification_type == 'sms':
+             self._send_sms_notifications(campaign, final_recipients_info) # Pass info list
+        else:
+             logger.warning(f"Unsupported notification type '{campaign.notification_type}' for campaign {campaign.id}")
+             campaign.error_message = f"Unsupported notification type: {campaign.notification_type}"
+             campaign.delivered_count = 0
+             campaign.success_rate = 0.0
+
+        logger.info(f"Finished processing send for campaign {campaign.id}")
+
+    # Internal helper - No permission check needed
+    def _get_segment_users_by_id(self, segment_id):
+        """Helper to get UserSegment instance and call _get_segment_users"""
+        try:
+            segment = UserSegment.objects.get(id=segment_id)
+            return self._get_segment_users(segment)
+        except (UserSegment.DoesNotExist, ValueError, TypeError): 
+            logger.error(f"Segment ID {segment_id} not found or invalid.")
+            return CustomUser.objects.none()
+
+
+    # Internal helper - No permission check needed
     def _get_segment_users(self, segment):
-        """Get users for a given segment based on segment name or criteria"""
+        """Get users for a given segment object based on segment name or criteria"""
         segment_name = segment.name
-        
-        # Handle special segment names
+
         if segment_name == 'all_users':
             return CustomUser.objects.all()
-        
+
         # Handle segmentation by prefix (e.g., role:Admin, category:Music)
         if ':' in segment_name:
             segment_type, segment_value = segment_name.split(':', 1)
-            
+
             if segment_type == 'role':
                 role = Role.objects.filter(name=segment_value).first()
                 if role:
                     return CustomUser.objects.filter(role=role)
-            
+                else:
+                    logger.warning(f"Segment role '{segment_value}' not found.")
+                    return CustomUser.objects.none()
+
             elif segment_type == 'category':
                 category = ClassCategory.objects.filter(name=segment_value).first()
                 if category:
+                    # Find users who have bookings in classes of this category
                     return CustomUser.objects.filter(
                         bookings__schedule_instance__schedule__option__classId__category=category
                     ).distinct()
-        
-        # Handle special segment types
+                else:
+                    logger.warning(f"Segment category '{segment_value}' not found.")
+                    return CustomUser.objects.none()
+
+        # Handle special segment types based on name convention
         if segment_name == 'new_users':
             thirty_days_ago = timezone.now() - timedelta(days=30)
             return CustomUser.objects.filter(createdAt__gte=thirty_days_ago)
-        
+
         elif segment_name == 'inactive_users':
+            # Users who have booked, but not in the last 60 days
             sixty_days_ago = timezone.now() - timedelta(days=60)
+            # Get IDs of users who HAVE booked recently
+            active_booking_user_ids = Booking.objects.filter(
+                booking_date__gte=sixty_days_ago
+            ).values_list('user_id', flat=True).distinct()
+            # Return users who have booked ever, but are not in the recent list
             return CustomUser.objects.filter(
-                bookings__isnull=False
+                bookings__isnull=False # Has booked at least once
             ).exclude(
-                bookings__booking_date__gte=sixty_days_ago
+                id__in=active_booking_user_ids # Exclude those who booked recently
             ).distinct()
-        
-        # For custom segments with criteria
-        if segment.criteria:
+
+
+        # For custom segments with criteria (if you implement this later)
+        if isinstance(segment.criteria, dict) and segment.criteria:
             queryset = CustomUser.objects.all()
-            
+            logger.info(f"Applying custom criteria for segment '{segment_name}': {segment.criteria}")
+
+            # Example criteria handling (expand as needed)
             if 'role' in segment.criteria:
-                queryset = queryset.filter(role_id=segment.criteria['role'])
-            
+                role_id = segment.criteria['role']
+                if isinstance(role_id, int):
+                     queryset = queryset.filter(role_id=role_id)
+                elif isinstance(role_id, str): # Allow role name maybe? Less robust.
+                     queryset = queryset.filter(role__name=role_id)
+
             if 'joined_after' in segment.criteria:
                 try:
-                    date = timezone.datetime.fromisoformat(segment.criteria['joined_after'])
+                    date_str = segment.criteria['joined_after']
+                    # Attempt to parse ISO format or YYYY-MM-DD
+                    if 'T' in date_str:
+                         date = timezone.datetime.fromisoformat(date_str)
+                    else:
+                         date = timezone.datetime.strptime(date_str, '%Y-%m-%d').replace(tzinfo=timezone.utc)
                     queryset = queryset.filter(createdAt__gte=date)
                 except (ValueError, TypeError):
-                    pass
-            
-            if 'no_bookings_since' in segment.criteria:
-                try:
-                    date = timezone.datetime.fromisoformat(segment.criteria['no_bookings_since'])
-                    queryset = queryset.filter(
-                        bookings__isnull=False
-                    ).exclude(
-                        bookings__booking_date__gte=date
-                    ).distinct()
-                except (ValueError, TypeError):
-                    pass
-            
-            return queryset
-        
-        # Default to empty queryset
+                    logger.warning(f"Invalid date format in segment criteria 'joined_after': {segment.criteria['joined_after']}")
+                    pass 
+
+            return queryset.distinct() 
+
+        # Default to empty queryset if no matching logic found
+        logger.warning(f"Could not determine user set for segment '{segment_name}' (ID: {segment.id})")
         return CustomUser.objects.none()
-    
-    def create(self, request, *args, **kwargs):
-        """Block creation of segments from API"""
-        return Response({
-            'error': 'User segments cannot be created via the API'
-        }, status=status.HTTP_405_METHOD_NOT_ALLOWED)
-    
-    def update(self, request, *args, **kwargs):
-        """Block updating of segments from API"""
-        return Response({
-            'error': 'User segments cannot be updated via the API'
-        }, status=status.HTTP_405_METHOD_NOT_ALLOWED)
-    
-    def destroy(self, request, *args, **kwargs):
-        """Block deletion of segments from API"""
-        return Response({
-            'error': 'User segments cannot be deleted via the API'
-        }, status=status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    # Internal helper - No permission check needed
+    def _send_email_notifications(self, campaign, recipients_info, template_variables=None):
+        """Send email notifications using Resend's batch API (expects list of dicts with email, etc.)"""
+        successful_sends = 0
+        total_recipients = len(recipients_info)
+        logger.info(f"Sending email notifications for campaign {campaign.id} to {total_recipients} recipients.")
+
+        # --- Get Attachments ---
+        attachments = []
+        try:
+            for attachment in campaign.attachments.all():
+                try:
+                    # Ensure file pointer is at the beginning
+                    attachment.file.seek(0)
+                    file_content = attachment.file.read()
+                    attachments.append({
+                        "filename": attachment.name,
+                        "content": file_content,
+                    })
+                except Exception as attach_err:
+                     logger.error(f"Error reading attachment {attachment.name} for campaign {campaign.id}: {attach_err}")
+        except Exception as e:
+             logger.error(f"Error accessing attachments for campaign {campaign.id}: {e}")
+
+        logger.info(f"Prepared {len(attachments)} attachments for campaign {campaign.id}.")
+
+        # --- Prepare Email Content ---
+        subject = campaign.subject
+        text_content = campaign.content
+        html_template = campaign.html_content or ""
+
+        template_defaults = getattr(settings, 'EMAIL_TEMPLATE_DEFAULTS', {})
+        final_template_vars = {**template_defaults, **(template_variables or {})}
+
+        # --- Sending Logic ---
+        notification_settings = getattr(settings, 'NOTIFICATION_SETTINGS', {})
+        default_from_email = notification_settings.get('default_from_email', 'notifications@classeasily.com')
+        default_from_name = notification_settings.get('default_from_name', 'ClassEasily Notifications')
+        from_email = f"{default_from_name} <{default_from_email}>"
+
+        batch_size = 100
+
+        for i in range(0, total_recipients, batch_size):
+            batch_info = recipients_info[i:i+batch_size]
+            batch_emails_payload = []
+            logger.info(f"Processing email batch {i//batch_size + 1}/{ (total_recipients + batch_size - 1)//batch_size }, size: {len(batch_info)}")
+
+            for recipient_info in batch_info:
+                 recipient_email = recipient_info.get('email')
+                 if not recipient_email:
+                     logger.warning(f"Skipping recipient due to missing email in info: {recipient_info}")
+                     continue
+
+                 try:
+                     personalized_html = html_template
+                     personalized_text = text_content
+                     recipient_name = recipient_info.get('first_name', 'there')
+
+                     # Apply general template variables
+                     for key, value in final_template_vars.items():
+                          placeholder = f"{{{{{key}}}}}"
+                          personalized_html = personalized_html.replace(placeholder, str(value))
+                          personalized_text = personalized_text.replace(placeholder, str(value))
+
+                     # Apply recipient-specific variables
+                     personalized_html = personalized_html.replace("{{name}}", recipient_name)
+                     personalized_html = personalized_html.replace("{{email}}", recipient_email)
+                     personalized_text = personalized_text.replace("{{name}}", recipient_name)
+                     personalized_text = personalized_text.replace("{{email}}", recipient_email)
+
+                     email_payload = {
+                         "from": from_email,
+                         "to": recipient_email,
+                         "subject": subject,
+                         "text": personalized_text,
+                     }
+                     if personalized_html: email_payload["html"] = personalized_html
+                     if attachments: email_payload["attachments"] = attachments
+
+                     batch_emails_payload.append(email_payload)
+
+                 except Exception as e:
+                      logger.error(f"Error preparing email payload for {recipient_email}: {str(e)}")
+
+            # Send the batch
+            if batch_emails_payload:
+                try:
+                    if not resend.api_key: raise ValueError("Resend API key not configured.")
+                    logger.info(f"Sending batch of {len(batch_emails_payload)} emails via Resend...")
+                    response = resend.Emails.send(batch_emails_payload) # Use batch method
+                    logger.debug(f"Resend API Response: {response}")
+
+                    # Process response
+                    if isinstance(response, dict) and 'data' in response and isinstance(response['data'], list):
+                         batch_success_count = sum(1 for item in response['data'] if isinstance(item, dict) and item.get('id'))
+                         successful_sends += batch_success_count
+                         logger.info(f"Batch sent. Success: {batch_success_count}/{len(batch_emails_payload)}")
+                         if batch_success_count < len(batch_emails_payload):
+                              # Log errors from the response if possible
+                              errors = [item.get('error', 'Unknown error') for item in response['data'] if not (isinstance(item, dict) and item.get('id'))]
+                              logger.warning(f"Some emails failed in batch: {errors}")
+                              campaign.error_message = (campaign.error_message or "") + f"\nBatch {i//batch_size + 1} send errors: {errors[:5]}" # Log first few errors
+                    else:
+                        logger.error(f"Unexpected response structure from Resend batch API: {response}")
+                        campaign.error_message = (campaign.error_message or "") + f"\nUnexpected Resend API response structure for batch {i//batch_size + 1}."
+
+                except Exception as e:
+                    logger.error(f"Error sending email batch {i//batch_size + 1} via Resend: {str(e)}", exc_info=True)
+                    campaign.error_message = (campaign.error_message or "") + f"\nError sending batch {i//batch_size + 1}: {str(e)}"
+
+            # Delay between batches
+            if i + batch_size < total_recipients: time.sleep(0.5)
+
+        # Update campaign stats after all batches
+        campaign.delivered_count = successful_sends
+        campaign.success_rate = (successful_sends / total_recipients * 100) if total_recipients > 0 else 0.0
+        logger.info(f"Email sending complete for campaign {campaign.id}. Delivered: {successful_sends}/{total_recipients}, Rate: {campaign.success_rate:.2f}%")
+
+
+    # Internal helper - No permission check needed
+    def _send_sms_notifications(self, campaign, recipients_info):
+        """Send SMS notifications (Placeholder)"""
+        total_recipients = len(recipients_info)
+        logger.info(f"Simulating SMS send for campaign {campaign.id} to {total_recipients} recipients.")
+        # --- Placeholder Logic ---
+        delivered_count = int(total_recipients * 0.95) # Simulate 95% success
+        campaign.delivered_count = delivered_count
+        campaign.success_rate = (delivered_count / total_recipients * 100) if total_recipients > 0 else 0.0
+        logger.info(f"SMS simulation complete. Delivered: {delivered_count}/{total_recipients}")
+
+
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        """Cancel a scheduled notification campaign"""
+        if not request.user.has_perm('quickstart.cancel_notification_campaign'):
+            self.permission_denied(request, message="You cannot cancel campaigns.")
+
+        campaign = self.get_object()
+        if campaign.status != 'scheduled':
+            return Response(
+                {'error': 'Only scheduled campaigns can be cancelled.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        campaign.status = 'draft'
+        campaign.scheduled_for = None
+        campaign.save(update_fields=['status', 'scheduled_for'])
+        logger.info(f"Campaign '{campaign.title}' (ID: {pk}) cancelled by Admin {request.user.email}")
+        # Add to AuditLog if needed
+
+        return Response({'success': True, 'status': 'draft'})
+
+
+    @action(detail=True, methods=['post'])
+    def duplicate(self, request, pk=None):
+        """Duplicate a notification campaign"""
+        if not request.user.has_perm('quickstart.duplicate_notification_campaign'):
+             self.permission_denied(request, message="You cannot duplicate campaigns.")
+
+        campaign = self.get_object()
+
+        try:
+            with transaction.atomic(): # Ensure atomicity
+                # Create shallow copy
+                new_campaign = NotificationCampaign.objects.get(pk=pk)
+                new_campaign.pk = None
+                new_campaign.id = None # Reset UUID if it's PK
+                new_campaign.title = f"Copy of {campaign.title}"[:255] # Ensure title length
+                new_campaign.status = 'draft'
+                new_campaign.scheduled_for = None
+                new_campaign.sent_at = None
+                new_campaign.delivered_count = 0
+                new_campaign.success_rate = 0.0
+                new_campaign.error_message = None
+                new_campaign.created_by = request.user # Assign current user
+                # created_at/updated_at set on save
+                new_campaign.save()
+
+                # Copy attachments
+                attachments_to_create = []
+                for attachment in campaign.attachments.all():
+                    # Create new attachment instance, handle file copy correctly
+                    # Depending on storage, just assigning attachment.file might work,
+                    # but safer might be to read content and save to a new file if needed.
+                    # For S3, assigning the file path might be sufficient if files are unique.
+                    attachments_to_create.append(NotificationAttachment(
+                        campaign=new_campaign,
+                        name=attachment.name,
+                        file=attachment.file, # Assuming this references the storage path
+                        content_type=attachment.content_type,
+                        size=attachment.size
+                    ))
+                if attachments_to_create:
+                    NotificationAttachment.objects.bulk_create(attachments_to_create)
+
+            logger.info(f"Campaign '{campaign.title}' (ID: {pk}) duplicated to new campaign (ID: {new_campaign.pk}) by Admin {request.user.email}")
+            serializer = NotificationCampaignDetailSerializer(new_campaign, context={'request': request})
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+             logger.error(f"Error duplicating campaign {pk}: {str(e)}", exc_info=True)
+             return Response({"error": "Failed to duplicate campaign."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+    @action(detail=False, methods=['get'])
+    def metrics(self, request):
+        """Get notification metrics for dashboard"""
+        if not request.user.has_perm('quickstart.view_notification_metrics'):
+            self.permission_denied(request, message="You cannot view notification metrics.")
+
+        # Aggregate counts
+        counts = NotificationCampaign.objects.aggregate(
+            total_sent=Count('id', filter=Q(status='sent')),
+            pending=Count('id', filter=Q(status='scheduled')),
+            drafts=Count('id', filter=Q(status='draft')),
+            failed=Count('id', filter=Q(status='failed'))
+        )
+
+        # Group by type/audience
+        by_type = list(NotificationCampaign.objects.values('notification_type').annotate(count=Count('id')).order_by())
+        by_audience = list(NotificationCampaign.objects.values('audience_type').annotate(count=Count('id')).order_by())
+
+        # Success rate trend
+        recent_campaigns = NotificationCampaign.objects.filter(status='sent').order_by('-sent_at')[:5]
+        success_trend = [{'title': c.title, 'rate': round(c.success_rate,1), 'sent_at': c.sent_at} for c in recent_campaigns]
+
+        return Response({**counts, 'by_type': by_type, 'by_audience': by_audience, 'success_trend': success_trend})
+
+
+# --- AdminUserSegmentViewSet ---
+
+class AdminUserSegmentViewSet(viewsets.ReadOnlyModelViewSet): 
+    """
+    Admin viewset for managing user segments (primarily read-only via API)
+    """
+    permission_classes = [IsAuthenticated, CanAccessSegmentAdmin] 
+    serializer_class = UserSegmentSerializer
+    queryset = UserSegment.objects.order_by('name') 
+    http_method_names = ['get', 'post', 'head', 'options'] 
+
+    # Reuse helper from campaign viewset
+    _get_segment_users = AdminNotificationCampaignViewSet._get_segment_users
+
+    def list(self, request, *args, **kwargs):
+        """Override list to handle hardcoded segments if none exist in DB and refresh counts"""
+        if not request.user.has_perm('quickstart.view_usersegment'):
+             self.permission_denied(request, message="You cannot view user segments.")
+
+        # --- Auto-create/refresh logic ---
+        force_refresh = request.query_params.get('refresh_counts') == 'true'
+        needs_initial_setup = not UserSegment.objects.exists()
+
+        if force_refresh:
+             if not request.user.has_perm('quickstart.refresh_segment_counts'):
+                  self.permission_denied(request, message="You do not have permission to refresh segment counts.")
+             logger.info(f"User {request.user.email} triggered segment count refresh.")
+             try:
+                  self._update_segment_counts()
+                  if needs_initial_setup: self._create_default_segments()
+             except Exception as e:
+                  # Log error but potentially still return existing segments
+                  logger.error(f"Error during segment count refresh/setup: {e}", exc_info=True)
+        elif needs_initial_setup:
+             logger.info("No segments found, creating default segments.")
+             try:
+                  self._create_default_segments()
+                  self._update_segment_counts()
+             except Exception as e:
+                  logger.error(f"Error during initial segment setup: {e}", exc_info=True)
+
+        # Re-fetch queryset after potential updates/creation
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+
+    def retrieve(self, request, *args, **kwargs):
+        if not request.user.has_perm('quickstart.view_usersegment'):
+            self.permission_denied(request, message="You cannot view segment details.")
+        return super().retrieve(request, *args, **kwargs)
+
+
+    # Internal helper, no permission needed here
+    def _update_segment_counts(self):
+        """Update user counts for all segments"""
+        logger.info("Starting segment count update process.")
+        all_users_count = CustomUser.objects.filter(is_active=True).count()
+        try:
+             all_users_segment, created = UserSegment.objects.get_or_create(
+                 name="all_users", defaults={'description': "All active users", 'user_count': all_users_count}
+             )
+             if not created and all_users_segment.user_count != all_users_count:
+                 all_users_segment.user_count = all_users_count
+                 all_users_segment.save(update_fields=['user_count'])
+
+             segments_to_update = []
+             for segment in UserSegment.objects.exclude(name="all_users"):
+                 try:
+                     # Ensure we count only active users for consistency maybe?
+                     current_count = self._get_segment_users(segment).filter(is_active=True).count()
+                     if segment.user_count != current_count:
+                          segment.user_count = current_count
+                          segments_to_update.append(segment)
+                 except Exception as e:
+                      logger.error(f"Error calculating count for segment '{segment.name}': {e}")
+
+             if segments_to_update:
+                 UserSegment.objects.bulk_update(segments_to_update, ['user_count'])
+                 logger.info(f"Updated counts for {len(segments_to_update)} segments.")
+
+        except Exception as e:
+             logger.error(f"Error during segment count update: {e}", exc_info=True)
+             raise # Re-raise to indicate failure in refresh action if called
+
+
+    # Internal helper, no permission needed here
+    def _create_default_segments(self):
+        """Create default hardcoded segments (Idempotent using get_or_create)"""
+        logger.info("Creating default segments...")
+        created_segments_count = 0
+
+        # All users segment
+        _, created = UserSegment.objects.get_or_create(
+            name="all_users", defaults={'description': "All active users"} 
+        )
+        if created: created_segments_count += 1
+
+        # Role-based segments
+        for role in Role.objects.all():
+            _, created = UserSegment.objects.get_or_create(
+                name=f"role:{role.name}", defaults={'description': f"All users with the {role.name} role"}
+            )
+            if created: created_segments_count += 1
+
+        # Category-based segments
+        for category in ClassCategory.objects.all():
+            _, created = UserSegment.objects.get_or_create(
+                name=f"category:{category.name}", defaults={'description': f"Users who have booked classes in the {category.name} category"}
+            )
+            if created: created_segments_count += 1
+
+        # Special segments (New users)
+        _, created = UserSegment.objects.get_or_create(
+            name="new_users", defaults={'description': "Users who joined in the last 30 days"}
+        )
+        if created: created_segments_count += 1
+
+        # Special segments (Inactive users)
+        _, created = UserSegment.objects.get_or_create(
+            name="inactive_users", defaults={'description': "Users who haven't booked a class in the last 60 days"}
+        )
+        if created: created_segments_count += 1
+
+        logger.info(f"Default segment creation process finished. Created {created_segments_count} new segments.")
+
+
+    @action(detail=True, methods=['get'])
+    def users(self, request, pk=None):
+        """Get users in this segment"""
+        if not request.user.has_perm('quickstart.view_segment_users'):
+            self.permission_denied(request, message="You cannot view users within segments.")
+
+        segment = self.get_object()
+        users_qs = self._get_segment_users(segment).filter(is_active=True).only('userId', 'email', 'first_name', 'last_name')
+
+        # Paginate results
+        paginator = self.pagination_class() # Use viewset's pagination
+        paginated_users = paginator.paginate_queryset(users_qs, request, view=self)
+
+        user_data = [
+            { 'id': user.userId, 'email': user.email, 'name': user.get_full_name() or user.email }
+            for user in paginated_users
+        ] if paginated_users is not None else [] # Handle case where pagination is disabled
+
+        if paginated_users is not None:
+             return paginator.get_paginated_response(user_data)
+
+        # Fallback if no pagination
+        return Response({'count': users_qs.count(), 'users': user_data})
+
+    # Add action to manually trigger refresh
+    @action(detail=False, methods=['post'], url_path='refresh-counts')
+    def refresh_counts(self, request):
+        """Manually trigger the segment count refresh."""
+        if not request.user.has_perm('quickstart.refresh_segment_counts'):
+             self.permission_denied(request, message="You do not have permission to refresh segment counts.")
+        try:
+             self._update_segment_counts()
+             return Response({"status": "success", "message": "Segment counts refreshed."})
+        except Exception as e:
+             logger.error(f"Manual segment count refresh failed: {e}", exc_info=True)
+             return Response({"status": "error", "message": "Failed to refresh segment counts."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+
+# --- AdminNotificationAttachmentViewSet ---
 
 class AdminNotificationAttachmentViewSet(viewsets.ModelViewSet):
     """
     Admin viewset for managing notification attachments
     """
-    permission_classes = [IsAuthenticated, IsAdminUser]
+    permission_classes = [IsAuthenticated, CanAccessNotificationAdmin] # Use campaign admin access
     serializer_class = NotificationAttachmentSerializer
-    queryset = NotificationAttachment.objects.all()
-    
+    queryset = NotificationAttachment.objects.select_related('campaign').all() # Add campaign relation
+    http_method_names = ['get', 'post', 'delete', 'head', 'options'] # Allow POST, GET, DELETE
+
+    # --- Standard Methods with Permissions ---
+    def create(self, request, *args, **kwargs):
+        # Check permission to add attachments
+        if not request.user.has_perm('quickstart.add_notificationattachment'):
+             self.permission_denied(request, message="You cannot upload attachments.")
+
+        # Check permission to modify the target campaign
+        campaign_id = request.data.get('campaign')
+        if not campaign_id:
+             return Response({"campaign": ["This field is required."]}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+             campaign = NotificationCampaign.objects.get(pk=campaign_id)
+             if not request.user.has_perm('quickstart.change_notificationcampaign'):
+                  # If user needs change perm on campaign to add attachments
+                  self.permission_denied(request, message=f"You do not have permission to modify campaign {campaign_id}.")
+             if campaign.status == 'sent':
+                 return Response({"detail": "Cannot add attachments to a sent campaign."}, status=400)
+        except NotificationCampaign.DoesNotExist:
+             return Response({"campaign": ["Campaign not found."]}, status=status.HTTP_400_BAD_REQUEST)
+
+        return super().create(request, *args, **kwargs)
+
     def perform_create(self, serializer):
-        # Set file size based on actual file
         file_obj = self.request.FILES.get('file')
         if file_obj:
-            serializer.save(size=file_obj.size)
+             # Save with size and log
+             instance = serializer.save(size=file_obj.size)
+             logger.info(f"Attachment '{file_obj.name}' (ID: {instance.pk}) uploaded by Admin {self.request.user.email} for Campaign {instance.campaign_id}")
         else:
-            serializer.save()
+             # Should be caught by serializer validation if file is required
+             serializer.save()
+
+    def destroy(self, request, *args, **kwargs):
+        if not request.user.has_perm('quickstart.delete_notificationattachment'):
+            self.permission_denied(request, message="You cannot delete attachments.")
+        instance = self.get_object()
+        if instance.campaign.status == 'sent':
+            return Response({"detail": "Cannot delete attachments from a sent campaign."}, status=400)
+        logger.warning(f"Attachment '{instance.name}' (ID: {instance.pk}) deleted by Admin {request.user.email} from Campaign {instance.campaign_id}")
+        return super().destroy(request, *args, **kwargs)
+
+    def list(self, request, *args, **kwargs):
+        if not request.user.has_perm('quickstart.view_notificationattachment'):
+             self.permission_denied(request, message="You cannot view attachments.")
+        # Filter by campaign_id if provided
+        campaign_id = request.query_params.get('campaign_id')
+        if campaign_id:
+             # Apply filtering to the base queryset
+             queryset = self.filter_queryset(self.get_queryset().filter(campaign_id=campaign_id))
+             serializer = self.get_serializer(queryset, many=True)
+             return Response(serializer.data)
+        # If no campaign filter, proceed with default list (might list all attachments)
+        return super().list(request, *args, **kwargs)
+
+    def retrieve(self, request, *args, **kwargs):
+        if not request.user.has_perm('quickstart.view_notificationattachment'):
+             self.permission_denied(request, message="You cannot view attachment details.")
+        return super().retrieve(request, *args, **kwargs)

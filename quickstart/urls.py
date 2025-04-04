@@ -5,7 +5,6 @@ from django.views.generic import TemplateView
 
 
 from quickstart.views.notifications.notification_views import AdminNotificationAttachmentViewSet, AdminNotificationCampaignViewSet, AdminUserSegmentViewSet
-from quickstart.views.support_ticket_views import SupportTicketViewSet
 from quickstart.views.booking_management.booking_views import AdminBookingViewSet
 from quickstart.views.booking_management.payment_views import AdminPaymentViewSet
 from quickstart.views.class_management.class_management_views import AdminCategoryViewSet, AdminClassViewSet, AdminReviewViewSet
@@ -30,6 +29,8 @@ from .views.user_management.role_views import RoleManagementViewSet
 from .views.user_management.verification_views import VerificationRequestViewSet
 from .views.user_management.audit_views import AuditLogViewSet
 from .views.business_management.business_admin_views import BusinessAdminViewSet
+from .views.support_management.support_management_views import AdminSupportTicketViewSet
+from .views.support_ticket_views import UserSupportTicketViewSet, CreateSupportTicketView
 
 # Initialize the router
 router = DefaultRouter()
@@ -56,7 +57,7 @@ router.register(r'admin/categories', AdminCategoryViewSet, basename='admin-categ
 router.register(r'admin/reviews', AdminReviewViewSet, basename='admin-reviews')
 router.register(r'admin/bookings', AdminBookingViewSet, basename='admin-bookings')
 router.register(r'admin/payments', AdminPaymentViewSet, basename='admin-payments')
-router.register(r'admin/support-tickets', SupportTicketViewSet, basename='admin-support-tickets')
+router.register(r'admin/support-tickets', AdminSupportTicketViewSet, basename='admin-support-tickets')
 router.register(r'admin/notifications', AdminNotificationCampaignViewSet, basename='admin-notifications')
 router.register(r'admin/user-segments', AdminUserSegmentViewSet, basename='admin-user-segments')
 router.register(r'admin/notification-attachments', AdminNotificationAttachmentViewSet, basename='admin-notification-attachments')
@@ -81,6 +82,7 @@ urlpatterns = [
     ])),
     path('support-tickets/<int:pk>/reply/', UserSupportTicketViewSet.as_view({'post': 'reply'}), name='user-support-ticket-reply'),
     path('support-tickets/summary/', UserSupportTicketViewSet.as_view({'get': 'summary'}), name='user-support-ticket-summary'),
+    path('support-tickets/create/', CreateSupportTicketView.as_view(), name='create-support-ticket'),
 
     path('login/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('token/refresh/', CustomTokenRefreshView.as_view(), name='token_refresh'),
@@ -145,12 +147,12 @@ urlpatterns = [
     path('admin/bookings/export/', AdminBookingViewSet.as_view({'get': 'export'}), name='admin-export-bookings'),
     path('admin/bookings/<int:pk>/cancel/', AdminBookingViewSet.as_view({'post': 'cancel'}), name='admin-cancel-booking'),
 
-    path('admin/support-tickets/<int:pk>/reply/', SupportTicketViewSet.as_view({'post': 'reply'}), name='admin-support-ticket-reply'),
-    path('admin/support-tickets/<int:pk>/assign/', SupportTicketViewSet.as_view({'post': 'assign'}), name='admin-support-ticket-assign'),
-    path('admin/support-tickets/<int:pk>/resolve/', SupportTicketViewSet.as_view({'post': 'resolve'}), name='admin-support-ticket-resolve'),
-    path('admin/support-tickets/<int:pk>/close/', SupportTicketViewSet.as_view({'post': 'close'}), name='admin-support-ticket-close'),
-    path('admin/support-tickets/stats/', SupportTicketViewSet.as_view({'get': 'stats'}), name='admin-support-ticket-stats'),
-    path('admin/support-tickets/export/', SupportTicketViewSet.as_view({'get': 'export'}), name='admin-support-ticket-export'),
+    path('admin/support-tickets/<int:pk>/reply/', AdminSupportTicketViewSet.as_view({'post': 'reply'}), name='admin-support-ticket-reply'),
+    path('admin/support-tickets/<int:pk>/assign/', AdminSupportTicketViewSet.as_view({'post': 'assign'}), name='admin-support-ticket-assign'),
+    path('admin/support-tickets/<int:pk>/resolve/', AdminSupportTicketViewSet.as_view({'post': 'resolve'}), name='admin-support-ticket-resolve'),
+    path('admin/support-tickets/<int:pk>/close/', AdminSupportTicketViewSet.as_view({'post': 'close'}), name='admin-support-ticket-close'),
+    path('admin/support-tickets/stats/', AdminSupportTicketViewSet.as_view({'get': 'stats'}), name='admin-support-ticket-stats'),
+    path('admin/support-tickets/export/', AdminSupportTicketViewSet.as_view({'get': 'export'}), name='admin-support-ticket-export'),
 
     path('admin/notifications/<uuid:pk>/send/', AdminNotificationCampaignViewSet.as_view({'post': 'send'}), name='admin-notification-send'),
     path('admin/notifications/<uuid:pk>/cancel/', AdminNotificationCampaignViewSet.as_view({'post': 'cancel'}), name='admin-notification-cancel'),
