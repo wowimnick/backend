@@ -4,6 +4,7 @@ from dj_rest_auth.serializers import LoginSerializer as DefaultLoginSerializer
 from django.contrib.auth import get_user_model
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from django.db.models import Exists, OuterRef , Q
+from django.core.files.uploadedfile import InMemoryUploadedFile
 from ...models import Role, ClassesMain, BusinessInfo
 
 User = get_user_model()
@@ -39,17 +40,24 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
             'userId', 'email', 'username', 'first_name', 'last_name',
             'birth_date', 'bio', 'phone_number', 'country',
             'city', 'state', 'address', 'zipCode',
-            'avatar',
-            'avatar_url',
+            'avatar', # Keep this write_only field
+            'avatar_url', # Read-only derived field
             'role',
             'favorited_ids',
             'permissions',
             'has_business',
         )
         read_only_fields = (
-            'userId', 'email', 'role', 'avatar_url',
+            'userId', 'email', 'username', 
+            'role', 'avatar_url',
             'favorited_ids', 'permissions', 'has_business'
         )
+        # Prevent accidental updates to sensitive fields during PATCH
+        extra_kwargs = {
+            'email': {'read_only': True},
+            'username': {'read_only': True},
+        }
+
 
     def get_avatar_url(self, obj):
         if obj.avatar and hasattr(obj.avatar, 'url'):
@@ -77,31 +85,35 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
         ).exists()
 
     def update(self, instance, validated_data):
-        validated_data.pop('role', None)
-        avatar_action = 'keep'
-        new_avatar_file = None # Define upfront
-        if 'avatar' in self.initial_data:
-            if self.initial_data['avatar'] is None: avatar_action = 'remove'
-            # Check if the avatar data is actually a file upload
-            elif isinstance(self.initial_data['avatar'], (serializers.FileField.PROXIED_CLASS, serializers.ImageField.PROXIED_CLASS)):
-                 avatar_action = 'update'
-                 new_avatar_file = validated_data.pop('avatar', None)
+        # Handle avatar update/removal separately
+        avatar_file = validated_data.pop('avatar', 'NOT_PROVIDED') # Use sentinel value
 
-
+        # Update other fields first
+        # Ensure read-only fields are not accidentally passed to super().update
+        # The extra_kwargs in Meta helps, but double-check here if needed.
         instance = super().update(instance, validated_data)
 
         try:
             current_avatar_exists = bool(instance.avatar)
-            if avatar_action == 'remove' and current_avatar_exists:
-                instance.avatar.delete(save=False)
-                instance.avatar = None
+
+            if avatar_file == '': # Frontend sends empty string to signal removal
+                if current_avatar_exists:
+                    print(f"Removing avatar for user {instance.pk}")
+                    instance.avatar.delete(save=False) # Delete file from storage
+                    instance.avatar = None
+                    instance.save(update_fields=['avatar'])
+            elif isinstance(avatar_file, InMemoryUploadedFile): # Check if it's an actual uploaded file
+                if current_avatar_exists:
+                    print(f"Replacing avatar for user {instance.pk}")
+                    instance.avatar.delete(save=False) # Delete old file first
+                instance.avatar = avatar_file
                 instance.save(update_fields=['avatar'])
-            elif avatar_action == 'update' and new_avatar_file:
-                if current_avatar_exists: instance.avatar.delete(save=False)
-                instance.avatar = new_avatar_file
-                instance.save(update_fields=['avatar'])
+            # If avatar_file is 'NOT_PROVIDED', do nothing (field wasn't in request)
+
         except Exception as e:
-            print(f"Warning: Error occurred during avatar update for user {instance.pk}: {e}")
+            # Use logger instead of print in production
+            print(f"ERROR: Could not process avatar update for user {instance.pk}: {e}")
+            # Optionally re-raise or add error to serializer non_field_errors
 
         return instance
 
