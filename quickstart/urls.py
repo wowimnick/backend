@@ -4,159 +4,148 @@ from allauth.account.views import confirm_email
 from django.views.generic import TemplateView
 
 
-from quickstart.views.notifications.notification_views import AdminNotificationAttachmentViewSet, AdminNotificationCampaignViewSet, AdminUserSegmentViewSet
-from quickstart.views.booking_management.booking_views import AdminBookingViewSet
-from quickstart.views.booking_management.payment_views import AdminPaymentViewSet
-from quickstart.views.class_management.class_management_views import AdminCategoryViewSet, AdminClassViewSet, AdminReviewViewSet
-from quickstart.monitoring.consumers import MetricsConsumer
-from quickstart.payments.views import CreatePaymentIntentView, ProcessBookingWebhook
+from .views.admin.metrics_monitoring.admin_metrics_views import AdminMetricsView
+from .views.admin.notifications.notification_views import AdminNotificationAttachmentViewSet, AdminNotificationCampaignViewSet, AdminUserSegmentViewSet
+from .views.admin.booking_management.booking_views import AdminBookingViewSet
+from .views.admin.booking_management.payment_views import AdminPaymentViewSet
+from .views.admin.class_management.class_management_views import AdminCategoryViewSet, AdminClassViewSet, AdminReviewViewSet
+from .payments.views import CreatePaymentIntentView, ProcessBookingWebhook
+from .views.admin.user_management.user_admin_views import UserAdminViewSet
+from .views.admin.user_management.role_views import RoleManagementViewSet
+from .views.admin.user_management.verification_views import VerificationRequestViewSet
+from .views.admin.user_management.audit_views import AuditLogViewSet
+from .views.admin.business_management.business_admin_views import BusinessAdminViewSet
+from .views.admin.support_management.support_management_views import AdminSupportTicketViewSet
 
 from .views import (
     # Existing views
-    CustomLoginView, CustomTokenObtainPairView, CustomTokenRefreshView,
-    LogoutView, UserUpdateView, CustomRegisterView, UserRoleView,
-    BusinessInfoViewSet, BookingViewSet,
-    RoleViewSet, BusinessViewSet, register_business, 
-    ScheduleViewSet, ClassReviews, ClassImageList,
-    ClassImageDetail, ClassOptionDetail, StudentProfileViewSet,
-    RevenueAnalyticsView, ClassViewSet, ReviewSubmission, ChatMessageView,
-    ScheduleInstanceViewSet,
-    ScheduleBreakViewSet, UserSupportTicketViewSet, CreateSupportTicketView
+    CustomTokenObtainPairView, CustomTokenRefreshView,
+    LogoutView, UserUpdateView, CustomRegisterView, 
+    get_user_businesses, BusinessBookingViewSet, StudentBookingViewSet,
+    BusinessDashboardViewSet, MyBusinessProfileView, PublicBusinessInfoViewSet, 
+    register_business, ClassReviews, BusinessStudentViewSet, MyProfileView,
+    RevenueAnalyticsView,  ReviewSubmission, ChatMessageView, UserSupportTicketViewSet, CreateSupportTicketView,
+    BusinessClassViewSet, BusinessClassOptionDetail, BusinessScheduleViewSet, 
+    BusinessScheduleInstanceViewSet, BusinessScheduleBreakViewSet, PublicClassViewSet, PublicScheduleViewSet,
+    BusinessReviewViewSet, MyBusinessOverviewView
 )
 
-from .views.user_management.user_admin_views import UserAdminViewSet
-from .views.user_management.role_views import RoleManagementViewSet
-from .views.user_management.verification_views import VerificationRequestViewSet
-from .views.user_management.audit_views import AuditLogViewSet
-from .views.business_management.business_admin_views import BusinessAdminViewSet
-from .views.support_management.support_management_views import AdminSupportTicketViewSet
-from .views.support_ticket_views import UserSupportTicketViewSet, CreateSupportTicketView
+# Router for Publicly Accessible Read-Only Endpoints (Base: /api/)
+public_router = DefaultRouter()
+public_router.register(r'businesses', PublicBusinessInfoViewSet, basename='public-business')
+public_router.register(r'classes', PublicClassViewSet, basename='public-class')
+public_router.register(r'schedules', PublicScheduleViewSet, basename='public-schedule')
 
-# Initialize the router
-router = DefaultRouter()
+# Router for Business Management Endpoints (Base: /api/business/)
+# Note: We map specific viewsets here, even if they could fit elsewhere,
+# to logically group them under a 'business' path prefix if desired in the future,
+# although current paths don't enforce it strictly to maintain URL structure.
+business_management_router = DefaultRouter()
+business_management_router.register(r'classes', BusinessClassViewSet, basename='business-class')
+business_management_router.register(r'reviews', BusinessReviewViewSet, basename='business-review')
+business_management_router.register(r'bookings', BusinessBookingViewSet, basename='business-booking')
+business_management_router.register(r'students', BusinessStudentViewSet, basename='business-student')
+business_management_router.register(r'schedules', BusinessScheduleViewSet, basename='business-schedule')
+business_management_router.register(r'schedule-instances', BusinessScheduleInstanceViewSet, basename='business-schedule-instance')
+business_management_router.register(r'schedule-breaks', BusinessScheduleBreakViewSet, basename='business-schedule-break')
+# Business dashboard stats - keeping original path /api/business-stats/
+# No suitable router base to keep this path, will register separately or keep outside router.
 
-# Register existing viewsets
-router.register(r'businesses', BusinessInfoViewSet, basename='business')
-router.register(r'business-stats', BusinessViewSet, basename='business-stats')
-router.register(r'bookings', BookingViewSet, basename='booking')
-router.register(r'roles', RoleViewSet, basename='role')
-router.register(r'students', StudentProfileViewSet, basename='student')
-router.register(r'classes', ClassViewSet, basename='classes')
-router.register(r'schedules', ScheduleViewSet, basename='schedule')
-router.register(r'schedule-instances', ScheduleInstanceViewSet, basename='schedule-instance')
-router.register(r'schedule-breaks', ScheduleBreakViewSet, basename='schedule-break')
-router.register(r'support-tickets', UserSupportTicketViewSet, basename='user-support-tickets')
+# Router for User/Student Self-Service Endpoints (Base: /api/)
+user_self_router = DefaultRouter()
+# These will need adjustment once those views are properly separated
+user_self_router.register(r'my-bookings', StudentBookingViewSet, basename='my-booking')
+user_self_router.register(r'support-tickets', UserSupportTicketViewSet, basename='user-support-ticket') # User's own tickets
 
-router.register(r'admin/users', UserAdminViewSet, basename='admin-users')
-router.register(r'admin/roles', RoleManagementViewSet, basename='admin-roles')
-router.register(r'admin/verification', VerificationRequestViewSet, basename='admin-verification')
-router.register(r'admin/audit-logs', AuditLogViewSet, basename='admin-audit-logs')
-router.register(r'admin/businesses', BusinessAdminViewSet, basename='admin-businesses')
-router.register(r'admin/classes', AdminClassViewSet, basename='admin-classes')
-router.register(r'admin/categories', AdminCategoryViewSet, basename='admin-categories')
-router.register(r'admin/reviews', AdminReviewViewSet, basename='admin-reviews')
-router.register(r'admin/bookings', AdminBookingViewSet, basename='admin-bookings')
-router.register(r'admin/payments', AdminPaymentViewSet, basename='admin-payments')
-router.register(r'admin/support-tickets', AdminSupportTicketViewSet, basename='admin-support-tickets')
-router.register(r'admin/notifications', AdminNotificationCampaignViewSet, basename='admin-notifications')
-router.register(r'admin/user-segments', AdminUserSegmentViewSet, basename='admin-user-segments')
-router.register(r'admin/notification-attachments', AdminNotificationAttachmentViewSet, basename='admin-notification-attachments')
+# Router for Admin Endpoints (Base: /api/admin/)
+admin_router = DefaultRouter()
+admin_router.register(r'users', UserAdminViewSet, basename='admin-users')
+admin_router.register(r'roles', RoleManagementViewSet, basename='admin-roles') # Admin role management
+admin_router.register(r'verification', VerificationRequestViewSet, basename='admin-verification')
+admin_router.register(r'audit-logs', AuditLogViewSet, basename='admin-audit-logs')
+admin_router.register(r'businesses', BusinessAdminViewSet, basename='admin-businesses')
+admin_router.register(r'classes', AdminClassViewSet, basename='admin-classes')
+admin_router.register(r'categories', AdminCategoryViewSet, basename='admin-categories')
+admin_router.register(r'reviews', AdminReviewViewSet, basename='admin-reviews')
+admin_router.register(r'bookings', AdminBookingViewSet, basename='admin-bookings')
+admin_router.register(r'payments', AdminPaymentViewSet, basename='admin-payments')
+admin_router.register(r'support-tickets', AdminSupportTicketViewSet, basename='admin-support-tickets')
+admin_router.register(r'notifications', AdminNotificationCampaignViewSet, basename='admin-notifications')
+admin_router.register(r'user-segments', AdminUserSegmentViewSet, basename='admin-user-segments')
+admin_router.register(r'notification-attachments', AdminNotificationAttachmentViewSet, basename='admin-notification-attachments')
 
 
-# URL Patterns
+# --- Main URL Patterns ---
 urlpatterns = [
-    path('', include(router.urls)),
+    # Silk profiler (keep at top if used)
     path('silk/', include('silk.urls', namespace='silk')),
-    path('ws/system_metrics/', MetricsConsumer.as_asgi()),
-    
-    # Existing auth URLs
-    path('auth/', include([
-        path('', include('dj_rest_auth.urls')),
-        path('registration/', CustomRegisterView.as_view(), name='rest_register'),
-        path('account-confirm-email/', 
-             TemplateView.as_view(template_name="email_confirmation.html"),
-             name='account_email_verification_sent'),
-        path('account-confirm-email/<str:key>/', 
-             confirm_email,
-             name='account_confirm_email'),
-    ])),
-    path('support-tickets/<int:pk>/reply/', UserSupportTicketViewSet.as_view({'post': 'reply'}), name='user-support-ticket-reply'),
-    path('support-tickets/summary/', UserSupportTicketViewSet.as_view({'get': 'summary'}), name='user-support-ticket-summary'),
-    path('support-tickets/create/', CreateSupportTicketView.as_view(), name='create-support-ticket'),
 
+    # Include Routers - Order can matter if paths overlap, but bases are distinct here
+    path('admin/', include(admin_router.urls)), 
+    path('business/', include(business_management_router.urls)),
+    path('', include(public_router.urls)), 
+    path('', include(user_self_router.urls)), 
+
+    # Business Dashboard Stats (Doesn't fit cleanly in routers while keeping path)
+    # Registering it separately
+    path('business-stats/', BusinessDashboardViewSet.as_view({'get': 'list'}), name='business-stats-list'),
+    path('my-business/overview/', MyBusinessOverviewView.as_view(), name='my-business-overview'),
+    path('business-stats/<int:pk>/', BusinessDashboardViewSet.as_view({'get': 'retrieve'}), name='business-stats-detail'),
+    path('business-stats/<int:pk>/dashboard_stats/', BusinessDashboardViewSet.as_view({'get': 'dashboard_stats'}), name='business-stats-dashboard'),
+    path('business-stats/<int:pk>/revenue_over_time/', BusinessDashboardViewSet.as_view({'get': 'revenue_over_time'}), name='business-stats-revenue'),
+    path('business-stats/<int:pk>/class_performance/', BusinessDashboardViewSet.as_view({'get': 'class_performance'}), name='business-stats-class-perf'),
+
+    # --- Standalone URL Paths (Not fitting standard router patterns or needing specific paths) ---
+
+    # Authentication
+    path('auth/', include([
+        path('', include('dj_rest_auth.urls')), # Default auth URLs (password reset, etc.)
+        path('registration/', CustomRegisterView.as_view(), name='rest_register'),
+        # Email confirmation paths (keep as is)
+        path('account-confirm-email/', TemplateView.as_view(template_name="account_confirmation.html"), name='account_email_verification_sent'),
+        path('account-confirm-email/<str:key>/', confirm_email, name='account_confirm_email'),
+    ])),
+    path('admin/metrics/', AdminMetricsView.as_view(), name='admin-metrics'),
     path('login/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('token/refresh/', CustomTokenRefreshView.as_view(), name='token_refresh'),
     path('logout/', LogoutView.as_view(), name='logout'),
-    path('user/', include([
-        path('role/', UserRoleView.as_view(), name='user-role'),
-        path('update/', UserUpdateView.as_view(), name='user-update'),
-    ])),
+
+    # User Self-Service
+    path('user/update/', UserUpdateView.as_view(), name='user-update'),
+    path('user/profile/', MyProfileView.as_view(), name='my-profile'),
+
+    # Business Management (Standalone)
     path('business/register/', register_business, name='business-register'),
-    path('classes/', include([
-        path('images/<int:pk>/', ClassImageDetail.as_view(), name='class-image-detail'),
-        path('<int:pk>/reviews/', ClassReviews.as_view(), name='class-reviews'),
-        path('<int:pk>/images/', ClassImageList.as_view(), name='class-images'),
-        path('<int:pk>/options/', ClassOptionDetail.as_view(), name='class-option-create'),
-        path('<int:pk>/options/<int:option_id>/', ClassOptionDetail.as_view(), name='class-option-detail'),
-    ])),
-    path('reviews/submit/', ReviewSubmission.as_view(), name='submit-review'),
-    path('schedule-instances/<int:pk>/', include([
-        path('mark-attendance/', 
-             ScheduleInstanceViewSet.as_view({'post': 'mark_attendance'}),
-             name='mark-attendance'),
-        path('cancel/',
-             ScheduleInstanceViewSet.as_view({'post': 'cancel'}),
-             name='cancel-instance'),
-    ])),
+    path('my-businesses/', get_user_businesses, name='my-businesses'), # List user's businesses
+    path('my-business/profile/', MyBusinessProfileView.as_view(), name='my-business-profile'), # Manage own profile
+
+    # Class Related (Standalone/Detail)
+    # Assuming class image management is part of BusinessClassViewSet actions now
+    # path('classes/images/<int:pk>/', ClassImageDetail.as_view(), name='class-image-detail'), # If needed separately
+    # path('classes/<int:pk>/images/', ClassImageList.as_view(), name='class-images'), # If needed separately
+    path('business/classes/<int:pk>/options/<int:option_id>/', BusinessClassOptionDetail.as_view(), name='business-class-option-detail'), # Specific business option detail
+
+    path('classes/<int:pk>/reviews/', ClassReviews.as_view(), name='public-class-reviews'), 
+    path('reviews/submit/', ReviewSubmission.as_view(), name='submit-review'), 
+
+    # Schedule Instance Actions (Business) - These are now actions within BusinessScheduleInstanceViewSet
+    # path('schedule-instances/<int:pk>/mark-attendance/', ...),
+    # path('schedule-instances/<int:pk>/cancel/', ...),
+
+    # Revenue Analytics (Business)
     path('revenue/analytics/', RevenueAnalyticsView.as_view(), name='revenue-analytics'),
+
+    # Chat (User)
     path('chat/message/', ChatMessageView.as_view(), name='chat-message'),
+
+    # Payments
     path('payments/webhook/', ProcessBookingWebhook.as_view(), name='payment-webhook'),
     path('payments/create-payment-intent/', CreatePaymentIntentView.as_view(), name='create-payment-intent'),
-    path('my_bookings/', BookingViewSet.as_view({'get': 'my_bookings'}), name='my-bookings'),
-    path('<int:pk>/student_cancel/', BookingViewSet.as_view({'post': 'student_cancel'}), name='student-cancel'),
 
-    path('admin/users/<int:pk>/lock/', UserAdminViewSet.as_view({'post': 'lock_account'}), name='admin-lock-user'),
-    path('admin/users/<int:pk>/unlock/', UserAdminViewSet.as_view({'post': 'unlock_account'}), name='admin-unlock-user'),
-    path('admin/users/<int:pk>/reset-password/', UserAdminViewSet.as_view({'post': 'reset_password'}), name='admin-reset-password'),
+    # Support Tickets (User)
+    path('support-tickets/create/', CreateSupportTicketView.as_view(), name='create-support-ticket'), # Standalone create view
 
-    path('admin/roles/<int:pk>/duplicate/', RoleManagementViewSet.as_view({'post': 'duplicate'}), name='admin-duplicate-role'),
-    path('admin/roles/permissions/', RoleManagementViewSet.as_view({'get': 'permissions'}), name='admin-role-permissions'),
+    # Verification (User - Actions are within VerificationRequestViewSet in admin_router, maybe needs user actions?)
+    # path('verification/submit/', VerificationRequestViewSet.as_view({'post': 'submit_verification'}), name='submit-verification'), # Example user action if needed
 
-    path('verification/submit/', VerificationRequestViewSet.as_view({'post': 'submit_verification'}), name='submit-verification'),
-    path('verification/<uuid:pk>/process/', VerificationRequestViewSet.as_view({'post': 'process_verification'}), name='process-verification'),
-    
-    path('admin/audit-logs/export/', AuditLogViewSet.as_view({'get': 'export'}), name='export-audit-logs'),
-    path('admin/audit-logs/activity-summary/', AuditLogViewSet.as_view({'get': 'activity_summary'}), name='audit-activity-summary'),
-
-    path('admin/businesses/<int:pk>/toggle-feature/', BusinessAdminViewSet.as_view({'post': 'toggle_feature'}), name='business-toggle-feature'),
-    path('admin/businesses/metrics/', BusinessAdminViewSet.as_view({'get': 'metrics'}), name='business-metrics'),
-    path('admin/businesses/geographical/', BusinessAdminViewSet.as_view({'get': 'geographical'}), name='business-geographical'),
-    path('admin/businesses/export/', BusinessAdminViewSet.as_view({'get': 'export'}), name='business-export'),
-    path('admin/businesses/announcements/', BusinessAdminViewSet.as_view({'post': 'announcements'}), name='business-announcements'),
-    
-    path('admin/classes/analytics/', AdminClassViewSet.as_view({'get': 'analytics'}), name='admin-class-analytics'),
-    path('admin/classes/export/', AdminClassViewSet.as_view({'get': 'export'}), name='admin-class-export'),
-    path('admin/categories/stats/', AdminCategoryViewSet.as_view({'get': 'stats'}), name='admin-category-stats'),
-
-    path('admin/payments/stats/', AdminPaymentViewSet.as_view({'get': 'stats'}), name='admin-payment-stats'),
-    path('admin/payments/<int:pk>/mark-paid/', AdminPaymentViewSet.as_view({'post': 'mark_paid'}), name='admin-mark-payment-paid'),
-    path('admin/payments/<int:pk>/history/', AdminPaymentViewSet.as_view({'get': 'history'}), name='admin-payment-history'),
-    path('admin/payments/<int:pk>/receipt/', AdminPaymentViewSet.as_view({'get': 'receipt'}), name='admin-payment-receipt'),
-    path('admin/payments/export/', AdminPaymentViewSet.as_view({'get': 'export'}), name='admin-export-payments'),
-    path('admin/bookings/analytics/', AdminBookingViewSet.as_view({'get': 'analytics'}), name='admin-booking-analytics'),
-    path('admin/bookings/export/', AdminBookingViewSet.as_view({'get': 'export'}), name='admin-export-bookings'),
-    path('admin/bookings/<int:pk>/cancel/', AdminBookingViewSet.as_view({'post': 'cancel'}), name='admin-cancel-booking'),
-
-    path('admin/support-tickets/<int:pk>/reply/', AdminSupportTicketViewSet.as_view({'post': 'reply'}), name='admin-support-ticket-reply'),
-    path('admin/support-tickets/<int:pk>/assign/', AdminSupportTicketViewSet.as_view({'post': 'assign'}), name='admin-support-ticket-assign'),
-    path('admin/support-tickets/<int:pk>/resolve/', AdminSupportTicketViewSet.as_view({'post': 'resolve'}), name='admin-support-ticket-resolve'),
-    path('admin/support-tickets/<int:pk>/close/', AdminSupportTicketViewSet.as_view({'post': 'close'}), name='admin-support-ticket-close'),
-    path('admin/support-tickets/stats/', AdminSupportTicketViewSet.as_view({'get': 'stats'}), name='admin-support-ticket-stats'),
-    path('admin/support-tickets/export/', AdminSupportTicketViewSet.as_view({'get': 'export'}), name='admin-support-ticket-export'),
-
-    path('admin/notifications/<uuid:pk>/send/', AdminNotificationCampaignViewSet.as_view({'post': 'send'}), name='admin-notification-send'),
-    path('admin/notifications/<uuid:pk>/cancel/', AdminNotificationCampaignViewSet.as_view({'post': 'cancel'}), name='admin-notification-cancel'),
-    path('admin/notifications/<uuid:pk>/duplicate/', AdminNotificationCampaignViewSet.as_view({'post': 'duplicate'}), name='admin-notification-duplicate'),
-    path('admin/notifications/metrics/', AdminNotificationCampaignViewSet.as_view({'get': 'metrics'}), name='admin-notification-metrics'),
-    path('admin/user-segments/<uuid:pk>/users/', AdminUserSegmentViewSet.as_view({'get': 'users'}), name='admin-user-segment-users'),
 ]

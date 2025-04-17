@@ -48,3 +48,11 @@ class RolePermissionBackend(ModelBackend):
     # We don't necessarily need to override authenticate() or get_user()
     # unless we change how users log in. We primarily care about has_perm here.
     # Inheriting from ModelBackend keeps the standard user lookup functional.
+
+    def get_all_permissions(self, user_obj, obj=None):
+        if not user_obj.is_active or user_obj.is_anonymous or not hasattr(user_obj, 'role') or user_obj.role is None:
+            return set()
+        perms = set()
+        for p in user_obj.role.permissions.select_related('content_type'):
+             perms.add(f"{p.content_type.app_label}.{p.codename}")
+        return perms

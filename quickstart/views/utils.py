@@ -1,4 +1,6 @@
 import math
+import random
+from decimal import Decimal, InvalidOperation
 
 def haversine_distance(lat1, lon1, lat2, lon2):
     """

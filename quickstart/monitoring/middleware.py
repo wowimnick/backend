@@ -1,105 +1,98 @@
-# monitoring/middleware.py
+# quickstart/monitoring/middleware.py
 
 import time
 from django.core.cache import cache
-from collections import defaultdict
-import threading
 import traceback
-import json
+import logging # Added logging
 
-local = threading.local()
+logger = logging.getLogger(__name__)
+
+# Removed defaultdict, threading as they are no longer used here
 
 class MetricsMiddleware:
     def __init__(self, get_response):
         self.get_response = get_response
-        self.requests = defaultdict(int)
-        self.response_times = defaultdict(list)
+        # Initialize cache keys if they don't exist, with a reasonable timeout
+        # This helps prevent NoneType errors if cache expires or restarts
+        cache.add('requests_per_minute', 0, timeout=70) # Set if not exists, expire slightly > 1 min
+        cache.add('error_count', 0, timeout=None) # Persist error count unless manually reset
+        cache.add('error_rate', 0, timeout=70) # Track errors per interval, expire slightly > 1 min
 
     def __call__(self, request):
-        # Store the overall start time 
-        overall_start_time = time.time()
-        
-        # Store start time in thread-local storage
-        local.start_time = overall_start_time
-        
-        # Track middleware start time
-        middleware_start = time.time()
-        
-        # This will be captured once middleware execution is complete
-        middleware_end = time.time()
-        middleware_time = middleware_end - middleware_start
-        
-        # Store middleware time in request for later access
-        request.middleware_time = middleware_time
-        
-        # Call the next middleware or view
-        response = self.get_response(request)
-        
-        # Calculate view time (including template rendering)
-        view_template_time = (time.time() - middleware_end)
-        
-        # Try to extract template rendering time if available
-        template_time = getattr(response, '_template_render_time', 0)
-        
-        # Calculate view time (excluding template rendering)
-        view_time = view_template_time - template_time
-        
-        # Store these values in response object for future reference
-        response._middleware_time = middleware_time
-        response._view_time = view_time
-        response._template_time = template_time
-        
-        # Calculate total response time
-        duration = time.time() - overall_start_time
-        
-        # Track metrics
-        path = request.path.split('/')[1] or 'root'
-        self.response_times[path].append(duration)
-        self.requests[path] += 1
+        start_time = time.time()
 
-        # Store in cache for the metrics collector
-        cache.set(f'response_time_{request.path}', duration, 3600)
-        cache.set(f'middleware_time_{request.path}', middleware_time, 3600)
-        cache.set(f'view_time_{request.path}', view_time, 3600)
-        cache.set(f'template_time_{request.path}', template_time, 3600)
-        
-        cache.incr('requests_per_minute', 1)
+        response = None # Initialize response
+        try:
+            response = self.get_response(request)
+        except Exception as e:
+            raise e
 
-        # Track errors
-        if 400 <= response.status_code < 600:
-            cache.incr('error_count', 1)
-            cache.incr('error_rate', 1)
-            
-            # Track error by path
-            cache.incr(f'error_count_{path}', 1)
+        duration = time.time() - start_time
+
+        # --- Track Aggregate Metrics ---
+
+        # Requests per minute counter (reset periodically by a separate task or metric system)
+        try:
+            # Use incr, handles initialization if key expired
+            cache.incr('requests_per_minute')
+        except Exception as cache_err:
+             logger.error(f"Cache error incrementing requests_per_minute: {cache_err}")
+
+
+        # Track errors based on response status code
+        if response and 400 <= response.status_code < 600:
+             self.handle_error_metrics(request, response, is_exception=False)
 
         return response
 
     def process_exception(self, request, exception):
-        path = request.path.split('/')[1] or 'root'
-        
-        # Increment error counters
-        cache.incr('error_count', 1)
-        cache.incr('error_rate', 1)
-        cache.incr(f'error_count_{path}', 1)
-        
-        # Store exception details for debugging
-        error_info = {
-            'timestamp': time.time(),
-            'path': request.path,
-            'method': request.method,
-            'exception_type': exception.__class__.__name__,
-            'exception_message': str(exception),
-            'traceback': traceback.format_exc()
-        }
-        
-        # Store the last 20 errors
-        errors = cache.get('recent_errors', [])
-        errors.insert(0, error_info)
-        cache.set('recent_errors', errors[:20], 3600)
-        
-        # Track exception types
-        exception_type = exception.__class__.__name__
-        exception_counts = cache.get('exception_counts', {})
-        exception_counts[exception_type] = exception_counts.get(exception_type, 0) + 1
-        cache.set('exception_counts', exception_counts, 3600)
+        """
+        Called when an exception occurs during view processing.
+        Logs error metrics and exception details.
+        """
+        # Log error metrics
+        self.handle_error_metrics(request, None, is_exception=True, exception=exception)
+
+        # Returning None lets Django's default exception handling continue
+        return None
+
+    def handle_error_metrics(self, request, response=None, is_exception=False, exception=None):
+        """ Helper function to increment error counters and log details. """
+        path_prefix = request.path.split('/')[1] or 'root' # Get first part of path
+
+        try:
+            # Increment general error counters
+            cache.incr('error_count')
+            cache.incr('error_rate') # Represents errors in the current interval
+
+            # Increment error counter for the specific path prefix
+            cache.incr(f'error_count_{path_prefix}')
+        except Exception as cache_err:
+             logger.error(f"Cache error incrementing error metrics: {cache_err}")
+
+
+        # Log exception details if it's an exception
+        if is_exception and exception:
+             try:
+                 error_info = {
+                     'timestamp': time.time(),
+                     'path': request.path,
+                     'method': request.method,
+                     'exception_type': exception.__class__.__name__,
+                     'exception_message': str(exception),
+                     'traceback': traceback.format_exc() # Full traceback
+                 }
+
+                 # Store the last N errors (e.g., 20)
+                 errors = cache.get('recent_errors', [])
+                 errors.insert(0, error_info) # Add to beginning
+                 # Use cache 'set' with timeout if errors should expire
+                 cache.set('recent_errors', errors[:20], timeout=3600) # Store for 1 hour
+
+                 # Track exception types counts
+                 exception_type = exception.__class__.__name__
+                 exception_counts = cache.get('exception_counts', {})
+                 exception_counts[exception_type] = exception_counts.get(exception_type, 0) + 1
+                 cache.set('exception_counts', exception_counts, timeout=3600) # Store for 1 hour
+             except Exception as log_err:
+                  logger.error(f"Error logging exception details to cache: {log_err}")

@@ -238,8 +238,8 @@ REST_FRAMEWORK = {
 }
 
 AUTHENTICATION_BACKENDS = [
-    'quickstart.backends.RolePermissionBackend',
     'django.contrib.auth.backends.ModelBackend',
+    'quickstart.backends.RolePermissionBackend',
 ]
 
 SIMPLE_JWT = {
@@ -369,6 +369,10 @@ SILKY_META = True
 SILKY_INTERCEPT_PERCENT = 100  # Log all requests
 SILKY_MAX_RECORDED_REQUESTS = 10000
 SILKY_MAX_RECORDED_REQUESTS_CHECK_PERCENT = 10
+
+SILKY_IGNORE_PATHS = [
+    '/api/admin/metrics/',
+]
 
 ROOT_URLCONF = 'CEBackend.urls'
 ASGI_APPLICATION = 'CEBackend.asgi.application'

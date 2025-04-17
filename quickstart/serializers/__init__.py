@@ -1,53 +1,73 @@
-from .auth_serializers import (
+from .auth.auth_serializers import (
     CustomLoginSerializer,
     CustomRegisterSerializer,
     CustomTokenObtainPairSerializer,
     CustomUserDetailsSerializer,
-    RoleSerializer
+    RoleNestedSerializer
 )
 
-from .business_serializers import (
-    BusinessInfoSerializer,
+from .public.public_business_serializers import (
+    PublicBusinessInfoSerializer,
+)
+
+from .business.business_management_serializers import (
+    ManagedBusinessInfoSerializer,
     BusinessStatsSerializer,
     BusinessRegistrationSerializer,
+    BusinessDashboardOverviewSerializer,
+    colors
 )
 
-from .class_serializers import (
-    ClassOptionSerializer,
+from .business.business_class_serializers import (
+    ManagedClassSerializer,
     ClassImageSerializer,
-    ClassesMainSerializer,
     ClassCreateSerializer,
-    ClassOptionCreateSerializer,
     ScheduleSerializer,
     ScheduleInstanceSerializer,
-    ScheduleBreakSerializer
+    ScheduleBreakSerializer,
+    ManagedClassOptionSerializer,
 )
 
-from .booking_serializers import (
-    BookingCreateSerializer,
+from .public.public_class_serializers import (
+    PublicClassImageSerializer,
+    PublicClassSerializer,
+    PublicClassOptionSerializer,
+    PublicScheduleSerializer,
+)
+
+from .business.business_booking_serializers import (
+    BusinessBookingListSerializer,
+    
+)
+
+from .public.public_booking_serializers import (
+    BookingCreateSerializer, 
+    StudentBookingSerializer, 
     BookingDetailSerializer,
-    BookingListSerializer,
-    StudentBookingSerializer
 )
 
-from .student_serializers import (
-    StudentProfileSerializer,
-    StudentNoteSerializer,
+from .business.business_student_serializers import (
+    BusinessStudentNoteSerializer,
+    BusinessStudentProfileSerializer
 )
 
-from .revenue_analytics_serializers import (
-    RevenueDistributionSerializer,
-    RevenueMetricsSerializer,
-    RevenueReportSerializer,
-    RevenueTimeSeriesSerializer
+from .public.user_profile_serializers import (
+    MyProfileSerializer
 )
 
-from .review_serializers import (
+from .public.public_review_serializers import (
     ReviewSubmissionSerializer,
-    ReviewSerializer
+    UserReviewSerializer,
+    PublicReviewSerializer,
 )
 
-from .support_chat_serializer import (
+from .business.business_review_serializers import (
+    BusinessReviewUserSerializer,
+    BusinessReviewBookingSerializer,
+    BusinessReviewSerializer,
+)
+
+from .public.support_chat_serializer import (
     ChatMessageSerializer, 
     ChatRequestSerializer,
     ChatSessionSerializer,
@@ -64,42 +84,47 @@ __all__ = [
     'CustomRegisterSerializer', 
     'CustomTokenObtainPairSerializer',
     'CustomUserDetailsSerializer',
-    'RoleSerializer',
+    'RoleNestedSerializer',
 
     # Business Serializers
-    'BusinessInfoSerializer',
+    'PublicBusinessInfoSerializer',
+    'ManagedBusinessInfoSerializer',
     'BusinessStatsSerializer',
     'BusinessRegistrationSerializer',
+    'BusinessDashboardOverviewSerializer',
+    'colors',
 
     # Class Serializers
-    'ClassOptionSerializer',
     'ClassImageSerializer',
-    'ReviewSerializer',
-    'ClassesMainSerializer',
     'ClassCreateSerializer',
-    'ClassOptionCreateSerializer',
     'ScheduleSerializer',
     'ScheduleInstanceSerializer',
     'ScheduleBreakSerializer',
+    'ManagedClassOptionSerializer',
+    'ManagedClassSerializer',
+    'PublicClassImageSerializer',
+    'PublicClassSerializer',
+    'PublicClassOptionSerializer',
+    'PublicScheduleSerializer',
 
     # Booking Serializers
     'BookingCreateSerializer',
-    'BookingDetailSerializer',
-    'BookingListSerializer',
     'StudentBookingSerializer',
+    'BusinessBookingListSerializer',
+    'BookingDetailSerializer',
 
     # Student Serializers
-    'StudentProfileSerializer',
-    'StudentNoteSerializer',
-
-    # Revenue Analytics Serializers
-    'RevenueDistributionSerializer',
-    'RevenueMetricsSerializer',
-    'RevenueReportSerializer',
-    'RevenueTimeSeriesSerializer',
+    'BusinessStudentNoteSerializer',
+    'BusinessStudentProfileSerializer',
+    'MyProfileSerializer',
 
     # Review Serializers
     'ReviewSubmissionSerializer',
+    'UserReviewSerializer',
+    'PublicReviewSerializer',
+    'BusinessReviewUserSerializer',
+    'BusinessReviewBookingSerializer',
+    'BusinessReviewSerializer',
 
     # Chat Serializers
     'ChatMessageSerializer',

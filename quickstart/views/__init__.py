@@ -1,5 +1,4 @@
-from .auth_views import (
-    CustomLoginView,
+from .auth.auth_views import (
     CustomTokenObtainPairView,
     CustomTokenRefreshView,
     LogoutView,
@@ -7,60 +6,55 @@ from .auth_views import (
     CustomRegisterView
 )
 
-from .business_views import (
-    BusinessViewSet,
-    BusinessInfoDetail,
-    BusinessInfoViewSet,
+from .business.business_management_views import (
+    BusinessDashboardViewSet,
+    MyBusinessProfileView,
     register_business,
+    get_user_businesses,
+    MyBusinessOverviewView,
 )
 
-from .class_views import (
-    ClassImageList,
-    ClassImageDetail,
-    ClassOptionDetail,
-    ScheduleViewSet,
-    ScheduleInstanceViewSet,
-    ScheduleBreakViewSet,
-    ClassViewSet,
+from .public.public_business_views import (
+    PublicBusinessInfoViewSet,
 )
 
-from .student_views import (
-    StudentProfileViewSet,
+from .public.public_class_views import (
+    PublicClassViewSet,
+    PublicScheduleViewSet,
 )
 
-from .booking_views import (
-    BookingViewSet,
+from .business.business_class_views import (
+    BusinessClassViewSet,
+    BusinessClassOptionDetail,
+    BusinessScheduleViewSet,
+    BusinessScheduleInstanceViewSet,
+    BusinessScheduleBreakViewSet,
 )
 
-from .role_views import (
-    UserRoleView,
-    RoleViewSet
-)
+from .public.user_profile_views import MyProfileView
+from .business.business_student_views import BusinessStudentViewSet
 
-from ..utils.permissions import (
-    BaseUserDataPermission,
-    IsAdminUser,
-    IsBusinessOwner,
-    IsManager,
-    IsInstructor,
-    check_user_role,
-    check_user_can_create_class,
-)
+from .public.public_booking_views import StudentBookingViewSet
+from .business.business_booking_views import BusinessBookingViewSet
 
-from .revenue_analytics_views import (
+from .business.revenue_analytics_views import (
     RevenueAnalyticsView,
 )
 
-from .review_views import (
+from .business.business_review_views import (
+    BusinessReviewViewSet,
+)
+
+from .public.public_review_views import (
     ReviewSubmission,
     ClassReviews,
 )
 
-from .support_chat_views import (
+from .public.support_chat_views import (
     ChatMessageView,
 )
 
-from .support_ticket_views import (
+from .public.support_ticket_views import (
     UserSupportTicketViewSet,
     CreateSupportTicketView,
 )
@@ -71,7 +65,6 @@ from .utils import (
 
 __all__ = [
     # Auth Views
-    'CustomLoginView',
     'CustomTokenObtainPairView',
     'CustomTokenRefreshView',
     'LogoutView',
@@ -79,38 +72,29 @@ __all__ = [
     'CustomRegisterView',
 
     # Business Views
-    'BusinessViewSet',
-    'BusinessInfoDetail',
-    'BusinessInfoViewSet',
+    'BusinessDashboardViewSet',
+    'get_user_businesses',
     'register_business',
+    'MyBusinessProfileView',
+    'PublicBusinessInfoViewSet',
+    'MyBusinessOverviewView',
 
     # Class Views
-    'ClassImageList',
-    'ClassImageDetail',
-    'ClassOptionDetail',
-    'ScheduleViewSet',
-    'ScheduleInstanceViewSet',
-    'ScheduleBreakViewSet',
-    'ClassViewSet',
+    'PublicClassViewSet',
+    'BusinessClassViewSet',
+    'BusinessClassOptionDetail',
+    'BusinessScheduleViewSet',
+    'BusinessScheduleInstanceViewSet',
+    'BusinessScheduleBreakViewSet',
+    'PublicScheduleViewSet',
 
     # Student Views
-    'StudentProfileViewSet',
+    'MyProfileView',
+    'BusinessStudentViewSet',
 
     # Booking Views
-    'BookingViewSet',
-
-    # Role Views
-    'UserRoleView',
-    'RoleViewSet',
-
-    # Permissions
-    'BaseUserDataPermission',
-    'IsAdminUser',
-    'IsBusinessOwner',
-    'IsManager',
-    'IsInstructor',
-    'check_user_role',
-    'check_user_can_create_class',
+    'BusinessBookingViewSet',
+    'StudentBookingViewSet',
 
     # Support Ticket Views
     'UserSupportTicketViewSet',
@@ -122,6 +106,7 @@ __all__ = [
     # Review Views
     'ReviewSubmission',
     'ClassReviews',
+    'BusinessReviewViewSet',
 
     # Chat Views
     'ChatMessageView',

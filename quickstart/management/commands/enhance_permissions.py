@@ -1,5 +1,3 @@
-# quickstart/management/commands/enhance_permissions.py
-
 from django.core.management.base import BaseCommand
 from django.contrib.auth.models import Permission
 from django.db import transaction
@@ -15,7 +13,6 @@ class Command(BaseCommand):
         self.stdout.write('Enhancing explicitly defined permissions...')
 
         # Define which Django app content types to exclude COMPLETELY
-        # (Keep this list as it helps filter the initial permission query)
         excluded_apps = [
             'admin', 'auth', 'contenttypes', 'sessions', 'sites',
             'admin_interface', 'theme', 'silk', 'allauth', 'account',
@@ -33,26 +30,31 @@ class Command(BaseCommand):
                 name="User Management", defaults={'description': 'Permissions related to user accounts and roles', 'sort_order': 1}
             )
             business_group, _ = PermissionGroup.objects.update_or_create(
-                name="Business Management", defaults={'description': 'Permissions related to businesses', 'sort_order': 2}
+                name="Business Admin", defaults={'description': 'Permissions related to platform-wide business administration', 'sort_order': 2} # Renamed for clarity
             )
             class_group, _ = PermissionGroup.objects.update_or_create(
-                name="Class Management", defaults={'description': 'Permissions related to classes, categories, and schedules', 'sort_order': 3}
+                name="Class Admin", defaults={'description': 'Permissions related to platform-wide class/category administration', 'sort_order': 3} # Renamed for clarity
             )
             booking_group, _ = PermissionGroup.objects.update_or_create(
-                name="Booking Management", defaults={'description': 'Permissions related to bookings and attendance', 'sort_order': 4}
+                name="Booking Admin", defaults={'description': 'Permissions related to platform-wide booking administration', 'sort_order': 4} # Renamed for clarity
             )
             notification_group, _ = PermissionGroup.objects.update_or_create(
                 name="Notification Management", defaults={'description': 'Permissions related to notifications and segments', 'sort_order': 5}
+            )
+            # NEW Group for Business User Permissions
+            business_users_group, _ = PermissionGroup.objects.update_or_create(
+                name="Business User", defaults={'description': 'Permissions related to managing one\'s own business', 'sort_order': 6}
             )
             system_group, _ = PermissionGroup.objects.update_or_create(
                 name="System & Moderation", defaults={'description': 'Permissions related to system settings, moderation, and administration', 'sort_order': 99}
             )
 
+
             # --- Define Explicit Descriptions & Custom Permissions ---
             # This dictionary is now the ONLY source for which permissions get enhanced.
             descriptions = {
-                # --- User Management ---
-                'view_customuser': {'group': user_group, 'description': 'View profile details for any user'},
+                # --- User Management (Platform Admins) ---
+                'view_customuser': {'group': user_group, 'description': 'View profile details for any user (Admin)'},
                 'change_customuser': {'group': user_group, 'description': 'Edit profile details (name, address, etc.) for any user', 'is_sensitive': True},
                 'add_customuser': {'group': user_group, 'description': 'Create new user accounts via admin interface', 'is_sensitive': True},
                 'delete_customuser': {'group': user_group, 'description': 'Delete any user account permanently', 'is_sensitive': True, 'requires_mfa': True},
@@ -65,8 +67,12 @@ class Command(BaseCommand):
                 'change_role': {'group': user_group, 'description': 'Edit roles and their permissions', 'is_sensitive': True},
                 'add_role': {'group': user_group, 'description': 'Create new roles', 'is_sensitive': True},
                 'delete_role': {'group': user_group, 'description': 'Delete roles (cannot delete system/assigned roles)', 'is_sensitive': True},
+                 # --- User Permissions (Students/General Users) ---
+                'reply_own_support_ticket': {'group': user_group, 'description': 'Reply to own support tickets'},
+                'cancel_own_booking': {'group': user_group, 'description': 'Cancel own booking (within policy)'},
+                'add_supportticket': {'group': user_group, 'description': 'Create new support tickets'},
 
-                # --- Business Management ---
+                # --- Business Admin (Platform Admins) ---
                 'view_businessinfo': {'group': business_group, 'description': 'View details for any business profile'},
                 'change_businessinfo': {'group': business_group, 'description': 'Edit details for any business profile', 'is_sensitive': True},
                 'add_businessinfo': {'group': business_group, 'description': 'Create new business profiles (Admin)', 'is_sensitive': True},
@@ -76,13 +82,8 @@ class Command(BaseCommand):
                 'export_business_data': {'group': business_group, 'description': 'Export business data as CSV', 'is_sensitive': True},
                 'send_business_announcements': {'group': business_group, 'description': 'Send platform announcements to selected businesses'},
                 'access_business_admin': {'group': business_group, 'description': 'General access to the Business Administration section'},
-                'manage_own_classes': {'group': business_group, 'description': '(Business Role) Can create/edit classes, options, schedules for own business'},
-                'manage_own_schedule_instances': {'group': business_group, 'description': '(Business Role) Can manage instances (attendance, cancel) for own classes'},
-                'view_own_business_bookings': {'group': business_group, 'description': '(Business Role) Can view bookings for own business'},
-                'manage_own_business_profile': {'group': business_group, 'description': '(Business Role) Can edit own business profile details'},
-                'manage_business_staff': {'group': business_group, 'description': '(Business Role) Can manage staff for own business'},
 
-                # --- Class Management ---
+                # --- Class Admin (Platform Admins) ---
                 'view_classesmain': {'group': class_group, 'description': 'View details for any class'},
                 'change_classesmain': {'group': class_group, 'description': 'Edit details (title, category, etc.) for any class', 'is_sensitive': True},
                 'add_classesmain': {'group': class_group, 'description': 'Create new classes via admin (if enabled)', 'is_sensitive': True},
@@ -102,7 +103,7 @@ class Command(BaseCommand):
                 'view_category_stats': {'group': class_group, 'description': 'View category statistics'},
                 'access_category_admin': {'group': class_group, 'description': 'General access to the Category Administration section'},
 
-                # --- Booking Management ---
+                # --- Booking Admin (Platform Admins) ---
                 'view_booking': {'group': booking_group, 'description': 'View details for any booking', 'is_sensitive': True },
                 'change_booking': {'group': booking_group, 'description': 'Modify details of any booking (Admin)', 'is_sensitive': True},
                 'add_booking': {'group': booking_group, 'description': 'Create new bookings for any user (Admin)', 'is_sensitive': True},
@@ -111,9 +112,8 @@ class Command(BaseCommand):
                 'view_booking_analytics': {'group': booking_group, 'description': 'View aggregated booking analytics'},
                 'export_booking_data': {'group': booking_group, 'description': 'Export booking data', 'is_sensitive': True},
                 'access_booking_admin': {'group': booking_group, 'description': 'General access to Booking Administration'},
-                'mark_booking_attendance': {'group': booking_group, 'description': 'Mark booking attendance'},
 
-                # --- Notification Management ---
+                # --- Notification Management (Platform Admins) ---
                 'view_notificationcampaign': { 'group': notification_group, 'description': 'View notification campaign list and details'},
                 'add_notificationcampaign': { 'group': notification_group, 'description': 'Create new notification campaigns'},
                 'change_notificationcampaign': { 'group': notification_group, 'description': 'Edit notification campaigns (drafts/scheduled)', 'is_sensitive': True},
@@ -129,10 +129,33 @@ class Command(BaseCommand):
                 'access_segment_admin': { 'group': notification_group, 'description': 'General access to User Segment Management'},
                 'view_notificationattachment': { 'group': notification_group, 'description': 'View notification attachments'},
                 'add_notificationattachment': { 'group': notification_group, 'description': 'Upload notification attachments'},
-                # 'change_notificationattachment': { 'group': notification_group, 'description': 'Edit notification attachments'}, # Excluded change
                 'delete_notificationattachment': { 'group': notification_group, 'description': 'Delete notification attachments', 'is_sensitive': True},
 
-                # --- System & Moderation ---
+                # --- Business User Permissions (Assigned to Business Roles) ---
+                'manage_own_classes': {'group': business_users_group, 'description': 'Create/edit classes, options, schedules for own business'},
+                'manage_own_schedule_instances': {'group': business_users_group, 'description': 'Manage instances (attendance, cancel) for own classes'},
+                'view_own_business_bookings': {'group': business_users_group, 'description': 'View bookings for own business'},
+                'manage_own_business_profile': {'group': business_users_group, 'description': 'Edit own business profile details'},
+                'manage_business_staff': {'group': business_users_group, 'description': 'Manage staff (instructors, managers) for own business'},
+                'access_business_dashboard': {'group': business_users_group, 'description': 'Access the dashboard for managing their own business'},
+                'view_business_revenue_analytics': {'group': business_users_group, 'description': 'View revenue analytics for own business'},
+                'export_business_revenue_data': {'group': business_users_group, 'description': 'Export revenue data for own business'},
+                'view_business_students': {'group': business_users_group, 'description': 'View students associated with own business'},
+                'view_own_business_reviews': {'group': business_users_group, 'description': 'View reviews for own business'},
+                'add_business_review_response': {'group': business_users_group, 'description': 'Add response to reviews for own business'},
+                'add_studentnote': {'group': business_users_group, 'description': 'Add notes to students associated with own business'},
+                'view_studentnote': {'group': business_users_group, 'description': 'View notes for students associated with own business'},
+                'mark_booking_attendance': {'group': business_users_group, 'description': 'Mark attendance for bookings in own business'},
+                'view_own_booking_analytics': {'group': business_users_group, 'description': 'View booking analytics for own business'},
+                'cancel_business_booking': {'group': business_users_group, 'description': 'Cancel bookings within own business (e.g., requested by student)'},
+
+                # --- System & Moderation (Platform Admins) ---
+                'access_admin_dashboard': {'group': system_group, 'description': 'Access the main admin dashboard'},
+                'view_system_metrics': {'group': system_group, 'description': 'Can view real-time system performance metrics dashboard', 'is_sensitive': True},
+                'view_auditlog': {'group': system_group, 'description': 'View audit logs of system activities', 'is_sensitive': True},
+                'view_verificationrequest': {'group': system_group, 'description': 'View verification requests', 'is_sensitive': True},
+                'change_verificationrequest': {'group': system_group, 'description': 'Process verification requests (approve/reject)', 'is_sensitive': True},
+                'view_verificationdocument': {'group': system_group, 'description': 'View verification documents', 'is_sensitive': True},
                 'view_payment': {'group': system_group, 'description': 'View details for any payment', 'is_sensitive': True},
                 'delete_payment': {'group': system_group, 'description': 'Delete any payment record (Use with extreme caution)', 'is_sensitive': True, 'requires_mfa': True},
                 'process_refund': {'group': system_group, 'description': 'Process refunds for any payment (Admin)', 'is_sensitive': True, 'requires_mfa': True },
@@ -144,24 +167,8 @@ class Command(BaseCommand):
                 'change_reviews': {'group': system_group, 'description': 'Moderate any review (status, response)', 'is_sensitive': True},
                 'delete_reviews': {'group': system_group, 'description': 'Delete any user review permanently', 'is_sensitive': True},
                 'access_review_admin': {'group': system_group, 'description': 'General access to the Review Moderation section'},
-                'view_system_metrics': {'group': system_group, 'description': 'Can view real-time system performance metrics dashboard', 'is_sensitive': True},
-                'view_auditlog': {'group': system_group, 'description': 'View audit logs of system activities', 'is_sensitive': True},
-                'view_verificationrequest': {'group': system_group, 'description': 'View verification requests', 'is_sensitive': True},
-                'change_verificationrequest': {'group': system_group, 'description': 'Process verification requests (approve/reject)', 'is_sensitive': True},
-                'view_verificationdocument': {'group': system_group, 'description': 'View verification documents', 'is_sensitive': True},
-                'view_supportticket': {'group': system_group, 'description': 'View any support ticket', 'is_sensitive': True},
-                'change_supportticket': {'group': system_group, 'description': 'Manage any support ticket (assign, update status, reply)', 'is_sensitive': True},
-                'delete_supportticket': {'group': system_group, 'description': 'Delete any support ticket', 'is_sensitive': True},
-                'access_support_admin': {'group': system_group, 'description': 'General access to Support Ticket Administration'},
-                'view_permissiongroup': {'group': system_group, 'description': 'View permission groups (Admin)'}, # Keep view for info
-                'view_enhancedpermission': {'group': system_group, 'description': 'View enhanced permission details (Admin)'}, # Keep view for info
-                # Add any other specific default permissions you WANT to manage here
-                # e.g., 'view_studentnote', 'view_instructornote' if needed for admins
-
-                # Support Tickets
                 'view_supportticket': {'group': system_group, 'description': 'View any support ticket (Admin/Support)'},
                 'change_supportticket': {'group': system_group, 'description': 'Modify any support ticket (Admin/Support - Use specific perms below)'},
-                'add_supportticket': {'group': system_group, 'description': 'Create new support tickets (Users & Admins)'}, 
                 'delete_supportticket': {'group': system_group, 'description': 'Delete any support ticket', 'is_sensitive': True},
                 'reply_any_support_ticket': {'group': system_group, 'description': 'Reply to any support ticket (Admin/Agent)'},
                 'assign_support_ticket': {'group': system_group, 'description': 'Assign any support ticket to an agent'},
@@ -169,10 +176,10 @@ class Command(BaseCommand):
                 'view_support_ticket_stats': {'group': system_group, 'description': 'View aggregated support ticket statistics'},
                 'export_support_ticket_data': {'group': system_group, 'description': 'Export support ticket data', 'is_sensitive': True},
                 'access_support_admin': {'group': system_group, 'description': 'General access to Support Ticket Administration'},
-                # User-facing support permission
-                'reply_own_support_ticket': {'group': user_group, 'description': 'Reply to own support tickets'}, 
-
-            } # End descriptions dictionary
+                'view_permissiongroup': {'group': system_group, 'description': 'View permission groups (Admin)'}, # Keep view for info
+                'view_enhancedpermission': {'group': system_group, 'description': 'View enhanced permission details (Admin)'}, # Keep view for info
+                # Add default model permissions only if needed for explicit admin management
+            }
 
             # --- Enhance Permissions ---
             self.stdout.write("Enhancing explicitly defined permissions...")
@@ -224,3 +231,5 @@ class Command(BaseCommand):
                  # You could print them if needed for debugging:
                  # for p in ignored_perms:
                  #     print(f"  - Ignored: {p.content_type.app_label}.{p.codename}")
+
+        self.stdout.write(self.style.SUCCESS('Permission enhancement complete.'))
