@@ -367,7 +367,7 @@ class AdminClassViewSet(viewsets.ModelViewSet):
              return Response({"error": "Failed to export class data"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-    @action(detail=True, methods=['patch'], url_path='update-status') # Corrected url_path
+    @action(detail=True, methods=['patch'], url_path='update_class_status') 
     def update_class_status(self, request, pk=None):
         """Admin action to update class status (active/inactive/suspended)"""
         if not request.user.has_perm('quickstart.change_class_status'): # Assumes this permission exists
