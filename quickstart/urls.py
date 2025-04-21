@@ -1,8 +1,9 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from allauth.account.views import confirm_email
+from dj_rest_auth.registration.views import VerifyEmailView, ResendEmailVerificationView
+from dj_rest_auth.views import PasswordResetConfirmView
+from django.urls import path, include, re_path
 from django.views.generic import TemplateView
-
 
 from .views.admin.metrics_monitoring.admin_metrics_views import AdminMetricsView
 from .views.admin.notifications.notification_views import AdminNotificationAttachmentViewSet, AdminNotificationCampaignViewSet, AdminUserSegmentViewSet
@@ -27,7 +28,7 @@ from .views import (
     RevenueAnalyticsView,  ReviewSubmission, ChatMessageView, UserSupportTicketViewSet, CreateSupportTicketView,
     BusinessClassViewSet, BusinessClassOptionDetail, BusinessScheduleViewSet, 
     BusinessScheduleInstanceViewSet, BusinessScheduleBreakViewSet, PublicClassViewSet, PublicScheduleViewSet,
-    BusinessReviewViewSet, MyBusinessOverviewView
+    BusinessReviewViewSet, MyBusinessOverviewView, MyFavoritesListView,
 )
 
 # Router for Publicly Accessible Read-Only Endpoints (Base: /api/)
@@ -99,12 +100,42 @@ urlpatterns = [
 
     # Authentication
     path('auth/', include([
-        path('', include('dj_rest_auth.urls')), # Default auth URLs (password reset, etc.)
-        path('registration/', CustomRegisterView.as_view(), name='rest_register'),
-        # Email confirmation paths (keep as is)
-        path('account-confirm-email/', TemplateView.as_view(template_name="account_confirmation.html"), name='account_email_verification_sent'),
-        path('account-confirm-email/<str:key>/', confirm_email, name='account_confirm_email'),
-    ])),
+        # Core dj-rest-auth (login, logout, password reset request/confirm)
+        # These will be at /api/auth/login/, /api/auth/password/reset/, etc.
+        path('', include('dj_rest_auth.urls')),
+
+        # Registration specific endpoints grouped under /api/auth/registration/
+        path('registration/', include([
+            # POST /api/auth/registration/ -> Your custom registration view
+            path('', CustomRegisterView.as_view(), name='rest_register'),
+
+            # POST /api/auth/registration/verify-email/ -> dj-rest-auth's verification view
+            path('verify-email/', VerifyEmailView.as_view(), name='rest_verify_email'),
+
+            # POST /api/auth/registration/resend-email/ -> dj-rest-auth's resend view
+            path('resend-email/', ResendEmailVerificationView.as_view(), name='rest_resend_email'),
+            re_path(
+                r'^account-confirm-email/(?P<key>[-:\w]+)/$',
+                VerifyEmailView.as_view(),
+                name='account_confirm_email'
+            ),
+            path(
+                'account-confirm-email/', # Or choose a different path if you prefer
+                TemplateView.as_view(),   # Renders a simple template
+                name='account_email_verification_sent'
+            ),
+            re_path(
+                r'^password/reset/confirm/(?P<uidb64>[0-9A-Za-z_\-]+)/(?P<token>[0-9A-Za-z]{1,13}-[0-9A-Za-z]{1,32})/$',
+                PasswordResetConfirmView.as_view(), # Point it to the actual view
+                name='password_reset_confirm'      # The required name
+            ),
+
+        ])), # End of 'registration/' include
+
+        # Optional: Allauth's confirmation sent page (if useful)
+        # path('account-confirm-email/', TemplateView.as_view(template_name="account_confirmation.html"), name='account_email_verification_sent'),
+
+    ])), # End of 'auth/' include
     path('admin/metrics/', AdminMetricsView.as_view(), name='admin-metrics'),
     path('login/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('token/refresh/', CustomTokenRefreshView.as_view(), name='token_refresh'),
@@ -113,6 +144,7 @@ urlpatterns = [
     # User Self-Service
     path('user/update/', UserUpdateView.as_view(), name='user-update'),
     path('user/profile/', MyProfileView.as_view(), name='my-profile'),
+    path('my-favorites/', MyFavoritesListView.as_view(), name='my-favorites-list'),
 
     # Business Management (Standalone)
     path('business/register/', register_business, name='business-register'),
@@ -141,9 +173,6 @@ urlpatterns = [
     # Payments
     path('payments/webhook/', ProcessBookingWebhook.as_view(), name='payment-webhook'),
     path('payments/create-payment-intent/', CreatePaymentIntentView.as_view(), name='create-payment-intent'),
-
-    # Support Tickets (User)
-    path('support-tickets/create/', CreateSupportTicketView.as_view(), name='create-support-ticket'), # Standalone create view
 
     # Verification (User - Actions are within VerificationRequestViewSet in admin_router, maybe needs user actions?)
     # path('verification/submit/', VerificationRequestViewSet.as_view({'post': 'submit_verification'}), name='submit-verification'), # Example user action if needed

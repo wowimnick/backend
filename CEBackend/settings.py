@@ -17,7 +17,6 @@ from datetime import timedelta
 
 load_dotenv()
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
@@ -193,6 +192,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',
     'corsheaders',
     'rest_framework',
+    'anymail',
     'quickstart',
     'storages',
     'silk',
@@ -238,8 +238,8 @@ REST_FRAMEWORK = {
 }
 
 AUTHENTICATION_BACKENDS = [
-    'django.contrib.auth.backends.ModelBackend',
     'quickstart.backends.RolePermissionBackend',
+    'django.contrib.auth.backends.ModelBackend',
 ]
 
 SIMPLE_JWT = {
@@ -287,7 +287,17 @@ CSRF_COOKIE_SAMESITE = 'Lax'
 CSRF_TRUSTED_ORIGINS = ['https://classeasily.com', 'http://localhost:5173', 'http://localhost:8000']
 
 ACCOUNT_EMAIL_VERIFICATION = 'mandatory'
-EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+EMAIL_BACKEND = 'anymail.backends.resend.EmailBackend'
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'noreply@classeasily.com') # Set a default sender
+SERVER_EMAIL = DEFAULT_FROM_EMAIL
+
+ANYMAIL = {
+    "RESEND_API_KEY": RESEND_API_KEY, 
+    # Optional: Add extra send defaults like tags
+    # "RESEND_SEND_DEFAULTS": {
+    #     "tags": ["django-registration"],
+    # },
+}
 
 SITE_ID = 1
 
@@ -297,12 +307,19 @@ ACCOUNT_USERNAME_REQUIRED = False
 ACCOUNT_EMAIL_VERIFICATION = 'mandatory'
 AUTH_USER_MODEL = 'quickstart.CustomUser'
 
+FRONTEND_BASE_URL = os.environ.get('FRONTEND_URL', 'https://classeasily.com')
+FRONTEND_EMAIL_VERIFICATION_PATH = '/verify-email/{key}/'
+FRONTEND_PASSWORD_RESET_CONFIRM_PATH = '/reset-password/{uid}/{token}/'
+
 REST_AUTH = {
     'USE_JWT': True,
     'JWT_AUTH_COOKIE': 'my-app-auth',  # Same as SIMPLE_JWT
     'JWT_AUTH_REFRESH_COOKIE': 'my-refresh-token',  # Same as SIMPLE_JWT
     'JWT_AUTH_SAMESITE': 'Lax',  # Match your SIMPLE_JWT setting
     'OLD_PASSWORD_FIELD_ENABLED': True,
+    'PASSWORD_RESET_CONFIRM_SERIALIZER': 'dj_rest_auth.serializers.PasswordResetConfirmSerializer',
+    'PASSWORD_RESET_USE_SITES_DOMAIN': False, 
+    'PASSWORD_RESET_CONFIRM_URL_PATH': FRONTEND_PASSWORD_RESET_CONFIRM_PATH
 }
 
 REST_AUTH_REGISTER_SERIALIZERS = {
@@ -348,6 +365,7 @@ MIDDLEWARE = [
     'allauth.account.middleware.AccountMiddleware',
     'quickstart.middleware.JWTCookieMiddleware'
 ]
+
 
 CHANNEL_LAYERS = {
     "default": {

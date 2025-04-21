@@ -186,9 +186,32 @@ class CustomRegisterView(RegisterView):
     serializer_class = CustomRegisterSerializer
 
     def post(self, request, *args, **kwargs):
-        logger.debug(f"Registration request data: {request.data}")
+        logger.debug(f"Registration request received: {request.data.get('email')}")
         serializer = self.get_serializer(data=request.data)
         if not serializer.is_valid():
-            logger.error(f"Serializer errors: {serializer.errors}")
+            logger.error(f"Registration Serializer errors for {request.data.get('email')}: {serializer.errors}")
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        return super().post(request, *args, **kwargs)
+
+        try:
+            # Call the parent method which handles user creation and triggers signup completion
+            response = super().post(request, *args, **kwargs)
+
+            # Log *after* the super().post() call, which includes user creation and signal sending
+            if response.status_code in [status.HTTP_201_CREATED, status.HTTP_200_OK]: # Check for success status
+                logger.info(f"REGISTRATION VIEW LOG: super().post completed successfully for {request.data.get('email')}. Status: {response.status_code}. About to return response.")
+                # At this point, the email confirmation *should* have been triggered by allauth/dj-rest-auth
+                # If you see this log, but NO adapter logs, the problem is likely in the connection
+                # between dj-rest-auth/allauth and your adapter, or settings.
+            else:
+                 logger.warning(f"REGISTRATION VIEW LOG: super().post for {request.data.get('email')} returned non-success status: {response.status_code}, Response data: {response.data}")
+
+            return response
+
+        except Exception as e:
+            # Catch any unexpected errors during the super().post call or user creation
+            logger.error(f"REGISTRATION VIEW LOG: Error during super().post or signup flow for {request.data.get('email')}: {e}", exc_info=True)
+            # Return a generic error response
+            return Response(
+                {"detail": "An internal error occurred during registration."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

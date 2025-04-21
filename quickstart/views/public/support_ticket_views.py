@@ -94,12 +94,43 @@ class UserSupportTicketViewSet(viewsets.ModelViewSet):
         #    self.permission_denied(request, message="You do not own this ticket.")
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
-
-    # Block standard create/update/delete if handled elsewhere or not allowed
+    
     def create(self, request, *args, **kwargs):
-        # Usually handled by CreateSupportTicketView, block here
-        return Response({"detail": "Method \"POST\" not allowed."}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
+        """
+        Handles POST request to /api/support-tickets/ for creating a new ticket.
+        """
+        # Check specific permission to create tickets
+        if not request.user.has_perm('quickstart.add_supportticket'):
+            return Response(
+                 {"detail": "You do not have permission to create support tickets."},
+                 status=status.HTTP_403_FORBIDDEN
+             )
 
+        # Use the CreateSupportTicketSerializer, passing request context
+        serializer = CreateSupportTicketSerializer(
+            data=request.data,
+            context={'request': request} # Context is crucial for the serializer to get the user
+        )
+        serializer.is_valid(raise_exception=True) # Validate the input data
+
+        try:
+             # Serializer's .save() method handles setting user=request.user
+             # and creating the chat session/initial message as defined in its create method.
+             ticket = serializer.save()
+             logger.info(f"User {request.user.email} created Support Ticket {ticket.pk} via ViewSet")
+             # Add to AuditLog if needed
+
+             # Return data using the appropriate user-facing serializer for the response
+             response_serializer = UserSupportTicketSerializer(ticket, context={'request': request})
+             headers = self.get_success_headers(serializer.data) # Get Location header
+             return Response(response_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+        except Exception as e:
+             logger.error(f"Error creating support ticket for user {request.user.email} via ViewSet: {e}", exc_info=True)
+             # Use a generic error message for the user
+             return Response({"detail": "An error occurred while creating the ticket."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    # Block standard update/delete if handled elsewhere or not allowed
     def update(self, request, *args, **kwargs):
         # Users typically shouldn't update tickets directly, only reply
         return Response({"detail": "Method \"PUT\" not allowed."}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
@@ -110,12 +141,14 @@ class UserSupportTicketViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         # Decide if users can delete their own tickets
+        # Option 1: Block deletion
         # return Response({"detail": "Method \"DELETE\" not allowed."}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
-        # OR implement with IsTicketOwner check:
-        instance = self.get_object() # Verifies ownership via get_queryset filter
-        logger.warning(f"User {request.user.email} deleted their own Support Ticket {instance.pk}")
+        # Option 2: Allow deletion with check (already handled by get_object's queryset filter)
+        instance = self.get_object()
+        logger.warning(f"User {request.user.email} deleted their own Support Ticket {instance.pk} via ViewSet")
         # Add AuditLog?
-        return super().destroy(request, *args, **kwargs)
+        self.perform_destroy(instance)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
     # --- Custom Actions for Users ---

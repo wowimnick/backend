@@ -60,6 +60,7 @@ class PublicClassSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source='category.name', read_only=True, allow_null=True)
     subcategory_name = serializers.CharField(source='subcategory.name', read_only=True, allow_null=True)
     saltLocation = serializers.BooleanField(read_only=True)
+    is_favorited = serializers.SerializerMethodField()
 
     class Meta:
         model = ClassesMain
@@ -80,6 +81,7 @@ class PublicClassSerializer(serializers.ModelSerializer):
             'review_count',
             'featured',
             'saltLocation',
+            'is_favorited',
         ]
         read_only_fields = fields
 
@@ -104,3 +106,12 @@ class PublicClassSerializer(serializers.ModelSerializer):
         except (ValueError, TypeError):
              logger.warning(f"Invalid public coordinates format for Class {obj.classId}: {obj.coordinates}")
              return None
+         
+    def get_is_favorited(self, obj):
+        """Checks if the current user (if authenticated) has favorited this class."""
+        request = self.context.get('request')
+        if request and hasattr(request, 'user') and request.user.is_authenticated:
+            # Check if the class object exists in the user's favorited set
+            # Use obj.pk for efficiency if the full object isn't needed for the check
+            return request.user.favorited.filter(pk=obj.pk).exists()
+        return False

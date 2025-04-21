@@ -1,0 +1,12 @@
+{% load i18n %}{% autoescape off %}
+{% blocktrans %}Hello from ClassEasily,{% endblocktrans %}
+
+{% blocktrans %}Welcome to ClassEasily! To complete your registration and activate your account, please confirm your email address by visiting the following link:{% endblocktrans %}
+
+{{ activate_url }}
+
+{% blocktrans %}If you did not sign up for an account on ClassEasily, you can safely ignore this email.{% endblocktrans %}
+
+{% trans "Thanks," %}
+{% trans "The ClassEasily Team" %}
+{% endautoescape %}

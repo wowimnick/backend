@@ -2,6 +2,7 @@ from rest_framework import viewsets, filters, status # Added status
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
 from django.db.models import Q, Avg, Count, Min, Max, Value, F, Subquery, OuterRef, DecimalField, IntegerField, Sum, Case, When
 from django.db.models.functions import Coalesce
 from django.utils import timezone
@@ -82,6 +83,42 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             review_count=Coalesce(self.REVIEW_COUNT_SUBQUERY, Value(0)),
             min_price=Coalesce(self.MIN_PRICE_SUBQUERY, None) # Keep None if no price
         ).distinct()
+        
+    @action(
+        detail=True, 
+        methods=['post'],
+        permission_classes=[IsAuthenticated], # Require login for this action
+        url_path='toggle-favorite', # Explicit URL path segment
+        url_name='toggle-favorite'  # Name for reversing
+    )
+    def toggle_favorite(self, request, pk=None):
+        """
+        Toggles the favorite status of this class for the authenticated user.
+        """
+        # get_object() is provided by the ViewSet for detail actions
+        klass = self.get_object()
+        user = request.user
+
+        try:
+            if user.favorited.filter(pk=klass.pk).exists():
+                user.favorited.remove(klass)
+                is_favorited = False
+                logger.info(f"User {user.email} unfavorited Class {klass.pk} via ViewSet action")
+            else:
+                user.favorited.add(klass)
+                is_favorited = True
+                logger.info(f"User {user.email} favorited Class {klass.pk} via ViewSet action")
+
+            return Response(
+                {"status": "success", "is_favorited": is_favorited},
+                status=status.HTTP_200_OK
+            )
+        except Exception as e:
+            logger.error(f"Error toggling favorite via ViewSet action for user {user.email}, class {klass.pk}: {e}", exc_info=True)
+            return Response(
+                {"error": "An internal error occurred while updating favorites."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
     # --- Search Action ---
     @action(detail=False, methods=['get'], permission_classes=[AllowAny])
@@ -372,3 +409,5 @@ class PublicScheduleViewSet(viewsets.ReadOnlyModelViewSet):
         except Exception as e:
             logger.error(f"Error fetching availability for option {option_id}: {e}", exc_info=True)
             return Response({"error": "An error occurred while fetching availability."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        
