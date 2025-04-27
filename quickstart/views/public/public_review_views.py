@@ -8,6 +8,8 @@ from django.db import transaction
 from django.shortcuts import get_object_or_404
 import logging
 
+from ...utils.email_utils import send_review_submission_confirmation_email
+
 # Adjust import paths
 from ...models import Reviews, Booking
 from ...serializers.public.public_review_serializers import (
@@ -38,6 +40,7 @@ class ReviewSubmission(APIView):
             # Fetch the booking and related objects needed for creation/validation
             booking = Booking.objects.select_related(
                 'user', # Needed for ownership check
+                'schedule_instance__schedule__option__classId', # Need class for name and business link
                 'schedule_instance__schedule__option__classId__businessId' # Needed for review creation
             ).get(id=booking_id)
         except Booking.DoesNotExist:
@@ -68,37 +71,44 @@ class ReviewSubmission(APIView):
             business_instance = class_instance.businessId
 
             review = Reviews.objects.create(
-                userId=request.user,              # The user submitting
-                businessId=business_instance,     # Link to business
-                classId=class_instance,           # Link to class
-                booking=booking,                  # Link to the specific booking
+                userId=request.user,
+                businessId=business_instance,
+                classId=class_instance,
+                booking=booking,
                 rating=serializer.validated_data['rating'],
                 comment=serializer.validated_data['comment'],
-                image=serializer.validated_data.get('image'), # Handles optional image
-                status='approved'                 # Default to approved (or 'under_review')
+                image=serializer.validated_data.get('image'),
+                status='approved' # Or 'under_review'
             )
 
-            # Update business review count safely
-            if hasattr(review.businessId, 'update_total_reviews'):
-                review.businessId.update_total_reviews()
-            else:
-                # Log an error if the method is missing, but don't crash the request
-                logger.error(f"BusinessInfo model missing 'update_total_reviews' method. Review {review.reviewId} created, but count not updated.")
+            # --- Update business review aggregates ---
+            try:
+                business_instance.update_review_aggregates()
+            except Exception as update_error:
+                logger.error(f"Error calling update_review_aggregates for Business {business_instance.businessId} after creating review {review.reviewId}: {update_error}", exc_info=True)
 
             logger.info(f"Review {review.reviewId} submitted by user {request.user.email} for booking {booking.id}")
 
-            # Return success response using the public serializer
+            # --- Send confirmation email ---
+            try:
+                # *** CORRECTED CALL: Removed class_name argument ***
+                send_review_submission_confirmation_email(request.user, review)
+                logger.info(f"Review submission confirmation email prepared/queued for review {review.reviewId}")
+            except Exception as email_error:
+                logger.error(f"Failed to send review submission confirmation email for review {review.reviewId}: {email_error}", exc_info=True)
+            # --- End email sending ---
+
             response_serializer = PublicReviewSerializer(review, context={'request': request})
             return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
+        # ... (rest of the try/except block remains the same) ...
         except Exception as e:
-            # Catch potential errors during object creation or fetching related instances
-            logger.error(f"Error saving review for user {request.user.email}, booking {booking.id}: {str(e)}", exc_info=True)
-            # Return a generic 500 error for server-side issues during creation
-            return Response(
-                {'error': 'An unexpected error occurred while saving the review.'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+             logger.error(f"Error saving review for user {request.user.email}, booking {booking.id}: {str(e)}", exc_info=True)
+             return Response(
+                 {'error': 'An unexpected error occurred while saving the review.'},
+                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
+             )
+
 
 class ClassReviews(generics.ListAPIView):
     """

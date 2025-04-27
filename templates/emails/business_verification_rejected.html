@@ -1,0 +1,36 @@
+{# templates/emails/business_verification_rejected.html #}
+{# Context required: user (CustomUser owner/manager), business (BusinessInfo object), verification_request (VerificationRequest object), contact_email (string), recipient_email (string) #}
+{% extends "emails/base_email.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Action Required: Business Verification Update" %}{% endblock %}
+
+{% block content %}
+    <h1>{% trans "Update on Your Business Verification Request" %}</h1>
+    <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
+    {# Use 'with' tag and <strong> #}
+    {% with business_name=business.businessName %}
+    <p>{% blocktrans %}Thank you for submitting your verification request for <strong>{{ business_name }}</strong>. After review, we were unable to approve your verification at this time.{% endblocktrans %}</p>
+    {% endwith %}
+
+    {% if verification_request.rejection_reason %}
+        <div style="background-color: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 12px 16px; margin: 20px 0; color: #991b1b;">
+            <p style="margin-bottom: 4px;"><strong>{% trans "Reason for Rejection:" %}</strong></p>
+            <p style="margin-bottom: 0;">{{ verification_request.rejection_reason|linebreaksbr }}</p>
+        </div>
+    {% else %}
+        <p>{% trans "No specific reason was provided. Please contact support for more details." %}</p>
+    {% endif %}
+
+    {% with support_email=contact_email|default:'support@classeasily.com' %}
+    <p>{% blocktrans %}Please review the reason provided. You may need to update your business information or submit additional documentation. If you have questions or believe this decision was made in error, please contact our support team by replying to this email or contacting {{ support_email }}.{% endblocktrans %}</p>
+    {% endwith %}
+
+    <p>{% trans "We appreciate your understanding," %}<br>{% trans "The ClassEasily Team" %}</p>
+{% endblock %}
+
+{% block footer_recipient %}
+    {% if recipient_email and recipient_email != "N/A" %}
+        <p>Verification status update sent to {{ recipient_email }} for Business ID: {{ business.businessId }}</p>
+    {% endif %}
+{% endblock %}

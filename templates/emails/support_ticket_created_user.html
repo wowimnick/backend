@@ -1,0 +1,41 @@
+{# templates/emails/support_ticket_created_user.html #}
+{# Context required: user (CustomUser), ticket (SupportTicket object), ticket_url (string), recipient_email (string) #}
+{% extends "emails/base_email.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Support Ticket Received" %} - #{{ ticket.ticket_id }}{% endblock %}
+
+{% block content %}
+    <h1>{% trans "We've Received Your Support Request!" %}</h1>
+    <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
+    {# Use 'with' tag #}
+    {% with ticket_id=ticket.ticket_id %}
+    <p>{% blocktrans %}This email confirms that we have successfully received your support request (Ticket #{{ ticket_id }}).{% endblocktrans %}</p>
+    {% endwith %}
+
+    <div style="background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px; margin: 20px 0;">
+        <p style="margin-bottom: 4px;"><strong>{% trans "Ticket ID:" %}</strong> #{{ ticket.ticket_id }}</p>
+        <p style="margin-bottom: 0;"><strong>{% trans "Subject:" %}</strong> {{ ticket.subject }}</p>
+    </div>
+
+    <p>{% trans "Our support team will review your request and get back to you as soon as possible (usually within 24-48 hours). You can track the status of your ticket and add further comments using the link below." %}</p>
+
+    <!-- Button to View Ticket -->
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+        <tr>
+            <td align="center" class="button-td">
+                <a href="{{ ticket_url }}" target="_blank" class="button">
+                    {% trans 'View Your Ticket' %}
+                </a>
+            </td>
+        </tr>
+    </table>
+
+    <p>{% trans "Thanks for reaching out," %}<br>{% trans "The ClassEasily Support Team" %}</p>
+{% endblock %}
+
+{% block footer_recipient %}
+    {% if recipient_email and recipient_email != "N/A" %}
+        <p>Confirmation sent to {{ recipient_email }} for Ticket ID: {{ ticket.ticket_id }}</p>
+    {% endif %}
+{% endblock %}

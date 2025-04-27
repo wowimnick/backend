@@ -1,0 +1,42 @@
+{# templates/emails/support_agent_reply_user.html #}
+{# Context required: user (CustomUser), ticket (SupportTicket object), agent_name (string), ticket_url (string), recipient_email (string) #}
+{% extends "emails/base_email.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Update on Support Ticket" %} - #{{ ticket.ticket_id }}{% endblock %}
+
+{% block content %}
+    <h1>{% trans "Update on Your Support Ticket" %} #{{ ticket.ticket_id }}</h1>
+    <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
+    <p>
+        {# Use 'with' tag #}
+        {% with agent=agent_name|default:"A support agent" subj=ticket.subject %}
+            {% if agent_name %} {# Check if agent_name was actually passed #}
+                 {% blocktrans %}A support agent ({{ agent }}) has replied to your ticket regarding "{{ subj }}".{% endblocktrans %}
+            {% else %}
+                 {% blocktrans %}A support agent has replied to your ticket regarding "{{ subj }}".{% endblocktrans %}
+            {% endif %}
+        {% endwith %}
+    </p>
+
+    <p>{% trans "Please click the button below to view the reply and continue the conversation if needed:" %}</p>
+
+    <!-- Button to View Ticket -->
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+        <tr>
+            <td align="center" class="button-td">
+                <a href="{{ ticket_url }}" target="_blank" class="button">
+                    {% trans 'View Ticket Reply' %}
+                </a>
+            </td>
+        </tr>
+    </table>
+
+    <p>{% trans "Thanks," %}<br>{% trans "The ClassEasily Support Team" %}</p>
+{% endblock %}
+
+{% block footer_recipient %}
+    {% if recipient_email and recipient_email != "N/A" %}
+        <p>Update sent to {{ recipient_email }} for Ticket ID: {{ ticket.ticket_id }}</p>
+    {% endif %}
+{% endblock %}

@@ -19,6 +19,13 @@ from ...serializers import (
     StudentBookingSerializer
 )
 
+from ...utils.email_utils import (
+        send_booking_cancellation_user_email,
+        send_business_student_cancellation_email,
+    )
+
+from ...utils.email_utils import send_booking_cancellation_user_email
+
 import logging
 logger = logging.getLogger(__name__)
 
@@ -27,12 +34,6 @@ class StudentBookingPagination(PageNumberPagination):
     page_size = 10 # Smaller page size for student view?
     page_size_query_param = 'page_size'
     max_page_size = 50
-
-# --- Permissions (Optional - Can rely on IsAuthenticated + object checks) ---
-# Example: More explicit permission if needed
-# class IsBookingOwner(BasePermission):
-#     def has_object_permission(self, request, view, obj):
-#         return obj.user == request.user
 
 # --- Student ViewSet ---
 class StudentBookingViewSet(viewsets.ModelViewSet):
@@ -156,75 +157,138 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='cancel')
     def student_cancel(self, request, pk=None):
         """ Allows a student to cancel their own booking, respecting policy. """
-        # Ensure user owns the booking via get_queryset filtering in get_object
-        booking = self.get_object()
-        if booking.user != request.user: # Explicit check
+        booking = self.get_object() # get_queryset filters by user
+        if booking.user != request.user: # Explicit check just in case
              raise PermissionDenied("You cannot cancel this booking.")
 
-        # Check permission: User needs 'cancel_own_booking'
         if not request.user.has_perm('quickstart.cancel_own_booking'):
             raise PermissionDenied("You do not have permission to cancel bookings.")
 
-        # Can only cancel confirmed or pending bookings (if payment failed etc)
         if booking.status not in ['confirmed', 'pending']:
             raise ValidationError({'status': f'Cannot cancel a booking with status "{booking.status}".'})
 
         cancellation_reason = request.data.get('reason', 'Cancelled by student.')
 
-        # Check cancellation policy if the booking is 'confirmed'
+        # --- Determine Refund Status & Policy Check ---
+        refund_details_message = "As per the cancellation policy, no refund was applicable for this cancellation."
+        needs_refund_processing = False
+        can_cancel_based_on_policy = True # Assume true initially
+        payment = None # Define payment variable
+
         if booking.status == 'confirmed':
             try:
                 schedule_instance = booking.schedule_instance
                 class_option = schedule_instance.schedule.option
                 policy = class_option.cancellationPolicy
 
-                # Combine date and time, make timezone aware (assuming instance time is naive)
+                # Use timezone aware comparison
                 instance_datetime_naive = datetime.combine(schedule_instance.date, schedule_instance.time)
-                # Use Django's timezone settings for awareness
-                instance_datetime_aware = timezone.make_aware(instance_datetime_naive)
+                instance_datetime_aware = timezone.make_aware(instance_datetime_naive, timezone.get_default_timezone()) # Use default TZ
 
                 if instance_datetime_aware <= timezone.now():
+                     can_cancel_based_on_policy = False
                      raise ValidationError({'policy': 'Cannot cancel a class that has already started or is in the past.'})
 
-                time_diff = instance_datetime_aware - timezone.now()
-                hours_until_class = time_diff.total_seconds() / 3600
+                policy_hours_map = {'24h': 24, '48h': 48, '72h': 72, 'flexible': float('inf')}
+                required_hours = policy_hours_map.get(policy, 0)
 
-                policy_hours = {'24h': 24, '48h': 48, '72h': 72, 'flexible': float('inf')}
-                required_hours = policy_hours.get(policy, 24) # Default policy?
+                if required_hours != float('inf'):
+                    time_diff = instance_datetime_aware - timezone.now()
+                    hours_until_class = time_diff.total_seconds() / 3600
+                    if hours_until_class < required_hours:
+                        can_cancel_based_on_policy = False
+                        raise ValidationError({'policy': f'Cancellation not allowed. Requires {policy} notice ({required_hours} hours).'})
 
-                if hours_until_class < required_hours:
-                    raise ValidationError({
-                        'policy': f'Cancellation not allowed. Requires {policy} notice ({required_hours} hours).'
-                    })
+                # Fetch payment here for later use
+                payment = booking.payments.filter(status__in=['succeeded', 'partially_refunded']).order_by('-created_at').first()
+
+                if can_cancel_based_on_policy and payment: # Check if policy allows and payment exists
+                     needs_refund_processing = True # Assume refund needed if paid and policy allows
 
             except AttributeError as e:
-                logger.error(f"Could not determine cancellation policy for booking {pk}. Error: {e}", exc_info=True)
-                raise ValidationError({'error': 'Could not verify cancellation policy.'})
-            except Exception as e: # Catch other potential errors
-                logger.error(f"Error checking cancellation policy for booking {pk}: {e}", exc_info=True)
-                raise ValidationError({'error': 'An error occurred checking the cancellation policy.'})
+                logger.error(f"Could not determine cancellation policy/payment for booking {pk}. Error: {e}", exc_info=True)
+                raise ValidationError({'error': 'Could not verify cancellation policy/payment. Cancellation aborted.'})
+            except ValidationError as ve:
+                 raise ve
+            except Exception as e:
+                logger.error(f"Unexpected error checking cancellation policy for booking {pk}: {e}", exc_info=True)
+                raise ValidationError({'error': 'An error occurred checking the cancellation policy. Cancellation aborted.'})
+        # --- End Policy Check ---
 
-        # Process cancellation
-        with transaction.atomic():
-            booking.status = 'cancelled'
-            booking.cancelled_at = timezone.now()
-            booking.cancellation_reason = cancellation_reason
-            # Handle refund logic - Mark for refund if it was paid
-            if booking.payment_status == 'paid':
-                booking.payment_status = 'refund_pending'
-                # TODO: Trigger actual refund process (e.g., signal to payment service)
-                logger.info(f"Booking {pk} cancelled by student {request.user.email}. Marked for refund.")
+        # Process cancellation if allowed
+        try:
+            # --- Get Business User BEFORE atomic transaction ---
+            # Needs careful error handling if relations are missing
+            business_user_to_notify = None
+            try:
+                business_owner = booking.schedule_instance.schedule.option.classId.businessId.owner
+                if business_owner and business_owner.email:
+                     business_user_to_notify = business_owner # Notify owner first
+                # Optionally add logic to notify managers as well
+                # business_managers = booking.schedule_instance.schedule.option.classId.businessId.managers.all()
+            except AttributeError:
+                 logger.error(f"Could not find business owner to notify for student cancellation of booking {pk}")
+
+            # --- Start Atomic Transaction ---
+            with transaction.atomic():
+                booking.status = 'cancelled'
+                booking.cancelled_at = timezone.now()
+                booking.cancellation_reason = cancellation_reason
+
+                if needs_refund_processing and payment and payment.available_refund_amount > 0:
+                    refund_amount_display = payment.available_refund_amount
+                    refund_details_message = f"A refund of ${refund_amount_display:.2f} will be processed."
+                    booking.payment_status = 'refund_pending' # Indicate refund is initiated
+                    # TODO: Trigger refund task here!
+                    logger.info(f"Booking {pk} cancelled by student {request.user.email}. Marked payment as refund_pending.")
+                else:
+                    logger.info(f"Booking {pk} cancelled by student {request.user.email}. No refund required or possible.")
+                    # Keep original payment_status (e.g., 'paid' if paid but no refund, or 'pending' if cancelled before payment)
+
+                booking.save(update_fields=['status', 'cancelled_at', 'cancellation_reason', 'payment_status'])
+
+            # --- Email Notifications (AFTER transaction) ---
+            # 1. Notify the Student
+            try:
+                send_booking_cancellation_user_email(
+                    user=request.user,
+                    booking=booking,
+                    refund_details=refund_details_message
+                )
+                logger.info(f"User cancellation email prepared/queued for booking {pk}")
+            except Exception as email_error:
+                logger.error(f"Failed to send user cancellation email for booking {pk}: {email_error}", exc_info=True)
+
+            # 2. *** ADDED: Notify the Business User ***
+            if business_user_to_notify:
+                 try:
+                     send_business_student_cancellation_email(
+                         business_user=business_user_to_notify,
+                         booking=booking
+                     )
+                     logger.info(f"Business student cancellation email prepared/queued for booking {pk} to {business_user_to_notify.email}")
+                 except Exception as email_error:
+                     logger.error(f"Failed to send business student cancellation email for booking {pk}: {email_error}", exc_info=True)
             else:
-                 # If it wasn't paid (e.g., pending), just mark as cancelled
-                 logger.info(f"Booking {pk} (Status: {booking.status}, Payment: {booking.payment_status}) cancelled by student {request.user.email}. No refund needed.")
+                 logger.warning(f"Skipped business notification for cancellation of booking {pk} as owner email was not found.")
+            # *** END ADDED ***
 
-            booking.save(update_fields=['status', 'cancelled_at', 'cancellation_reason', 'payment_status'])
 
-        # Return updated booking details
-        serializer = BookingDetailSerializer(booking, context={'request': request}) # Use detail serializer
-        return Response(serializer.data)
+            # Return updated booking details
+            serializer = BookingDetailSerializer(booking, context={'request': request})
+            return Response(serializer.data, status=status.HTTP_200_OK)
 
-    # --- Block unwanted actions ---
+        except ValidationError as ve:
+             # Catch validation errors raised during policy check
+             return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.error(f"Error during booking cancellation save/email for pk={pk}: {e}", exc_info=True)
+            return Response(
+                {'detail': 'An error occurred while cancelling the booking.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    # --- Block unwanted actions --- (Keep as is)
     def update(self, request, *args, **kwargs):
         return Response(status=status.HTTP_405_METHOD_NOT_ALLOWED)
     def partial_update(self, request, *args, **kwargs):

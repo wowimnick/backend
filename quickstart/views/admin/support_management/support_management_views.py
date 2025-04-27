@@ -14,7 +14,7 @@ from datetime import timedelta
 import logging
 
 from quickstart.serializers.public.support_chat_serializer import UserBriefSerializer
-
+from ....utils.email_utils import send_ticket_resolved_email, send_agent_reply_email
 from ....models import SupportTicket, ChatMessage, ChatSession, CustomUser
 from ..user_management.user_admin_views import user_can_manage 
 from ....serializers import ( # Example path
@@ -192,55 +192,61 @@ class AdminSupportTicketViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated, CanAccessSupportAdmin])
     def reply(self, request, pk=None):
-        """Add an admin/agent reply to a support ticket (Hierarchy checked by decorator)"""
+        """Add an admin/agent reply to a support ticket"""
         if not request.user.has_perm('quickstart.reply_any_support_ticket'):
             self.permission_denied(request, message="You do not have permission to reply to this ticket.")
 
         ticket = self.get_object()
         message_content = request.data.get('message', '').strip()
-
         if not message_content:
             return Response({'error': 'Message content is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Get or create chat session
-        # Use atomic transaction to prevent race conditions creating session
-        with transaction.atomic():
-             chat_session, created = ChatSession.objects.get_or_create(userId=ticket.user)
-             if not ticket.chat_session:
-                 ticket.chat_session = chat_session
-                 ticket.save(update_fields=['chat_session'])
+        try: # Wrap in try/except
+            with transaction.atomic():
+                chat_session, created = ChatSession.objects.get_or_create(userId=ticket.user)
+                if not ticket.chat_session:
+                    ticket.chat_session = chat_session
+                    ticket.save(update_fields=['chat_session'])
 
-        # Create agent message
-        message = ChatMessage.objects.create(
-            session=chat_session,
-            content=message_content,
-            is_user=False, # Agent message
-            sender_type='agent' # Or derive from user role if needed
-        )
+            message = ChatMessage.objects.create(
+                session=chat_session,
+                content=message_content,
+                is_user=False,
+                sender_type='agent' # Mark as agent reply
+            )
 
-        # Update ticket status if needed (e.g., move from 'open' or 'resolved' back to 'in_progress')
-        updated_fields = []
-        if ticket.status == 'open':
-            ticket.status = 'in_progress'
-            updated_fields.append('status')
-            # Assign to replying agent if unassigned
-            if not ticket.assigned_to:
-                 ticket.assigned_to = request.user
-                 updated_fields.append('assigned_to')
-        elif ticket.status == 'resolved': # Re-open if agent replies after resolution
-             ticket.status = 'in_progress'
-             updated_fields.append('status')
+            updated_fields = []
+            if ticket.status == 'open':
+                ticket.status = 'in_progress'
+                updated_fields.append('status')
+                if not ticket.assigned_to:
+                    ticket.assigned_to = request.user
+                    updated_fields.append('assigned_to')
+            elif ticket.status == 'resolved':
+                ticket.status = 'in_progress' # Reopen if agent replies after resolving
+                updated_fields.append('status')
+            if updated_fields:
+                ticket.save(update_fields=updated_fields)
 
-        if updated_fields:
-             ticket.save(update_fields=updated_fields)
+            logger.info(f"Admin {request.user.email} replied to Ticket {pk}")
 
-        logger.info(f"Admin {request.user.email} replied to Ticket {pk}")
-        # Add to AuditLog? Maybe too verbose for replies.
+            try:
+                # Ensure the ticket has a user associated
+                if ticket.user:
+                    send_agent_reply_email(ticket.user, ticket, request.user) # Pass agent too
+                    logger.info(f"Agent reply notification email prepared/queued for ticket {pk} to user {ticket.user.email}")
+                else:
+                    logger.warning(f"Cannot send agent reply notification for ticket {pk} because user is missing.")
+            except Exception as email_error:
+                logger.error(f"Failed to send agent reply notification for ticket {pk}: {email_error}", exc_info=True)
 
-        return Response(
-            ChatMessageSerializer(message).data,
-            status=status.HTTP_201_CREATED
-        )
+            return Response(
+                ChatMessageSerializer(message).data,
+                status=status.HTTP_201_CREATED
+            )
+        except Exception as e:
+            logger.error(f"Error processing admin reply for ticket {pk}: {e}", exc_info=True)
+            return Response({'error': 'An error occurred while processing the reply.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated, CanAccessSupportAdmin])
     def assign(self, request, pk=None):
@@ -286,46 +292,55 @@ class AdminSupportTicketViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated, CanAccessSupportAdmin])
     def resolve(self, request, pk=None):
-        """Resolve a ticket (Hierarchy checked by decorator)"""
+        """Resolve a ticket"""
         if not request.user.has_perm('quickstart.resolve_support_ticket'):
             self.permission_denied(request, message="You do not have permission to resolve tickets.")
 
         ticket = self.get_object()
-
         if ticket.status in ['resolved', 'closed']:
-            return Response({'error': 'Ticket is already resolved or closed.'}, status=400)
+            return Response({'error': 'Ticket is already resolved or closed.'}, status=status.HTTP_400_BAD_REQUEST)
 
         resolution_notes = request.data.get('resolution_notes', '').strip()
-        # Make notes required? Optional.
-        # if not resolution_notes:
-        #    return Response({'error': 'Resolution notes are required.'}, status=400)
 
-        # Update ticket
-        ticket.status = 'resolved'
-        ticket.resolution_notes = resolution_notes
-        # Assign to resolver if not already assigned or assigned to someone else?
-        if not ticket.assigned_to or ticket.assigned_to != request.user:
-             ticket.assigned_to = request.user
-             ticket.save(update_fields=['status', 'resolution_notes', 'assigned_to'])
-        else:
-             ticket.save(update_fields=['status', 'resolution_notes'])
+        try: # Wrap in try/except
+            # Update ticket
+            ticket.status = 'resolved'
+            ticket.resolution_notes = resolution_notes
+            updated_fields = ['status', 'resolution_notes']
+            # Assign to self if unassigned or assigned to someone else when resolving
+            if not ticket.assigned_to or ticket.assigned_to != request.user:
+                ticket.assigned_to = request.user
+                updated_fields.append('assigned_to')
+            ticket.save(update_fields=updated_fields)
 
+            # Add system message to chat
+            if ticket.chat_session:
+                note_text = f": {resolution_notes}" if resolution_notes else ""
+                ChatMessage.objects.create(
+                    session=ticket.chat_session,
+                    content=f"Ticket resolved by {request.user.get_full_name()}{note_text}",
+                    is_user=False, sender_type='system'
+                )
 
-        # Add system message to chat
-        if ticket.chat_session:
-            note_text = f": {resolution_notes}" if resolution_notes else ""
-            ChatMessage.objects.create(
-                session=ticket.chat_session,
-                content=f"Ticket resolved by {request.user.get_full_name()}{note_text}",
-                is_user=False, sender_type='system'
-            )
+            logger.info(f"Ticket {pk} resolved by Admin {request.user.email}")
+            # Log audit action
+            self._log_ticket_action(ticket, 'ticket_resolve', f"Ticket resolved by admin. Notes: {resolution_notes}", request)
 
-        logger.info(f"Ticket {pk} resolved by Admin {request.user.email}")
-        # Add to AuditLog
-        self._log_ticket_action(ticket, 'ticket_resolve', f"Ticket resolved by admin. Notes: {resolution_notes}", request)
+            try:
+                if ticket.user:
+                    send_ticket_resolved_email(ticket.user, ticket)
+                    logger.info(f"Ticket resolved notification email prepared/queued for ticket {pk} to user {ticket.user.email}")
+                else:
+                    logger.warning(f"Cannot send ticket resolved notification for ticket {pk} because user is missing.")
+            except Exception as email_error:
+                logger.error(f"Failed to send ticket resolved notification for ticket {pk}: {email_error}", exc_info=True)
 
-        serializer = SupportTicketDetailSerializer(ticket, context={'request': request})
-        return Response(serializer.data, status=status.HTTP_200_OK)
+            serializer = SupportTicketDetailSerializer(ticket, context={'request': request})
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.error(f"Error resolving ticket {pk}: {e}", exc_info=True)
+            return Response({'error': 'An error occurred while resolving the ticket.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated, CanAccessSupportAdmin])
     def close(self, request, pk=None):

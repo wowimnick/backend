@@ -41,28 +41,33 @@ logger = logging.getLogger(__name__)
 def register_business(request):
     """
     Handles the creation of a new BusinessInfo instance by an authenticated user.
+    Uses BusinessRegistrationSerializer which now handles 4 steps including agreements.
     (URL: /api/business/register/)
     """
     # Serializer context handles associating the user as owner.
     try:
+        # Pass request.data and context to the updated serializer
         serializer = BusinessRegistrationSerializer(
             data=request.data,
             context={'request': request}
         )
+        # Validate all data (including agreements, parsed lists, etc.)
         serializer.is_valid(raise_exception=True)
-        business = serializer.save() # Owner is set within serializer create/save
-        logger.info(f"Business '{business.businessName}' (ID: {business.businessId}) registered by user {request.user.email}")
+        # Save the business instance (owner, verificationStatus set internally)
+        business = serializer.save()
+        logger.info(f"Business '{business.businessName}' (ID: {business.businessId}) registered by user {request.user.email} (4-step flow completed).")
         return Response({
             'status': 'success',
-            'message': 'Business registered successfully. Verification may be required.',
+            'message': 'Business registered successfully!', # Simplified message
             'businessId': business.businessId
         }, status=status.HTTP_201_CREATED)
 
     except DRFValidationError as e:
+         # Log validation errors from any step
          logger.warning(f"Business registration validation failed for user {request.user.email}. Errors: {e.detail}")
          return Response({
             'status': 'error',
-            'errors': e.detail
+            'errors': e.detail # Return detailed validation errors
          }, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
         logger.error(f"Error in business registration for user {request.user.email}: {str(e)}", exc_info=True)

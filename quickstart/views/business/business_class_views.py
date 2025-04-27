@@ -24,7 +24,7 @@ from ...serializers import (
     ManagedClassOptionSerializer, ScheduleSerializer, ScheduleInstanceSerializer, ScheduleBreakSerializer
 )
 
-from ...utils.permissions import CanManageOwnClasses
+from ...utils.permissions import CanManageOwnClasses, IsVerifiedAndActiveBusinessOwnerOrManager
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
     Handles CRUD, image management, and status toggling.
     (URL Base: /api/business/classes/)
     """
-    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+    permission_classes = [IsAuthenticated, CanManageOwnClasses, IsVerifiedAndActiveBusinessOwnerOrManager]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
 

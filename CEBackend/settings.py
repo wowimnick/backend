@@ -19,6 +19,8 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+TIME_ZONE = 'UTC'
+
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.1/howto/deployment/checklist/
@@ -193,7 +195,7 @@ INSTALLED_APPS = [
     'corsheaders',
     'rest_framework',
     'anymail',
-    'quickstart',
+    'quickstart.apps.QuickstartConfig',
     'storages',
     'silk',
     'channels',
@@ -310,6 +312,37 @@ AUTH_USER_MODEL = 'quickstart.CustomUser'
 FRONTEND_BASE_URL = os.environ.get('FRONTEND_URL', 'https://classeasily.com')
 FRONTEND_EMAIL_VERIFICATION_PATH = '/verify-email/{key}/'
 FRONTEND_PASSWORD_RESET_CONFIRM_PATH = '/reset-password/{uid}/{token}/'
+
+# CELERY SETTINGS
+# ------------------------------------------------------------------------------
+# Use Redis as the broker
+# Ensure Redis is running: redis-server
+# Use database number 1 to avoid conflicts with cache if using Redis for cache too
+CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'redis://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379/1')
+
+# Use Redis as the result backend (optional, but useful for tracking task status)
+# Use database number 2
+CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'redis://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379/2')
+
+# Accept JSON content for tasks
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+
+# Set timezone for Celery (should match Django's TIME_ZONE)
+CELERY_TIMEZONE = TIME_ZONE # Use the TIME_ZONE already defined in settings
+
+# Optional: Task tracking and result settings
+CELERY_TASK_TRACK_STARTED = True # Track when tasks start execution
+CELERY_TASK_SEND_SENT_EVENT = True # Send event when task is sent
+# CELERY_RESULT_EXPIRES = timedelta(days=1) # How long to keep task results (if backend is used)
+
+# Optional: Routing (advanced, not needed for basic email)
+# CELERY_TASK_ROUTES = {'quickstart.tasks.some_other_task': {'queue': 'high_priority'}}
+
+# Optional: Rate limiting (example: 100 emails per minute)
+# Adjust based on your email provider limits (Resend has its own limits)
+# CELERY_ANNOTATIONS = {'quickstart.tasks.send_email_task': {'rate_limit': '100/m'}}
 
 REST_AUTH = {
     'USE_JWT': True,
@@ -475,7 +508,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+
 
 USE_I18N = True
 

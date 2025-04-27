@@ -111,7 +111,6 @@ class AdminBusinessDetailSerializer(serializers.ModelSerializer):
             # --- Operational Details ---
             'openingTime',        # Editable
             'closingTime',        # Editable
-            'cancellationPolicy', # Editable
             'liabilityWaiver',    # Editable
 
             # --- Contact Info ---

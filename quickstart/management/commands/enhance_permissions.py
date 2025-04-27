@@ -82,6 +82,8 @@ class Command(BaseCommand):
                 'export_business_data': {'group': business_group, 'description': 'Export business data as CSV', 'is_sensitive': True},
                 'send_business_announcements': {'group': business_group, 'description': 'Send platform announcements to selected businesses'},
                 'access_business_admin': {'group': business_group, 'description': 'General access to the Business Administration section'},
+                'view_all_verificationrequests': {'group': business_group, 'description': 'View all verification requests (Admin)'},
+                'process_verificationrequest': {'group': business_group, 'description': 'Process verification requests (approve/reject) for any business', 'is_sensitive': True},
 
                 # --- Class Admin (Platform Admins) ---
                 'view_classesmain': {'group': class_group, 'description': 'View details for any class'},

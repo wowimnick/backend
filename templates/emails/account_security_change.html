@@ -1,0 +1,60 @@
+{# templates/emails/account_security_change.html #}
+{# Context required: user (CustomUser object), change_type ("email_update", "email_added", or "password"), change_time (datetime object), recipient_email (string), new_email_address (string, optional) #}
+{% extends "emails/base_email.html" %}
+{% load i18n tz %} {# Load timezone filters #}
+
+{% block title %}{% trans "Account Security Update" %}{% endblock %}
+
+{% block content %}
+    <h1>{% trans "Your ClassEasily Account Security Update" %}</h1>
+
+    <p>
+        {% trans "Hello" %}
+        {% if user.first_name %} {{ user.first_name }} {% else %} {% trans "User" %} {% endif %},
+    </p>
+    {% if change_type == "password" %}
+        {% with user_email=user.email change_timestamp=change_time|timezone:settings.TIME_ZONE|date:"F j, Y \a\t P" %}
+        <p>{% blocktrans %}This email confirms that the password for your ClassEasily account (associated with {{ user_email }}) was successfully changed on {{ change_timestamp }}.{% endblocktrans %}</p>
+        {% endwith %}
+        <p>{% trans "If you did not make this change, please secure your account and contact our support team immediately." %}</p>
+
+    {% elif change_type == "email_update" %}
+         {% with new_email=user.email change_timestamp=change_time|timezone:settings.TIME_ZONE|date:"F j, Y \a\t P" %}
+         {# Use <strong> tag #}
+         <p>{% blocktrans %}This email confirms that the email address associated with your ClassEasily account was successfully updated to <strong>{{ new_email }}</strong> on {{ change_timestamp }}. You will now use this email to log in.{% endblocktrans %}</p>
+         {% endwith %}
+        <p>{% trans "If you did not authorize this change, please contact our support team immediately." %}</p>
+
+    {% elif change_type == "email_added" %}
+        {% with added_email=new_email_address change_timestamp=change_time|timezone:settings.TIME_ZONE|date:"F j, Y \a\t P" %}
+        {# Use <strong> tag #}
+        <p>{% blocktrans %}This email confirms that <strong>{{ added_email }}</strong> was added as an email address to your ClassEasily account on {{ change_timestamp }}.{% endblocktrans %}</p>
+        {% endwith %}
+         <p>{% trans "If you did not authorize this change, please contact our support team immediately." %}</p>
+
+    {% else %}
+        {% with user_email=user.email change_timestamp=change_time|timezone:settings.TIME_ZONE|date:"F j, Y \a\t P" %}
+        <p>{% blocktrans %}This email confirms a security-related change was made to your ClassEasily account (associated with {{ user_email }}) on {{ change_timestamp }}.{% endblocktrans %}</p>
+        {% endwith %}
+        <p>{% trans "If you did not authorize this change, please contact our support team immediately." %}</p>
+    {% endif %}
+
+    <!-- Button to Support -->
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+        <tr>
+            <td align="center" class="button-td">
+                <a href="mailto:{{ settings.NOTIFICATION_SETTINGS.reply_to|default:'support@classeasily.com' }}" target="_blank" class="button">
+                    {% trans 'Contact Support' %}
+                </a>
+            </td>
+        </tr>
+    </table>
+
+    <p>{% trans "Thanks," %}<br>{% trans "The ClassEasily Team" %}</p>
+{% endblock %}
+
+{% block footer_recipient %}
+    {% if recipient_email and recipient_email != "N/A" %}
+        <p>Security update sent to {{ recipient_email }}.</p>
+    {% endif %}
+{% endblock %}

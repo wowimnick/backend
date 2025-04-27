@@ -8,6 +8,8 @@ from django.utils import timezone # Added timezone
 from django.db import transaction # Added transaction for atomic operations
 import logging
 
+from ...utils.email_utils import send_support_ticket_created_email
+
 from ...models import SupportTicket, ChatMessage, ChatSession, CustomUser
 from ...serializers import ( 
     SupportTicketSerializer, ChatMessageSerializer, SupportTicketDetailSerializer,
@@ -99,35 +101,31 @@ class UserSupportTicketViewSet(viewsets.ModelViewSet):
         """
         Handles POST request to /api/support-tickets/ for creating a new ticket.
         """
-        # Check specific permission to create tickets
         if not request.user.has_perm('quickstart.add_supportticket'):
             return Response(
                  {"detail": "You do not have permission to create support tickets."},
                  status=status.HTTP_403_FORBIDDEN
              )
-
-        # Use the CreateSupportTicketSerializer, passing request context
         serializer = CreateSupportTicketSerializer(
             data=request.data,
-            context={'request': request} # Context is crucial for the serializer to get the user
+            context={'request': request}
         )
-        serializer.is_valid(raise_exception=True) # Validate the input data
-
+        serializer.is_valid(raise_exception=True)
         try:
-             # Serializer's .save() method handles setting user=request.user
-             # and creating the chat session/initial message as defined in its create method.
              ticket = serializer.save()
              logger.info(f"User {request.user.email} created Support Ticket {ticket.pk} via ViewSet")
-             # Add to AuditLog if needed
 
-             # Return data using the appropriate user-facing serializer for the response
+             try:
+                 send_support_ticket_created_email(request.user, ticket)
+                 logger.info(f"Support ticket created confirmation email prepared/queued for ticket {ticket.pk}")
+             except Exception as email_error:
+                 logger.error(f"Failed to send ticket created confirmation email for ticket {ticket.pk}: {email_error}", exc_info=True)
+
              response_serializer = UserSupportTicketSerializer(ticket, context={'request': request})
-             headers = self.get_success_headers(serializer.data) # Get Location header
+             headers = self.get_success_headers(serializer.data)
              return Response(response_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
-
         except Exception as e:
              logger.error(f"Error creating support ticket for user {request.user.email} via ViewSet: {e}", exc_info=True)
-             # Use a generic error message for the user
              return Response({"detail": "An error occurred while creating the ticket."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     # Block standard update/delete if handled elsewhere or not allowed
@@ -234,44 +232,40 @@ class UserSupportTicketViewSet(viewsets.ModelViewSet):
 
         return Response(result)
 
-# --- CreateSupportTicketView ---
 class CreateSupportTicketView(APIView):
     """
     API view for authenticated users to create support tickets.
     Checks 'add_supportticket' permission.
+    (Note: Functionality moved to UserSupportTicketViewSet.create, this might be redundant unless used elsewhere)
     """
-    permission_classes = [IsAuthenticated] # Base: Must be logged in
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        # Check specific permission to create tickets
         if not request.user.has_perm('quickstart.add_supportticket'):
             return Response(
                  {"detail": "You do not have permission to create support tickets."},
                  status=status.HTTP_403_FORBIDDEN
              )
-
-        # Pass request context to serializer to automatically set the user
         serializer = CreateSupportTicketSerializer(
             data=request.data,
             context={'request': request}
         )
-
         if serializer.is_valid():
             try:
-                 # Serializer's save method should handle setting user=request.user
-                 # and creating the chat session/initial message
                  ticket = serializer.save()
-                 logger.info(f"User {request.user.email} created Support Ticket {ticket.pk}")
-                 # Add to AuditLog if needed for user actions
+                 logger.info(f"User {request.user.email} created Support Ticket {ticket.pk} via dedicated View")
 
-                 # Return data using the appropriate detail or user-facing serializer
-                 # Use UserSupportTicketSerializer for the response to the user
+                 # **** ADDED: Trigger Confirmation Email ****
+                 try:
+                     send_support_ticket_created_email(request.user, ticket)
+                     logger.info(f"Support ticket created confirmation email prepared/queued for ticket {ticket.pk}")
+                 except Exception as email_error:
+                     logger.error(f"Failed to send ticket created confirmation email for ticket {ticket.pk}: {email_error}", exc_info=True)
+                 # **** END ADDED ****
+
                  response_serializer = UserSupportTicketSerializer(ticket, context={'request': request})
                  return Response(response_serializer.data, status=status.HTTP_201_CREATED)
-
             except Exception as e:
-                 logger.error(f"Error creating support ticket for user {request.user.email}: {e}", exc_info=True)
+                 logger.error(f"Error creating support ticket for user {request.user.email} via dedicated View: {e}", exc_info=True)
                  return Response({"detail": "An error occurred while creating the ticket."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        # Return validation errors
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

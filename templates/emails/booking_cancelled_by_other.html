@@ -1,0 +1,50 @@
+{# templates/emails/booking_cancelled_by_other.html #}
+{# Context required: user (CustomUser), booking (Booking object), cancelled_by ("the business" or "an administrator"), reason (string), contact_info (string), explore_url(string), related_data (dict), recipient_email (string) #}
+{% extends "emails/base_email.html" %}
+{% load i18n tz %}
+
+{% block title %}{% trans "Important Update: Your Booking Was Cancelled" %}{% endblock %}
+
+{% block content %}
+    <h1>{% trans "Important Update Regarding Your Booking" %}</h1>
+    <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
+    {# Removed blocktrans for main sentence #}
+    <p>
+        We are writing to inform you that your booking for <strong>{{ related_data.class_title|default:"the class" }}</strong> scheduled for {{ booking.schedule_instance.date|date:"F j, Y" }} at {{ booking.schedule_instance.time|time:"P" }} has been cancelled by {{ cancelled_by }}.
+    </p>
+
+    {% if reason %}
+        <p><strong>{% trans "Reason provided:" %}</strong> {{ reason }}</p>
+    {% else %}
+         <p>{% trans "No specific reason was provided for the cancellation." %}</p>
+    {% endif %}
+
+    {# Use 'with' tag for amount #}
+    {% with amount_paid=booking.amount_paid|floatformat:2 %}
+    <p>{% blocktrans %}A full refund for the amount paid (${{ amount_paid }}) has been automatically processed. Please allow 3-5 business days for this to appear in your account.{% endblocktrans %}</p>
+    {% endwith %}
+
+    {# Use 'with' tag for contact_info #}
+    {% with contact=contact_info|default:"our support team" %}
+    <p>{% blocktrans %}We sincerely apologize for any inconvenience this may cause. If you have questions regarding this cancellation, please contact {{ contact }}.{% endblocktrans %}</p>
+    {% endwith %}
+
+    <!-- Button to Explore -->
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+        <tr>
+            <td align="center" class="button-td">
+                <a href="{{ explore_url }}" target="_blank" class="button">
+                    {% trans 'Find Another Class' %}
+                </a>
+            </td>
+        </tr>
+    </table>
+
+    <p>{% trans "Thanks for your understanding," %}<br>{% trans "The ClassEasily Team" %}</p>
+{% endblock %}
+
+{% block footer_recipient %}
+    {% if recipient_email and recipient_email != "N/A" %}
+        <p>Cancellation notice sent to {{ recipient_email }}. Booking ID: {{ booking.id }}</p>
+    {% endif %}
+{% endblock %}

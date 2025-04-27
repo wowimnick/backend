@@ -1,0 +1,36 @@
+{# templates/emails/review_response_notification_user.html #}
+{# Context required: user (CustomUser), review (Review object), business_name (string), class_name (string), review_url (string), recipient_email (string) #}
+{% extends "emails/base_email.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "A Business Responded to Your Review" %}{% endblock %}
+
+{% block content %}
+    <h1>{% trans "Response to Your Recent Review" %}</h1>
+    <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
+    {# Use 'with' tag and <strong> #}
+    {% with biz_name=business_name|default:"The business" cls_name=class_name|default:"their class" %}
+    <p>{% blocktrans %}<strong>{{ biz_name }}</strong> has responded to the review you left for <strong>{{ cls_name }}</strong>.{% endblocktrans %}</p>
+    {% endwith %}
+
+    <p>{% trans "You can view their response by clicking the button below:" %}</p>
+
+    <!-- Button to View Review -->
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+        <tr>
+            <td align="center" class="button-td">
+                <a href="{{ review_url }}" target="_blank" class="button">
+                    {% trans 'View Review and Response' %}
+                </a>
+            </td>
+        </tr>
+    </table>
+
+    <p>{% trans "Thanks," %}<br>{% trans "The ClassEasily Team" %}</p>
+{% endblock %}
+
+{% block footer_recipient %}
+    {% if recipient_email and recipient_email != "N/A" %}
+        <p>Notification sent to {{ recipient_email }} regarding Review ID: {{ review.reviewId }}</p>
+    {% endif %}
+{% endblock %}

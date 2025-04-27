@@ -8,7 +8,7 @@ from django.contrib.contenttypes.models import ContentType
 from storages.backends.s3boto3 import S3Boto3Storage
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.core.exceptions import ValidationError
-from django.db.models import Count, Case, When, DecimalField, Sum
+from django.db.models import Count, Case, When, DecimalField, Sum, JSONField, Avg, F
 from django.db.models.functions import Coalesce
 from decimal import Decimal
 from django.utils import timezone
@@ -82,6 +82,10 @@ class VerificationRequest(models.Model):
     class Meta:
         db_table = 'verification_requests'
         ordering = ['-submitted_at']
+        permissions = [
+            ("view_all_verificationrequests", "Can view all verification requests"),
+            ("process_verificationrequest", "Can approve or reject verification requests"),
+        ]
 
 class VerificationDocument(models.Model):
     """Stores documents submitted as part of a verification request"""
@@ -309,7 +313,6 @@ STRIPE_STATUS_CHOICES = [
     ('incomplete', 'Incomplete Setup'),
 ]
 
-
 class BusinessInfo(models.Model):
     # --- Core Fields ---
     businessId = models.AutoField(primary_key=True)
@@ -325,12 +328,12 @@ class BusinessInfo(models.Model):
     businessDescription = models.TextField(max_length=500)
     businessImage = models.ImageField(
         upload_to='business_images/',
-        storage=S3Boto3Storage(), 
+        storage=S3Boto3Storage(), # Assuming S3Boto3Storage is configured
         blank=True,
         null=True
     )
     featured = models.BooleanField(default=False)
-    isActive = models.BooleanField(default=True)
+    isActive = models.BooleanField(default=False)
     createdAt = models.DateTimeField(auto_now_add=True)
     updatedAt = models.DateTimeField(auto_now=True)
 
@@ -345,22 +348,17 @@ class BusinessInfo(models.Model):
     ])
 
     # --- Location ---
-    businessAddress = models.CharField(max_length=255)
+    businessAddress = models.CharField(max_length=255) # Street address, potentially apartment number etc.
     businessCity = models.CharField(max_length=100)
     businessState = models.CharField(max_length=100) # Province/Territory for Canada
     businessZipCode = models.CharField(max_length=20) # Postal Code for Canada
     latitude = models.DecimalField(max_digits=10, decimal_places=8, null=True, blank=True)
     longitude = models.DecimalField(max_digits=11, decimal_places=8, null=True, blank=True)
-    showExactLocation = models.BooleanField(default=True)
+    showExactLocation = models.BooleanField(default=True) # Controlled by 'saltLocation' on frontend
 
     # --- Simplified Booking Settings ---
     openingTime = models.TimeField()
     closingTime = models.TimeField()
-    cancellationPolicy = models.CharField(
-        max_length=20,
-        choices=CANCELLATION_POLICY_CHOICES,
-        default='moderate'
-    )
     refundPolicy = models.CharField(
         max_length=20,
         choices=REFUND_POLICY_CHOICES,
@@ -373,11 +371,7 @@ class BusinessInfo(models.Model):
     reminderNotification = models.BooleanField(default=True)
     smsNotifications = models.BooleanField(default=False)
 
-    # --- Simplified Payment Settings ---
-    # REMOVED: currency, taxRate, invoicePrefix
-    # Note: Currency will likely be hardcoded as 'CAD' in payment processing logic
-
-    # --- Stripe Connect Fields (Keep for future implementation) ---
+    # --- Stripe Connect Fields ---
     stripe_account_id = models.CharField(max_length=255, blank=True, null=True, unique=True, db_index=True)
     stripe_account_status = models.CharField(
         max_length=30,
@@ -388,16 +382,20 @@ class BusinessInfo(models.Model):
     )
 
     managers = models.ManyToManyField(settings.AUTH_USER_MODEL, related_name='managed_businesses', blank=True)
-    liabilityWaiver = models.BooleanField(default=False)
-    classCategory = models.CharField(max_length=50, choices=[
+    liabilityWaiver = models.BooleanField(default=False) # Added based on frontend form
+
+    # --- Class/Category Information ---
+    classCategory = models.CharField(max_length=50, choices=[ # Choices defined on model
         ('academic', 'Academic'), ('music', 'Music'), ('dance', 'Dance'),
         ('fitness', 'Fitness'), ('art', 'Art'), ('technology', 'Technology'),
         ('sports', 'Sports')
     ])
-    subcategories = models.CharField(max_length=255, blank=True)
-    classFormats = models.CharField(max_length=255, blank=True)
-    skillLevels = models.CharField(max_length=255, blank=True)
-    ageGroups = models.CharField(max_length=255, blank=True)
+    subcategories = JSONField(default=list, blank=True)
+    classFormats = JSONField(default=list, blank=True)
+    skillLevels = JSONField(default=list, blank=True)
+    ageGroups = JSONField(default=list, blank=True)
+
+    # --- Verification & Agreements ---
     verificationDocument = models.FileField(
         upload_to='verification_documents/',
         storage=S3Boto3Storage(),
@@ -406,15 +404,62 @@ class BusinessInfo(models.Model):
     )
     verificationStatus = models.CharField(max_length=20, choices=[
         ('pending', 'Pending'),
-        ('verified', 'Verified'),
+        ('verified', 'Verified'), # NOTE: Should match VerificationRequest status choices
         ('rejected', 'Rejected')
-    ], default='pending')
+    ], default='pending', db_index=True) # Added index
     termsAccepted = models.BooleanField(default=False)
     privacyAccepted = models.BooleanField(default=False)
+    # --- End Verification & Agreements ---
+
+    total_reviews_count = models.IntegerField(
+        default=0,
+        editable=False,
+        help_text="Cached count of approved reviews for this business"
+    )
+    average_rating = models.DecimalField(
+        max_digits=3,
+        decimal_places=1,
+        default=Decimal('0.0'),
+        editable=False,
+        help_text="Cached average rating from approved reviews for this business"
+    )
+
     last_booking_date = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return self.businessName
+
+    def update_review_aggregates(self):
+        """
+        Recalculates and saves the total approved review count and average rating
+        for this business. Call this after a review is approved or status changes.
+        """
+        try:
+            # Correctly query Reviews linked to this business via ClassesMain
+            approved_reviews_qs = Reviews.objects.filter(
+                classId__businessId=self, # Filter reviews linked to classes of this business
+                status='approved'
+            )
+            new_count = approved_reviews_qs.count()
+            new_avg_rating_data = approved_reviews_qs.aggregate(avg=Avg('rating'))
+            new_avg_rating = new_avg_rating_data['avg'] or Decimal('0.0')
+            new_avg_rating_rounded = Decimal(str(round(new_avg_rating, 1)))
+
+            # Check if update is needed to avoid unnecessary writes
+            needs_update = False
+            if self.total_reviews_count != new_count:
+                self.total_reviews_count = new_count
+                needs_update = True
+            # Use Decimal comparison for rating
+            if self.average_rating != new_avg_rating_rounded:
+                 self.average_rating = new_avg_rating_rounded
+                 needs_update = True
+
+            if needs_update:
+                self.save(update_fields=['total_reviews_count', 'average_rating'])
+                logger.info(f"Updated review aggregates for Business {self.businessId}: Count={self.total_reviews_count}, AvgRating={self.average_rating}")
+        except Exception as e:
+            logger.error(f"Error updating review aggregates for Business {self.businessId}: {e}", exc_info=True)
 
     class Meta:
         db_table = 'business_info'
@@ -427,16 +472,15 @@ class BusinessInfo(models.Model):
             models.Index(fields=['verificationStatus']),
             models.Index(fields=['stripe_account_id']),
             models.Index(fields=['stripe_account_status']),
+            models.Index(fields=['total_reviews_count']),
+            models.Index(fields=['average_rating']),
         ]
         permissions = [
-            # --- Platform Admin Permissions (Keep these) ---
             ("toggle_business_feature", "Can toggle the featured status for any business"),
             ("view_business_metrics", "Can view aggregated business management statistics"),
             ("export_business_data", "Can export business data as CSV"),
             ("send_business_announcements", "Can send platform announcements to businesses"),
             ("access_business_admin", "Can access the Business Administration section"),
-
-            # --- Business User Permissions (NEW) ---
             ("manage_own_classes", "Can create/edit classes, options, schedules for own business"),
             ("manage_own_schedule_instances", "Can manage instances (attendance, cancel) for own classes"),
             ("view_own_business_bookings", "Can view bookings for own business"),

@@ -1,0 +1,55 @@
+{# templates/emails/booking_confirmation_user.html #}
+{# Context required: user (CustomUser), booking (Booking object), class_details_url (string), manage_bookings_url (string), related_data (dict), payment (Payment object, optional) #}
+{% extends "emails/base_email.html" %}
+{% load i18n tz %}
+
+{% block title %}{% trans "Your Booking Confirmation!" %}{% endblock %}
+
+{% block content %}
+    <h1>{% trans "Booking Confirmed! Get Ready to Learn!" %}</h1>
+    <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
+    {# Separate the variable from blocktrans for robustness #}
+    <p>
+        {% trans "Your booking for the class" %} <strong>{{ related_data.class_title|default:"[Class Title]" }}</strong> {% trans "is confirmed." %}
+        {% blocktrans %}We're excited for you to join!{% endblocktrans %}
+    </p>
+
+    {# --- Enhanced Details Section --- #}
+    <div style="background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin: 20px 0;">
+        <h2 style="font-size: 18px; font-weight: 600; color: #111827; margin-top: 0; margin-bottom: 12px;">{% trans "Booking Summary:" %}</h2>
+        <p style="margin-bottom: 6px;"><strong>{% trans "Class:" %}</strong> {{ related_data.class_title|default:"N/A" }}</p>
+        <p style="margin-bottom: 6px;"><strong>{% trans "Option:" %}</strong> {{ related_data.option_title|default:"N/A" }}</p>
+        <p style="margin-bottom: 6px;"><strong>{% trans "Date:" %}</strong> {{ booking.schedule_instance.date|date:"l, F j, Y" }}</p>
+        <p style="margin-bottom: 6px;"><strong>{% trans "Time:" %}</strong> {{ booking.schedule_instance.time|time:"P" }}</p>
+        <p style="margin-bottom: 6px;"><strong>{% trans "Duration:" %}</strong> {{ booking.schedule_instance.duration }} {% trans "minutes" %}</p>
+        <p style="margin-bottom: 6px;"><strong>{% trans "Location:" %}</strong> {{ related_data.class_location|default:"N/A" }}</p>
+        <p style="margin-bottom: 6px;"><strong>{% trans "Business:" %}</strong> {{ related_data.business_name|default:"N/A" }}</p>
+        <p style="margin-bottom: 6px;"><strong>{% trans "Participants:" %}</strong> {{ booking.participants }}</p>
+        <p style="margin-bottom: 0;"><strong>{% trans "Amount Paid:" %}</strong> ${{ booking.amount_paid|floatformat:2 }}</p>
+        {# --- Removed "Paid with..." line --- #}
+    </div>
+    {# --- End Enhanced Details Section --- #}
+
+    <!-- Button to View Booking -->
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+        <tr>
+            <td align="center" class="button-td">
+                <!--[if mso]>...<![endif]-->
+                <a href="{{ manage_bookings_url }}" target="_blank" class="button">
+                    {% trans 'View Your Bookings' %}
+                </a>
+                <!--[if mso]>...<![endif]-->
+            </td>
+        </tr>
+    </table>
+
+    <p>{% blocktrans %}You can view or manage this booking, including cancellation options (subject to the business's policy), from your 'My Classes' page.{% endblocktrans %}</p>
+    <p>{% trans "We look forward to seeing you!" %}<br>{% trans "The ClassEasily Team" %}</p>
+{% endblock %}
+
+{# Footer recipient block: Still keeping Booking ID without blocktrans #}
+{% block footer_recipient %}
+    {% if recipient_email and recipient_email != "N/A" %}
+        <p>Booking confirmation sent to {{ recipient_email }}. Booking ID: {{ booking.id }}</p>
+    {% endif %}
+{% endblock %}

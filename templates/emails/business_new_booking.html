@@ -1,0 +1,46 @@
+{# templates/emails/business_new_booking.html #}
+{# Context required: business_user (owner/manager CustomUser), booking (Booking object), dashboard_booking_url (string), related_data (dict), recipient_email (string) #}
+{% extends "emails/base_email.html" %}
+{% load i18n tz %}
+
+{% block title %}{% trans "New Booking Received!" %}{% endblock %}
+
+{% block content %}
+    <h1>{% trans "New Booking for Your Class!" %}</h1>
+    <p>{% blocktrans with first_name=business_user.first_name|default:"Business Owner/Manager" %}Hi {{ first_name }},{% endblocktrans %}</p>
+    {# Removed blocktrans #}
+    <p>
+        You've received a new booking for your class: <strong>{{ related_data.class_title|default:"[Class Title]" }}</strong>.
+    </p>
+
+    <div style="background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin: 20px 0;">
+        <h2 style="font-size: 18px; font-weight: 600; color: #111827; margin-top: 0; margin-bottom: 12px;">{% trans "Booking Details:" %}</h2>
+        <p style="margin-bottom: 6px;"><strong>{% trans "Student Name:" %}</strong> {{ booking.user.get_full_name|default:"N/A" }}</p>
+        <p style="margin-bottom: 6px;"><strong>{% trans "Student Email:" %}</strong> {{ booking.user.email }}</p>
+        <p style="margin-bottom: 6px;"><strong>{% trans "Class Option:" %}</strong> {{ related_data.option_title|default:"N/A" }}</p>
+        <p style="margin-bottom: 6px;"><strong>{% trans "Date:" %}</strong> {{ booking.schedule_instance.date|date:"l, F j, Y" }}</p>
+        <p style="margin-bottom: 6px;"><strong>{% trans "Time:" %}</strong> {{ booking.schedule_instance.time|time:"P" }}</p>
+        <p style="margin-bottom: 0;"><strong>{% trans "Participants:" %}</strong> {{ booking.participants }}</p>
+    </div>
+
+    <p>{% trans "You can view the full details and manage this booking from your Business Dashboard." %}</p>
+
+    <!-- Button to Booking -->
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+        <tr>
+            <td align="center" class="button-td">
+                <a href="{{ dashboard_booking_url }}" target="_blank" class="button">
+                    {% trans 'View Booking Details' %}
+                </a>
+            </td>
+        </tr>
+    </table>
+
+    <p>{% trans "Keep up the great work!" %}<br>{% trans "The ClassEasily Team" %}</p>
+{% endblock %}
+
+{% block footer_recipient %}
+    {% if recipient_email and recipient_email != "N/A" %}
+        <p>New booking notification sent to {{ recipient_email }} for Booking ID: {{ booking.id }}</p>
+    {% endif %}
+{% endblock %}

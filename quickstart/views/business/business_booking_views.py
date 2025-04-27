@@ -27,6 +27,8 @@ from ...utils.permissions import CanManageOwnClasses # For checking if user can 
 import logging
 logger = logging.getLogger(__name__)
 
+from ...utils.email_utils import send_booking_cancelled_by_other_email
+
 # --- Permissions ---
 class CanViewOwnBusinessBookings(BasePermission):
     """ Allows access if user has 'view_own_business_bookings' perm AND owns/manages the related business."""
@@ -276,23 +278,55 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
         if booking.status not in ['confirmed', 'pending']:
              raise ValidationError({'status': f'Cannot cancel a booking with status "{booking.status}".'})
 
-        with transaction.atomic():
-            booking.status = 'cancelled'
-            booking.cancelled_at = timezone.now()
-            booking.cancellation_reason = f"Cancelled by business: {cancellation_reason}"
-            # Handle refund logic if applicable
-            if booking.payment_status == 'paid':
-                booking.payment_status = 'refund_pending'
-                # TODO: Trigger refund process
-                logger.info(f"Booking {pk} cancelled by business user {request.user.email}. Marked for refund.")
-            else:
-                 logger.info(f"Booking {pk} cancelled by business user {request.user.email}. No refund needed (Payment Status: {booking.payment_status}).")
+        user_to_notify = booking.user # Get the user associated with the booking
 
-            booking.save(update_fields=['status', 'cancelled_at', 'cancellation_reason', 'payment_status'])
-            # TODO: Notify the student about the cancellation
+        try: # Wrap the entire process in try/except
+            with transaction.atomic():
+                booking.status = 'cancelled'
+                booking.cancelled_at = timezone.now()
+                # Prepend who cancelled it for clarity
+                booking.cancellation_reason = f"Cancelled by business: {cancellation_reason}"
+                # Handle refund logic if applicable (mark as pending, trigger separate process)
+                if booking.payment_status == 'paid':
+                    booking.payment_status = 'refund_pending'
+                    # TODO: Trigger async refund task here if applicable!
+                    logger.info(f"Booking {pk} cancelled by business user {request.user.email}. Marked payment as refund_pending.")
+                else:
+                    logger.info(f"Booking {pk} cancelled by business user {request.user.email}. No refund processing needed (Payment Status: {booking.payment_status}).")
 
-        serializer = BookingDetailSerializer(booking, context={'request': request}) # Return updated detail
-        return Response(serializer.data)
+                booking.save(update_fields=['status', 'cancelled_at', 'cancellation_reason', 'payment_status'])
+
+                try:
+                    contact_info = settings.NOTIFICATION_SETTINGS.get('reply_to', 'support@classeasily.com')
+                    send_booking_cancelled_by_other_email(
+                        user=user_to_notify,
+                        booking=booking,
+                        cancelled_by="the business", # Indicate who cancelled
+                        reason=cancellation_reason, # Pass the reason provided
+                        contact_info=contact_info # Provide support contact
+                    )
+                    logger.info(f"'Cancelled by other' email prepared/queued for user {user_to_notify.email} for booking {booking.id}")
+                except Exception as email_error:
+                    # Log email error but don't fail the cancellation itself
+                    logger.error(f"Failed to send cancellation email for booking {booking.id}: {email_error}", exc_info=True)
+                # *** END ADDED ***
+
+            # Log the cancellation (audit log - if you have one)
+            # self._log_booking_action(booking, 'booking_cancel_business', ...)
+
+            # Return updated booking details using the appropriate serializer
+            serializer = BookingDetailSerializer(booking, context={'request': request}) # Or appropriate serializer
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        except ValidationError as ve: # Catch validation errors specifically
+             logger.warning(f"Validation error during business cancel for booking {pk}: {ve.detail}")
+             return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.error(f"Error during business cancellation for booking {pk}: {e}", exc_info=True)
+            return Response(
+                {'error': 'An error occurred while cancelling the booking.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated]) # Use specific analytics perm
     def analytics(self, request):

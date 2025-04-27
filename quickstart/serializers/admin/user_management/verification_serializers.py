@@ -166,45 +166,50 @@ class VerificationSubmissionSerializer(serializers.ModelSerializer):
 
 class VerificationProcessSerializer(serializers.ModelSerializer):
     """Serializer for admins to process verification requests"""
-    status = serializers.ChoiceField(choices=VerificationRequest.STATUS_CHOICES)
-    
+    # Allow 'approve' and 'reject' from frontend for clarity
+    status = serializers.ChoiceField(choices=[('approve', 'Approve'), ('reject', 'Reject')])
+    # Map these to backend status choices ('approved', 'rejected') in validate/update
+
     class Meta:
         model = VerificationRequest
         fields = ['status', 'rejection_reason', 'notes']
-    
+
     def validate(self, data):
-        # Map frontend values to backend values if needed
-        if 'status' in data:
-            if data['status'] == 'approve':
-                data['status'] = 'approved'
-            elif data['status'] == 'reject':
-                data['status'] = 'rejected'
-                
         # Ensure rejection reason is provided when rejecting
-        if data.get('status') == 'rejected' and not data.get('rejection_reason'):
+        if data.get('status') == 'reject' and not data.get('rejection_reason'):
             raise serializers.ValidationError({
                 'rejection_reason': 'Rejection reason is required when rejecting a request.'
             })
-        
+
+        # Clean rejection_reason if approving
+        if data.get('status') == 'approve':
+            data['rejection_reason'] = '' # Clear rejection reason if approving
+
         return data
-    
+
     def update(self, instance, validated_data):
+        # Map frontend status ('approve'/'reject') to backend status ('approved'/'rejected')
+        backend_status = 'approved' if validated_data['status'] == 'approve' else 'rejected'
+
         # Record who processed the request
         instance.reviewed_by = self.context['request'].user
         instance.reviewed_at = timezone.now()
-        
-        # Update fields
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        
+
+        # Update VerificationRequest fields
+        instance.status = backend_status
+        instance.rejection_reason = validated_data.get('rejection_reason', '')
+        instance.notes = validated_data.get('notes', instance.notes) # Keep existing notes if not provided
+
         instance.save()
-        
-        # Update business verification status too
+
+        # *** UPDATE BUSINESS STATUS AND ACTIVITY ***
         if instance.business:
             if instance.status == 'approved':
-                instance.business.verificationStatus = 'verified'
+                instance.business.verificationStatus = 'verified' # Map 'approved' to 'verified'
+                instance.business.isActive = True # <-- ACTIVATE the business
             elif instance.status == 'rejected':
                 instance.business.verificationStatus = 'rejected'
-            instance.business.save(update_fields=['verificationStatus'])
-        
+                instance.business.isActive = False # <-- Ensure business remains inactive
+            instance.business.save(update_fields=['verificationStatus', 'isActive'])
+
         return instance

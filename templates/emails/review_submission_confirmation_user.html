@@ -1,0 +1,33 @@
+{# templates/emails/review_submission_confirmation_user.html #}
+{# Context required: user (CustomUser), review (Review object), class_name (string), recipient_email (string) #}
+{% extends "emails/base_email.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Review Received!" %}{% endblock %}
+
+{% block content %}
+    <h1>{% trans "Thanks for Your Feedback!" %}</h1>
+    <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
+
+    {# Removed blocktrans AND default filter for maximum simplicity #}
+    <p>
+        Thank you for submitting your review for <strong>{{ class_name }}</strong>. We've received it successfully.
+    </p>
+
+    <p>{% trans "Your feedback helps other students make informed decisions and allows businesses to improve their offerings. Approved reviews are typically visible on the class page shortly." %}</p>
+
+    {% if review %}
+    <div style="background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px; margin: 20px 0; font-style: italic;">
+        <p style="margin-bottom: 4px;"><strong>{% trans "Your Rating:" %}</strong> {{ review.rating }}/5</p>
+        <p style="margin-bottom: 0;"><strong>{% trans "Your Comment Snippet:" %}</strong> "{{ review.comment|truncatewords:30 }}"</p>
+    </div>
+    {% endif %}
+
+    <p>{% trans "We appreciate you taking the time to share your experience!" %}<br>{% trans "The ClassEasily Team" %}</p>
+{% endblock %}
+
+{% block footer_recipient %}
+    {% if recipient_email and recipient_email != "N/A" %}
+        <p>Review confirmation sent to {{ recipient_email }}. Review ID: {{ review.reviewId }}</p>
+    {% endif %}
+{% endblock %}

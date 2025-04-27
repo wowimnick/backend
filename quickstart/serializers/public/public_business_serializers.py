@@ -21,7 +21,6 @@ class PublicBusinessInfoSerializer(serializers.ModelSerializer):
             'businessImage', # URL is generated automatically by storage backend
             'openingTime',
             'closingTime',
-            'cancellationPolicy', # Public policy info
             # Student contacts might be considered public for booking purposes
             'studentContactPhone',
             'studentContactEmail',

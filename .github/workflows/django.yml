@@ -1,4 +1,4 @@
-name: Fix Django App Config and Setup ASGI
+name: Fix Django App Config and Setup ASGI + Celery
 
 on:
   push:
@@ -9,22 +9,22 @@ jobs:
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
-      
+
       - name: Verify working directory
         run: |
           echo "Current directory: $(pwd)"
           ls -la
           echo "CEBackend directory exists: $(test -d CEBackend && echo 'YES' || echo 'NO')"
           echo "quickstart directory exists: $(test -d quickstart && echo 'YES' || echo 'NO')"
-      
+
+      # Keep your Quickstart AppConfig fix if needed
       - name: Fix QuickStart AppConfig
         run: |
-          # Create or update apps.py in the quickstart app
           mkdir -p quickstart
           cat > quickstart/apps.py << 'EOF'
           from django.apps import AppConfig
@@ -35,65 +35,71 @@ jobs:
               path = os.path.dirname(os.path.abspath(__file__))
               default_auto_field = 'django.db.models.BigAutoField'
           EOF
-          
-          # Make sure __init__.py exists
           touch quickstart/__init__.py
-          
-          # Update INSTALLED_APPS in settings.py to use the AppConfig
-          sed -i "s/'quickstart',/'quickstart.apps.QuickstartConfig',/g" CEBackend/settings.py
-          
-          # Verify the change
-          grep -A1 -B1 'QuickstartConfig' CEBackend/settings.py || echo "QuickstartConfig not found in settings.py"
-      
+          # Ensure the sed command targets the correct file path relative to the checkout root
+          if [ -f CEBackend/settings.py ]; then
+            sed -i "s/'quickstart.apps.QuickstartConfig',/'quickstart.apps.QuickstartConfig',/g; s/'quickstart',/'quickstart.apps.QuickstartConfig',/g" CEBackend/settings.py
+            grep -A1 -B1 'QuickstartConfig' CEBackend/settings.py || echo "QuickstartConfig not found in settings.py after attempted fix"
+          else
+             echo "CEBackend/settings.py not found."
+             exit 1
+          fi
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          # Ensure requirements include celery, redis, etc.
           pip install -r requirements.txt
-          pip install daphne channels channels_redis
-      
+          pip install daphne channels channels_redis celery[redis]
+
       - name: Test Django setup directly with proper environment
         run: |
-          # Run Django management command to ensure settings are loaded
           python manage.py check
-          
-          # Test with a simple Django script
+
           cat > test_django.py << 'EOF'
           import os
           import django
-          
+
           os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'CEBackend.settings')
           django.setup()
-          
+
           from django.apps import apps
           print('Available apps:', [app.name for app in apps.get_app_configs()])
           print('QuickstartConfig in apps:', 'quickstart.apps.QuickstartConfig' in [app.name for app in apps.get_app_configs()])
-          
+
           # Test ASGI import
           try:
               from CEBackend.asgi import application
               print('ASGI application imported successfully')
           except Exception as e:
               print(f'ASGI import error: {e}')
+
+          # Test Celery app import
+          try:
+              from CEBackend.celery import app as celery_app
+              print('Celery app imported successfully')
+          except Exception as e:
+              print(f'Celery import error: {e}')
           EOF
-          
+
           python test_django.py
-      
+
       - name: Stop existing services
         run: |
           sudo systemctl stop gunicorn || true
           sudo systemctl stop django-asgi || true
-      
+          sudo systemctl stop celery-worker || true # Add stopping celery
+
       - name: Create ASGI service file
         run: |
           PYTHON_PATH=$(which python)
-          # Get current directory for the service file
           CURRENT_DIR=$(pwd)
-          
+
           sudo tee /etc/systemd/system/django-asgi.service << EOF
           [Unit]
           Description=Django ASGI service with Daphne
-          After=network.target redis.service
-          
+          After=network.target redis.service # Assuming you have redis setup as a service
+
           [Service]
           User=ubuntu
           Group=ubuntu
@@ -105,39 +111,78 @@ jobs:
           StandardError=journal
           Restart=on-failure
           RestartSec=10s
-          
+
           [Install]
           WantedBy=multi-user.target
           EOF
-          
+
+      # --- NEW: Create Celery Worker service file ---
+      - name: Create Celery Worker service file
+        run: |
+          PYTHON_PATH=$(which python)
+          CURRENT_DIR=$(pwd)
+
+          sudo tee /etc/systemd/system/celery-worker.service << EOF
+          [Unit]
+          Description=Celery Worker for CEBackend
+          After=network.target redis.service # Depends on Redis
+
+          [Service]
+          User=ubuntu
+          Group=ubuntu
+          WorkingDirectory=${CURRENT_DIR}
+          Environment="PYTHONUNBUFFERED=1"
+          Environment="DJANGO_SETTINGS_MODULE=CEBackend.settings"
+          # Use python -m celery, point to your Celery app instance in CEBackend/celery.py
+          ExecStart=${PYTHON_PATH} -m celery -A CEBackend worker --loglevel=info
+          StandardOutput=journal
+          StandardError=journal
+          Restart=on-failure
+          RestartSec=10s
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+      # --- END NEW ---
+
+      - name: Reload systemd daemon
+        run: |
           sudo systemctl daemon-reload
-      
+
       - name: Start Django ASGI application
         run: |
           sudo systemctl enable django-asgi
           sudo systemctl restart django-asgi
-          sleep 5
+          sleep 5 # Give it a moment to start/fail
           sudo systemctl status django-asgi || true
-          
-          # Check logs for issues
-          sudo journalctl -xeu django-asgi --no-pager
-      
-      - name: Wait for application to start
+          sudo journalctl -xeu django-asgi --no-pager # Show recent logs regardless of status
+
+      # --- NEW: Start Celery Worker ---
+      - name: Start Celery Worker
+        run: |
+          sudo systemctl enable celery-worker
+          sudo systemctl restart celery-worker
+          sleep 5 # Give it a moment to start/fail
+          sudo systemctl status celery-worker || true
+          sudo journalctl -xeu celery-worker --no-pager # Show recent logs regardless of status
+      # --- END NEW ---
+
+      - name: Wait for ASGI application to start
         run: |
           for i in {1..6}
           do
             if nc -z 127.0.0.1 8000; then
-              echo "✅ Application is running successfully!"
+              echo "✅ ASGI Application is running on port 8000!"
               break
             fi
-            echo "Waiting for application to start... ($i/6)"
+            echo "Waiting for ASGI application to start... ($i/6)"
             sleep 5
           done
-          
+
           if nc -z 127.0.0.1 8000; then
-            echo "✅ Application is running successfully!"
+            echo "✅ ASGI Application check successful!"
           else
-            echo "❌ Application failed to start"
+            echo "❌ ASGI Application failed to start or respond on 127.0.0.1:8000"
             sudo journalctl -u django-asgi -n 50 --no-pager
             exit 1
           fi

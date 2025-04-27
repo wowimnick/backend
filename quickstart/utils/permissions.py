@@ -140,3 +140,57 @@ class CanManageOwnClasses(BasePermission):
              logger.error(f"AttributeError during object permission check for user {user.email} on object {obj}: {e}", exc_info=True)
              return False # Error resolving relationship chain
          
+class IsVerifiedAndActiveBusinessOwnerOrManager(BasePermission):
+    message = "Your business account is not active or verified."
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+
+        # Check if user is associated with *any* business that is active and verified
+        return BusinessInfo.objects.filter(
+            (Q(owner=user) | Q(managers=user)),
+            isActive=True,
+            verificationStatus='verified'
+        ).exists()
+
+    def has_object_permission(self, request, view, obj):
+        # This method might be needed if the permission needs to check against
+        # a specific object (e.g., a ClassMain instance).
+        # Check if the object belongs to an active, verified business managed by the user.
+        user = request.user
+        business = None
+
+        # Determine the business context from the object 'obj'
+        if isinstance(obj, BusinessInfo):
+            business = obj
+        elif hasattr(obj, 'businessId'): # e.g., ClassesMain
+            business = obj.businessId
+        elif hasattr(obj, 'classId') and hasattr(obj.classId, 'businessId'): # e.g., ClassOption, Review
+            business = obj.classId.businessId
+        elif hasattr(obj, 'schedule_instance'): # e.g., Booking
+            try:
+                business = obj.schedule_instance.schedule.option.classId.businessId
+            except AttributeError:
+                 return False # Cannot determine business
+        # Add more cases as needed based on your models
+
+        if not business:
+            return False # Cannot determine business context
+
+        # Check ownership/management AND active/verified status
+        return (
+            (business.owner == user or user in business.managers.all()) and
+            business.isActive is True and
+            business.verificationStatus == 'verified'
+        )
+        
+class CanViewAllVerificationRequests(BasePermission):
+    def has_permission(self, request, view):
+        return request.user.has_perm('quickstart.view_all_verificationrequests')
+
+class CanProcessVerificationRequests(BasePermission):
+    def has_permission(self, request, view):
+        # Also check if the object exists and maybe belongs to the expected scope if needed
+        return request.user.has_perm('quickstart.process_verificationrequest')
