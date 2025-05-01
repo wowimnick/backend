@@ -156,8 +156,8 @@ RESEND_API_KEY = os.environ.get('RESEND_API_KEY', 're_R6FMGC6t_B2T88HHXmcRkmxuBt
 
 # Notification settings
 NOTIFICATION_SETTINGS = {
-    'default_from_email': 'notifications@classeasily.com',
-    'default_from_name': 'Your Company Notifications',
+    'default_from_email': 'noreply@classeasily.com',
+    'default_from_name': 'ClassEasily',
     'reply_to': 'support@classeasily.com',
     'tracking': {
         'opens': True,

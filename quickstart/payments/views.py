@@ -11,7 +11,7 @@ import stripe
 from django.conf import settings
 from ..models import CustomUser, Booking, Payment, ScheduleInstance
 from ..serializers import BookingCreateSerializer, BookingDetailSerializer
-from ..utils.email_utils import send_booking_confirmation_email # Adjust path if needed
+from ..utils.email_utils import send_booking_confirmation_email, send_business_new_booking_email
 
 import logging
 
@@ -213,7 +213,7 @@ class ProcessBookingWebhook(APIView):
             # Invalid payload
             logger.error(f"Webhook Error: Invalid payload. {e}")
             return Response(status=status.HTTP_400_BAD_REQUEST)
-        except stripe.error.SignatureVerificationError as e:
+        except stripe.SignatureVerificationError as e:
             # Invalid signature
             logger.error(f"Webhook Error: Invalid signature. {e}")
             return Response(status=status.HTTP_400_BAD_REQUEST)
@@ -298,7 +298,12 @@ class ProcessBookingWebhook(APIView):
                 try:
                     participants = int(participants_str)
                     user = CustomUser.objects.get(userId=int(user_id))
-                    initial_instance = ScheduleInstance.objects.select_related('schedule__option').get(id=int(first_slot_id))
+                    # Use select_related to fetch business info needed for emails efficiently
+                    initial_instance = ScheduleInstance.objects.select_related(
+                        'schedule__option__classId__businessId__owner' # Fetch owner
+                    ).prefetch_related(
+                        'schedule__option__classId__businessId__managers' # Fetch managers
+                    ).get(id=int(first_slot_id))
                     start_date = timezone.datetime.strptime(start_date_str, '%Y-%m-%d').date()
                 except (ValueError, TypeError, CustomUser.DoesNotExist, ScheduleInstance.DoesNotExist) as e:
                     logger.error(f"Webhook Error: Invalid metadata types or object not found for PI {payment_intent.id}. Error: {e}")
@@ -412,7 +417,7 @@ class ProcessBookingWebhook(APIView):
 
                 logger.info(f"Webhook: Created Payment record {payment.id} for PI {payment_intent.id}")
 
-                # --- Send Confirmation Email (using the utility function) ---
+                # --- Send Confirmation Email to User (using the utility function) ---
                 try:
                     # Send confirmation based on the first booking instance created
                     if created_bookings:
@@ -421,6 +426,29 @@ class ProcessBookingWebhook(APIView):
                 except Exception as email_error:
                     # Log email error but don't fail the whole webhook processing
                     logger.error(f"Webhook: Failed to send confirmation email for booking {created_bookings[0].id} (PI: {payment_intent.id}): {email_error}", exc_info=True)
+
+                # --- MODIFICATION: Send New Booking Email to Business ---
+                try:
+                    if created_bookings:
+                        first_booking = created_bookings[0]
+                        # Find the business user(s) to notify from the pre-fetched instance data
+                        business_info = initial_instance.schedule.option.classId.businessId
+                        if business_info and business_info.newBookingNotification: # Check notification setting
+                            owner = business_info.owner
+                            managers = business_info.managers.all() # Get managers if any
+                            recipients = [owner] + list(managers)
+                            unique_recipients = {recipient for recipient in recipients if recipient and recipient.email} # Ensure unique and valid
+
+                            for business_user in unique_recipients:
+                                send_business_new_booking_email(business_user, first_booking)
+                                logger.info(f"Webhook: New Booking notification email prepared/queued for booking {first_booking.id} to business user {business_user.email}")
+                        else:
+                             logger.info(f"Skipping new booking notification for business {business_info.businessId} (Setting disabled or missing owner)")
+                except AttributeError as ae:
+                     logger.error(f"Webhook: Error accessing business details for notification email for booking {created_bookings[0].id} (PI: {payment_intent.id}): {ae}", exc_info=True)
+                except Exception as email_error:
+                     logger.error(f"Webhook: Failed to send new booking notification email for booking {created_bookings[0].id} (PI: {payment_intent.id}): {email_error}", exc_info=True)
+                # --- END MODIFICATION ---
 
 
                 # Return success, maybe include first booking ID

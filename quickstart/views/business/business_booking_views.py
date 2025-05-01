@@ -1,5 +1,6 @@
 # views/business/business_booking_views.py
 from decimal import Decimal
+from django.conf import settings
 from django.db import models, transaction
 from django.db.models import Q, Sum, Count, Avg, F, Prefetch, Window, Value, FloatField, ExpressionWrapper, Subquery, OuterRef, IntegerField
 from django.db.models.functions import TruncDate, ExtractWeekDay, datetime, Concat, RowNumber, Cast, ExtractHour, Coalesce

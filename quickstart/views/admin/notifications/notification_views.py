@@ -5,7 +5,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, BasePermission # Added BasePermission
 from django.utils import timezone
 from django.db import transaction # Added transaction
-from django.db.models import Q, Count, Sum, Avg, F # Added F, Sum, Avg
+from django.db.models import Q, Count, Sum, Avg, F, Value
 from django.db.models.functions import Coalesce # Added Coalesce
 from rest_framework.pagination import PageNumberPagination
 from ....models import (
@@ -25,7 +25,7 @@ from ....serializers.admin.notifications.notification_serializers import (
     NotificationAttachmentSerializer,
     UserSegmentSerializer
 )
-import resend
+import resend # Ensure resend is imported
 from django.conf import settings
 import json
 import logging
@@ -56,7 +56,7 @@ class AdminNotificationCampaignViewSet(viewsets.ModelViewSet):
     """
     Admin viewset for managing notification campaigns
     """
-    permission_classes = [IsAuthenticated, CanAccessNotificationAdmin] 
+    permission_classes = [IsAuthenticated, CanAccessNotificationAdmin]
     queryset = NotificationCampaign.objects.select_related('created_by').prefetch_related('attachments').all() # Optimize base queryset
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['title', 'subject', 'content', 'created_by__email']
@@ -125,7 +125,7 @@ class AdminNotificationCampaignViewSet(viewsets.ModelViewSet):
 
         # Use perform_create which now handles the created_by field
         self.perform_create(serializer)
-        campaign = serializer.instance 
+        campaign = serializer.instance
 
         # Trigger immediate send if requested and permitted
         if should_send_now:
@@ -335,7 +335,7 @@ class AdminNotificationCampaignViewSet(viewsets.ModelViewSet):
         try:
             segment = UserSegment.objects.get(id=segment_id)
             return self._get_segment_users(segment)
-        except (UserSegment.DoesNotExist, ValueError, TypeError): 
+        except (UserSegment.DoesNotExist, ValueError, TypeError):
             logger.error(f"Segment ID {segment_id} not found or invalid.")
             return CustomUser.objects.none()
 
@@ -415,17 +415,16 @@ class AdminNotificationCampaignViewSet(viewsets.ModelViewSet):
                     queryset = queryset.filter(createdAt__gte=date)
                 except (ValueError, TypeError):
                     logger.warning(f"Invalid date format in segment criteria 'joined_after': {segment.criteria['joined_after']}")
-                    pass 
+                    pass
 
-            return queryset.distinct() 
+            return queryset.distinct()
 
         # Default to empty queryset if no matching logic found
         logger.warning(f"Could not determine user set for segment '{segment_name}' (ID: {segment.id})")
         return CustomUser.objects.none()
 
-    # Internal helper - No permission check needed
     def _send_email_notifications(self, campaign, recipients_info, template_variables=None):
-        """Send email notifications using Resend's batch API (expects list of dicts with email, etc.)"""
+        """Send email notifications using Resend's batch API"""
         successful_sends = 0
         total_recipients = len(recipients_info)
         logger.info(f"Sending email notifications for campaign {campaign.id} to {total_recipients} recipients.")
@@ -435,7 +434,6 @@ class AdminNotificationCampaignViewSet(viewsets.ModelViewSet):
         try:
             for attachment in campaign.attachments.all():
                 try:
-                    # Ensure file pointer is at the beginning
                     attachment.file.seek(0)
                     file_content = attachment.file.read()
                     attachments.append({
@@ -457,17 +455,16 @@ class AdminNotificationCampaignViewSet(viewsets.ModelViewSet):
         template_defaults = getattr(settings, 'EMAIL_TEMPLATE_DEFAULTS', {})
         final_template_vars = {**template_defaults, **(template_variables or {})}
 
-        # --- Sending Logic ---
         notification_settings = getattr(settings, 'NOTIFICATION_SETTINGS', {})
-        default_from_email = notification_settings.get('default_from_email', 'notifications@classeasily.com')
+        default_from_email = notification_settings.get('default_from_email', 'noreply@classeasily.com')
         default_from_name = notification_settings.get('default_from_name', 'ClassEasily Notifications')
         from_email = f"{default_from_name} <{default_from_email}>"
 
-        batch_size = 100
+        batch_size = 100 # Resend batch limit is often 100
 
         for i in range(0, total_recipients, batch_size):
             batch_info = recipients_info[i:i+batch_size]
-            batch_emails_payload = []
+            batch_emails_payload = [] # This is the list of email objects
             logger.info(f"Processing email batch {i//batch_size + 1}/{ (total_recipients + batch_size - 1)//batch_size }, size: {len(batch_info)}")
 
             for recipient_info in batch_info:
@@ -493,29 +490,33 @@ class AdminNotificationCampaignViewSet(viewsets.ModelViewSet):
                      personalized_text = personalized_text.replace("{{name}}", recipient_name)
                      personalized_text = personalized_text.replace("{{email}}", recipient_email)
 
+                     # Construct the individual email payload (dictionary)
                      email_payload = {
                          "from": from_email,
-                         "to": recipient_email,
+                         "to": [recipient_email], # Resend batch expects 'to' to be a list
                          "subject": subject,
                          "text": personalized_text,
                      }
                      if personalized_html: email_payload["html"] = personalized_html
                      if attachments: email_payload["attachments"] = attachments
 
+                     # Add the dictionary to the list
                      batch_emails_payload.append(email_payload)
 
                  except Exception as e:
                       logger.error(f"Error preparing email payload for {recipient_email}: {str(e)}")
 
-            # Send the batch
+            # Send the batch using resend.Batch.send()
             if batch_emails_payload:
                 try:
                     if not resend.api_key: raise ValueError("Resend API key not configured.")
                     logger.info(f"Sending batch of {len(batch_emails_payload)} emails via Resend...")
-                    response = resend.Emails.send(batch_emails_payload) # Use batch method
+                    # *** USE THE CORRECT BATCH METHOD ***
+                    response = resend.Batch.send(batch_emails_payload)
+                    # ***********************************
                     logger.debug(f"Resend API Response: {response}")
 
-                    # Process response
+                    # Process response (The response handling seems correct for batch)
                     if isinstance(response, dict) and 'data' in response and isinstance(response['data'], list):
                          batch_success_count = sum(1 for item in response['data'] if isinstance(item, dict) and item.get('id'))
                          successful_sends += batch_success_count
@@ -533,14 +534,13 @@ class AdminNotificationCampaignViewSet(viewsets.ModelViewSet):
                     logger.error(f"Error sending email batch {i//batch_size + 1} via Resend: {str(e)}", exc_info=True)
                     campaign.error_message = (campaign.error_message or "") + f"\nError sending batch {i//batch_size + 1}: {str(e)}"
 
-            # Delay between batches
-            if i + batch_size < total_recipients: time.sleep(0.5)
+            # Delay between batches if needed
+            if i + batch_size < total_recipients: time.sleep(0.5) # Small delay
 
         # Update campaign stats after all batches
         campaign.delivered_count = successful_sends
         campaign.success_rate = (successful_sends / total_recipients * 100) if total_recipients > 0 else 0.0
         logger.info(f"Email sending complete for campaign {campaign.id}. Delivered: {successful_sends}/{total_recipients}, Rate: {campaign.success_rate:.2f}%")
-
 
     # Internal helper - No permission check needed
     def _send_sms_notifications(self, campaign, recipients_info):
@@ -638,18 +638,29 @@ class AdminNotificationCampaignViewSet(viewsets.ModelViewSet):
             total_sent=Count('id', filter=Q(status='sent')),
             pending=Count('id', filter=Q(status='scheduled')),
             drafts=Count('id', filter=Q(status='draft')),
-            failed=Count('id', filter=Q(status='failed'))
+            failed=Count('id', filter=Q(status='failed')),
+            # Calculate average success rate across sent campaigns
+            average_success_rate=Coalesce(Avg('success_rate', filter=Q(status='sent')), Value(0.0))
         )
 
         # Group by type/audience
         by_type = list(NotificationCampaign.objects.values('notification_type').annotate(count=Count('id')).order_by())
         by_audience = list(NotificationCampaign.objects.values('audience_type').annotate(count=Count('id')).order_by())
 
-        # Success rate trend
+        # Success rate trend (fetch more details if needed)
         recent_campaigns = NotificationCampaign.objects.filter(status='sent').order_by('-sent_at')[:5]
         success_trend = [{'title': c.title, 'rate': round(c.success_rate,1), 'sent_at': c.sent_at} for c in recent_campaigns]
 
-        return Response({**counts, 'by_type': by_type, 'by_audience': by_audience, 'success_trend': success_trend})
+        return Response({
+            'total_sent': counts['total_sent'],
+            'pending_notifications': counts['pending'], # Renamed key for clarity
+            'drafts': counts['drafts'],
+            'failed': counts['failed'],
+            'average_success_rate': counts['average_success_rate'], # Added avg rate
+            'by_type': by_type,
+            'by_audience': by_audience,
+            'success_trend': success_trend
+        })
 
 
 # --- AdminUserSegmentViewSet ---
@@ -659,14 +670,14 @@ class SimplePageNumberPagination(PageNumberPagination):
     page_size_query_param = 'page_size'
     max_page_size = 200
 
-class AdminUserSegmentViewSet(viewsets.ReadOnlyModelViewSet): 
+class AdminUserSegmentViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Admin viewset for managing user segments (primarily read-only via API)
     """
-    permission_classes = [IsAuthenticated, CanAccessSegmentAdmin] 
+    permission_classes = [IsAuthenticated, CanAccessSegmentAdmin]
     serializer_class = UserSegmentSerializer
-    queryset = UserSegment.objects.order_by('name') 
-    http_method_names = ['get', 'post', 'head', 'options'] 
+    queryset = UserSegment.objects.order_by('name')
+    http_method_names = ['get', 'post', 'head', 'options']
     pagination_class = SimplePageNumberPagination
 
     # Reuse helper from campaign viewset
@@ -757,7 +768,7 @@ class AdminUserSegmentViewSet(viewsets.ReadOnlyModelViewSet):
 
         # All users segment
         _, created = UserSegment.objects.get_or_create(
-            name="all_users", defaults={'description': "All active users"} 
+            name="all_users", defaults={'description': "All active users"}
         )
         if created: created_segments_count += 1
 
@@ -800,7 +811,8 @@ class AdminUserSegmentViewSet(viewsets.ReadOnlyModelViewSet):
         # Select only necessary fields for performance
         users_qs = self._get_segment_users(segment).filter(is_active=True).only(
             'userId', 'email', 'first_name', 'last_name', 'avatar' # Add avatar if needed
-        )
+        ).order_by('last_name', 'first_name') # Add ordering
+
 
         paginator = self.pagination_class()
         paginated_users = paginator.paginate_queryset(users_qs, request, view=self)
@@ -820,17 +832,19 @@ class AdminUserSegmentViewSet(viewsets.ReadOnlyModelViewSet):
                      'name': user.get_full_name() or user.email,
                      'avatar_url': avatar_url # Include avatar URL
                  })
-        else:
+        else: # Fallback if pagination is somehow disabled
              user_data = [
                  { 'id': user.userId, 'email': user.email, 'name': user.get_full_name() or user.email, 'avatar_url': user.get_avatar_url() if hasattr(user, 'get_avatar_url') else (user.avatar.url if user.avatar else None) }
                  for user in users_qs # Iterate directly over the queryset
              ]
 
         if paginated_users is not None:
+             # Use paginator's method to get the response with headers/count
              return paginator.get_paginated_response(user_data)
 
         # Fallback if no pagination class was somehow assigned
-        return Response({'count': users_qs.count(), 'users': user_data})
+        # Provide data structure consistent with pagination response
+        return Response({'count': users_qs.count(), 'next': None, 'previous': None, 'results': user_data})
 
     # Add action to manually trigger refresh
     @action(detail=False, methods=['post'], url_path='refresh-counts')

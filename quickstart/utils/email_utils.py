@@ -3,7 +3,7 @@ from django.core.mail import EmailMultiAlternatives # Keep for type hints maybe
 from django.template.loader import render_to_string
 from django.conf import settings
 from django.utils import timezone
-from typing import Optional
+from typing import List, Optional
 import logging
 
 logger = logging.getLogger(__name__)
@@ -355,6 +355,44 @@ def send_booking_reminder_email(user: CustomUser, booking: Booking):
     )
     logger.info(f"Booking reminder email prepared/queued for booking {booking.id}")
 
+def send_admin_new_verification_request_email(admin_recipient_list: List[str], verification_request: VerificationRequest):
+    """Notifies designated admins about a new verification request."""
+    if not admin_recipient_list:
+        logger.warning("No admin recipients provided for new verification request notification.")
+        return
+    if not verification_request:
+        logger.warning("Attempted to send new verification request email with invalid request object.")
+        return
+
+    try:
+        user = verification_request.user
+        business = verification_request.business
+        business_name = business.businessName if business else "N/A"
+        user_email = user.email if user else "N/A"
+    except AttributeError:
+        logger.error(f"Could not access related data for verification request {verification_request.id} when sending admin notification.")
+        return
+
+    logger.info(f"Preparing new verification request notification email for request {verification_request.id} to admins: {admin_recipient_list}")
+
+    # Construct URL to the admin verification section (adjust path as needed)
+    verification_url = f"{settings.FRONTEND_BASE_URL}/admin/verification/{verification_request.id}" # Example URL
+
+    context = {
+        'verification_request': verification_request,
+        'user': user,
+        'business': business,
+        'verification_url': verification_url,
+        'recipient_email': ", ".join(admin_recipient_list), # For footer context, list all admins
+    }
+    send_templated_email(
+        recipient_list=admin_recipient_list,
+        template_name='emails/admin_new_verification_request.html',
+        context=context,
+        subject=f"New Verification Request Submitted: {business_name} ({user_email})"
+    )
+    logger.info(f"New verification request email prepared/queued for request {verification_request.id}")
+    
 def send_review_submission_confirmation_email(user: CustomUser, review: Reviews):
     """Sends confirmation after a user submits a review."""
     if not user or not user.email or not review:
