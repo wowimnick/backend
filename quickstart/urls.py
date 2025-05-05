@@ -4,6 +4,7 @@ from dj_rest_auth.registration.views import VerifyEmailView, ResendEmailVerifica
 from dj_rest_auth.views import PasswordResetConfirmView
 from django.urls import path, include, re_path
 from django.views.generic import TemplateView
+from django.contrib import admin
 
 from .views.admin.metrics_monitoring.admin_metrics_views import AdminMetricsView
 from .views.admin.notifications.notification_views import AdminNotificationAttachmentViewSet, AdminNotificationCampaignViewSet, AdminUserSegmentViewSet
@@ -80,6 +81,8 @@ admin_router.register(r'notification-attachments', AdminNotificationAttachmentVi
 urlpatterns = [
     # Silk profiler (keep at top if used)
     path('silk/', include('silk.urls', namespace='silk')),
+    path('admin/panel/', admin.site.urls), # Django admin panel
+    path('admin/silk/', include('silk.urls', namespace='silk')),
 
     # Include Routers - Order can matter if paths overlap, but bases are distinct here
     path('admin/', include(admin_router.urls)), 
@@ -177,4 +180,5 @@ urlpatterns = [
     # Verification (User - Actions are within VerificationRequestViewSet in admin_router, maybe needs user actions?)
     # path('verification/submit/', VerificationRequestViewSet.as_view({'post': 'submit_verification'}), name='submit-verification'), # Example user action if needed
 
+    re_path(r'^.*$', TemplateView.as_view(template_name='index.html')), # Catch-all for frontend routing (React Router)
 ]
