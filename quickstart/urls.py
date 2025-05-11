@@ -79,10 +79,8 @@ admin_router.register(r'notification-attachments', AdminNotificationAttachmentVi
 
 # --- Main URL Patterns ---
 urlpatterns = [
-    # Silk profiler (keep at top if used)
-    path('silk/', include('silk.urls', namespace='silk')),
+    path('admin/silk/', include('silk.urls', namespace='admin_silk')),
     path('admin/panel/', admin.site.urls), # Django admin panel
-    path('admin/silk/', include('silk.urls', namespace='silk')),
 
     # Include Routers - Order can matter if paths overlap, but bases are distinct here
     path('admin/', include(admin_router.urls)), 
