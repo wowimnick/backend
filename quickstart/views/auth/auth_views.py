@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
+from rest_framework.permissions import IsAuthenticated
 from dj_rest_auth.registration.views import RegisterView
 from django.contrib.auth import get_user_model
 from django.conf import settings
@@ -137,18 +138,23 @@ class CustomTokenRefreshView(APIView):
             return response
 
 class UserUpdateView(APIView):
+    permission_classes = [IsAuthenticated] 
+
     def patch(self, request):
-        print("Received data:", request.data)  # Add this for debugging
+        print(f"UserUpdateView: Authenticated user: {request.user.email if request.user.is_authenticated else 'Anonymous'}") # Debug log
+        print("Received data:", request.data)
+
         serializer = CustomUserDetailsSerializer(
-            request.user,
+            request.user, # This should now be the authenticated user instance
             data=request.data,
-            partial=True
+            partial=True,
+            context={'request': request} # Good practice to pass request context
         )
         if serializer.is_valid():
-            print("Valid data:", serializer.validated_data)  
+            print("Valid data:", serializer.validated_data)
             serializer.save()
             return Response(serializer.data)
-        print("Serializer errors:", serializer.errors) 
+        print("Serializer errors:", serializer.errors)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class LogoutView(APIView):

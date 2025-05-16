@@ -78,28 +78,28 @@ class AdminBookingPaymentSerializer(serializers.ModelSerializer):
         ]
 
 class AdminBookingListSerializer(serializers.ModelSerializer):
-    class_name = serializers.CharField(source='schedule_instance.schedule.option.classId.title')
-    option_name = serializers.CharField(source='schedule_instance.schedule.option.title')
+    class_name = serializers.CharField(source='schedule_instance.schedule.option.classId.title', read_only=True, allow_null=True) # Added allow_null
+    option_name = serializers.CharField(source='schedule_instance.schedule.option.title', read_only=True, allow_null=True) # Added allow_null
     user_name = serializers.SerializerMethodField()
-    user_email = serializers.CharField(source='user.email')
-    date = serializers.DateField(source='schedule_instance.date')
-    time = serializers.TimeField(source='schedule_instance.time')
-    duration = serializers.IntegerField(source='schedule_instance.schedule.duration')
-    booking_type = serializers.CharField(source='enrollment_type')
+    user_email = serializers.CharField(source='user.email', read_only=True)
+    business_name = serializers.CharField(source='schedule_instance.schedule.option.classId.businessId.businessName', read_only=True, allow_null=True) # ADDED THIS
+    date = serializers.DateField(source='schedule_instance.date', read_only=True)
+    time = serializers.TimeField(source='schedule_instance.time', read_only=True)
+    duration = serializers.IntegerField(source='schedule_instance.schedule.duration', read_only=True)
     session_info = serializers.SerializerMethodField()
     payment = serializers.SerializerMethodField()
+    user = serializers.PrimaryKeyRelatedField(read_only=True) # Or a nested serializer
 
     class Meta:
         model = Booking
         fields = [
-            'id', 'user_name', 'user_email', 'class_name',
+            'id', 'user', 'user_name', 'user_email', 'class_name', 'business_name', # Added business_name
             'option_name', 'date', 'time', 'duration',
-            'participants', 'status', 'enrollment_type',
-            'booking_type', 'amount_paid', 'payment_status',
+            'participants', 'status', 'enrollment_type', # Replaced booking_type with enrollment_type
+            'amount_paid', 'payment_status',
             'notes', 'booking_date', 'attendance_marked',
             'attended', 'session_info', 'payment'
         ]
-
     def get_user_name(self, obj):
         return f"{obj.user.first_name} {obj.user.last_name}".strip()
     
