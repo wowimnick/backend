@@ -29,6 +29,7 @@ from .business.business_class_views import (
     BusinessScheduleViewSet,
     BusinessScheduleInstanceViewSet,
     BusinessScheduleBreakViewSet,
+    PublicCategoryViewSet,
 )
 
 from .public.user_profile_views import MyProfileView
@@ -89,6 +90,7 @@ __all__ = [
     'BusinessScheduleInstanceViewSet',
     'BusinessScheduleBreakViewSet',
     'PublicScheduleViewSet',
+    'PublicCategoryViewSet',
     
     # Favorite Views
     'MyFavoritesListView',

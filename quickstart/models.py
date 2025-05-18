@@ -7,11 +7,16 @@ from django.contrib.auth.models import AbstractUser, Permission
 from django.contrib.contenttypes.models import ContentType
 from storages.backends.s3boto3 import S3Boto3Storage
 from django.core.validators import MinValueValidator, MaxValueValidator
+from django.contrib.postgres.search import SearchVectorField
+from django.contrib.postgres.search import SearchVector
+from django.contrib.postgres.indexes import GinIndex
 from django.core.exceptions import ValidationError
-from django.db.models import Count, Case, When, DecimalField, Sum, JSONField, Avg, F
+from django.db.models import Count, Case, When, DecimalField, Sum, JSONField, Avg, Value
 from django.db.models.functions import Coalesce
 from decimal import Decimal
 from django.utils import timezone
+from django.db.models.signals import post_save, post_delete 
+from django.dispatch import receiver
 import jsonfield
 import uuid
 
@@ -50,7 +55,7 @@ class VerificationRequest(models.Model):
 
     STATUS_CHOICES = [
         ('pending', 'Pending'),
-        ('approved', 'Approved'),
+        ('verified', 'Verified'),
         ('rejected', 'Rejected')
     ]
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
@@ -404,7 +409,7 @@ class BusinessInfo(models.Model):
     )
     verificationStatus = models.CharField(max_length=20, choices=[
         ('pending', 'Pending'),
-        ('verified', 'Verified'), # NOTE: Should match VerificationRequest status choices
+        ('verified', 'Verified'), 
         ('rejected', 'Rejected')
     ], default='pending', db_index=True) # Added index
     termsAccepted = models.BooleanField(default=False)
@@ -557,54 +562,131 @@ class ClassSubcategory(models.Model):
 
 class ClassesMain(models.Model):
     classId = models.AutoField(primary_key=True)
-    businessId = models.ForeignKey('BusinessInfo', on_delete=models.CASCADE)
-
-    # Basic Info Fields
+    # Use a unique related_name to avoid clashes if BusinessInfo has other FKs to ClassesMain
+    businessId = models.ForeignKey('BusinessInfo', on_delete=models.CASCADE, related_name='classes_taught')
     title = models.CharField(max_length=100)
     description = models.TextField(max_length=2000)
-    features = models.JSONField(default=list)  # Store as JSON array
-    category = models.ForeignKey(ClassCategory, on_delete=models.SET_NULL, null=True, related_name='classes')
-    subcategory = models.ForeignKey(ClassSubcategory, on_delete=models.SET_NULL, null=True, blank=True, related_name='classes')
-
-    STATUS_CHOICES = [
-        ('active', 'Active'),
-        ('inactive', 'Inactive'),
-        ('suspended', 'Suspended')
-    ]
-    status = models.CharField(
-        max_length=20,
-        choices=STATUS_CHOICES,
-        default='active'
-    )
-
-    # Location Fields
+    features = models.JSONField(default=list)
+    category = models.ForeignKey(ClassCategory, on_delete=models.SET_NULL, null=True, related_name='classes_in_category')
+    subcategory = models.ForeignKey(ClassSubcategory, on_delete=models.SET_NULL, null=True, blank=True, related_name='classes_in_subcategory')
+    STATUS_CHOICES = [('active', 'Active'), ('inactive', 'Inactive'), ('suspended', 'Suspended')]
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
     location = models.CharField(max_length=255)
-    coordinates = models.CharField(max_length=50)  # "lat,long" format
+    coordinates = models.CharField(max_length=50)
     saltLocation = models.BooleanField(default=False)
-
-    # Contact Fields
     studentContactEmail = models.EmailField(null=True, blank=True)
     studentContactPhone = models.CharField(max_length=20, null=True, blank=True)
     adminContactEmail = models.EmailField(null=True, blank=True)
     adminContactPhone = models.CharField(max_length=20, null=True, blank=True)
-
+    search_vector = SearchVectorField(null=True, editable=False)
     createdAt = models.DateTimeField(auto_now_add=True)
     updatedAt = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = 'classes'
         indexes = [
-            models.Index(fields=['coordinates']),
-            models.Index(fields=['location']),
-            models.Index(fields=['businessId']),
-            models.Index(fields=['status'])
+            models.Index(fields=['coordinates']), models.Index(fields=['location']),
+            models.Index(fields=['businessId']), models.Index(fields=['status']),
+            GinIndex(fields=['search_vector'])
         ]
         permissions = [
-            ("change_class_status", "Can change the status (active/inactive/suspended) of any class"),
-            ("view_class_analytics", "Can view aggregated class analytics"),
-            ("export_class_data", "Can export class data"),
-            ("access_class_admin", "Can access the Class Administration section"),
+            ("change_class_status", "Can change class status"), ("view_class_analytics", "View class analytics"),
+            ("export_class_data", "Can export class data"), ("access_class_admin", "Access Class Admin")
         ]
+    def __str__(self): return self.title
+
+# --- Signal Handlers to Update Search Vector for ClassesMain ---
+def get_classesmain_search_vector(instance: ClassesMain):
+    """Helper function to construct the search vector for a ClassesMain instance."""
+    vector_components = [
+        SearchVector(Value(instance.title), weight='A', config='english'), # title field
+        SearchVector(Value(instance.description), weight='B', config='english'), # description field
+    ]
+    if instance.businessId:
+        vector_components.append(SearchVector(Value(instance.businessId.businessName), weight='B', config='english'))
+    if instance.category:
+        vector_components.append(SearchVector(Value(instance.category.name), weight='C', config='pg_catalog.english'))
+    if instance.subcategory:
+        vector_components.append(SearchVector(Value(instance.subcategory.name), weight='D', config='pg_catalog.english'))
+    
+    try:
+        if instance.pk and hasattr(instance, 'options') and instance.options.exists():
+            related_options_titles = " ".join(instance.options.values_list('title', flat=True))
+            if related_options_titles:
+                vector_components.append(SearchVector(Value(related_options_titles), weight='C', config='pg_catalog.english'))
+    except AttributeError: pass # options might not be loaded or related_name is different
+        
+    if not vector_components: return SearchVector(Value('')) # Return empty vector if no components
+
+    final_vector = vector_components[0]
+    for component in vector_components[1:]:
+        final_vector += component
+    return final_vector
+
+@receiver(post_save, sender=ClassesMain)
+def classesmain_post_save_receiver(sender, instance, created, update_fields, **kwargs):
+    if kwargs.get('raw', False): return # Skip for fixture loading
+
+    # Determine if vector needs update: new, or relevant fields changed (simplified)
+    # A more robust check would compare old values of text fields to new values.
+    should_update = created
+    if not created and update_fields:
+        text_fields = {'title', 'description'} # Fields on ClassesMain itself
+        if any(f in update_fields for f in text_fields):
+            should_update = True
+    elif not created and update_fields is None: # Full save, assume update needed
+        should_update = True
+
+    if should_update:
+        new_vector = get_classesmain_search_vector(instance)
+        # Update only if vector changed to avoid recursion if a field in vector didn't change
+        # This direct comparison might not be perfect.
+        if instance.search_vector != new_vector: # Check if change is needed
+            ClassesMain.objects.filter(pk=instance.pk).update(search_vector=new_vector)
+            # logger.info(f"Search vector updated for ClassesMain {instance.pk}")
+
+
+APP_LABEL = 'quickstart' 
+
+@receiver(post_save, sender=f'{APP_LABEL}.ClassOption')
+@receiver(post_delete, sender=f'{APP_LABEL}.ClassOption') # Also update on delete
+def classoption_change_receiver(sender, instance, **kwargs):
+    if hasattr(instance, 'classId') and instance.classId:
+        class_instance = instance.classId
+        new_vector = get_classesmain_search_vector(class_instance)
+        if class_instance.search_vector != new_vector:
+            ClassesMain.objects.filter(pk=class_instance.pk).update(search_vector=new_vector)
+            # logger.info(f"SV for Class {class_instance.pk} updated due to ClassOption change.")
+
+@receiver(post_save, sender=f'{APP_LABEL}.BusinessInfo')
+def businessinfo_change_receiver(sender, instance, update_fields, **kwargs):
+    if kwargs.get('raw', False): return
+    if update_fields is None or 'businessName' in update_fields:
+        for class_instance in ClassesMain.objects.filter(businessId=instance):
+            new_vector = get_classesmain_search_vector(class_instance)
+            if class_instance.search_vector != new_vector:
+                ClassesMain.objects.filter(pk=class_instance.pk).update(search_vector=new_vector)
+                # logger.info(f"SV for Class {class_instance.pk} updated due to BusinessInfo name change.")
+
+@receiver(post_save, sender=f'{APP_LABEL}.ClassCategory')
+def classcategory_change_receiver(sender, instance, update_fields, **kwargs):
+    if kwargs.get('raw', False): return
+    if update_fields is None or 'name' in update_fields:
+        for class_instance in ClassesMain.objects.filter(category=instance):
+            new_vector = get_classesmain_search_vector(class_instance)
+            if class_instance.search_vector != new_vector:
+                 ClassesMain.objects.filter(pk=class_instance.pk).update(search_vector=new_vector)
+                 # logger.info(f"SV for Class {class_instance.pk} updated due to ClassCategory name change.")
+
+@receiver(post_save, sender=f'{APP_LABEL}.ClassSubcategory')
+def classsubcategory_change_receiver(sender, instance, update_fields, **kwargs):
+    if kwargs.get('raw', False): return
+    if update_fields is None or 'name' in update_fields:
+        for class_instance in ClassesMain.objects.filter(subcategory=instance):
+            new_vector = get_classesmain_search_vector(class_instance)
+            if class_instance.search_vector != new_vector:
+                 ClassesMain.objects.filter(pk=class_instance.pk).update(search_vector=new_vector)
+                 # logger.info(f"SV for Class {class_instance.pk} updated due to ClassSubcategory name change.")
 
 class Favorites(models.Model):
     favoriteId = models.AutoField(primary_key=True)

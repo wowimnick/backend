@@ -1,6 +1,7 @@
 # serializers/classes/public_class_serializers.py
 from rest_framework import serializers
 from ...models import ClassesMain, ClassImage, ClassOption, Schedule, Reviews
+from django.utils import timezone
 from django.db.models import Avg
 import logging
 from random import uniform # For coordinate salting if needed here
@@ -22,7 +23,7 @@ class PublicScheduleSerializer(serializers.ModelSerializer):
 
 class PublicClassOptionSerializer(serializers.ModelSerializer):
     """Serializer for publicly displaying class options."""
-    schedules = PublicScheduleSerializer(many=True, read_only=True)
+    schedules = serializers.SerializerMethodField()
     image_url = serializers.SerializerMethodField()
 
     class Meta:
@@ -47,15 +48,46 @@ class PublicClassOptionSerializer(serializers.ModelSerializer):
             except ValueError:
                  return None
         return None
+    
+    def get_schedules(self, option_instance: ClassOption):
+        """
+        Returns only active and future schedules for the given class option.
+        """
+        today = timezone.now().date()
+        
+        # Access schedules related to the option_instance.
+        # This relies on proper prefetching in the ViewSet to be efficient.
+        # The prefetch should ensure that option_instance.schedules.all()
+        # returns only schedules where `is_active=True`.
+        active_schedules = option_instance.schedules.all()
+
+        future_schedules_objects = []
+        for schedule_obj in active_schedules: # Iterate over actual Schedule model instances
+            is_future = False
+            if option_instance.booking_type == 'Full Course':
+                # For courses, relevant if its end_date is today or in the future.
+                if schedule_obj.end_date and schedule_obj.end_date >= today:
+                    is_future = True
+            else: # Single Session
+                # For single sessions, relevant if its date is today or in the future.
+                if schedule_obj.date and schedule_obj.date >= today:
+                    is_future = True
+            
+            if is_future:
+                future_schedules_objects.append(schedule_obj)
+        
+        # Serialize only the filtered future schedules
+        return PublicScheduleSerializer(future_schedules_objects, many=True, context=self.context).data
 
 class PublicClassSerializer(serializers.ModelSerializer):
     """Serializer for public listing and detail view of classes."""
     options = PublicClassOptionSerializer(many=True, read_only=True)
+    images = PublicClassImageSerializer(many=True, read_only=True) # <--- ADD THIS LINE
     business_name = serializers.CharField(source='businessId.businessName', read_only=True)
     business_image = serializers.SerializerMethodField(read_only=True)
-    coordinates = serializers.SerializerMethodField(read_only=True) # Handles salting
-    average_rating = serializers.FloatField(read_only=True) # Assumes annotated in view
-    review_count = serializers.IntegerField(read_only=True) # Assumes annotated in view
+    coordinates = serializers.SerializerMethodField(read_only=True)
+    average_rating = serializers.FloatField(read_only=True)
+    review_count = serializers.IntegerField(read_only=True)
     featured = serializers.BooleanField(source='businessId.featured', read_only=True)
     category_name = serializers.CharField(source='category.name', read_only=True, allow_null=True)
     subcategory_name = serializers.CharField(source='subcategory.name', read_only=True, allow_null=True)
@@ -64,19 +96,19 @@ class PublicClassSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ClassesMain
-        # Explicitly list fields safe for public view
         fields = [
             'classId', 'businessId', 'title', 'description',
-            'features', 
+            'features',
             'category_name',
             'subcategory_name',
-            'coordinates', # Salted coordinates from method
-            'studentContactEmail', 
-            'studentContactPhone', 
+            'coordinates',
+            'studentContactEmail',
+            'studentContactPhone',
             'createdAt',
             'business_name',
             'business_image',
             'options',
+            'images',  
             'average_rating',
             'review_count',
             'featured',
@@ -93,7 +125,6 @@ class PublicClassSerializer(serializers.ModelSerializer):
         return None
 
     def get_coordinates(self, obj):
-        # Keep existing salting logic from original serializer
         if not obj.coordinates: return None
         try:
             lat, lng = map(float, obj.coordinates.split(','))
@@ -106,12 +137,9 @@ class PublicClassSerializer(serializers.ModelSerializer):
         except (ValueError, TypeError):
              logger.warning(f"Invalid public coordinates format for Class {obj.classId}: {obj.coordinates}")
              return None
-         
+
     def get_is_favorited(self, obj):
-        """Checks if the current user (if authenticated) has favorited this class."""
         request = self.context.get('request')
         if request and hasattr(request, 'user') and request.user.is_authenticated:
-            # Check if the class object exists in the user's favorited set
-            # Use obj.pk for efficiency if the full object isn't needed for the check
             return request.user.favorited.filter(pk=obj.pk).exists()
         return False

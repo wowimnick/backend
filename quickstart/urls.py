@@ -29,7 +29,7 @@ from .views import (
     RevenueAnalyticsView,  ReviewSubmission, ChatMessageView, UserSupportTicketViewSet, CreateSupportTicketView,
     BusinessClassViewSet, BusinessClassOptionDetail, BusinessScheduleViewSet, 
     BusinessScheduleInstanceViewSet, BusinessScheduleBreakViewSet, PublicClassViewSet, PublicScheduleViewSet,
-    BusinessReviewViewSet, MyBusinessOverviewView, MyFavoritesListView,
+    BusinessReviewViewSet, MyBusinessOverviewView, MyFavoritesListView, PublicCategoryViewSet
 )
 
 # Router for Publicly Accessible Read-Only Endpoints (Base: /api/)
@@ -37,6 +37,7 @@ public_router = DefaultRouter()
 public_router.register(r'businesses', PublicBusinessInfoViewSet, basename='public-business')
 public_router.register(r'classes', PublicClassViewSet, basename='public-class')
 public_router.register(r'schedules', PublicScheduleViewSet, basename='public-schedule')
+public_router.register(r'categories', PublicCategoryViewSet, basename='public-categories')
 
 # Router for Business Management Endpoints (Base: /api/business/)
 # Note: We map specific viewsets here, even if they could fit elsewhere,

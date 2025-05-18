@@ -1,5 +1,5 @@
 from decimal import Decimal
-from rest_framework import viewsets, status, filters, generics
+from rest_framework import viewsets, status, filters, generics, permissions
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -12,7 +12,9 @@ from django.shortcuts import get_object_or_404
 from django.http import Http404
 import logging
 import json
-from django.utils import timezone 
+from django.utils import timezone
+
+from quickstart.serializers.admin.class_management.class_management_serializers import AdminClassCategorySerializer 
 
 from ...models import (
     BusinessInfo, ClassCategory, ClassSubcategory, ClassesMain, ClassImage,
@@ -29,6 +31,19 @@ from ...utils.permissions import CanManageOwnClasses, IsVerifiedAndActiveBusines
 logger = logging.getLogger(__name__)
 
 # --- Business ViewSet for Managing Classes ---
+
+class PublicCategoryViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Provides a list of class categories and their subcategories.
+    Accessible by authenticated users (e.g., business owners creating classes).
+    """
+    permission_classes = [permissions.IsAuthenticated] # Or AllowAny if categories are fully public
+    serializer_class = AdminClassCategorySerializer # Adjust if a different serializer is needed
+    queryset = ClassCategory.objects.prefetch_related('subcategories').order_by('name')
+
+    def list(self, request, *args, **kwargs):
+        # Standard list action, queryset and serializer handle the rest
+        return super().list(request, *args, **kwargs)
 
 class BusinessClassViewSet(viewsets.ModelViewSet):
     """
@@ -480,8 +495,6 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
 
 
 # --- Views for related models (Options, Schedules, Instances, Breaks) ---
-# These remain largely the same as the previous refactored versions,
-# ensuring they use CanManageOwnClasses and filter by the business context.
 
 class BusinessClassOptionDetail(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = ManagedClassOptionSerializer
