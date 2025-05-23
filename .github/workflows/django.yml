@@ -133,7 +133,7 @@ jobs:
           WorkingDirectory=${CURRENT_DIR}
           Environment="PYTHONUNBUFFERED=1"
           Environment="DJANGO_SETTINGS_MODULE=CEBackend.settings"
-          ExecStart=${PYTHON_PATH} -m celery -A CEBackend.celery worker --loglevel=info
+          ExecStart=${PYTHON_PATH} -m celery -A CEBackend.celery worker --loglevel=DEBUG
           StandardOutput=journal
           StandardError=journal
           Restart=on-failure
