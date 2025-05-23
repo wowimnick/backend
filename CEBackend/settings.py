@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/4.1/ref/settings/
 """
 
 import os
+import ssl
 from dotenv import load_dotenv
 from pathlib import Path
 from datetime import timedelta
@@ -319,12 +320,15 @@ FRONTEND_PASSWORD_RESET_CONFIRM_PATH = '/reset-password/{uid}/{token}/'
 # Use Redis as the broker
 # Ensure Redis is running: redis-server
 # Use database number 1 to avoid conflicts with cache if using Redis for cache too
-CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'redis://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379/1')
+CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379/1') 
+CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379/2')
 
-# Use Redis as the result backend (optional, but useful for tracking task status)
-# Use database number 2
-CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'redis://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379/2')
-
+CELERY_BROKER_USE_SSL = {
+      'ssl_cert_reqs': ssl.CERT_NONE
+  }
+CELERY_REDIS_BACKEND_USE_SSL = {
+      'ssl_cert_reqs': ssl.CERT_NONE
+  }
 # Accept JSON content for tasks
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
