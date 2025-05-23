@@ -7,8 +7,8 @@ class PublicBusinessInfoSerializer(serializers.ModelSerializer):
     Serializer for PUBLIC display of Business Information.
     Only includes fields safe for anyone to view.
     """
-    average_rating = serializers.SerializerMethodField(read_only=True)
-    totalReviews = serializers.IntegerField(read_only=True) # Use the optimized field from the model
+    average_rating = serializers.DecimalField(max_digits=3, decimal_places=1, read_only=True) 
+    totalReviews = serializers.IntegerField(source='total_reviews_count', read_only=True) 
 
     class Meta:
         model = BusinessInfo

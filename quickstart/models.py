@@ -1,5 +1,6 @@
 from asyncio.log import logger
 from datetime import timedelta
+import pytz
 from django.db import transaction
 from django.conf import settings
 from django.db import models
@@ -19,6 +20,8 @@ from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
 import jsonfield
 import uuid
+
+COMMON_TIMEZONE_CHOICES = [(tz, tz.replace('_', ' ')) for tz in pytz.common_timezones]
 
 class PermissionGroup(models.Model):
     """Group related permissions together for better organization in the UI"""
@@ -72,17 +75,25 @@ class VerificationRequest(models.Model):
         return f"Verification Request for {self.user.email} ({self.status})"
 
     def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)
-        # Sync with the business model if status changed
-        if self.business and hasattr(self, '_original_status') and self._original_status != self.status:
+        # Determine if status is changing. _original_status is set in __init__ for existing objects.
+        # For new objects, we don't need to compare as there's no previous status to sync.
+        status_changed = hasattr(self, '_original_status') and self._original_status is not None and self._original_status != self.status
+
+        super().save(*args, **kwargs) # Save the VerificationRequest first
+
+        if self.business and status_changed:
             self.business.verificationStatus = self.status
             self.business.save(update_fields=['verificationStatus'])
 
+        # Update _original_status after save to reflect the new current state for subsequent saves
+        self._original_status = self.status
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Track the original status for change detection
-        if self.id:
+        if self.pk: 
             self._original_status = self.status
+        else:
+            self._original_status = None
 
     class Meta:
         db_table = 'verification_requests'
@@ -221,11 +232,18 @@ class CustomUser(AbstractUser):
     zipCode = models.CharField(max_length=100)
     avatar = models.ImageField(upload_to='avatars/', storage=S3Boto3Storage(), null=True, blank=True)
     createdAt = models.DateTimeField(auto_now_add=True)
-    role = models.ForeignKey(Role, on_delete=models.SET_NULL, null=True, blank=True)
+    role = models.ForeignKey('Role', on_delete=models.SET_NULL, null=True, blank=True) # Assuming Role model is defined
     favorited = models.ManyToManyField('ClassesMain', related_name='favorited_by', blank=True)
+    user_timezone = models.CharField(
+        max_length=50,
+        choices=COMMON_TIMEZONE_CHOICES,
+        default='UTC', # Sensible default
+        blank=True,    # Allow blank if you want to prompt user or guess later
+        help_text="User's preferred IANA timezone for displaying dates/times."
+    )
 
     USERNAME_FIELD = 'email'
-    REQUIRED_FIELDS = ['username']
+    REQUIRED_FIELDS = ['username'] # Keep username for AbstractUser compatibility, though email is login
 
     def __str__(self):
         return self.email
@@ -249,8 +267,8 @@ class CustomUser(AbstractUser):
             ),
             average_attendance=Case(
                 When(
-                    total_finished_bookings__gt=0,
-                    then=100.0 * models.F('completed_bookings_count') /
+                    total_finished_bookings__gt=0, # Assuming this field is annotated separately
+                    then=100.0 * models.F('completed_bookings_count') / # Assuming this field is annotated separately
                          models.F('total_finished_bookings')
                 ),
                 default=0,
@@ -278,7 +296,6 @@ class CustomUser(AbstractUser):
             return Decimal('0.00')
         completed = self.bookings.filter(status='completed').count()
         return Decimal(str(round((completed / total_finished) * 100, 2)))
-
     class Meta:
         db_table = 'users'
         permissions = [
@@ -295,6 +312,7 @@ class CustomUser(AbstractUser):
             ("cancel_own_booking", "Can cancel their own booking"), # Moved from Booking model for clarity
             ("add_supportticket", "Can create new support tickets"), # Added for user creation
         ]
+
 
 REFUND_POLICY_CHOICES = [
      ('full', 'Full refund if cancelled within policy'),
@@ -333,12 +351,12 @@ class BusinessInfo(models.Model):
     businessDescription = models.TextField(max_length=500)
     businessImage = models.ImageField(
         upload_to='business_images/',
-        storage=S3Boto3Storage(), # Assuming S3Boto3Storage is configured
+        storage=S3Boto3Storage(),
         blank=True,
         null=True
     )
     featured = models.BooleanField(default=False)
-    isActive = models.BooleanField(default=False)
+    isActive = models.BooleanField(default=False) # Typically managed by verification
     createdAt = models.DateTimeField(auto_now_add=True)
     updatedAt = models.DateTimeField(auto_now=True)
 
@@ -353,24 +371,31 @@ class BusinessInfo(models.Model):
     ])
 
     # --- Location ---
-    businessAddress = models.CharField(max_length=255) # Street address, potentially apartment number etc.
+    businessAddress = models.CharField(max_length=255)
     businessCity = models.CharField(max_length=100)
-    businessState = models.CharField(max_length=100) # Province/Territory for Canada
-    businessZipCode = models.CharField(max_length=20) # Postal Code for Canada
+    businessState = models.CharField(max_length=100)
+    businessZipCode = models.CharField(max_length=20)
     latitude = models.DecimalField(max_digits=10, decimal_places=8, null=True, blank=True)
     longitude = models.DecimalField(max_digits=11, decimal_places=8, null=True, blank=True)
-    showExactLocation = models.BooleanField(default=True) # Controlled by 'saltLocation' on frontend
+    showExactLocation = models.BooleanField(default=True)
+    business_timezone = models.CharField(
+        max_length=50,
+        choices=COMMON_TIMEZONE_CHOICES,
+        default='UTC', # Or a more common business timezone like 'America/Toronto'
+        blank=True,
+        help_text="Primary IANA timezone for this business's operations and local time display."
+    )
 
     # --- Simplified Booking Settings ---
-    openingTime = models.TimeField()
-    closingTime = models.TimeField()
+    openingTime = models.TimeField() # Naive time, interpreted in business_timezone
+    closingTime = models.TimeField() # Naive time, interpreted in business_timezone
     refundPolicy = models.CharField(
         max_length=20,
-        choices=REFUND_POLICY_CHOICES,
+        choices=REFUND_POLICY_CHOICES, # Assuming REFUND_POLICY_CHOICES is defined
         default='partial'
     )
 
-    # Notification fields remain
+    # Notification fields
     newBookingNotification = models.BooleanField(default=True)
     cancellationNotification = models.BooleanField(default=True)
     reminderNotification = models.BooleanField(default=True)
@@ -380,25 +405,25 @@ class BusinessInfo(models.Model):
     stripe_account_id = models.CharField(max_length=255, blank=True, null=True, unique=True, db_index=True)
     stripe_account_status = models.CharField(
         max_length=30,
-        choices=STRIPE_STATUS_CHOICES,
+        choices=STRIPE_STATUS_CHOICES, # Assuming STRIPE_STATUS_CHOICES is defined
         blank=True,
         null=True,
         db_index=True
     )
 
     managers = models.ManyToManyField(settings.AUTH_USER_MODEL, related_name='managed_businesses', blank=True)
-    liabilityWaiver = models.BooleanField(default=False) # Added based on frontend form
+    liabilityWaiver = models.BooleanField(default=False)
 
     # --- Class/Category Information ---
-    classCategory = models.CharField(max_length=50, choices=[ # Choices defined on model
+    classCategory = models.CharField(max_length=50, choices=[
         ('academic', 'Academic'), ('music', 'Music'), ('dance', 'Dance'),
         ('fitness', 'Fitness'), ('art', 'Art'), ('technology', 'Technology'),
         ('sports', 'Sports')
     ])
-    subcategories = JSONField(default=list, blank=True)
-    classFormats = JSONField(default=list, blank=True)
-    skillLevels = JSONField(default=list, blank=True)
-    ageGroups = JSONField(default=list, blank=True)
+    subcategories = models.JSONField(default=list, blank=True)
+    classFormats = models.JSONField(default=list, blank=True)
+    skillLevels = models.JSONField(default=list, blank=True)
+    ageGroups = models.JSONField(default=list, blank=True)
 
     # --- Verification & Agreements ---
     verificationDocument = models.FileField(
@@ -409,13 +434,13 @@ class BusinessInfo(models.Model):
     )
     verificationStatus = models.CharField(max_length=20, choices=[
         ('pending', 'Pending'),
-        ('verified', 'Verified'), 
+        ('verified', 'Verified'),
         ('rejected', 'Rejected')
-    ], default='pending', db_index=True) # Added index
+    ], default='pending', db_index=True)
     termsAccepted = models.BooleanField(default=False)
     privacyAccepted = models.BooleanField(default=False)
-    # --- End Verification & Agreements ---
 
+    # --- Cached Aggregates ---
     total_reviews_count = models.IntegerField(
         default=0,
         editable=False,
@@ -429,42 +454,35 @@ class BusinessInfo(models.Model):
         help_text="Cached average rating from approved reviews for this business"
     )
 
-    last_booking_date = models.DateTimeField(null=True, blank=True)
+    last_booking_date = models.DateTimeField(null=True, blank=True) # Aware datetime
 
     def __str__(self):
         return self.businessName
 
     def update_review_aggregates(self):
-        """
-        Recalculates and saves the total approved review count and average rating
-        for this business. Call this after a review is approved or status changes.
-        """
-        try:
-            # Correctly query Reviews linked to this business via ClassesMain
-            approved_reviews_qs = Reviews.objects.filter(
-                classId__businessId=self, # Filter reviews linked to classes of this business
-                status='approved'
-            )
-            new_count = approved_reviews_qs.count()
-            new_avg_rating_data = approved_reviews_qs.aggregate(avg=Avg('rating'))
-            new_avg_rating = new_avg_rating_data['avg'] or Decimal('0.0')
-            new_avg_rating_rounded = Decimal(str(round(new_avg_rating, 1)))
+        # (Keep your existing implementation of this method)
+        # Correctly query Reviews linked to this business via ClassesMain
+        approved_reviews_qs = Reviews.objects.filter(
+            classId__businessId=self, # Filter reviews linked to classes of this business
+            status='approved'
+        )
+        new_count = approved_reviews_qs.count()
+        new_avg_rating_data = approved_reviews_qs.aggregate(avg=Avg('rating'))
+        new_avg_rating = new_avg_rating_data['avg'] or Decimal('0.0')
+        new_avg_rating_rounded = Decimal(str(round(new_avg_rating, 1)))
 
-            # Check if update is needed to avoid unnecessary writes
-            needs_update = False
-            if self.total_reviews_count != new_count:
-                self.total_reviews_count = new_count
-                needs_update = True
-            # Use Decimal comparison for rating
-            if self.average_rating != new_avg_rating_rounded:
-                 self.average_rating = new_avg_rating_rounded
-                 needs_update = True
+        needs_update = False
+        if self.total_reviews_count != new_count:
+            self.total_reviews_count = new_count
+            needs_update = True
+        if self.average_rating != new_avg_rating_rounded:
+            self.average_rating = new_avg_rating_rounded
+            needs_update = True
 
-            if needs_update:
-                self.save(update_fields=['total_reviews_count', 'average_rating'])
-                logger.info(f"Updated review aggregates for Business {self.businessId}: Count={self.total_reviews_count}, AvgRating={self.average_rating}")
-        except Exception as e:
-            logger.error(f"Error updating review aggregates for Business {self.businessId}: {e}", exc_info=True)
+        if needs_update:
+            self.save(update_fields=['total_reviews_count', 'average_rating'])
+            logger.info(f"Updated review aggregates for Business {self.businessId}: Count={self.total_reviews_count}, AvgRating={self.average_rating}")
+
 
     class Meta:
         db_table = 'business_info'
@@ -562,8 +580,7 @@ class ClassSubcategory(models.Model):
 
 class ClassesMain(models.Model):
     classId = models.AutoField(primary_key=True)
-    # Use a unique related_name to avoid clashes if BusinessInfo has other FKs to ClassesMain
-    businessId = models.ForeignKey('BusinessInfo', on_delete=models.CASCADE, related_name='classes_taught')
+    businessId = models.ForeignKey('BusinessInfo', on_delete=models.CASCADE, related_name='classes')
     title = models.CharField(max_length=100)
     description = models.TextField(max_length=2000)
     features = models.JSONField(default=list)
@@ -690,13 +707,13 @@ def classsubcategory_change_receiver(sender, instance, update_fields, **kwargs):
 
 class Favorites(models.Model):
     favoriteId = models.AutoField(primary_key=True)
-    userId = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='favorites')
-    classId = models.ForeignKey(ClassesMain, models.DO_NOTHING, db_column='classId', blank=True, null=True)
+    userId = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='favorites_through_model')
+    classId = models.ForeignKey(ClassesMain, models.CASCADE, db_column='classId', related_name='favorited_by_records')
     createdAt = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = 'favorites'
-
+        unique_together = ('userId', 'classId')
 class ClassOption(models.Model):
     optionId = models.AutoField(primary_key=True)
     classId = models.ForeignKey('ClassesMain', on_delete=models.CASCADE, related_name='options')
@@ -1150,6 +1167,11 @@ class Booking(models.Model):
 
     booking_date = models.DateTimeField(auto_now_add=True)
     participants = models.IntegerField(validators=[MinValueValidator(1), MaxValueValidator(4)])
+    participant_details = models.JSONField(
+        default=list, 
+        blank=True, 
+        help_text="List of dicts for participant names, e.g., [{'name': 'Jane Doe'}, {'name': 'John Smith'}]"
+    )
     notes = models.TextField(blank=True)
     cancelled_at = models.DateTimeField(null=True, blank=True)
     cancellation_reason = models.TextField(blank=True)
@@ -1158,6 +1180,7 @@ class Booking(models.Model):
     payment_status = models.CharField(max_length=20, choices=[
         ('pending', 'Pending'),
         ('paid', 'Paid'),
+        ('refund_pending', 'Refund Pending'), # Added this choice
         ('refunded', 'Refunded')
     ], default='pending')
 
@@ -1168,14 +1191,14 @@ class Booking(models.Model):
         db_table = 'bookings'
         indexes = [
             models.Index(fields=['schedule_instance', 'status']),
-            models.Index(fields=['user', 'status']),  # Changed from student to user
+            models.Index(fields=['user', 'status']), 
             models.Index(fields=['booking_date']),
             models.Index(fields=['enrollment_type', 'status']),
             models.Index(fields=['status']),
             models.Index(fields=['booking_group_id']),
         ]
         permissions = [
-            # --- Platform Admin Permissions (Keep these) ---
+            # --- Platform Admin Permissions ---
             ("cancel_any_booking", "Can cancel any user's booking (Admin)"),
             ("view_booking_analytics", "Can view aggregated booking analytics"),
             ("export_booking_data", "Can export booking data"),
@@ -1269,7 +1292,7 @@ class Payment(models.Model):
 class Reviews(models.Model):
     reviewId = models.AutoField(primary_key=True)
     userId = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='reviews')
-    businessId = models.ForeignKey(BusinessInfo, models.CASCADE, db_column='businessId')
+    businessId = models.ForeignKey(BusinessInfo, models.CASCADE, db_column='businessId', related_name='reviews')
     classId = models.ForeignKey(ClassesMain, models.CASCADE, db_column='classId', related_name='reviews')
     booking = models.OneToOneField(
         Booking,

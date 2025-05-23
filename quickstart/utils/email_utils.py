@@ -35,17 +35,27 @@ def _get_booking_related_data(booking: Booking) -> dict:
         'class_location': "N/A",
     }
     try:
-        schedule_instance = booking.schedule_instance
-        schedule = schedule_instance.schedule
-        option = schedule.option
-        class_main = option.classId
-        business = class_main.businessId
+        # Ensure relations are accessed safely
+        schedule_instance = getattr(booking, 'schedule_instance', None)
+        if not schedule_instance: raise AttributeError("schedule_instance missing")
+        
+        schedule = getattr(schedule_instance, 'schedule', None)
+        if not schedule: raise AttributeError("schedule missing")
+        
+        option = getattr(schedule, 'option', None)
+        if not option: raise AttributeError("option missing")
+        
+        class_main = getattr(option, 'classId', None)
+        if not class_main: raise AttributeError("classId missing from option")
+        
+        business = getattr(class_main, 'businessId', None)
+        if not business: raise AttributeError("businessId missing from class_main")
 
-        data['class_title'] = class_main.title
-        data['class_id'] = class_main.classId
-        data['business_name'] = business.businessName
-        data['option_title'] = option.title
-        data['class_location'] = class_main.location
+        data['class_title'] = getattr(class_main, 'title', "N/A")
+        data['class_id'] = getattr(class_main, 'classId', None)
+        data['business_name'] = getattr(business, 'businessName', "N/A")
+        data['option_title'] = getattr(option, 'title', "N/A")
+        data['class_location'] = getattr(class_main, 'location', "N/A")
 
     except AttributeError as e:
         logger.error(f"Could not access related data for booking {booking.id} when preparing email context: {e}", exc_info=True)
@@ -67,58 +77,41 @@ def send_templated_email(recipient_list, template_name, context, subject=None):
         logger.warning("No recipients provided for template %s, skipping email queuing.", template_name)
         return
 
-    # --- Context Preparation ---
-    # Ensure recipient_email is always present for the footer
     context.setdefault('recipient_email', recipient_list[0] if recipient_list else "N/A")
-    # Ensure base URL is always present
     context.setdefault('frontend_base_url', settings.FRONTEND_BASE_URL)
-    # Add settings to context IF needed by templates directly (prefer filters though)
-    context.setdefault('settings', settings) # Make settings available if direct access is needed
+    context.setdefault('settings', settings)
 
-    # --- Render Email Content ---
     try:
         html_content = render_to_string(template_name, context)
     except Exception as e:
         logger.error(f"Error rendering email template '{template_name}' with context keys {list(context.keys())}: {e}", exc_info=True)
-        return # Stop processing if template rendering fails
+        return
 
-    # --- Determine Subject ---
-    # Using explicit subject is preferred. This block remains as a fallback.
     if not subject:
         try:
-            # Attempt to extract subject from the template's title block
             from django.template import Template, Context
-            # Simple extraction assuming {% block title %}...{% endblock %}
             minimal_template_string = "{% extends '" + template_name + "' %}{% block title %}{% endblock %}"
             template_obj = Template(minimal_template_string)
             subject = template_obj.render(Context(context)).strip()
-            # Provide a default if the block is empty or extraction fails
             if not subject:
                  subject = "Notification from ClassEasily"
                  logger.warning(f"Subject block empty or not found in '{template_name}'. Using default.")
         except Exception as e:
             logger.warning(f"Could not derive subject from template '{template_name}': {e}. Using default.")
-            subject = "Notification from ClassEasily" # Fallback on any error
-    subject = subject or "Notification from ClassEasily" # Final fallback
+            subject = "Notification from ClassEasily"
+    subject = subject or "Notification from ClassEasily"
 
-    # --- Prepare Arguments for Task ---
     try:
-        # Prepare arguments for the Celery task
         task_kwargs = {
             'subject': subject,
-            'body': "Please view this email in an HTML-compatible client.", # Plain text fallback
+            'body': "Please view this email in an HTML-compatible client.",
             'from_email': settings.DEFAULT_FROM_EMAIL,
             'to_list': recipient_list,
             'reply_to_list': [settings.NOTIFICATION_SETTINGS.get('reply_to')] if settings.NOTIFICATION_SETTINGS.get('reply_to') else None,
             'html_content': html_content
-            # 'attachments': None # TODO: Add attachment handling if needed later
         }
-
-        # --- Dispatch the Task ---
-        send_email_task.delay(**task_kwargs) # Use .delay() to queue the task
-
+        send_email_task.delay(**task_kwargs)
         logger.info(f"Email task queued for {recipient_list} using template '{template_name}'. Subject: '{subject}'.")
-
     except Exception as e:
         logger.error(f"Error queuing email task for template '{template_name}' to {recipient_list}: {e}", exc_info=True)
 
@@ -192,84 +185,69 @@ def send_booking_confirmation_email(user: CustomUser, booking: Booking):
         logger.warning("Attempted to send booking confirmation with invalid user or booking.")
         return
 
-    # Use helper to get related data safely
     related_data = _get_booking_related_data(booking)
-    if not related_data.get('class_id'): # Check if essential data was retrieved
+    if not related_data.get('class_id'):
         logger.error(f"Could not access essential related data for booking {booking.id} when sending confirmation.")
-        return # Avoid sending incomplete emails
-
+        # Consider if we should still send a partial email or not
+        # For now, let's proceed but the template will show "N/A" for missing parts
+    
     logger.info(f"Preparing booking confirmation email for booking {booking.id} to user {user.email}")
 
-    # Construct necessary URLs
-    class_details_url = f"{settings.FRONTEND_BASE_URL}/classes/{related_data['class_id']}"
+    class_details_url = f"{settings.FRONTEND_BASE_URL}/classes/{related_data.get('class_id', '')}" if related_data.get('class_id') else "#"
     manage_bookings_url = f"{settings.FRONTEND_BASE_URL}/my-classes"
+    
+    payment = booking.payments.filter(status='succeeded').order_by('-created_at').first()
 
-    # ----> ADDED DEBUG LOGGING <----
-    payment = booking.payments.filter(status='succeeded').first() # Attempt to get the payment
-    logger.debug(f"Email Context Check for Booking {booking.id}: User={user.email}, ClassTitle='{related_data.get('class_title')}', BookingID={booking.id}, PaymentFound={'Yes' if payment else 'No'}, CardLast4='{payment.card_last4 if payment else 'N/A'}'")
-    # ----> END DEBUG LOGGING <----
-
+    # The 'booking' object itself contains booking.participants and booking.participant_details
+    # The template will access these directly.
     context = {
         'user': user,
-        'booking': booking, # Pass the full booking object
+        'booking': booking, 
         'class_details_url': class_details_url,
         'manage_bookings_url': manage_bookings_url,
-        'recipient_email': user.email, # Explicitly set for footer
-        'related_data': related_data, # Pass fetched related data dictionary
-        'payment': payment # Explicitly pass the first successful payment if found
+        'recipient_email': user.email,
+        'related_data': related_data,
+        'payment': payment 
     }
     send_templated_email(
         recipient_list=[user.email],
         template_name='emails/booking_confirmation_user.html',
         context=context,
-        subject=f"Your Booking for {related_data['class_title']} is Confirmed!" # Use fetched title
+        subject=f"Your Booking for {related_data.get('class_title', '[Class Title]')} is Confirmed!"
     )
     logger.info(f"Booking confirmation email prepared/queued for booking {booking.id}")
-
 
 def send_booking_cancellation_user_email(user: CustomUser, booking: Booking, refund_details: str):
     """
     Sends confirmation to a user after they cancelled their booking.
-
-    Args:
-        user (CustomUser): The user who cancelled the booking.
-        booking (Booking): The cancelled Booking object.
-        refund_details (str): A message describing the refund status.
     """
     if not user or not user.email or not booking:
         logger.warning("Attempted to send user booking cancellation email with invalid user or booking.")
         return
 
-    # Use helper to get related data safely
     related_data = _get_booking_related_data(booking)
+    # Log error if class_title is missing but proceed with sending
     if not related_data.get('class_title'):
-        logger.error(f"Could not access related data for booking {booking.id} when sending user cancellation email.")
-        # Don't stop, try to send with available info, but log error
-
+        logger.error(f"Could not access class_title for booking {booking.id} when sending user cancellation email.")
+    
     logger.info(f"Preparing user booking cancellation email for booking {booking.id} to user {user.email}")
 
     explore_url = f"{settings.FRONTEND_BASE_URL}/explore"
 
-    schedule_instance = booking.schedule_instance # Get instance for logging
-    instance_date = schedule_instance.date if schedule_instance else "N/A"
-    instance_time = schedule_instance.time if schedule_instance else "N/A"
-    class_title_from_data = related_data.get('class_title', '[TITLE MISSING]')
-    logger.debug(f"Email Context Check (Cancellation) for Booking {booking.id}: User={user.email}, ClassTitle='{class_title_from_data}', InstanceDate={instance_date}, InstanceTime={instance_time}")
-
+    # The 'booking' object itself contains booking.participants and booking.participant_details
     context = {
         'user': user,
-        'booking': booking, # Pass the full booking object
+        'booking': booking,
         'refund_details': refund_details,
         'explore_url': explore_url,
-        'recipient_email': user.email, # Explicitly set
-        'related_data': related_data, # Pass fetched data
-        'schedule_instance': schedule_instance # Explicitly pass instance if needed
+        'recipient_email': user.email,
+        'related_data': related_data,
     }
     send_templated_email(
         recipient_list=[user.email],
         template_name='emails/booking_cancellation_user.html',
         context=context,
-        subject=f"Your Booking for {class_title_from_data} Has Been Cancelled" # Use fetched title (with fallback)
+        subject=f"Your Booking for {related_data.get('class_title', '[Class Title]')} Has Been Cancelled"
     )
     logger.info(f"User booking cancellation email prepared/queued for booking {booking.id}")
 
@@ -277,43 +255,36 @@ def send_booking_cancellation_user_email(user: CustomUser, booking: Booking, ref
 def send_booking_cancelled_by_other_email(user: CustomUser, booking: Booking, cancelled_by: str, reason: str, contact_info: str):
     """
     Sends notification to a user when their booking is cancelled by the business or an admin.
-
-    Args:
-        user (CustomUser): The user whose booking was cancelled.
-        booking (Booking): The cancelled Booking object.
-        cancelled_by (str): Description of who cancelled (e.g., "the business", "an administrator").
-        reason (str): The reason for cancellation (can be empty).
-        contact_info (str): Contact details for questions (business email/phone or support email).
     """
     if not user or not user.email or not booking:
         logger.warning("Attempted to send 'cancelled by other' email with invalid user or booking.")
         return
 
-    # Use helper to get related data safely
     related_data = _get_booking_related_data(booking)
     if not related_data.get('class_title'):
         logger.error(f"Could not access related data for booking {booking.id} when sending 'cancelled by other' email.")
-        return
-
+        # Proceed with sending, template handles defaults
+    
     logger.info(f"Preparing 'cancelled by other' email for booking {booking.id} to user {user.email}")
 
     explore_url = f"{settings.FRONTEND_BASE_URL}/explore"
 
+    # The 'booking' object itself contains booking.participants and booking.participant_details
     context = {
         'user': user,
         'booking': booking,
         'cancelled_by': cancelled_by,
-        'reason': reason or "No specific reason provided.", # Provide a default if reason is empty
+        'reason': reason or "No specific reason provided.",
         'contact_info': contact_info,
         'explore_url': explore_url,
-        'recipient_email': user.email, # Explicitly set
-        'related_data': related_data, # Pass fetched data
+        'recipient_email': user.email,
+        'related_data': related_data,
     }
     send_templated_email(
         recipient_list=[user.email],
-        template_name='emails/booking_cancelled_by_other.html', # Check template name
+        template_name='emails/booking_cancelled_by_other.html',
         context=context,
-        subject=f"Update: Your Booking for {related_data['class_title']} Was Cancelled" # Use fetched title
+        subject=f"Update: Your Booking for {related_data.get('class_title', '[Class Title]')} Was Cancelled"
     )
     logger.info(f"'Cancelled by other' email prepared/queued for booking {booking.id}")
 
@@ -321,37 +292,33 @@ def send_booking_cancelled_by_other_email(user: CustomUser, booking: Booking, ca
 def send_booking_reminder_email(user: CustomUser, booking: Booking):
     """
     Sends a reminder email to a user about an upcoming class.
-
-    Args:
-        user (CustomUser): The user who has the booking.
-        booking (Booking): The upcoming Booking object.
     """
     if not user or not user.email or not booking:
         logger.warning("Attempted to send booking reminder with invalid user or booking.")
         return
 
-    # Use helper to get related data safely
     related_data = _get_booking_related_data(booking)
     if not related_data.get('class_id'):
-        logger.error(f"Could not access related data for booking {booking.id} when sending reminder email.")
-        return
+        logger.error(f"Could not access class_id for booking {booking.id} when sending reminder email.")
+        # Proceed, template and URL construction will handle missing class_id
 
     logger.info(f"Preparing booking reminder email for booking {booking.id} to user {user.email}")
 
-    class_details_url = f"{settings.FRONTEND_BASE_URL}/classes/{related_data['class_id']}" # Construct URL
+    class_details_url = f"{settings.FRONTEND_BASE_URL}/classes/{related_data.get('class_id', '')}" if related_data.get('class_id') else "#"
 
+    # The 'booking' object itself contains booking.participants and booking.participant_details
     context = {
         'user': user,
         'booking': booking,
         'class_details_url': class_details_url,
-        'recipient_email': user.email, # Explicitly set
-        'related_data': related_data, # Pass fetched data
+        'recipient_email': user.email,
+        'related_data': related_data,
     }
     send_templated_email(
         recipient_list=[user.email],
         template_name='emails/booking_reminder_user.html',
         context=context,
-        subject=f"Reminder: Your Class '{related_data['class_title']}' is Soon!" # Use fetched title
+        subject=f"Reminder: Your Class '{related_data.get('class_title', '[Class Title]')}' is Soon!"
     )
     logger.info(f"Booking reminder email prepared/queued for booking {booking.id}")
 

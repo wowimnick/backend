@@ -1,5 +1,7 @@
+# quickstart/payments/views.py (or your actual path)
 import uuid
-from django.forms import ValidationError # Keep this
+import json # <--- IMPORT JSON MODULE
+from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -9,8 +11,9 @@ from django.db import transaction
 from decimal import Decimal
 import stripe
 from django.conf import settings
-from ..models import CustomUser, Booking, Payment, ScheduleInstance
-from ..serializers import BookingCreateSerializer, BookingDetailSerializer
+from ..models import CustomUser, Booking, Payment, ScheduleInstance # Adjust import path if needed
+from ..serializers.public.public_booking_serializers import BookingCreateSerializer # Correct import path
+
 from ..utils.email_utils import send_booking_confirmation_email, send_business_new_booking_email
 
 import logging
@@ -19,49 +22,13 @@ logger = logging.getLogger(__name__)
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
-class PaymentBookingSerializer(BookingCreateSerializer):
-    """Extended serializer that skips weekly slot validation for payment processing"""
-    # ... (content of this class remains unchanged) ...
-    def validate_schedule_instances(self, value):
-        # Keep working with IDs as expected by the parent serializer
-        instances = ScheduleInstance.objects.select_related(
-            'schedule__option'
-        ).filter(id__in=value)
-
-        if len(instances) != len(value):
-            raise ValidationError('One or more schedule instances not found')
-
-        # Check each instance's availability
-        for instance in instances:
-            if instance.status != 'scheduled':
-                raise ValidationError(
-                    f'Instance {instance.pk} is not available for booking'
-                )
-
-            if instance.date < timezone.now().date():
-                raise ValidationError(
-                    f'Cannot book past instance {instance.pk}'
-                )
-
-            # Assuming request.data might not be available here, check for 1 participant
-            # Correct check might need context or different approach if participants > 1
-            if not instance.can_accommodate(1):
-                raise ValidationError(
-                    f'Not enough spots available for instance {instance.pk}'
-                )
-
-        return value # Return IDs as expected by the serializer
-
-
 class CreatePaymentIntentView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
         try:
-            # Log the incoming request data
-            logger.info(f"Received payment intent request: {request.data}")
+            logger.info(f"CreatePaymentIntentView - Received payment intent request: {request.data}")
 
-            # Get the selected slots
             selected_slots = request.data.get('selectedSlots')
             if not selected_slots or not isinstance(selected_slots, list) or len(selected_slots) == 0:
                  logger.warning("CreatePaymentIntentView: selectedSlots missing or invalid.")
@@ -70,13 +37,17 @@ class CreatePaymentIntentView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                  )
 
+            serializer_data = {
+                'selectedSlots': selected_slots,
+                'participants': request.data.get('participants', 1),
+                'notes': request.data.get('notes', ''),
+                'participant_details': request.data.get('participant_details', [])
+            }
+            logger.debug(f"CreatePaymentIntentView - Data for BookingCreateSerializer: {serializer_data}")
+
             serializer = BookingCreateSerializer(
-                data={
-                    'selectedSlots': selected_slots,
-                    'participants': request.data.get('participants', 1),
-                    'notes': request.data.get('notes', '')
-                },
-                context={'request': request} # Pass request context
+                data=serializer_data,
+                context={'request': request}
             )
 
             if not serializer.is_valid():
@@ -86,37 +57,20 @@ class CreatePaymentIntentView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # Get the first schedule instance from the validated context or re-fetch
-            # Accessing context added during validation
             validated_instance = serializer.context.get('validated_instance')
             if not validated_instance:
-                # Fallback if context wasn't set correctly (shouldn't happen ideally)
-                logger.warning("CreatePaymentIntentView: validated_instance not found in serializer context. Re-fetching.")
-                first_slot_id = selected_slots[0].get('id')
-                if not first_slot_id:
-                    return Response({'error': 'First slot ID is missing.'}, status=status.HTTP_400_BAD_REQUEST)
-                try:
-                    instance = ScheduleInstance.objects.select_related('schedule__option').get(id=first_slot_id)
-                except ScheduleInstance.DoesNotExist:
-                    return Response({'error': 'Initial schedule instance not found.'}, status=status.HTTP_404_NOT_FOUND)
-            else:
-                 instance = validated_instance
+                logger.error("CreatePaymentIntentView: validated_instance not found in serializer context.")
+                return Response({'error': 'Internal error: Validated instance not found after serialization.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-
+            instance = validated_instance
             option = instance.schedule.option
             booking_type = option.booking_type
 
-            # Get all instances if this is a course booking (using validated context if available)
             if booking_type == 'Full Course':
                 all_instances = serializer.context.get('future_course_instances')
                 if not all_instances:
-                     # Fallback query if context missing
-                     logger.warning("CreatePaymentIntentView: future_course_instances not found in context. Re-querying.")
-                     all_instances = ScheduleInstance.objects.filter(
-                        schedule=instance.schedule,
-                        date__gte=instance.date,
-                        status='scheduled' # Only include available ones
-                    ).order_by('date')
+                     logger.error("CreatePaymentIntentView: future_course_instances not found in context for a course.")
+                     return Response({'error': 'Internal error: Course instances not found after serialization.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             else:
                 all_instances = [instance]
 
@@ -124,75 +78,73 @@ class CreatePaymentIntentView(APIView):
                  logger.error(f"CreatePaymentIntentView: No valid instances found for booking (Initial ID: {instance.id}, Type: {booking_type}).")
                  return Response({'error': 'No available sessions found for this booking.'}, status=status.HTTP_400_BAD_REQUEST)
 
-
-            # Calculate total amount for all instances
-            participants = serializer.validated_data.get('participants', 1) # Use validated participants
+            participants = serializer.validated_data['participants']
             base_total = sum(
-                Decimal(inst.price) * participants # Use Decimal for price calculation
+                Decimal(inst.price) * participants
                 for inst in all_instances
             )
 
-            # Apply service fee
-            # Ensure service fee is read from settings or constants, not hardcoded
-            # Example: service_fee_rate = getattr(settings, 'SERVICE_FEE_RATE', Decimal('0.13'))
-            service_fee_rate = Decimal('0.13') # Keep as is for now
+            service_fee_rate = getattr(settings, 'SERVICE_FEE_RATE', Decimal('0.13'))
             service_fee = base_total * service_fee_rate
             total_amount_decimal = base_total + service_fee
-            total_amount_cents = int(total_amount_decimal * 100) # Convert to cents for Stripe
+            total_amount_cents = int(total_amount_decimal * 100)
 
-            # Prepare metadata
+            participant_details_json_list = serializer.validated_data.get('participant_details', [])
+            # --- CORRECTLY SERIALIZE TO JSON STRING FOR STRIPE METADATA ---
+            participant_details_metadata_str = json.dumps(participant_details_json_list)
+
             metadata={
                 'user_id': str(request.user.userId),
-                'first_slot_id': str(instance.id), # Use the confirmed initial instance ID
+                'first_slot_id': str(instance.id),
                 'participants': str(participants),
-                'base_total': str(base_total.quantize(Decimal("0.01"))), # Format decimal
-                'service_fee': str(service_fee.quantize(Decimal("0.01"))), # Format decimal
+                'participant_details': participant_details_metadata_str, # Store proper JSON string
+                'base_total': str(base_total.quantize(Decimal("0.01"))),
+                'service_fee': str(service_fee.quantize(Decimal("0.01"))),
                 'booking_type': str(booking_type),
-                'notes': str(serializer.validated_data.get('notes', '')), # Use validated notes
+                'notes': str(serializer.validated_data.get('notes', '')),
                 'is_course': str(booking_type == 'Full Course'),
                 'schedule_id': str(instance.schedule.pk),
-                'start_date': str(instance.date), # Ensure string format
+                'start_date': str(instance.date),
             }
-            # Add end_date only if it's a course and end_date exists
-            if booking_type == 'Full Course' and hasattr(instance.schedule, 'end_date') and instance.schedule.end_date:
+            if booking_type == 'Full Course' and instance.schedule.end_date:
                  metadata['end_date'] = str(instance.schedule.end_date)
 
+            logger.debug(f"CreatePaymentIntentView - Metadata for Stripe: {metadata}")
 
-            # Create payment intent with course info
             intent = stripe.PaymentIntent.create(
                 amount=total_amount_cents,
-                currency='usd', # Consider making currency dynamic or from settings
-                payment_method_types=['card'], # Or fetch allowed types
+                currency=getattr(settings, 'STRIPE_CURRENCY', 'usd').lower(),
+                payment_method_types=['card'],
                 metadata=metadata
             )
-
-            logger.info(f"Created Payment Intent {intent.id} for user {request.user.email}")
+            logger.info(f"CreatePaymentIntentView - Created Payment Intent {intent.id} for user {request.user.email}")
 
             return Response({
                 'clientSecret': intent.client_secret,
-                'amount': float(total_amount_decimal.quantize(Decimal("0.01"))), # Return decimal as float
+                'amount': float(total_amount_decimal.quantize(Decimal("0.01"))),
                 'service_fee': float(service_fee.quantize(Decimal("0.01"))),
                 'base_total': float(base_total.quantize(Decimal("0.01"))),
                 'total_sessions': len(all_instances),
-                'booking_type': booking_type
+                'booking_type': booking_type,
+                'booking_id': None
             })
 
-        # Keep existing exception handling
         except ScheduleInstance.DoesNotExist:
-            logger.error(f"CreatePaymentIntentView: ScheduleInstance not found (maybe invalid ID in request?). Request Data: {request.data}")
+            logger.error(f"CreatePaymentIntentView: ScheduleInstance not found. Request Data: {request.data}", exc_info=True)
             return Response(
                 {'error': 'Invalid schedule instance ID provided.'},
                 status=status.HTTP_404_NOT_FOUND
             )
-        except ValidationError as ve: # Catch DRF validation errors
-             logger.warning(f"CreatePaymentIntentView: Validation Error: {ve.detail}")
+        except DRFValidationError as ve:
+             logger.warning(f"CreatePaymentIntentView: DRF Validation Error: {ve.detail}")
              return Response({'error': ve.detail}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
-            logger.error(f"Error creating payment intent: {str(e)}", exc_info=True)
+            logger.error(f"CreatePaymentIntentView - Error creating payment intent: {str(e)}", exc_info=True)
             return Response(
                 {'error': "An unexpected error occurred while preparing payment."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
 
 class ProcessBookingWebhook(APIView):
     authentication_classes = []
@@ -201,207 +153,177 @@ class ProcessBookingWebhook(APIView):
     def post(self, request):
         payload = request.body
         sig_header = request.META.get('HTTP_STRIPE_SIGNATURE')
-        event = None # Initialize event
+        event = None
 
         try:
             event = stripe.Webhook.construct_event(
                 payload, sig_header, settings.STRIPE_WEBHOOK_SECRET
             )
-            logger.info(f"Stripe Webhook Received: ID={event.id}, Type={event.type}")
-
+            logger.info(f"ProcessBookingWebhook - Stripe Webhook Received: ID={event.id}, Type={event.type}")
         except ValueError as e:
-            # Invalid payload
-            logger.error(f"Webhook Error: Invalid payload. {e}")
+            logger.error(f"ProcessBookingWebhook - Webhook Error: Invalid payload. {e}")
             return Response(status=status.HTTP_400_BAD_REQUEST)
         except stripe.SignatureVerificationError as e:
-            # Invalid signature
-            logger.error(f"Webhook Error: Invalid signature. {e}")
+            logger.error(f"ProcessBookingWebhook - Webhook Error: Invalid signature. {e}")
             return Response(status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
-            # Catch any other exceptions during event construction
-            logger.error(f"Webhook Error: Unexpected error constructing event. {e}", exc_info=True)
+            logger.error(f"ProcessBookingWebhook - Webhook Error: Unexpected error constructing event. {e}", exc_info=True)
             return Response(status=status.HTTP_400_BAD_REQUEST)
 
-
-        # Handle the event
         if event.type == 'payment_intent.succeeded':
-            payment_intent = event.data.object # contains a stripe.PaymentIntent
-            logger.info(f'Webhook: PaymentIntent {payment_intent.id} succeeded.')
-            # Call handler function
+            payment_intent = event.data.object
+            logger.info(f'ProcessBookingWebhook - PaymentIntent {payment_intent.id} succeeded.')
             try:
                 response_data = self.handle_successful_payment(payment_intent)
-                # If handler returns data, use it, otherwise default to 200 OK
                 return Response(response_data or {}, status=status.HTTP_200_OK)
-            except ValidationError as ve:
-                 logger.error(f"Webhook Validation Error handling PI {payment_intent.id}: {ve.detail}")
-                 # Return 400 so Stripe might retry if configured, or signal processing issue
-                 return Response({'error': ve.detail}, status=status.HTTP_400_BAD_REQUEST)
+            except DRFValidationError as ve:
+                 error_detail = ve.detail if hasattr(ve, 'detail') else ve.args
+                 logger.error(f"ProcessBookingWebhook - Validation Error handling PI {payment_intent.id}: {error_detail}")
+                 return Response({'error': error_detail}, status=status.HTTP_400_BAD_REQUEST)
             except Exception as e:
-                 logger.error(f"Webhook: Error processing successful PI {payment_intent.id}: {e}", exc_info=True)
-                 # Return 500 - internal server error, Stripe might retry
+                 logger.error(f"ProcessBookingWebhook - Error processing successful PI {payment_intent.id}: {e}", exc_info=True)
                  return Response({'error': 'Internal server error handling payment.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         elif event.type == 'payment_intent.payment_failed':
             payment_intent = event.data.object
-            logger.warning(f'Webhook: PaymentIntent {payment_intent.id} failed.')
-            # Optionally: Find related pending booking/payment records and mark as failed
-            # payment = Payment.objects.filter(stripe_payment_intent_id=payment_intent.id).first()
-            # if payment:
-            #     payment.status = 'failed'
-            #     payment.failure_message = payment_intent.last_payment_error.message if payment_intent.last_payment_error else 'Unknown reason'
-            #     payment.save()
-            #     if payment.booking:
-            #         payment.booking.status = 'failed' # Or keep pending?
-            #         payment.booking.payment_status = 'failed'
-            #         payment.booking.save()
-
-        # ... handle other event types (charge.refunded, etc.)
-
+            logger.warning(f'ProcessBookingWebhook - PaymentIntent {payment_intent.id} failed.')
         else:
-            logger.debug(f'Webhook: Unhandled event type {event.type}')
+            logger.debug(f'ProcessBookingWebhook - Unhandled event type {event.type}')
 
-        # Acknowledge receipt of unhandled or non-critical events
         return Response(status=status.HTTP_200_OK)
 
 
     def handle_successful_payment(self, payment_intent):
-        # --- Check if Payment already processed ---
         if Payment.objects.filter(stripe_payment_intent_id=payment_intent.id, status='succeeded').exists():
-            logger.warning(f"Webhook: PaymentIntent {payment_intent.id} has already been successfully processed. Skipping.")
-            return {"message": "Already processed"} # Indicate success but no action taken
+            logger.warning(f"ProcessBookingWebhook - PaymentIntent {payment_intent.id} has already been successfully processed. Skipping.")
+            return {"message": "Already processed"}
 
         try:
             with transaction.atomic():
                 metadata = payment_intent.metadata
                 if not metadata:
-                     logger.error(f"Webhook Error: Missing metadata for successful PaymentIntent {payment_intent.id}")
-                     raise ValidationError("Payment metadata missing.")
+                     logger.error(f"ProcessBookingWebhook - Error: Missing metadata for successful PaymentIntent {payment_intent.id}")
+                     raise DRFValidationError("Payment metadata missing.")
 
-                # --- Safely extract metadata ---
                 user_id = metadata.get('user_id')
                 first_slot_id = metadata.get('first_slot_id')
                 participants_str = metadata.get('participants', '1')
+                # --- CORRECTLY PARSE PARTICIPANT_DETAILS FROM JSON STRING ---
+                participant_details_str = metadata.get('participant_details', '[]')
+                try:
+                    participant_details = json.loads(participant_details_str)
+                    if not isinstance(participant_details, list):
+                         logger.warning(f"ProcessBookingWebhook - participant_details metadata for PI {payment_intent.id} is not a list after parsing: {participant_details_str}. Defaulting to empty list.")
+                         participant_details = []
+                except json.JSONDecodeError:
+                    logger.error(f"ProcessBookingWebhook - Error: Could not parse participant_details JSON from metadata for PI {payment_intent.id}. Value: '{participant_details_str}'. Defaulting to empty list.")
+                    participant_details = [] # Default to empty list if JSON is malformed
+
                 booking_type = metadata.get('booking_type')
                 notes = metadata.get('notes', '')
                 is_course = metadata.get('is_course') == 'True'
                 schedule_id = metadata.get('schedule_id')
                 start_date_str = metadata.get('start_date')
-                end_date_str = metadata.get('end_date') # Might be empty
+                end_date_str = metadata.get('end_date')
 
-                # --- Validate required metadata ---
-                required_meta = ['user_id', 'first_slot_id', 'participants', 'booking_type', 'is_course', 'schedule_id', 'start_date']
+                required_meta = ['user_id', 'first_slot_id', 'participants', 'booking_type', 'is_course', 'schedule_id', 'start_date', 'participant_details']
                 if not all(key in metadata for key in required_meta):
                     missing_keys = [key for key in required_meta if key not in metadata]
-                    logger.error(f"Webhook Error: Missing required metadata for PI {payment_intent.id}. Missing: {missing_keys}")
-                    raise ValidationError(f"Payment metadata incomplete. Missing: {', '.join(missing_keys)}")
+                    logger.error(f"ProcessBookingWebhook - Error: Missing required metadata for PI {payment_intent.id}. Missing: {missing_keys}")
+                    raise DRFValidationError(f"Payment metadata incomplete. Missing: {', '.join(missing_keys)}")
 
                 try:
                     participants = int(participants_str)
                     user = CustomUser.objects.get(userId=int(user_id))
-                    # Use select_related to fetch business info needed for emails efficiently
                     initial_instance = ScheduleInstance.objects.select_related(
-                        'schedule__option__classId__businessId__owner' # Fetch owner
+                        'schedule__option__classId__businessId__owner'
                     ).prefetch_related(
-                        'schedule__option__classId__businessId__managers' # Fetch managers
+                        'schedule__option__classId__businessId__managers'
                     ).get(id=int(first_slot_id))
                     start_date = timezone.datetime.strptime(start_date_str, '%Y-%m-%d').date()
                 except (ValueError, TypeError, CustomUser.DoesNotExist, ScheduleInstance.DoesNotExist) as e:
-                    logger.error(f"Webhook Error: Invalid metadata types or object not found for PI {payment_intent.id}. Error: {e}")
-                    raise ValidationError(f"Invalid payment metadata or related object not found: {e}")
+                    logger.error(f"ProcessBookingWebhook - Error: Invalid metadata types or object not found for PI {payment_intent.id}. Error: {e}")
+                    raise DRFValidationError(f"Invalid payment metadata or related object not found: {e}")
 
-                # --- Determine instances to book ---
                 instances_to_book = []
                 if is_course:
-                    if not end_date_str: # End date is crucial for courses
-                        logger.error(f"Webhook Error: Missing end_date metadata for course booking PI {payment_intent.id}.")
-                        raise ValidationError("End date missing for course booking.")
+                    if not end_date_str:
+                        logger.error(f"ProcessBookingWebhook - Error: Missing end_date metadata for course booking PI {payment_intent.id}.")
+                        raise DRFValidationError("End date missing for course booking.")
                     try:
                         end_date = timezone.datetime.strptime(end_date_str, '%Y-%m-%d').date()
                     except (ValueError, TypeError):
-                        logger.error(f"Webhook Error: Invalid end_date format '{end_date_str}' for PI {payment_intent.id}.")
-                        raise ValidationError("Invalid end date format for course booking.")
+                        logger.error(f"ProcessBookingWebhook - Error: Invalid end_date format '{end_date_str}' for PI {payment_intent.id}.")
+                        raise DRFValidationError("Invalid end date format for course booking.")
 
-                    # Query instances for the course
                     instances_to_book = list(ScheduleInstance.objects.filter(
-                        schedule_id=int(schedule_id), # Use schedule_id from metadata
+                        schedule_id=int(schedule_id),
                         date__gte=start_date,
                         date__lte=end_date,
-                        status='scheduled' # Re-check status just in case
+                        status='scheduled'
                     ).order_by('date'))
 
                     if not instances_to_book:
-                        logger.error(f"Webhook Error: No scheduled instances found for course (Schedule ID: {schedule_id}) between {start_date} and {end_date} for PI {payment_intent.id}.")
-                        raise ValidationError("No available sessions found for the specified course range.")
+                        logger.error(f"ProcessBookingWebhook - Error: No scheduled instances found for course (Schedule ID: {schedule_id}) between {start_date} and {end_date} for PI {payment_intent.id}.")
+                        raise DRFValidationError("No available sessions found for the specified course range.")
                 else:
-                    # Single session: Ensure the initial instance is still valid
                     if initial_instance.status != 'scheduled' or initial_instance.date < timezone.now().date():
-                        logger.error(f"Webhook Error: Initial instance {initial_instance.id} is no longer available for booking PI {payment_intent.id}.")
-                        raise ValidationError("The selected session is no longer available.")
+                        logger.error(f"ProcessBookingWebhook - Error: Initial instance {initial_instance.id} is no longer available for booking PI {payment_intent.id}.")
+                        raise DRFValidationError("The selected session is no longer available.")
                     instances_to_book = [initial_instance]
 
-                # --- Check Availability Again (Crucial!) ---
-                for instance in instances_to_book:
-                    if not instance.can_accommodate(participants):
-                         logger.error(f"Webhook Error: Instance {instance.id} cannot accommodate {participants} participants for PI {payment_intent.id}. Booking cannot be completed.")
-                         # What to do here? Ideally, refund should be triggered.
-                         # For now, raise validation error to stop processing.
-                         # TODO: Implement automatic refund logic here if needed.
-                         raise ValidationError(f"Session on {instance.date} is full. Booking cannot be completed.")
+                for instance_check in instances_to_book:
+                    if not instance_check.can_accommodate(participants):
+                         logger.error(f"ProcessBookingWebhook - Error: Instance {instance_check.id} cannot accommodate {participants} participants for PI {payment_intent.id}. Booking cannot be completed.")
+                         raise DRFValidationError(f"Session on {instance_check.date} at {instance_check.time} is full. Booking cannot be completed.")
 
-
-                # --- Create Bookings ---
                 booking_group_id = uuid.uuid4() if len(instances_to_book) > 1 else None
-                total_amount_decimal = Decimal(payment_intent.amount) / 100
+                total_amount_decimal = Decimal(payment_intent.amount_received) / 100
                 num_instances = len(instances_to_book)
-                # Calculate amount per booking carefully, handle potential division by zero
                 amount_per_booking = (total_amount_decimal / num_instances) if num_instances > 0 else Decimal('0.00')
 
                 created_bookings = []
-                for instance in instances_to_book:
+                for current_sch_instance in instances_to_book:
                     booking = Booking.objects.create(
-                        schedule_instance=instance,
+                        schedule_instance=current_sch_instance,
                         user=user,
                         booking_group_id=booking_group_id,
                         participants=participants,
+                        participant_details=participant_details, # Now this is a Python list of dicts
                         notes=notes,
-                        amount_paid=amount_per_booking.quantize(Decimal("0.01")), # Ensure 2 decimal places
-                        status='confirmed', # Mark as confirmed immediately
+                        amount_paid=amount_per_booking.quantize(Decimal("0.01")),
+                        status='confirmed',
                         payment_status='paid',
                         enrollment_type=booking_type
                     )
                     created_bookings.append(booking)
-                logger.info(f"Webhook: Created {len(created_bookings)} booking(s) for PI {payment_intent.id}. Group ID: {booking_group_id}")
+                logger.info(f"ProcessBookingWebhook - Created {len(created_bookings)} booking(s) for PI {payment_intent.id}. Group ID: {booking_group_id}")
 
-                # --- Create Payment Record ---
-                charge = None
+                charge_details = None
                 if payment_intent.latest_charge:
                     try:
-                        charge = stripe.Charge.retrieve(payment_intent.latest_charge)
-                    except stripe.InvalidRequestError as e:
-                        logger.warning(f"Webhook: Could not retrieve charge {payment_intent.latest_charge} for PI {payment_intent.id}: {e}")
-
+                        charge_details = stripe.Charge.retrieve(payment_intent.latest_charge)
+                    except stripe.StripeError as e:
+                        logger.warning(f"ProcessBookingWebhook - Could not retrieve charge {payment_intent.latest_charge} for PI {payment_intent.id}: {e}")
 
                 payment = Payment.objects.create(
-                    # Link payment only to the first booking for simplicity in lookups
-                    # Metadata stores all related booking IDs
                     booking=created_bookings[0],
                     stripe_payment_intent_id=payment_intent.id,
                     stripe_charge_id=payment_intent.latest_charge,
                     amount=total_amount_decimal,
                     service_fee_amount=Decimal(metadata.get('service_fee', '0.00')),
                     currency=payment_intent.currency.upper(),
-                    status='succeeded', # Mark as succeeded
+                    status='succeeded',
                     payment_method_type=payment_intent.payment_method_types[0] if payment_intent.payment_method_types else 'card',
-                    metadata={ # Store useful info for reconciliation/debugging
+                    metadata={
                         'booking_group_id': str(booking_group_id) if booking_group_id else None,
                         'booking_ids': [b.id for b in created_bookings],
-                        'original_stripe_metadata': metadata # Keep original meta if needed
+                        'original_stripe_metadata': metadata
                     }
                 )
 
-                # Add charge details if retrieved
-                if charge:
-                    payment_method_details = charge.payment_method_details
+                if charge_details:
+                    payment_method_details = charge_details.payment_method_details
                     if payment_method_details and payment_method_details.type == 'card':
                         card = payment_method_details.card
                         if card:
@@ -409,58 +331,44 @@ class ProcessBookingWebhook(APIView):
                             payment.card_last4 = card.last4
                             payment.card_exp_month = card.exp_month
                             payment.card_exp_year = card.exp_year
+                    payment.receipt_url = charge_details.receipt_url
+                    payment.receipt_number = charge_details.receipt_number
+                    payment.billing_details = charge_details.billing_details.to_dict() if charge_details.billing_details else {}
+                    payment.save()
 
-                    payment.receipt_url = charge.receipt_url
-                    payment.receipt_number = charge.receipt_number
-                    payment.billing_details = charge.billing_details.to_dict() if charge.billing_details else {}
-                    payment.save() # Save updated card/receipt details
+                logger.info(f"ProcessBookingWebhook - Created Payment record {payment.id} for PI {payment_intent.id}")
 
-                logger.info(f"Webhook: Created Payment record {payment.id} for PI {payment_intent.id}")
-
-                # --- Send Confirmation Email to User (using the utility function) ---
-                try:
-                    # Send confirmation based on the first booking instance created
-                    if created_bookings:
+                # Email notifications
+                if created_bookings:
+                    try:
                         send_booking_confirmation_email(user, created_bookings[0])
-                        logger.info(f"Webhook: Booking confirmation email prepared/queued for booking {created_bookings[0].id}, user {user.email}")
-                except Exception as email_error:
-                    # Log email error but don't fail the whole webhook processing
-                    logger.error(f"Webhook: Failed to send confirmation email for booking {created_bookings[0].id} (PI: {payment_intent.id}): {email_error}", exc_info=True)
+                        logger.info(f"ProcessBookingWebhook - Booking confirmation email prepared/queued for booking {created_bookings[0].id}, user {user.email}")
+                    except Exception as email_error:
+                        logger.error(f"ProcessBookingWebhook - Failed to send confirmation email for booking {created_bookings[0].id} (PI: {payment_intent.id}): {email_error}", exc_info=True)
 
-                # --- MODIFICATION: Send New Booking Email to Business ---
-                try:
-                    if created_bookings:
-                        first_booking = created_bookings[0]
-                        # Find the business user(s) to notify from the pre-fetched instance data
-                        business_info = initial_instance.schedule.option.classId.businessId
-                        if business_info and business_info.newBookingNotification: # Check notification setting
-                            owner = business_info.owner
-                            managers = business_info.managers.all() # Get managers if any
-                            recipients = [owner] + list(managers)
-                            unique_recipients = {recipient for recipient in recipients if recipient and recipient.email} # Ensure unique and valid
+                    try:
+                        first_booking_for_notification = created_bookings[0]
+                        business_info_obj = initial_instance.schedule.option.classId.businessId
+                        if business_info_obj and business_info_obj.newBookingNotification:
+                            owner_user = business_info_obj.owner
+                            manager_users = business_info_obj.managers.all()
+                            all_recipients = [owner_user] + list(manager_users)
+                            unique_valid_recipients = {rec for rec in all_recipients if rec and rec.email}
 
-                            for business_user in unique_recipients:
-                                send_business_new_booking_email(business_user, first_booking)
-                                logger.info(f"Webhook: New Booking notification email prepared/queued for booking {first_booking.id} to business user {business_user.email}")
+                            for biz_user in unique_valid_recipients:
+                                send_business_new_booking_email(biz_user, first_booking_for_notification)
+                                logger.info(f"ProcessBookingWebhook - New Booking notification email prepared/queued for booking {first_booking_for_notification.id} to business user {biz_user.email}")
                         else:
-                             logger.info(f"Skipping new booking notification for business {business_info.businessId} (Setting disabled or missing owner)")
-                except AttributeError as ae:
-                     logger.error(f"Webhook: Error accessing business details for notification email for booking {created_bookings[0].id} (PI: {payment_intent.id}): {ae}", exc_info=True)
-                except Exception as email_error:
-                     logger.error(f"Webhook: Failed to send new booking notification email for booking {created_bookings[0].id} (PI: {payment_intent.id}): {email_error}", exc_info=True)
-                # --- END MODIFICATION ---
+                             logger.info(f"ProcessBookingWebhook - Skipped new booking notification for business {business_info_obj.businessId if business_info_obj else 'N/A'} (Setting disabled or missing owner)")
+                    except AttributeError as ae_email:
+                         logger.error(f"ProcessBookingWebhook - Error accessing business details for notification email for booking {created_bookings[0].id} (PI: {payment_intent.id}): {ae_email}", exc_info=True)
+                    except Exception as email_error_biz:
+                         logger.error(f"ProcessBookingWebhook - Failed to send new booking notification email for booking {created_bookings[0].id} (PI: {payment_intent.id}): {email_error_biz}", exc_info=True)
 
-
-                # Return success, maybe include first booking ID
                 return {'booking_id': created_bookings[0].id}
 
-        except (ValidationError, ScheduleInstance.DoesNotExist, CustomUser.DoesNotExist) as e:
-            # Catch specific errors we raised or expect
-            logger.error(f"Webhook Error processing PI {payment_intent.id}: {e}")
-            # Re-raise validation errors to potentially return 400
-            raise e
+        except DRFValidationError:
+            raise
         except Exception as e:
-            # Catch unexpected errors during the atomic block
-            logger.error(f"Webhook CRITICAL Error processing PI {payment_intent.id}: {e}", exc_info=True)
-            # Re-raise to signal failure (will result in 500 if not caught higher up)
-            raise e
+            logger.error(f"ProcessBookingWebhook - CRITICAL Error processing PI {payment_intent.id} within atomic block: {e}", exc_info=True)
+            raise DRFValidationError("An internal error occurred while finalizing your booking.")

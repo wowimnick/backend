@@ -4,6 +4,7 @@ from django.utils import timezone
 from datetime import datetime, timedelta
 from django.shortcuts import get_object_or_404
 from django.db.models import Prefetch
+import pytz
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -130,25 +131,24 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
 
     def create(self, request, *args, **kwargs):
         """ Creates one or more bookings based on selected slots for the current user. """
-        # Permission check: User needs 'add_booking' (Django default)
-        if not request.user.has_perm('quickstart.add_booking'):
+        if not request.user.has_perm('quickstart.add_booking'): # Or your custom permission
              raise PermissionDenied("You do not have permission to create bookings.")
 
-        serializer = self.get_serializer(data=request.data, context={'request': request}) # Uses BookingCreateSerializer
+        serializer = self.get_serializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
 
         try:
-            # Serializer create method handles transaction and logic
-            booking_or_list = serializer.save() # Returns representative booking
+            booking_or_list = serializer.save() # Serializer's create method now handles participant_details
             logger.info(f"Booking creation initiated by user {request.user.email}. Initial Instance: {serializer.context['validated_instance'].pk}")
 
-            # TODO: Return response indicating pending payment and next steps
-            # For now, return detail of the representative booking
             response_serializer = BookingDetailSerializer(booking_or_list, context={'request': request})
-            return Response(response_serializer.data, status=status.HTTP_201_CREATED) # Or 202 Accepted if async payment
-        except ValidationError as e:
+            return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+        except ValidationError as e: # DRF ValidationError
             logger.warning(f"Booking creation failed validation for user {request.user.email}. Error: {e.detail}")
             return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
+        except DjangoValidationError as e: # Django Core ValidationError
+            logger.warning(f"Booking creation failed Django validation for user {request.user.email}. Error: {e.message_dict}")
+            return Response(e.message_dict, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             logger.error(f"Unexpected error creating booking for user {request.user.email}: {str(e)}", exc_info=True)
             return Response({"error": "An unexpected error occurred while creating the booking."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -181,11 +181,17 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
                 class_option = schedule_instance.schedule.option
                 policy = class_option.cancellationPolicy
 
-                # Use timezone aware comparison
-                instance_datetime_naive = datetime.combine(schedule_instance.date, schedule_instance.time)
-                instance_datetime_aware = timezone.make_aware(instance_datetime_naive, timezone.get_default_timezone()) # Use default TZ
+                business_timezone_str = class_option.classId.businessId.business_timezone
+                try:
+                    business_tz = pytz.timezone(business_timezone_str)
+                except pytz.UnknownTimeZoneError:
+                    logger.error(f"Unknown timezone '{business_timezone_str}' for business {class_option.classId.businessId.pk}. Defaulting to UTC for cancellation check.")
+                    business_tz = timezone.utc # Fallback, or raise a more specific error
 
-                if instance_datetime_aware <= timezone.now():
+                instance_datetime_naive = datetime.combine(schedule_instance.date, schedule_instance.time)
+                instance_datetime_aware = business_tz.localize(instance_datetime_naive) # Localize to business's timezone
+
+                if instance_datetime_aware <= timezone.now(): # Comparison is now correct
                      can_cancel_based_on_policy = False
                      raise ValidationError({'policy': 'Cannot cancel a class that has already started or is in the past.'})
 

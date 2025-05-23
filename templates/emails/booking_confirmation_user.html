@@ -8,13 +8,12 @@
 {% block content %}
     <h1>{% trans "Booking Confirmed! Get Ready to Learn!" %}</h1>
     <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
-    {# Separate the variable from blocktrans for robustness #}
+    
     <p>
         {% trans "Your booking for the class" %} <strong>{{ related_data.class_title|default:"[Class Title]" }}</strong> {% trans "is confirmed." %}
         {% blocktrans %}We're excited for you to join!{% endblocktrans %}
     </p>
 
-    {# --- Enhanced Details Section --- #}
     <div style="background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin: 20px 0;">
         <h2 style="font-size: 18px; font-weight: 600; color: #111827; margin-top: 0; margin-bottom: 12px;">{% trans "Booking Summary:" %}</h2>
         <p style="margin-bottom: 6px;"><strong>{% trans "Class:" %}</strong> {{ related_data.class_title|default:"N/A" }}</p>
@@ -24,21 +23,28 @@
         <p style="margin-bottom: 6px;"><strong>{% trans "Duration:" %}</strong> {{ booking.schedule_instance.duration }} {% trans "minutes" %}</p>
         <p style="margin-bottom: 6px;"><strong>{% trans "Location:" %}</strong> {{ related_data.class_location|default:"N/A" }}</p>
         <p style="margin-bottom: 6px;"><strong>{% trans "Business:" %}</strong> {{ related_data.business_name|default:"N/A" }}</p>
-        <p style="margin-bottom: 6px;"><strong>{% trans "Participants:" %}</strong> {{ booking.participants }}</p>
+        <p style="margin-bottom: 6px;"><strong>{% trans "Total Participants:" %}</strong> {{ booking.participants }}</p> {# Changed from "Participants" to "Total Participants" #}
+        
+        {# Display Participant Names #}
+        {% if booking.participant_details and booking.participants > 0 %}
+            <p style="margin-bottom: 2px;"><strong>{% trans "Participant Names:" %}</strong></p>
+            <ul style="margin-top: 0; margin-bottom: 6px; padding-left: 20px;">
+                {% for participant in booking.participant_details %}
+                    <li>{{ participant.name|default:"Unnamed Participant" }}</li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+
         <p style="margin-bottom: 0;"><strong>{% trans "Amount Paid:" %}</strong> ${{ booking.amount_paid|floatformat:2 }}</p>
-        {# --- Removed "Paid with..." line --- #}
     </div>
-    {# --- End Enhanced Details Section --- #}
 
     <!-- Button to View Booking -->
     <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
         <tr>
             <td align="center" class="button-td">
-                <!--[if mso]>...<![endif]-->
                 <a href="{{ manage_bookings_url }}" target="_blank" class="button">
                     {% trans 'View Your Bookings' %}
                 </a>
-                <!--[if mso]>...<![endif]-->
             </td>
         </tr>
     </table>
@@ -47,7 +53,6 @@
     <p>{% trans "We look forward to seeing you!" %}<br>{% trans "The ClassEasily Team" %}</p>
 {% endblock %}
 
-{# Footer recipient block: Still keeping Booking ID without blocktrans #}
 {% block footer_recipient %}
     {% if recipient_email and recipient_email != "N/A" %}
         <p>Booking confirmation sent to {{ recipient_email }}. Booking ID: {{ booking.id }}</p>

@@ -36,25 +36,21 @@ class RevenueAnalyticsView(views.APIView):
         return business # Return None if no business found
 
     def get_date_range(self, request):
-        """Parse and validate date range from request query parameters."""
         start_date_str = request.query_params.get('start_date')
         end_date_str = request.query_params.get('end_date')
 
         try:
             if start_date_str and end_date_str:
-                # Use timezone aware datetimes for range queries
-                start_date = timezone.make_aware(datetime.strptime(start_date_str, '%Y-%m-%d'))
-                # Ensure end_date includes the whole day
-                end_date = timezone.make_aware(datetime.strptime(end_date_str, '%Y-%m-%d')) + timedelta(days=1) - timedelta.resolution
+                start_date = timezone.make_aware(datetime.strptime(start_date_str, '%Y-%m-%d'), timezone.utc)
+                end_date = timezone.make_aware(datetime.strptime(end_date_str, '%Y-%m-%d'), timezone.utc) + timedelta(days=1) - timedelta.resolution
             else:
                 # Default to the last 30 days
-                end_date = timezone.now()
-                start_date = end_date - timedelta(days=30)
+                end_date = timezone.now() # This is already UTC aware
+                start_date = end_date - timedelta(days=30) # This is also UTC aware
 
             return start_date, end_date
 
         except ValueError:
-            # Raise DRF's ValidationError for standard 400 response
             raise ValidationError("Invalid date format. Please use YYYY-MM-DD.")
 
 

@@ -129,13 +129,14 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             'businessId', 'category', 'subcategory'
         ).prefetch_related(
             'images',
-            'options', 
-            Prefetch( 
+            'options',
+            Prefetch(
                 'options__schedules',
                 queryset=Schedule.objects.filter(is_active=True),
             ),
-            Prefetch(  
-                'options__schedules__instances'
+            Prefetch(
+                'options__schedules__instances',
+                queryset=ScheduleInstance.objects.filter(status='scheduled', date__gte=timezone.now().date())
             )
         ).filter(
             status='active',
@@ -144,8 +145,8 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         ).annotate(
             average_rating=Coalesce(self.AVERAGE_RATING_SUBQUERY, Value(Decimal('0.0'))),
             review_count=Coalesce(self.REVIEW_COUNT_SUBQUERY, Value(0)),
-            min_price=Coalesce(self.MIN_PRICE_SUBQUERY, None), # Now reflects future prices
-            max_price=Coalesce(self.MAX_PRICE_SUBQUERY, None), # Now reflects future prices
+            min_price=Coalesce(self.MIN_PRICE_SUBQUERY, None),
+            max_price=Coalesce(self.MAX_PRICE_SUBQUERY, None),
         ).distinct()
         
     @action(
@@ -170,40 +171,46 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['get'], permission_classes=[AllowAny])
     def search(self, request):
         try:
+            # --- Get Query Parameters ---
             req_lat_str = request.query_params.get('lat')
             req_lng_str = request.query_params.get('lng')
             req_radius_km_str = request.query_params.get('radius')
             location_search_text = request.query_params.get('location_search')
-            location_display_name = request.query_params.get('location') # Usually from selected geocoded location
+            location_display_name = request.query_params.get('location')
             keyword = request.query_params.get('keyword')
             price_min_str = request.query_params.get('price_min')
             price_max_str = request.query_params.get('price_max')
-            time_preferences = request.query_params.getlist('time_preference')
-            days = request.query_params.getlist('days')
-            class_type = request.query_params.get('class_type') # e.g. 'class', 'course', 'all'
+            # time_preferences will be a list like ['Morning (6am-12pm)', 'Afternoon (12pm-5pm)']
+            time_preferences_from_query = request.query_params.getlist('time_preference')
+            days_from_query = request.query_params.getlist('days') # e.g., ['Monday', 'Wednesday']
+            class_type = request.query_params.get('class_type')
             category_key = request.query_params.get('category_key')
-            # subcategory_key = request.query_params.get('subcategory_key') # Add if needed
+            subcategory_key = request.query_params.get('subcategory_key')
             req_date_str = request.query_params.get('date')
             req_participants_str = request.query_params.get('participants')
             sort_by = request.query_params.get('sort_by', 'relevance')
 
+            # --- Process Location ---
             search_lat, search_lng, search_radius_km = None, None, None
             if req_lat_str and req_lng_str:
                 try:
                     search_lat = float(req_lat_str)
                     search_lng = float(req_lng_str)
                     search_radius_km = float(req_radius_km_str) if req_radius_km_str and float(req_radius_km_str) > 0 else DEFAULT_SEARCH_RADIUS_KM
-                except (ValueError, TypeError): logger.warning(f"Invalid geo params received: lat='{req_lat_str}', lng='{req_lng_str}', radius='{req_radius_km_str}'")
+                except (ValueError, TypeError):
+                    logger.warning(f"Invalid geo params: lat='{req_lat_str}', lng='{req_lng_str}', radius='{req_radius_km_str}'")
             elif location_search_text:
                 geocoded_result = geocode_location_text_backend(location_search_text)
                 if geocoded_result:
                     search_lat, search_lng, _ = geocoded_result
                     search_radius_km = float(req_radius_km_str) if req_radius_km_str and float(req_radius_km_str) > 0 else DEFAULT_SEARCH_RADIUS_KM
-                else:
+                else: # If geocoding fails, use the text for display name filtering later
                     if not location_display_name: location_display_name = location_search_text
-            
+
+            # --- Base Queryset ---
             queryset = self.get_queryset()
 
+            # --- Keyword Search (Full-Text) ---
             if keyword:
                 search_query_obj = SearchQuery(keyword, search_type='websearch', config='english')
                 queryset = queryset.annotate(
@@ -212,65 +219,117 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             else:
                 queryset = queryset.annotate(text_rank=Value(0.0, output_field=FloatField()))
 
-
+            # --- Location Text Fallback (if no coords but display name exists) ---
             if location_display_name and not (search_lat and search_lng):
-                location_filter = Q()
+                location_filter_q = Q()
                 for term_part in location_display_name.split(','):
                     for term in term_part.strip().split():
-                        term = term.lower()
-                        if term: location_filter |= (Q(location__icontains=term) | Q(businessId__businessCity__icontains=term) | Q(businessId__businessState__icontains=term) | Q(businessId__businessZipCode__icontains=term))
-                if location_filter: queryset = queryset.filter(location_filter).distinct()
+                        term_lower = term.strip().lower()
+                        if term_lower:
+                            location_filter_q |= (
+                                Q(location__icontains=term_lower) |
+                                Q(businessId__businessCity__icontains=term_lower) |
+                                Q(businessId__businessState__icontains=term_lower) |
+                                Q(businessId__businessZipCode__icontains=term_lower)
+                            )
+                if location_filter_q:
+                    queryset = queryset.filter(location_filter_q).distinct()
 
+            # --- Price Filter ---
             if price_min_str:
-                try: queryset = queryset.filter(Q(min_price__gte=Decimal(price_min_str)) | Q(min_price__isnull=True)) # Allow classes with no price yet
+                try:
+                    queryset = queryset.filter(Q(min_price__gte=Decimal(price_min_str)) | Q(min_price__isnull=True))
                 except InvalidOperation: logger.warning(f"Invalid price_min: {price_min_str}")
             if price_max_str:
-                try: queryset = queryset.filter(Q(min_price__lte=Decimal(price_max_str)) | Q(min_price__isnull=True))
+                try:
+                    queryset = queryset.filter(Q(min_price__lte=Decimal(price_max_str)) | Q(min_price__isnull=True))
                 except InvalidOperation: logger.warning(f"Invalid price_max: {price_max_str}")
 
-            if time_preferences:
-                time_ranges = {'Morning':(time(6,0),time(11,59,59)), 'Afternoon':(time(12,0),time(16,59,59)), 'Evening':(time(17,0),time(22,0))}
-                time_q = Q()
-                for p in [pref for pref in time_preferences if pref in time_ranges]:
-                    s,e = time_ranges[p]
-                    time_q |= Q(options__schedules__instances__time__gte=s, options__schedules__instances__time__lte=e, options__schedules__instances__status='scheduled', options__schedules__is_active=True)
-                if time_q: queryset = queryset.filter(time_q).distinct()
+            # --- Time of Day Preference Filter ---
+            # Keys in time_ranges match the strings sent from frontend e.g. "Morning (6am-12pm)"
+            time_ranges_map = {
+                'Morning (6am-12pm)': (time(6, 0), time(11, 59, 59)),
+                'Afternoon (12pm-5pm)': (time(12, 0), time(16, 59, 59)),
+                'Evening (5pm-10pm)': (time(17, 0), time(22, 0, 0)) # up to 10:00 PM
+            }
+            if time_preferences_from_query:
+                time_q_filter = Q()
+                for pref_string in time_preferences_from_query:
+                    if pref_string in time_ranges_map:
+                        start_time, end_time = time_ranges_map[pref_string]
+                        time_q_filter |= Q(
+                            options__schedules__instances__time__gte=start_time,
+                            options__schedules__instances__time__lte=end_time
+                        )
+                if time_q_filter: # Only apply if valid preferences were found
+                    queryset = queryset.filter(time_q_filter)
+                    # Ensure these instances are actually bookable
+                    queryset = queryset.filter(
+                        options__schedules__instances__status='scheduled',
+                        options__schedules__is_active=True
+                    ).distinct()
 
-            if days:
-                day_map={'Monday':'Mon','Tuesday':'Tue','Wednesday':'Wed','Thursday':'Thu','Friday':'Fri','Saturday':'Sat','Sunday':'Sun'}
-                s_days=[day_map[d] for d in days if d in day_map]
-                if s_days: queryset=queryset.filter(Q(options__schedules__day__in=s_days)&Q(options__schedules__instances__status='scheduled')&Q(options__schedules__is_active=True)).distinct()
 
-            if class_type == 'course': queryset = queryset.filter(options__booking_type='Full Course').distinct()
-            elif class_type == 'session': queryset = queryset.filter(options__booking_type='Single Session').distinct()
-            
-            if category_key and category_key != 'all': queryset = queryset.filter(category__key=category_key)
-            # if subcategory_key: queryset = queryset.filter(subcategory__key=subcategory_key) # Add if used
+            # --- Day of Week Filter ---
+            if days_from_query:
+                # Frontend sends full day names like "Monday", "Tuesday"
+                # Backend Schedule model uses "Mon", "Tue"
+                day_mapping_frontend_to_model = {
+                    'Monday': 'Mon', 'Tuesday': 'Tue', 'Wednesday': 'Wed',
+                    'Thursday': 'Thu', 'Friday': 'Fri', 'Saturday': 'Sat', 'Sunday': 'Sun'
+                }
+                model_days_to_filter = [day_mapping_frontend_to_model[d] for d in days_from_query if d in day_mapping_frontend_to_model]
+                if model_days_to_filter:
+                    queryset = queryset.filter(
+                        options__schedules__day__in=model_days_to_filter,
+                        options__schedules__instances__status='scheduled', # Ensure instances for these schedules are bookable
+                        options__schedules__is_active=True
+                    ).distinct()
 
-            target_date_obj = None
-            q_for_instances = Q(options__schedules__instances__status='scheduled', options__schedules__is_active=True)
+            # --- Class Type Filter ---
+            if class_type == 'course':
+                queryset = queryset.filter(options__booking_type='Full Course').distinct()
+            elif class_type == 'session': # Assuming 'session' means 'Single Session'
+                queryset = queryset.filter(options__booking_type='Single Session').distinct()
+
+            # --- Category Filter ---
+            if category_key and category_key.lower() != 'all':
+                queryset = queryset.filter(category__key=category_key)
+                if subcategory_key: 
+                    queryset = queryset.filter(subcategory__key=subcategory_key)
+
+            # --- Date and Participants Filter (Affects Instance Availability) ---
+            instance_filters_q = Q(options__schedules__instances__status='scheduled', options__schedules__is_active=True)
             if req_date_str:
                 try:
                     target_date_obj = datetime.strptime(req_date_str, '%Y-%m-%d').date()
-                    q_for_instances &= Q(options__schedules__instances__date=target_date_obj)
-                except ValueError: 
+                    instance_filters_q &= Q(options__schedules__instances__date=target_date_obj)
+                except ValueError:
                     logger.warning(f"Invalid date format: {req_date_str}, defaulting to future dates.")
-                    q_for_instances &= Q(options__schedules__instances__date__gte=timezone.now().date())
-            else:
-                q_for_instances &= Q(options__schedules__instances__date__gte=timezone.now().date())
-            
+                    instance_filters_q &= Q(options__schedules__instances__date__gte=timezone.now().date())
+            else: # Default to future dates if no specific date
+                instance_filters_q &= Q(options__schedules__instances__date__gte=timezone.now().date())
+
             if req_participants_str:
                 try:
                     num_participants = int(req_participants_str)
                     if num_participants > 0:
-                         q_for_instances &= Q(options__schedules__instances__max_participants__gte=num_participants)
-                except ValueError: logger.warning(f"Invalid participant count: {req_participants_str}")
-            
-            queryset = queryset.filter(q_for_instances).distinct()
+                        # Filter instances that can accommodate the number of participants
+                        # This requires checking max_participants against current bookings for each instance
+                        # This is complex for a direct ORM filter here if not pre-annotated.
+                        # For simplicity here, we filter by max_participants directly.
+                        # More accurate check happens in availability or would need annotation.
+                        instance_filters_q &= Q(options__schedules__instances__max_participants__gte=num_participants)
+                except ValueError:
+                    logger.warning(f"Invalid participant count: {req_participants_str}")
+
+            queryset = queryset.filter(instance_filters_q).distinct()
 
 
+            # --- Python-side Distance Calculation & Filtering + Relevance Scoring ---
+            # This part still runs in Python after initial DB filtering
             distances_map = {}
-            final_results_list = [] 
+            final_results_list = []
 
             if search_lat is not None and search_lng is not None:
                 candidate_classes_for_distance = list(queryset.exclude(Q(coordinates__isnull=True) | Q(coordinates__exact='')))
@@ -280,102 +339,78 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                         item_lat_str, item_lon_str = klass_item.coordinates.split(',')
                         item_lat, item_lon = float(item_lat_str), float(item_lon_str)
                         distance_km = haversine_distance(search_lat, search_lng, item_lat, item_lon)
-                        distances_map[klass_item.pk] = distance_km 
-                        klass_item.distance_from_search = distance_km # For serializer or direct use
+                        distances_map[klass_item.pk] = distance_km
+                        klass_item.distance_from_search = distance_km # For serializer
                         if search_radius_km is None or distance_km <= search_radius_km:
                             temp_list_with_distance.append(klass_item)
-                    except (ValueError, TypeError, AttributeError) as e: 
-                        logger.warning(f"Class {klass_item.pk} ({klass_item.title}) has invalid coordinates '{klass_item.coordinates}' or other error: {e}")
-                        if search_radius_km is None: # If no radius, it might still be included if it matches other criteria
-                             temp_list_with_distance.append(klass_item) # Decide if it should be added
-                        distances_map[klass_item.pk] = float('inf') 
-                        klass_item.distance_from_search = float('inf') 
+                    except (ValueError, TypeError, AttributeError) as e:
+                        logger.warning(f"Class {klass_item.pk} ('{klass_item.title}') invalid coords '{klass_item.coordinates}': {e}")
+                        distances_map[klass_item.pk] = float('inf')
+                        klass_item.distance_from_search = float('inf')
+                        if search_radius_km is None: # Include if no radius filter, despite bad coords
+                            temp_list_with_distance.append(klass_item)
                 final_results_list = temp_list_with_distance
-            else: 
+            else: # No geo-search, take all from queryset
                 final_results_list = list(queryset)
-                for item in final_results_list: # Ensure all items have distance_from_search attribute
-                    item.distance_from_search = None 
+                for item in final_results_list:
+                    item.distance_from_search = None
                     distances_map[item.pk] = None
 
 
+            # --- Sorting Logic ---
             if sort_by == 'relevance':
                 today_date = timezone.now().date()
                 for item in final_results_list:
                     score = 0.0
-                    
-                    # Featured Boost (Business level)
-                    if item.businessId and item.businessId.featured: # Check if businessId exists
-                        score += W_FEATURED_N
-
-                    # Text Rank (already 0-1 from annotation or default 0)
+                    if item.businessId and item.businessId.featured: score += W_FEATURED_N
                     score += float(getattr(item, 'text_rank', 0.0)) * W_TEXT_RANK_N
-
-                    # Rating (normalize 0-MAX_RATING_VALUE to 0-1)
                     if MAX_RATING_VALUE > 0:
-                        normalized_rating = float(item.average_rating) / MAX_RATING_VALUE
-                        score += normalized_rating * W_RATING_N
-                    
-                    # Review Count (log transform, then normalize)
+                        score += (float(item.average_rating) / MAX_RATING_VALUE) * W_RATING_N
                     if item.review_count > 0 and MAX_EXPECTED_LOG_REVIEWS > 0:
                         log_reviews = math.log10(item.review_count + 1)
-                        normalized_log_reviews = min(1.0, log_reviews / MAX_EXPECTED_LOG_REVIEWS)
-                        score += normalized_log_reviews * W_REVIEW_COUNT_N
+                        score += min(1.0, log_reviews / MAX_EXPECTED_LOG_REVIEWS) * W_REVIEW_COUNT_N
                     
-                    # Distance (normalized_dist_proximity is 0-1)
                     dist_km = distances_map.get(item.pk)
-                    if dist_km is not None and dist_km != float('inf') and search_lat is not None and search_lng is not None:
-                        # Use effective_radius for normalization (could be DEFAULT_SEARCH_RADIUS_KM or user's choice)
-                        effective_radius_for_score = search_radius_km if search_radius_km and search_radius_km > 0 else DEFAULT_SEARCH_RADIUS_KM
-                        if effective_radius_for_score > 0:
-                            # Proximity score: higher for closer items, 0 if at or beyond effective_radius
-                            proximity_score_component = max(0, (effective_radius_for_score - dist_km) / effective_radius_for_score)
-                            score += proximity_score_component * W_DISTANCE_N
+                    if dist_km is not None and dist_km != float('inf') and search_lat is not None:
+                        eff_radius = search_radius_km if search_radius_km and search_radius_km > 0 else DEFAULT_SEARCH_RADIUS_KM
+                        if eff_radius > 0:
+                            proximity = max(0, (eff_radius - dist_km) / eff_radius)
+                            score += proximity * W_DISTANCE_N
                     
-                    # Newness Boost (decaying)
-                    if item.createdAt: # Ensure createdAt is not None
-                        # Ensure item.createdAt is a date object if it's datetime
+                    if item.createdAt:
                         item_created_date = item.createdAt.date() if isinstance(item.createdAt, datetime) else item.createdAt
-                        if isinstance(item_created_date, datetime_date): # Check type again after potential conversion
+                        if isinstance(item_created_date, datetime_date):
                             days_old = (today_date - item_created_date).days
-                            if days_old >= 0 and days_old <= MAX_RECENCY_DAYS_FOR_BOOST and RECENCY_DECAY_PER_DAY > 0:
-                                newness_boost_points = W_NEWNESS_N - (days_old * RECENCY_DECAY_PER_DAY)
-                                score += max(0, newness_boost_points)
-                        else:
-                            logger.warning(f"Class {item.pk} has invalid createdAt type: {type(item.createdAt)}")
-
-
+                            if 0 <= days_old <= MAX_RECENCY_DAYS_FOR_BOOST and RECENCY_DECAY_PER_DAY > 0:
+                                score += max(0, W_NEWNESS_N - (days_old * RECENCY_DECAY_PER_DAY))
                     item.relevance_score_final = score
-                
                 final_results_list.sort(key=lambda x: getattr(x, 'relevance_score_final', 0.0), reverse=True)
-
             elif sort_by == 'distance':
-                # Ensure distances_map has valid numbers or inf for sorting
                 final_results_list.sort(key=lambda x: distances_map.get(x.pk, float('inf')))
             elif sort_by == 'price_asc':
                 final_results_list.sort(key=lambda x: x.min_price if x.min_price is not None else float('inf'))
             elif sort_by == 'price_desc':
-                final_results_list.sort(key=lambda x: x.min_price if x.min_price is not None else float('-inf'), reverse=True) # Corrected to min_price for consistency if max_price is not always available
+                final_results_list.sort(key=lambda x: x.min_price if x.min_price is not None else float('-inf'), reverse=True)
             elif sort_by == 'rating':
                 final_results_list.sort(key=lambda x: (float(x.average_rating), int(x.review_count)), reverse=True)
             elif sort_by == 'reviews':
                 final_results_list.sort(key=lambda x: int(x.review_count), reverse=True)
             elif sort_by == 'newest':
-                final_results_list.sort(key=lambda x: x.createdAt if x.createdAt else datetime.min, reverse=True) # Handle None createdAt
+                final_results_list.sort(key=lambda x: x.createdAt if x.createdAt else datetime.min.replace(tzinfo=timezone.utc), reverse=True)
 
-            # --- Pagination ---
-            page = self.paginate_queryset(final_results_list) # DRF handles page slicing
+
+            # --- Pagination & Serialization ---
+            page = self.paginate_queryset(final_results_list)
             if page is not None:
-                # Add distance to each item in the page for the serializer
                 for item_in_page in page:
-                    item_in_page.distance = distances_map.get(item_in_page.pk) 
+                    item_in_page.distance = distances_map.get(item_in_page.pk)
                 serializer = self.get_serializer(page, many=True, context={'request': request})
-                return self.get_paginated_response(serializer.data) # DRF constructs paginated response
+                return self.get_paginated_response(serializer.data)
 
-            # Fallback if pagination is not used (e.g., not configured or page size is larger than results)
-            for item in final_results_list: # Add distance for non-paginated full list
+            for item in final_results_list:
                 item.distance = distances_map.get(item.pk)
             serializer = self.get_serializer(final_results_list, many=True, context={'request': request})
-            return Response({'results': serializer.data}) # Should ideally still conform to paginated structure
+            return Response({'results': serializer.data}) # Ensure this matches paginated structure if needed
 
         except Exception as e:
             logger.error(f"Public class search error: {str(e)}", exc_info=True)

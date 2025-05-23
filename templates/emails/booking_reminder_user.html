@@ -8,7 +8,7 @@
 {% block content %}
     <h1>{% trans "Friendly Reminder!" %}</h1>
     <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
-    {# Removed blocktrans for reliability #}
+    
     <p>
         Just a friendly reminder that your class, <strong>{{ related_data.class_title|default:"[Class Title]" }}</strong>, is coming up soon!
     </p>
@@ -16,9 +16,21 @@
     <div style="background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin: 20px 0;">
         <h2 style="font-size: 18px; font-weight: 600; color: #111827; margin-top: 0; margin-bottom: 12px;">{% trans "Class Details:" %}</h2>
         <p style="margin-bottom: 6px;"><strong>{% trans "Class:" %}</strong> {{ related_data.class_title|default:"N/A" }}</p>
+        <p style="margin-bottom: 6px;"><strong>{% trans "Option:" %}</strong> {{ related_data.option_title|default:"N/A" }}</p>
         <p style="margin-bottom: 6px;"><strong>{% trans "Date:" %}</strong> {{ booking.schedule_instance.date|date:"l, F j, Y" }}</p>
         <p style="margin-bottom: 6px;"><strong>{% trans "Time:" %}</strong> {{ booking.schedule_instance.time|time:"P" }}</p>
-        <p style="margin-bottom: 0;"><strong>{% trans "Business:" %}</strong> {{ related_data.business_name|default:"N/A" }}</p>
+        <p style="margin-bottom: 6px;"><strong>{% trans "Business:" %}</strong> {{ related_data.business_name|default:"N/A" }}</p>
+        <p style="margin-bottom: 0;"><strong>{% trans "Participants in this Booking:" %}</strong> {{ booking.participants }}</p>
+        
+        {# Participant Information (Optional to list all names in reminder) #}
+        {% if booking.participants > 1 and booking.participant_details %}
+            <p style="margin-top: 6px; margin-bottom:0; font-size:0.9em; color:#555;">
+                {% trans "Booked for:" %}
+                {% for participant in booking.participant_details %}
+                    {{ participant.name|default:"Unnamed Participant" }}{% if not forloop.last %}, {% endif %}
+                {% endfor %}
+            </p>
+        {% endif %}
     </div>
 
     <p>{% trans "Please check the class details for location, required materials, and any other important information." %}</p>
