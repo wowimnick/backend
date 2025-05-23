@@ -133,8 +133,7 @@ jobs:
           WorkingDirectory=${CURRENT_DIR}
           Environment="PYTHONUNBUFFERED=1"
           Environment="DJANGO_SETTINGS_MODULE=CEBackend.settings"
-          # Use python -m celery, point to your Celery app instance in CEBackend/celery.py
-          ExecStart=${PYTHON_PATH} -m celery -A CEBackend worker --loglevel=info
+          ExecStart=${PYTHON_PATH} -m celery -A CEBackend.celery worker --loglevel=info
           StandardOutput=journal
           StandardError=journal
           Restart=on-failure
