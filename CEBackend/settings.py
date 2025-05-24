@@ -329,6 +329,18 @@ CELERY_BROKER_USE_SSL = {
 CELERY_REDIS_BACKEND_USE_SSL = {
       'ssl_cert_reqs': ssl.CERT_NONE
   }
+
+CELERY_BROKER_TRANSPORT_OPTIONS = {
+    'is_cluster': True,
+    # Might also need to ensure that if Celery creates queues for things like
+    # worker direct messages (pidbox), those queue names are "hashtagged"
+    # so they fall into the same slot.
+    # 'fanout_prefix': True, # Usually for AMQP, but check Celery Redis docs
+    # 'fanout_patterns': True, # Usually for AMQP
+    # Celery 5.x+ and Kombu 5.x+ should have better auto-detection or
+    # rely on redis-py's RedisCluster client if 'is_cluster' is set.
+}
+
 # Accept JSON content for tasks
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
