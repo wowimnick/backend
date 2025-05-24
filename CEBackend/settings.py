@@ -325,30 +325,22 @@ CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'rediss://cluste
 CELERY_BROKER_USE_SSL = {'ssl_cert_reqs': ssl.CERT_NONE}
 CELERY_REDIS_BACKEND_USE_SSL = {'ssl_cert_reqs': ssl.CERT_NONE}
 
-# This is where queue_name_prefix belongs
 CELERY_BROKER_TRANSPORT_OPTIONS = {
     'is_cluster': True,
-    'queue_name_prefix': '{celery}.', # Should be picked up by Kombu Redis Channel
-    # The 'visibility_timeout' default is 3600 (1 hour). If tasks are acked quickly, this is fine.
-    # 'visibility_timeout': 3600,
+    'queue_name_prefix': '{celery}.', # Crucial for unacked_key, unacked_index_key
 }
 
-# For the result backend, is_cluster is the most important.
-# It doesn't have the same complex QoS unacked logic as the broker.
 CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {
     'is_cluster': True,
-    # You could add a queue_name_prefix here too if you want all result keys
-    # to also be namespaced, e.g., '{celery}.results.'
-    # This would affect how celery.backends.database.DatabaseBackend stores task results if using Redis as that DB.
-    # For now, let's focus on the broker.
+    'queue_name_prefix': '{celery}.results.', # Good practice
 }
 
 CELERY_CONTROL_EXCHANGE = '{celery}.pidbox'
-CELERY_EVENT_QUEUE_PREFIX = '{celery}.eve' # This prefixes event QUEUE names
+CELERY_EVENT_QUEUE_PREFIX = '{celery}.eve'
 
-# If CELERY_BROKER_TRANSPORT_OPTIONS['queue_name_prefix'] = '{celery}.' is active,
-# Kombu's Redis transport should automatically prefix this queue name.
-CELERY_TASK_DEFAULT_QUEUE = 'tasks' # Will become '{celery}.tasks'
+# Put the hash tag directly in the default queue name.
+# This ensures the main task list itself is correctly named for cluster mode.
+CELERY_TASK_DEFAULT_QUEUE = '{celery}.tasks'
 
 # Accept JSON content for tasks
 CELERY_ACCEPT_CONTENT = ['json']
