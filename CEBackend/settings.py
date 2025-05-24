@@ -338,6 +338,9 @@ CELERY_BROKER_TRANSPORT_OPTIONS = {
     # 'fanout_patterns': True, # Usually for AMQP
     # Celery 5.x+ and Kombu 5.x+ should have better auto-detection or
     # rely on redis-py's RedisCluster client if 'is_cluster' is set.
+
+    'unacked_keyprefix': '{celery}.unacked_', # Prefix for the ZSET storing unacked messages by score (timestamp)
+    'unacked_index_key': '{celery}.unacked_index', # Prefix for the HASH storing message data by delivery_tag
 }
 
 CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {
