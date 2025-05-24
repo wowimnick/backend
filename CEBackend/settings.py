@@ -345,6 +345,7 @@ CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {
 }
 
 CELERY_CONTROL_EXCHANGE = '{celery}.pidbox'
+CELERY_EVENT_QUEUE_PREFIX = '{celery}.eve'
 
 # Accept JSON content for tasks
 CELERY_ACCEPT_CONTENT = ['json']
