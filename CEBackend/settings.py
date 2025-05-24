@@ -331,23 +331,7 @@ CELERY_REDIS_BACKEND_USE_SSL = {
 
 CELERY_BROKER_TRANSPORT_OPTIONS = {
     'is_cluster': True,
-    # Remove unacked_keyprefix and unacked_index_key for now,
-    # let's try data_folder_out as it's more encompassing for unacked data.
-    # 'unacked_keyprefix': '{celery}.unacked_',
-    # 'unacked_index_key': '{celery}.unacked_index',
-
-    # --- NEW: Try data_folder_out for unacked message keys ---
-    # This should prefix the keys used for storing unacked messages (both the sorted set and the hash).
-    # Kombu's Redis transport forms keys like:
-    # - Unacked set (sorted by visibility timeout): self.data_folder_out + queue_name
-    # - Unacked index (message data): self.data_folder_out + queue_name + '.idx'
-    # So, if queue_name is '{celery}.tasks', we want data_folder_out to also use the tag.
-    # The simplest might be to just ensure it starts with the tag.
-    'data_folder_out': '{celery}.unacked:', # Note the colon often used as a separator by Kombu
-
-    # You might also want to set a shorter visibility_timeout for testing if needed,
-    # but the default (1 hour) is usually fine. This doesn't directly cause CROSSSLOT.
-    # 'visibility_timeout': 3600,
+    'queue_name_prefix': '{celery}.',
 }
 
 CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {
