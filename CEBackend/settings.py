@@ -331,7 +331,7 @@ CELERY_REDIS_BACKEND_USE_SSL = {
 
 CELERY_BROKER_TRANSPORT_OPTIONS = {
     'is_cluster': True,
-    'queue_name_prefix': '{celery}.',
+    'data_folder_out': '{celery}.unacked:'
 }
 
 CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {
