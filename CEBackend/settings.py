@@ -319,7 +319,6 @@ FRONTEND_PASSWORD_RESET_CONFIRM_PATH = '/reset-password/{uid}/{token}/'
 # ------------------------------------------------------------------------------
 # Use Redis as the broker
 # Ensure Redis is running: redis-server
-# Use database number 1 to avoid conflicts with cache if using Redis for cache too
 CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379') 
 CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379')
 
@@ -339,6 +338,10 @@ CELERY_BROKER_TRANSPORT_OPTIONS = {
     # 'fanout_patterns': True, # Usually for AMQP
     # Celery 5.x+ and Kombu 5.x+ should have better auto-detection or
     # rely on redis-py's RedisCluster client if 'is_cluster' is set.
+}
+
+CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {
+    'is_cluster': True,
 }
 
 # Accept JSON content for tasks
