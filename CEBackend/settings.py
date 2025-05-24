@@ -320,8 +320,8 @@ FRONTEND_PASSWORD_RESET_CONFIRM_PATH = '/reset-password/{uid}/{token}/'
 # Use Redis as the broker
 # Ensure Redis is running: redis-server
 # Use database number 1 to avoid conflicts with cache if using Redis for cache too
-CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379/1') 
-CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379/2')
+CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379') 
+CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379')
 
 CELERY_BROKER_USE_SSL = {
       'ssl_cert_reqs': ssl.CERT_NONE
