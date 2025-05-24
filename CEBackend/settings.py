@@ -327,23 +327,18 @@ CELERY_REDIS_BACKEND_USE_SSL = {'ssl_cert_reqs': ssl.CERT_NONE}
 
 CELERY_BROKER_TRANSPORT_OPTIONS = {
     'is_cluster': True,
-    # --- DIRECTLY SET THE KEYS USED BY QoS.append ---
-    'unacked_key': '{celery}.unacked', # Ensure this starts with your hash tag
-    'unacked_index_key': '{celery}.unacked_index', # Ensure this starts with your hash tag
-    # Remove 'queue_name_prefix' for this test, as we are being more direct.
-    # If this works, we can see if 'queue_name_prefix' is still needed for other things
-    # or if being this direct is the way for QoS.
+    'unacked_key': '{celery}.unacked', 
+    'unacked_index_key': '{celery}.unacked_index', 
+
 }
 
 CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {
     'is_cluster': True,
-    # You could add 'queue_name_prefix': '{celery}.results.' here if needed for results,
-    # but it's not related to the broker's QoS CROSSSLOT issue.
 }
 
 CELERY_CONTROL_EXCHANGE = '{celery}.pidbox'
 CELERY_EVENT_QUEUE_PREFIX = '{celery}.eve'
-CELERY_TASK_DEFAULT_QUEUE = '{celery}.tasks' # Keep this explicitly hashtagged
+CELERY_TASK_DEFAULT_QUEUE = '{celery}.tasks' 
 
 # Accept JSON content for tasks
 CELERY_ACCEPT_CONTENT = ['json']
