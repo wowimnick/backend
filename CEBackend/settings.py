@@ -344,6 +344,8 @@ CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {
     'is_cluster': True,
 }
 
+CELERY_CONTROL_EXCHANGE = '{celery}.pidbox'
+
 # Accept JSON content for tasks
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
