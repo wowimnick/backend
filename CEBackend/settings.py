@@ -319,39 +319,36 @@ FRONTEND_PASSWORD_RESET_CONFIRM_PATH = '/reset-password/{uid}/{token}/'
 # ------------------------------------------------------------------------------
 # Use Redis as the broker
 # Ensure Redis is running: redis-server
-broker_url_base = 'rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379'
-broker_transport_query = 'queue_name_prefix=%7Bcelery%7D.&is_cluster=true' # %7B is {, %7D is }
+CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379')
+CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379')
 
-CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', f'{broker_url_base}?{broker_transport_query}')
+CELERY_BROKER_USE_SSL = {'ssl_cert_reqs': ssl.CERT_NONE}
+CELERY_REDIS_BACKEND_USE_SSL = {'ssl_cert_reqs': ssl.CERT_NONE}
 
-# Result backend doesn't use QoS unacked keys in the same way,
-# but setting queue_name_prefix can be good for consistency if it uses other prefixed keys.
-# Or keep it simpler if it's not causing issues.
-result_url_base = 'rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379'
-result_transport_query = 'queue_name_prefix=%7Bcelery%7D.results.&is_cluster=true'
-CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', f'{result_url_base}?{result_transport_query}')
-
-
-CELERY_BROKER_USE_SSL = {'ssl_cert_reqs': ssl.CERT_NONE} # Still need this for rediss://
-CELERY_REDIS_BACKEND_USE_SSL = {'ssl_cert_reqs': ssl.CERT_NONE} # Still need this for rediss://
-
-# We've moved queue_name_prefix and is_cluster into the URL.
-# So, CELERY_BROKER_TRANSPORT_OPTIONS can be simpler or empty if all options are in URL.
-# Let's keep it empty for now to test if URL options are picked up.
+# This is where queue_name_prefix belongs
 CELERY_BROKER_TRANSPORT_OPTIONS = {
-    # 'is_cluster': True, # Moved to URL
-    # 'queue_name_prefix': '{celery}.', # Moved to URL
+    'is_cluster': True,
+    'queue_name_prefix': '{celery}.', # Should be picked up by Kombu Redis Channel
+    # The 'visibility_timeout' default is 3600 (1 hour). If tasks are acked quickly, this is fine.
+    # 'visibility_timeout': 3600,
 }
+
+# For the result backend, is_cluster is the most important.
+# It doesn't have the same complex QoS unacked logic as the broker.
 CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {
-    # 'is_cluster': True, # Moved to URL
-    # 'queue_name_prefix': '{celery}.results.', # Moved to URL
+    'is_cluster': True,
+    # You could add a queue_name_prefix here too if you want all result keys
+    # to also be namespaced, e.g., '{celery}.results.'
+    # This would affect how celery.backends.database.DatabaseBackend stores task results if using Redis as that DB.
+    # For now, let's focus on the broker.
 }
 
 CELERY_CONTROL_EXCHANGE = '{celery}.pidbox'
-CELERY_EVENT_QUEUE_PREFIX = '{celery}.eve'
+CELERY_EVENT_QUEUE_PREFIX = '{celery}.eve' # This prefixes event QUEUE names
 
-# With queue_name_prefix='{celery}.' (from broker URL), this becomes '{celery}.tasks'
-CELERY_TASK_DEFAULT_QUEUE = 'tasks'
+# If CELERY_BROKER_TRANSPORT_OPTIONS['queue_name_prefix'] = '{celery}.' is active,
+# Kombu's Redis transport should automatically prefix this queue name.
+CELERY_TASK_DEFAULT_QUEUE = 'tasks' # Will become '{celery}.tasks'
 
 # Accept JSON content for tasks
 CELERY_ACCEPT_CONTENT = ['json']
