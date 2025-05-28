@@ -488,7 +488,8 @@ DATABASES = {
         'NAME': 'CEDB',
         'USER': 'postgres',
         'PASSWORD': 'A>a*kU>)78P?$R)|k4Ae?|ramjpU',
-        'HOST': 'localhost', #  localhost
+        'HOST': 'database-2.czutdql9jx70.us-east-2.rds.amazonaws.com', #  localhost
+        'PORT': '5432',
     }
 }
 
