@@ -358,7 +358,7 @@ else: # Production settings (EC2 with ElastiCache Cluster)
     CELERY_TASK_DEFAULT_QUEUE = '{celery}.tasks'
 
 
-# --- Common Celery Settings (apply to both local and prod) ---
+# -- Common Celery Settings (apply to both local and prod) --
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
