@@ -315,8 +315,8 @@ FRONTEND_BASE_URL = os.environ.get('FRONTEND_URL', 'http://localhost:5173')
 FRONTEND_EMAIL_VERIFICATION_PATH = '/verify-email/{key}/'
 FRONTEND_PASSWORD_RESET_CONFIRM_PATH = '/reset-password/{uid}/{token}/'
 
-CURRENT_HOSTNAME = socket.gethostname()
-IS_LOCAL_MACHINE = (CURRENT_HOSTNAME == 'Banana') # Or whatever your local hostname truly is
+#CURRENT_HOSTNAME = socket.gethostname()
+IS_LOCAL_MACHINE = ('Banana' == 'Banana') # Or whatever your local hostname truly is
 
 # --- Celery Configuration ---
 if IS_LOCAL_MACHINE:
