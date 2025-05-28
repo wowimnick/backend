@@ -427,8 +427,8 @@ CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            # "hosts": ["redis://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379"],
-            "hosts": ["redis://localhost:6379"],
+            "hosts": ["redis://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379"],
+            # "hosts": ["redis://localhost:6379"],
         },
     },
 }
