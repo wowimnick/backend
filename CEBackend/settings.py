@@ -316,7 +316,7 @@ FRONTEND_EMAIL_VERIFICATION_PATH = '/verify-email/{key}/'
 FRONTEND_PASSWORD_RESET_CONFIRM_PATH = '/reset-password/{uid}/{token}/'
 
 #CURRENT_HOSTNAME = socket.gethostname()
-IS_LOCAL_MACHINE = ('Banana' == 'Banana') # Or whatever your local hostname truly is
+IS_LOCAL_MACHINE = ('Hehe' == 'Banana') # Or whatever your local hostname truly is
 
 # --- Celery Configuration ---
 if IS_LOCAL_MACHINE:
