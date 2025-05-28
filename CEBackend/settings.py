@@ -337,7 +337,7 @@ if IS_LOCAL_MACHINE:
     CELERY_TASK_DEFAULT_QUEUE = 'celery'
 
 else: # Production settings (EC2 with ElastiCache Cluster)
-    print(f"---- DETECTED PRODUCTION ENV (Hostname: {CURRENT_HOSTNAME}) - Using ElastiCache Redis Cluster settings ----")
+    print(f"---- DETECTED PRODUCTION ENV (Hostname: ) - Using ElastiCache Redis Cluster settings ----")
     CELERY_BROKER_URL = 'rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379'
     CELERY_RESULT_BACKEND = 'rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379'
 
