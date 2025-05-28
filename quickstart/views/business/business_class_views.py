@@ -18,12 +18,12 @@ from quickstart.serializers.admin.class_management.class_management_serializers 
 
 from ...models import (
     BusinessInfo, ClassCategory, ClassSubcategory, ClassesMain, ClassImage,
-    ClassOption, Schedule, ScheduleInstance, ScheduleBreak, Booking, Reviews
+    ClassOption, Schedule, ScheduleInstance, Booking, Reviews
 )
 
 from ...serializers import (
     ManagedClassSerializer, ClassCreateSerializer, ClassImageSerializer,
-    ManagedClassOptionSerializer, ScheduleSerializer, ScheduleInstanceSerializer, ScheduleBreakSerializer
+    ManagedClassOptionSerializer, ScheduleSerializer, ScheduleInstanceSerializer
 )
 
 from ...utils.permissions import CanManageOwnClasses, IsVerifiedAndActiveBusinessOwnerOrManager
@@ -572,17 +572,6 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
         instance.delete(force_delete=False)
         logger.info(f"Schedule ID {schedule_id} deactivated by {self.request.user.email}")
 
-    @action(detail=True, methods=['post'])
-    def add_break(self, request, pk=None):
-        schedule = self.get_object()
-        data = request.data.copy(); data['schedule'] = schedule.pk
-        serializer = ScheduleBreakSerializer(data=data)
-        serializer.is_valid(raise_exception=True)
-        break_instance = serializer.save() # Model save cancels instances
-        logger.info(f"Break added to Schedule {schedule.pk} by {request.user.email}")
-        return Response(ScheduleBreakSerializer(break_instance).data, status=status.HTTP_201_CREATED)
-
-
 class BusinessScheduleInstanceViewSet(viewsets.ModelViewSet):
     serializer_class = ScheduleInstanceSerializer
     permission_classes = [IsAuthenticated, CanManageOwnClasses]
@@ -682,41 +671,3 @@ class BusinessScheduleInstanceViewSet(viewsets.ModelViewSet):
          if errors:
               return Response({"message": "Partial success with errors.", "updated": updated_count, "skipped": skipped_count, "errors": errors}, status=status.HTTP_400_BAD_REQUEST)
          return Response({"message": "Attendance marked successfully.", "updated_count": updated_count})
-
-
-class BusinessScheduleBreakViewSet(viewsets.ModelViewSet):
-     serializer_class = ScheduleBreakSerializer
-     permission_classes = [IsAuthenticated, CanManageOwnClasses]
-
-     def get_queryset(self):
-          user = self.request.user
-          business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
-          if not business: return ScheduleBreak.objects.none()
-          queryset = ScheduleBreak.objects.filter(schedule__option__classId__businessId=business)
-          schedule_id = self.request.query_params.get('schedule_id')
-          if schedule_id and schedule_id.isdigit():
-               queryset = queryset.filter(schedule_id=schedule_id)
-          return queryset.select_related('schedule').order_by('-start_date')
-
-     def perform_create(self, serializer):
-          schedule = serializer.validated_data.get('schedule')
-          user = self.request.user
-          business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
-          if not business or schedule.option.classId.businessId != business:
-               raise PermissionDenied("Cannot add break to this schedule.")
-          instance = serializer.save() # Model save cancels instances
-          logger.info(f"Break period created for Schedule {schedule.pk} by {user.email}")
-
-     def perform_update(self, serializer):
-           instance = self.get_object() # Ensures ownership
-           serializer.validated_data.pop('schedule', None) # Don't change parent schedule
-           updated_instance = serializer.save()
-           logger.info(f"Break period {instance.pk} updated by {self.request.user.email}")
-           # TODO: Logic to re-evaluate affected instances
-
-     def perform_destroy(self, instance):
-          # Ensures ownership
-          break_id = instance.pk
-          # TODO: Logic to re-evaluate affected instances
-          instance.delete()
-          logger.info(f"Break period {break_id} deleted by {self.request.user.email}")

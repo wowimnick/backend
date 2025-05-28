@@ -8,7 +8,7 @@ import logging
 # Adjust import paths as needed
 from ...models import (
     BusinessInfo, ClassCategory, ClassSubcategory, ClassesMain, ClassImage,
-    ClassOption, Schedule, ScheduleInstance, ScheduleBreak
+    ClassOption, Schedule, ScheduleInstance
 )
 # Assuming business permissions are defined elsewhere
 # from ...permissions import check_user_role # If needed for validation
@@ -24,30 +24,6 @@ class ClassImageSerializer(serializers.ModelSerializer):
         model = ClassImage
         fields = ['imageId', 'image', 'createdAt']
         read_only_fields = ['imageId', 'createdAt']
-
-class ScheduleBreakSerializer(serializers.ModelSerializer):
-    """Serializer for managing schedule breaks."""
-    class Meta:
-        model = ScheduleBreak
-        fields = ['id', 'schedule', 'start_date', 'end_date', 'reason', 'created_at']
-        read_only_fields = ['id', 'created_at']
-
-    def validate(self, data):
-        # Keep existing validation for dates and overlaps
-        start_date = data.get('start_date', getattr(self.instance, 'start_date', None))
-        end_date = data.get('end_date', getattr(self.instance, 'end_date', None))
-        schedule = data.get('schedule', getattr(self.instance, 'schedule', None))
-
-        if not schedule:
-             # This should be caught by required field, but extra check
-             raise serializers.ValidationError({"schedule": "Schedule is required."})
-        if not start_date or not end_date:
-             raise serializers.ValidationError("Start date and end date are required.")
-
-        if start_date >= end_date:
-            raise serializers.ValidationError({'end_date': 'End date must be after start date'})
-        # Add other validations (past dates, overlaps) if needed
-        return data
 
 class ScheduleInstanceSerializer(serializers.ModelSerializer):
     """Serializer for managing schedule instances (e.g., cancel, mark attendance)."""
@@ -74,8 +50,6 @@ class ScheduleInstanceSerializer(serializers.ModelSerializer):
 
 class ScheduleSerializer(serializers.ModelSerializer):
     """Serializer for creating/managing schedules within a class option."""
-    # breaks = ScheduleBreakSerializer(many=True, read_only=True) # Show breaks if needed
-    # instances = ScheduleInstanceSerializer(many=True, read_only=True) # Maybe only show upcoming?
 
     class Meta:
         model = Schedule
@@ -87,7 +61,6 @@ class ScheduleSerializer(serializers.ModelSerializer):
             'date', # For single sessions
             'allow_late_enrollment',
             'created_at', 'updated_at',
-            # 'breaks', 'instances' # Optional nested reads
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
         extra_kwargs = {

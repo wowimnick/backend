@@ -1,7 +1,7 @@
-# views/business/business_booking_views.py
+# quickstart/views/business/business_booking_views.py
 from decimal import Decimal
 from django.conf import settings
-from django.db import models, transaction  # Added models
+from django.db import models, transaction
 from django.db.models import (
     Q,
     Sum,
@@ -16,57 +16,53 @@ from django.db.models import (
     Subquery,
     OuterRef,
     IntegerField,
-)  # Added Value
+    DateTimeField,
+    DateField,  # Added DateField
+)
 from django.db.models.functions import (
     TruncDate,
     ExtractWeekDay,
-    datetime,
+    datetime as ExtractDatetimeDb,  # Renamed to avoid conflict
     Concat,
     RowNumber,
     Cast,
     ExtractHour,
     Coalesce,
-)  # Added datetime
+    TruncHour,  # Added TruncHour
+)
 from django.utils import timezone
-from datetime import (
-    datetime,
-    timedelta,
-)  # Ensure datetime is imported from datetime module
+from datetime import datetime, timedelta, date as datetime_date
 from django.shortcuts import get_object_or_404
 from django.core.exceptions import ValidationError as DjangoValidationError
+import pytz
 
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.exceptions import (
-    ValidationError,
-    PermissionDenied,
-    NotFound,
-)  # Added NotFound
+from rest_framework.exceptions import ValidationError, PermissionDenied, NotFound
 from rest_framework.permissions import IsAuthenticated, BasePermission
 from rest_framework.pagination import PageNumberPagination
 
-# Adjust import paths as needed
-from ...models import BusinessInfo, Booking, ScheduleInstance, CustomUser
-from ...serializers import (
-    BookingDetailSerializer,  # Generic detail
-    BusinessBookingListSerializer,  # Specific list for business
+from ...models import (
+    BusinessInfo,
+    Booking,
+    ScheduleInstance,
+    CustomUser,
+    ClassesMain,
+)  # Added ClassesMain
+from ...serializers.business.business_booking_serializers import (
+    BusinessBookingListSerializer,
+    BusinessBookingDetailSerializer,
 )
-
-# Import specific business permissions
-from ...utils.permissions import (
-    CanManageOwnClasses,
-)  # For checking if user can manage related class
-
+from ...utils.permissions import CanManageOwnClasses
+from ...utils.email_utils import send_booking_cancelled_by_other_email
 import logging
 
 logger = logging.getLogger(__name__)
 
-from ...utils.email_utils import send_booking_cancelled_by_other_email
 
-
-# --- Permissions ---
-class CanViewOwnBusinessBookings(BasePermission):
+# --- Permissions and Pagination (Assumed to be defined as before) ---
+class CanViewOwnBusinessBookings(BasePermission):  # ... (definition as before)
     message = "You do not have permission to view bookings for this business."
 
     def has_permission(self, request, view):
@@ -79,7 +75,7 @@ class CanViewOwnBusinessBookings(BasePermission):
         ).exists()
         return has_base_perm and has_business
 
-    def has_object_permission(self, request, view, obj):
+    def has_object_permission(self, request, view, obj):  # obj is Booking instance
         user = request.user
         business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
         if not business:
@@ -90,7 +86,7 @@ class CanViewOwnBusinessBookings(BasePermission):
             return False
 
 
-class CanManageOwnBusinessBookings(BasePermission):
+class CanManageOwnBusinessBookings(BasePermission):  # ... (definition as before)
     message = "You do not have permission to manage this booking."
 
     def has_permission(self, request, view):
@@ -106,7 +102,7 @@ class CanManageOwnBusinessBookings(BasePermission):
             and BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).exists()
         )
 
-    def has_object_permission(self, request, view, obj):
+    def has_object_permission(self, request, view, obj):  # obj is Booking instance
         user = request.user
         business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
         if not business:
@@ -117,15 +113,14 @@ class CanManageOwnBusinessBookings(BasePermission):
             return False
 
 
-# --- Pagination ---
-class BusinessBookingPagination(PageNumberPagination):
-    page_size = 25
+class BusinessBookingPagination(PageNumberPagination):  # ... (definition as before)
+    page_size = 10
     page_size_query_param = "page_size"
-    max_page_size = 100
+    max_page_size = 50
 
 
-# --- Business ViewSet ---
 class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
+    # ... (other parts of the ViewSet: serializer_class, permission_classes, etc. as before) ...
     serializer_class = BusinessBookingListSerializer
     permission_classes = [IsAuthenticated, CanViewOwnBusinessBookings]
     pagination_class = BusinessBookingPagination
@@ -151,29 +146,29 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_serializer_class(self):
         if self.action == "retrieve":
-            return BookingDetailSerializer
+            return BusinessBookingDetailSerializer
         return BusinessBookingListSerializer
 
     def get_business_context(self):
         user = self.request.user
         try:
-            business = BusinessInfo.objects.get(Q(owner=user) | Q(managers=user))
+            business = BusinessInfo.objects.filter(owner=user).first()
+            if not business:
+                business = BusinessInfo.objects.filter(managers=user).first()
+            if not business:
+                raise PermissionDenied(
+                    "You are not associated with an active business."
+                )
             return business
         except BusinessInfo.DoesNotExist:
             raise PermissionDenied("You are not associated with a business.")
-        except BusinessInfo.MultipleObjectsReturned:
-            logger.error(
-                f"User {user.email} is owner/manager of multiple businesses. Ambiguous context."
-            )
-            raise PermissionDenied(
-                "Ambiguous business context. Please contact support."
-            )
 
     def get_queryset(self):
         business = self.get_business_context()
         queryset = Booking.objects.filter(
             schedule_instance__schedule__option__classId__businessId=business
         ).select_related(
+            "schedule_instance__schedule__option__classId__businessId",
             "schedule_instance__schedule__option__classId",
             "schedule_instance__schedule__option",
             "user",
@@ -184,23 +179,41 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
     def _apply_business_filters(self, queryset, request):
         status_param = request.query_params.get("status")
         if status_param and status_param != "all":
-            status_list = [s.strip() for s in status_param.split(",") if s.strip()]
+            status_list = [
+                s.strip().lower() for s in status_param.split(",") if s.strip()
+            ]
             if status_list:
                 queryset = queryset.filter(status__in=status_list)
 
-        start_date = request.query_params.get("start_date")
-        end_date = request.query_params.get("end_date")
-        if start_date:
-            queryset = queryset.filter(schedule_instance__date__gte=start_date)
-        if end_date:
-            queryset = queryset.filter(schedule_instance__date__lte=end_date)
+        # Date range filter applies to booking_date for analytics, schedule_instance.date for lists
+        # For consistency in _apply_business_filters IF it's used by analytics too, pick one or pass context
+        # Assuming this filter is for general list view on schedule_instance.date
+        start_date_str = request.query_params.get("start_date")
+        end_date_str = request.query_params.get("end_date")
+        if start_date_str:
+            try:
+                start_date_filter = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+                queryset = queryset.filter(
+                    schedule_instance__date__gte=start_date_filter
+                )
+            except ValueError:
+                logger.warning(
+                    f"Invalid start_date format for list filter: {start_date_str}"
+                )
+        if end_date_str:
+            try:
+                end_date_filter = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+                queryset = queryset.filter(schedule_instance__date__lte=end_date_filter)
+            except ValueError:
+                logger.warning(
+                    f"Invalid end_date format for list filter: {end_date_str}"
+                )
 
-        class_id = request.query_params.get("class_id")
+        class_id = request.query_params.get("class_id")  # Used by analytics
         if class_id and class_id.isdigit():
             queryset = queryset.filter(
                 schedule_instance__schedule__option__classId_id=class_id
             )
-
         user_id = request.query_params.get("user_id")
         if user_id and user_id.isdigit():
             queryset = queryset.filter(user_id=user_id)
@@ -214,25 +227,17 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                 page, many=True, context={"request": request}
             )
             response = self.get_paginated_response(serializer.data)
-            business = self.get_business_context()
-            # Apply same filters to count_qs for accurate summary
-            count_qs_base = Booking.objects.filter(
-                schedule_instance__schedule__option__classId__businessId=business
-            )
-            count_qs_filtered = self._apply_business_filters(count_qs_base, request)
-
+            summary_qs = queryset
             response.data["summary"] = {
-                "total_confirmed": count_qs_filtered.filter(status="confirmed").count(),
-                "total_completed": count_qs_filtered.filter(status="completed").count(),
-                "total_cancelled": count_qs_filtered.filter(status="cancelled").count(),
-                "total_bookings": count_qs_filtered.count(),  # Total booking transactions matching filters
-                # Total participant spots matching filters
-                "total_participant_spots": count_qs_filtered.aggregate(
+                "total_confirmed": summary_qs.filter(status="confirmed").count(),
+                "total_completed": summary_qs.filter(status="completed").count(),
+                "total_cancelled": summary_qs.filter(status="cancelled").count(),
+                "total_bookings_in_filter": summary_qs.count(),
+                "total_participant_spots_in_filter": summary_qs.aggregate(
                     total_spots=Coalesce(Sum("participants"), Value(0))
                 )["total_spots"],
             }
             return response
-
         serializer = self.get_serializer(
             queryset, many=True, context={"request": request}
         )
@@ -249,6 +254,7 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
         permission_classes=[IsAuthenticated, CanManageOwnBusinessBookings],
     )
     def mark_attendance(self, request, pk=None):
+        # ... (as before)
         if not request.user.has_perm("quickstart.mark_booking_attendance"):
             raise PermissionDenied("You do not have permission to mark attendance.")
         booking = self.get_object()
@@ -260,6 +266,24 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
         if booking.status != "confirmed":
             raise ValidationError(
                 {"status": "Can only mark attendance for confirmed bookings."}
+            )
+
+        instance_datetime = datetime.combine(
+            booking.schedule_instance.date, booking.schedule_instance.time
+        )
+        business_tz_str = (
+            booking.schedule_instance.schedule.option.classId.businessId.business_timezone
+        )
+        try:
+            business_tz = pytz.timezone(business_tz_str)
+        except pytz.UnknownTimeZoneError:
+            business_tz = pytz.utc
+            logger.warning(f"Unknown business timezone '{business_tz_str}'. Using UTC.")
+        aware_instance_datetime = business_tz.localize(instance_datetime)
+
+        if aware_instance_datetime > timezone.now():
+            raise ValidationError(
+                {"date": "Cannot mark attendance for future sessions."}
             )
 
         with transaction.atomic():
@@ -274,10 +298,13 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
             ).exists():
                 instance.attendance_marked = True
                 instance.save(update_fields=["attendance_marked"])
+
         logger.info(
             f"Attendance marked for Booking {pk} (Attended: {attended_status}) by business user {request.user.email}"
         )
-        serializer = BookingDetailSerializer(booking, context={"request": request})
+        serializer = BusinessBookingDetailSerializer(
+            booking, context={"request": request}
+        )
         return Response(serializer.data)
 
     @action(
@@ -287,6 +314,7 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
         permission_classes=[IsAuthenticated, CanManageOwnBusinessBookings],
     )
     def business_cancel(self, request, pk=None):
+        # ... (as before)
         if not request.user.has_perm("quickstart.cancel_business_booking"):
             raise PermissionDenied(
                 "You do not have permission to cancel bookings for this business."
@@ -299,6 +327,23 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
             raise ValidationError(
                 {"status": f'Cannot cancel a booking with status "{booking.status}".'}
             )
+
+        instance_datetime = datetime.combine(
+            booking.schedule_instance.date, booking.schedule_instance.time
+        )
+        business_tz_str = (
+            booking.schedule_instance.schedule.option.classId.businessId.business_timezone
+        )
+        try:
+            business_tz = pytz.timezone(business_tz_str)
+        except pytz.UnknownTimeZoneError:
+            business_tz = pytz.utc
+            logger.warning(f"Unknown business timezone '{business_tz_str}'. Using UTC.")
+        aware_instance_datetime = business_tz.localize(instance_datetime)
+
+        if aware_instance_datetime < timezone.now():
+            raise ValidationError({"date": "Cannot cancel bookings for past sessions."})
+
         user_to_notify = booking.user
         try:
             with transaction.atomic():
@@ -309,13 +354,6 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                 )
                 if booking.payment_status == "paid":
                     booking.payment_status = "refund_pending"
-                    logger.info(
-                        f"Booking {pk} cancelled by business user {request.user.email}. Marked payment as refund_pending."
-                    )
-                else:
-                    logger.info(
-                        f"Booking {pk} cancelled by business user {request.user.email}. No refund processing needed (Payment Status: {booking.payment_status})."
-                    )
                 booking.save(
                     update_fields=[
                         "status",
@@ -335,20 +373,16 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                         reason=cancellation_reason,
                         contact_info=contact_info,
                     )
-                    logger.info(
-                        f"'Cancelled by other' email prepared/queued for user {user_to_notify.email} for booking {booking.id}"
-                    )
                 except Exception as email_error:
                     logger.error(
                         f"Failed to send cancellation email for booking {booking.id}: {email_error}",
                         exc_info=True,
                     )
-            serializer = BookingDetailSerializer(booking, context={"request": request})
+            serializer = BusinessBookingDetailSerializer(
+                booking, context={"request": request}
+            )
             return Response(serializer.data, status=status.HTTP_200_OK)
         except ValidationError as ve:
-            logger.warning(
-                f"Validation error during business cancel for booking {pk}: {ve.detail}"
-            )
             return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             logger.error(
@@ -366,23 +400,43 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
             raise PermissionDenied(
                 "You do not have permission to view booking analytics for this business."
             )
+
         business = self.get_business_context()
+        business_pytz = pytz.timezone(
+            business.business_timezone
+        )  # Business's local timezone
+
         try:
-            start_datetime, end_datetime = self._get_date_range(request)
-            bookings_qs = Booking.objects.filter(
-                schedule_instance__schedule__option__classId__businessId=business,
-                booking_date__range=[start_datetime, end_datetime],
-            ).select_related(
-                "schedule_instance__schedule__option__classId",
-                "schedule_instance__schedule__option",
-                "user",
+            start_datetime_utc, end_datetime_utc = self._get_date_range_for_analytics(
+                request
             )
 
+            # Base queryset for bookings within the UTC date range
+            bookings_qs_base = Booking.objects.filter(
+                schedule_instance__schedule__option__classId__businessId=business,
+                booking_date__range=[
+                    start_datetime_utc,
+                    end_datetime_utc,
+                ],  # Filter by UTC booking_date
+            )
+
+            # Apply class_id filter if provided
+            class_id_filter = request.query_params.get("class_id")
+            if class_id_filter and class_id_filter.isdigit():
+                bookings_qs_base = bookings_qs_base.filter(
+                    schedule_instance__schedule__option__classId_id=class_id_filter
+                )
+
+            # Ensure related objects are selected
+            bookings_qs = bookings_qs_base.select_related(
+                "schedule_instance__schedule__option__classId",  # For class title in popular_classes
+                "user",  # For unique booker counts
+            )
+
+            # --- Summary Aggregates (as before) ---
             total_aggregates = bookings_qs.aggregate(
-                total_booking_transactions=Count("id"),  # Number of booking actions
-                total_participant_spots=Coalesce(
-                    Sum("participants"), Value(0)
-                ),  # Total spots booked
+                total_booking_transactions=Count("id"),
+                total_participant_spots=Coalesce(Sum("participants"), Value(0)),
                 confirmed_transactions=Count("id", filter=Q(status="confirmed")),
                 completed_transactions=Count("id", filter=Q(status="completed")),
                 cancelled_transactions=Count("id", filter=Q(status="cancelled")),
@@ -404,7 +458,6 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                 if total_booking_transactions > 0
                 else 0
             )
-
             completed_qs = bookings_qs.filter(status="completed")
             total_completed_for_attendance = completed_qs.aggregate(
                 total_spots=Coalesce(Sum("participants"), Value(0))
@@ -419,7 +472,6 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                 if total_completed_for_attendance > 0
                 else 0
             )
-
             user_bookings_in_business = bookings_qs.values("user").annotate(
                 booking_tx_count=Count("id")
             )
@@ -433,25 +485,74 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                 else 0
             )
 
+            # --- Daily Trends (based on booking_date converted to business local date) ---
             daily_trends_data = (
-                bookings_qs.annotate(date=TruncDate("booking_date"))
-                .values("date")
+                bookings_qs.annotate(
+                    # Convert UTC booking_date to business's local date for grouping
+                    # This requires database functions or more complex annotation if business_timezone varies
+                    # Assuming a single business_timezone for simplicity here in annotation
+                    # For PostgreSQL: F('booking_date').astimezone(business_pytz)
+                    # For cross-DB, TruncDate on UTC is simpler, then frontend can adjust display
+                    date_local=TruncDate(
+                        F("booking_date"), tzinfo=business_pytz
+                    )  # Group by local date
+                )
+                .values("date_local")
                 .annotate(
                     new_booking_transactions=Count("id"),
-                    new_participant_spots=Sum("participants"),
+                    new_participant_spots=Coalesce(Sum("participants"), Value(0)),
                     cancelled_booking_transactions=Count(
                         "id", filter=Q(status="cancelled")
                     ),
+                    # Add cancelled spots for net calculation
+                    cancelled_participant_spots=Coalesce(
+                        Sum("participants", filter=Q(status="cancelled")), Value(0)
+                    ),
                 )
-                .order_by("date")
+                .order_by("date_local")
             )
 
-            processed_trends = [
-                {
-                    "date": trend["date"].isoformat(),
-                    "new_booking_transactions": trend["new_booking_transactions"],
-                    "new_participant_spots": trend["new_participant_spots"] or 0,
-                    "cancellation_rate": round(
+            all_trend_dates_local = {}  # Keyed by local date string
+            current_scan_local_date = start_datetime_utc.astimezone(
+                business_pytz
+            ).date()
+            end_scan_local_date = end_datetime_utc.astimezone(business_pytz).date()
+
+            while current_scan_local_date <= end_scan_local_date:
+                date_iso = current_scan_local_date.isoformat()
+                all_trend_dates_local[date_iso] = {
+                    "date": date_iso,  # Local date
+                    "new_booking_transactions": 0,
+                    "new_participant_spots": 0,
+                    "cancelled_booking_transactions": 0,
+                    "cancelled_participant_spots": 0,
+                    "net_participant_spots": 0,
+                    "cancellation_rate_by_transaction": 0.0,  # Renamed to be specific
+                }
+                current_scan_local_date += timedelta(days=1)
+
+            for trend in daily_trends_data:
+                local_date_iso = trend["date_local"].isoformat()
+                if local_date_iso in all_trend_dates_local:
+                    all_trend_dates_local[local_date_iso][
+                        "new_booking_transactions"
+                    ] = trend["new_booking_transactions"]
+                    all_trend_dates_local[local_date_iso]["new_participant_spots"] = (
+                        trend["new_participant_spots"]
+                    )
+                    all_trend_dates_local[local_date_iso][
+                        "cancelled_booking_transactions"
+                    ] = trend["cancelled_booking_transactions"]
+                    all_trend_dates_local[local_date_iso][
+                        "cancelled_participant_spots"
+                    ] = trend["cancelled_participant_spots"]
+                    all_trend_dates_local[local_date_iso]["net_participant_spots"] = (
+                        trend["new_participant_spots"]
+                        - trend["cancelled_participant_spots"]
+                    )
+                    all_trend_dates_local[local_date_iso][
+                        "cancellation_rate_by_transaction"
+                    ] = round(
                         (
                             (
                                 trend["cancelled_booking_transactions"]
@@ -462,36 +563,44 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                             else 0
                         ),
                         1,
-                    ),
-                }
-                for trend in daily_trends_data
-            ]
+                    )
+            processed_trends = sorted(
+                all_trend_dates_local.values(), key=lambda x: x["date"]
+            )
 
+            # --- Popular Classes (Added Revenue) ---
             popular_classes_data = (
                 bookings_qs.values(
                     "schedule_instance__schedule__option__classId__title"
                 )
                 .annotate(
                     total_booking_transactions=Count("id"),
-                    total_participant_spots=Sum(
-                        "participants"
-                    ),  # Sum of participants for this class
+                    total_participant_spots=Coalesce(Sum("participants"), Value(0)),
                     unique_bookers=Count("user", distinct=True),
-                    class_completed_spots=Sum(
-                        "participants", filter=Q(status="completed")
+                    class_completed_spots=Coalesce(
+                        Sum("participants", filter=Q(status="completed")), Value(0)
                     ),
-                    class_attended_spots=Sum(
-                        "participants",
-                        filter=Q(
-                            status="completed", attendance_marked=True, attended=True
+                    class_attended_spots=Coalesce(
+                        Sum(
+                            "participants",
+                            filter=Q(
+                                status="completed",
+                                attendance_marked=True,
+                                attended=True,
+                            ),
                         ),
+                        Value(0),
                     ),
-                    class_cancelled_spots=Sum(
-                        "participants", filter=Q(status="cancelled")
+                    class_cancelled_spots=Coalesce(
+                        Sum("participants", filter=Q(status="cancelled")), Value(0)
                     ),
+                    total_revenue_for_class=Coalesce(
+                        Sum("amount_paid", filter=Q(payment_status="paid")),
+                        Value(Decimal("0.0")),
+                    ),  # Added revenue
                 )
                 .order_by("-total_participant_spots")
-            )  # Order by total spots
+            )
 
             popular_classes = [
                 {
@@ -499,8 +608,9 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                         "schedule_instance__schedule__option__classId__title"
                     ],
                     "total_booking_transactions": entry["total_booking_transactions"],
-                    "total_participant_spots": entry["total_participant_spots"] or 0,
+                    "total_participant_spots": entry["total_participant_spots"],
                     "unique_bookers": entry["unique_bookers"],
+                    "total_revenue": float(entry["total_revenue_for_class"]),  # Added
                     "attendance_rate": round(
                         (
                             (
@@ -530,42 +640,64 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                 if entry["schedule_instance__schedule__option__classId__title"]
             ]
 
+            # --- Time Distribution (based on LOCAL business hour of booking) ---
+            # Using TruncHour with tzinfo for local business time grouping
             time_dist_data = (
                 bookings_qs.annotate(
-                    hour=ExtractHour(
-                        "booking_date"
-                    )  # Assuming booking_date is what matters for "time of day" pattern
+                    local_booking_hour_group=TruncHour(
+                        F("booking_date"), tzinfo=business_pytz
+                    )
                 )
-                .values("hour")
+                .values(
+                    hour_local=ExtractHour(
+                        "local_booking_hour_group"
+                    )  # Extract hour from the localized timestamp
+                )
                 .annotate(
                     booking_transactions=Count("id"),
-                    participant_spots=Sum("participants"),
+                    participant_spots=Coalesce(Sum("participants"), Value(0)),
                     cancelled_transactions=Count("id", filter=Q(status="cancelled")),
                 )
-                .order_by("hour")
+                .order_by("hour_local")
             )
-            time_distribution = [
-                {
-                    "hour": entry["hour"],
-                    "booking_transactions": entry["booking_transactions"],
-                    "participant_spots": entry["participant_spots"] or 0,
-                    "cancelled_transactions": entry["cancelled_transactions"],
-                }
-                for entry in time_dist_data
-            ]
 
+            time_distribution_local = [
+                {
+                    "hour": h,
+                    "booking_transactions": 0,
+                    "participant_spots": 0,
+                    "cancelled_transactions": 0,
+                }
+                for h in range(24)
+            ]
+            for entry in time_dist_data:
+                hour_idx = entry["hour_local"]
+                if 0 <= hour_idx < 24:
+                    time_distribution_local[hour_idx]["booking_transactions"] = entry[
+                        "booking_transactions"
+                    ]
+                    time_distribution_local[hour_idx]["participant_spots"] = entry[
+                        "participant_spots"
+                    ]
+                    time_distribution_local[hour_idx]["cancelled_transactions"] = entry[
+                        "cancelled_transactions"
+                    ]
+
+            # --- Booking Type Distribution (as before) ---
             type_dist_data = (
                 bookings_qs.values("enrollment_type")
-                .annotate(transaction_count=Count("id"), spot_count=Sum("participants"))
+                .annotate(
+                    transaction_count=Count("id"),
+                    spot_count=Coalesce(Sum("participants"), Value(0)),
+                )
                 .order_by("-spot_count")
             )
-
             total_spots_for_types = total_aggregates["total_participant_spots"]
             booking_types = [
                 {
                     "type": entry["enrollment_type"],
                     "transaction_count": entry["transaction_count"],
-                    "spot_count": entry["spot_count"] or 0,
+                    "spot_count": entry["spot_count"],
                     "percentage_of_spots": round(
                         (
                             (entry["spot_count"] / total_spots_for_types * 100)
@@ -579,12 +711,106 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                 if entry["enrollment_type"]
             ]
 
+            # --- Booking Lead Time Analysis (Simplified: avg lead time) ---
+            # lead_time_days = ExpressionWrapper(
+            #     F('schedule_instance__date') - TruncDate(F('booking_date')), # Difference between class date and booking date part
+            #     output_field=models.DurationField()
+            # )
+            # For more complex bucketing, Python processing post-fetch might be easier if DB functions are tricky
+            avg_lead_time_data = (
+                bookings_qs.filter(status__in=["confirmed", "completed"])
+                .annotate(
+                    lead_interval=ExpressionWrapper(
+                        F("schedule_instance__date") - TruncDate(F("booking_date")),
+                        output_field=models.DurationField(),
+                    )
+                )
+                .aggregate(avg_lead_time=Avg("lead_interval"))
+            )
+            avg_lead_time_days = (
+                avg_lead_time_data["avg_lead_time"].days
+                if avg_lead_time_data["avg_lead_time"]
+                else 0
+            )
+
+            # --- New vs. Returning Student Bookings (Simplified: count of bookings by new/returning students in period) ---
+            # Identify users whose first booking with this business falls within the current date range
+            first_booking_dates_subquery = (
+                Booking.objects.filter(
+                    user=OuterRef("user"),
+                    schedule_instance__schedule__option__classId__businessId=business,
+                )
+                .order_by("booking_date")
+                .values("booking_date")[:1]
+            )
+
+            new_vs_returning_data = bookings_qs.annotate(
+                user_first_booking_date=Subquery(
+                    first_booking_dates_subquery, output_field=DateTimeField()
+                )
+            ).aggregate(
+                new_student_bookings=Count(
+                    "id",
+                    filter=Q(
+                        user_first_booking_date__range=[
+                            start_datetime_utc,
+                            end_datetime_utc,
+                        ]
+                    ),
+                ),
+                returning_student_bookings=Count(
+                    "id", filter=Q(user_first_booking_date__lt=start_datetime_utc)
+                ),
+            )
+
+            # --- Occupancy Rate Trends (Simplified: average occupancy for instances that had bookings) ---
+            # This is complex to do efficiently per day. For MVP, overall avg might be simpler or fetched elsewhere.
+            # Let's calculate overall average occupancy for instances *within the booking_date range that had bookings*
+            instances_with_bookings_in_period = (
+                ScheduleInstance.objects.filter(
+                    bookings__in=bookings_qs  # Instances relevant to the bookings in the period
+                )
+                .distinct()
+                .annotate(
+                    total_capacity_for_instances=Sum(
+                        "max_participants"
+                    ),  # Sum of max_participants for these instances
+                    total_booked_spots_for_instances=Sum(
+                        "bookings__participants",
+                        filter=Q(bookings__status__in=["confirmed", "completed"]),
+                    ),  # Sum of booked spots for these instances
+                )
+            )
+
+            total_capacity_sum = 0
+            total_booked_sum = 0
+            # Need to iterate to correctly sum capacity as an instance might appear multiple times if not aggregated
+            # A better approach for average daily/weekly occupancy would be a separate query.
+            # For now, let's provide an overall average based on instances that had bookings.
+            # This is an approximation.
+            avg_occupancy_data = bookings_qs.filter(
+                schedule_instance__max_participants__gt=0,  # Avoid division by zero
+                status__in=["confirmed", "completed"],
+            ).aggregate(
+                avg_occupancy_percentage=Avg(
+                    ExpressionWrapper(
+                        100.0
+                        * F("participants")
+                        / F("schedule_instance__max_participants"),
+                        output_field=FloatField(),
+                    )
+                )
+            )
+            average_occupancy_rate = (
+                avg_occupancy_data["avg_occupancy_percentage"] or 0.0
+            )
+
             response_data = {
                 "business_id": business.businessId,
                 "business_name": business.businessName,
                 "date_range": {
-                    "start": start_datetime.date().isoformat(),
-                    "end": end_datetime.date().isoformat(),
+                    "start": start_datetime_utc.date().isoformat(),
+                    "end": end_datetime_utc.date().isoformat(),
                 },
                 "summary": {
                     "total_booking_transactions": total_booking_transactions,
@@ -593,28 +819,36 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                     ],
                     "active_booking_transactions": total_aggregates[
                         "confirmed_transactions"
-                    ],  # Renamed for clarity
+                    ],
                     "completed_booking_transactions": total_aggregates[
                         "completed_transactions"
-                    ],  # Renamed for clarity
-                    "cancelled_booking_transactions": cancelled_transactions,  # Renamed for clarity
+                    ],
+                    "cancelled_booking_transactions": cancelled_transactions,
                     "total_revenue": float(total_aggregates["total_revenue"]),
                     "cancellation_rate_by_transaction": round(cancellation_rate, 1),
                     "attendance_rate_by_spot": round(attendance_rate, 1),
                     "booker_retention_rate": round(booker_retention_rate, 1),
+                    "average_lead_time_days": avg_lead_time_days,  # Added
+                    "new_student_bookings": new_vs_returning_data[
+                        "new_student_bookings"
+                    ],  # Added
+                    "returning_student_bookings": new_vs_returning_data[
+                        "returning_student_bookings"
+                    ],  # Added
+                    "average_occupancy_rate": round(average_occupancy_rate, 1),  # Added
                 },
-                "trends": processed_trends,
-                "class_insights": {"popular_classes": popular_classes},
+                "trends": processed_trends,  # Modified for local date, net spots, cancelled spots
+                "class_insights": {
+                    "popular_classes": popular_classes
+                },  # Modified with revenue
                 "booking_patterns": {
-                    "time_distribution": time_distribution,
+                    "time_distribution": time_distribution_local,  # Modified for local hour
                     "booking_types": booking_types,
                 },
             }
             return Response(response_data)
+
         except ValidationError as e:
-            logger.warning(
-                f"Validation error in booking analytics for business {business.businessId}: {e.detail}"
-            )
             return Response({"error": e.detail}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             logger.error(
@@ -626,30 +860,28 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-    def _get_date_range(self, request):
+    def _get_date_range_for_analytics(self, request):
         try:
             start_date_str = request.query_params.get("start_date")
             end_date_str = request.query_params.get("end_date")
-            today = timezone.now().date()  # tz-aware now(), then .date()
+            today_utc_date = timezone.now().date()
             if start_date_str:
-                start_date = timezone.datetime.strptime(
-                    start_date_str, "%Y-%m-%d"
-                ).date()
+                start_date_naive = datetime.strptime(start_date_str, "%Y-%m-%d").date()
             else:
-                start_date = today - timedelta(days=30)
+                start_date_naive = today_utc_date - timedelta(days=29)
             if end_date_str:
-                end_date = timezone.datetime.strptime(end_date_str, "%Y-%m-%d").date()
+                end_date_naive = datetime.strptime(end_date_str, "%Y-%m-%d").date()
             else:
-                end_date = today
-            if start_date > end_date:
+                end_date_naive = today_utc_date
+            if start_date_naive > end_date_naive:
                 raise ValidationError("Start date cannot be after end date.")
-            start_datetime = timezone.make_aware(
-                datetime.combine(start_date, datetime.min.time()), timezone.utc
+            start_datetime_utc = timezone.make_aware(
+                datetime.combine(start_date_naive, datetime.min.time()), pytz.utc
             )
-            end_datetime = timezone.make_aware(
-                datetime.combine(end_date, datetime.max.time()), timezone.utc
+            end_datetime_utc = timezone.make_aware(
+                datetime.combine(end_date_naive, datetime.max.time()), pytz.utc
             )
-            return start_datetime, end_datetime
+            return start_datetime_utc, end_datetime_utc
         except ValueError:
             raise ValidationError("Invalid date format. Use YYYY-MM-DD")
 

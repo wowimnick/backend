@@ -6,10 +6,9 @@ from rest_framework.decorators import (
     parser_classes,
 )
 from rest_framework.response import Response
-from django.db.models import Q, Sum, Count, Avg
 from django.utils import timezone
 from django.db.models.functions import Coalesce
-from django.db.models import IntegerField, Subquery, OuterRef, F
+from django.db.models import Q, Sum, Count, Avg, Subquery, OuterRef, IntegerField, F, Value
 from rest_framework.views import APIView
 from datetime import timedelta
 from datetime import datetime
@@ -20,17 +19,22 @@ from rest_framework.exceptions import (
     ValidationError as DRFValidationError,
 )
 from rest_framework.parsers import MultiPartParser, FormParser
+import pytz
 import logging
 
 from ...models import (
     BusinessInfo,
     Booking,
+    ClassOption,
     ClassesMain,
     Reviews,
+    Schedule,
     ScheduleInstance,
     Payment,
     CustomUser,
 )
+
+from .revenue_analytics_views import RevenueAnalyticsView
 from ...serializers import (
     ManagedBusinessInfoSerializer,
     BusinessStatsSerializer,
@@ -136,400 +140,266 @@ def get_user_businesses(request):
 
 
 class MyBusinessOverviewView(APIView):
-    """
-    Provides the aggregated overview dashboard data for the
-    single business associated with the currently authenticated user.
-    """
-
-    permission_classes = [
-        IsAuthenticated,
-        CanAccessBusinessDashboard,
-    ]  # Apply permission check
+    permission_classes = [IsAuthenticated, CanAccessBusinessDashboard]
 
     def get_business_for_user(self, user):
-        """Helper to find the single business for the user."""
         businesses = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user))
         count = businesses.count()
-
         if count == 0:
             raise NotFound("No business profile associated with this user found.")
         elif count > 1:
-            # This violates the stated constraint, indicates a data issue or logic flaw elsewhere
-            logger.error(
-                f"User {user.email} is associated with multiple businesses ({count}). Constraint violated."
-            )
-            raise PermissionDenied(
-                "Error: Multiple business associations found. Please contact support."
-            )
-        business = businesses.first()
-        return business
+            logger.error(f"User {user.email} is associated with multiple businesses ({count}). Constraint violated.")
+            raise PermissionDenied("Error: Multiple business associations found. Please contact support.")
+        return businesses.first()
 
     def get(self, request, *args, **kwargs):
-        """Handles GET request to fetch the overview data."""
         user = request.user
         try:
             business = self.get_business_for_user(user)
         except (NotFound, PermissionDenied) as e:
             return Response(
-                {"error": str(e)},
-                status=(
-                    status.HTTP_404_NOT_FOUND
-                    if isinstance(e, NotFound)
-                    else status.HTTP_403_FORBIDDEN
-                ),
+                {'error': str(e)},
+                status=(status.HTTP_404_NOT_FOUND if isinstance(e, NotFound) else status.HTTP_403_FORBIDDEN)
             )
 
-        pk = business.pk  # Business primary key
+        pk = business.pk # business primary key
+        now_utc = timezone.now()
+        today_utc_date = now_utc.date()
+        seven_days_ago_utc_date = today_utc_date - timedelta(days=6) 
 
-        now = timezone.now()  # UTC-aware datetime
-        today = now.date()  # Naive date (current day in UTC)
-
-        # Define current month boundaries (naive dates for start/end of month in UTC)
-        start_current_month = today.replace(day=1)
-        next_month_start = (start_current_month + timedelta(days=32)).replace(day=1)
-        end_current_month = next_month_start - timedelta(days=1)
-
-        # Define previous month boundaries (naive dates)
-        start_previous_month = (start_current_month - timedelta(days=1)).replace(day=1)
-        end_previous_month = start_current_month - timedelta(days=1)
-
-        # Define 30-day range ending now (UTC-aware)
-        thirty_days_ago_dt = now - timedelta(days=30)  # UTC-aware
-
-        from ...views import (
-            RevenueAnalyticsView,
-        )  # Assuming RevenueAnalyticsView is in views/__init__.py or similar
+        current_month_start_naive_date = today_utc_date.replace(day=1)
+        next_month_start_naive_date = (current_month_start_naive_date + timedelta(days=32)).replace(day=1)
+        current_month_end_naive_date = next_month_start_naive_date - timedelta(days=1)
+        previous_month_start_naive_date = (current_month_start_naive_date - timedelta(days=1)).replace(day=1)
+        previous_month_end_naive_date = current_month_start_naive_date - timedelta(days=1)
+        thirty_days_ago_utc_dt_start_of_day = (now_utc - timedelta(days=29)).replace(hour=0, minute=0, second=0, microsecond=0)
 
         revenue_view = RevenueAnalyticsView()
-        revenue_view.request = request  # Context for revenue view if it needs it
 
+        # --- Revenue Metrics ---
         try:
-            # Make naive dates UTC-aware for range queries
-            current_month_start_dt_aware = timezone.make_aware(
-                datetime.combine(start_current_month, datetime.min.time()), timezone.utc
-            )
-            current_month_end_dt_aware = timezone.make_aware(
-                datetime.combine(end_current_month, datetime.max.time()), timezone.utc
-            )
-
-            current_revenue_metrics = revenue_view.calculate_metrics(
-                business,
-                current_month_start_dt_aware,
-                current_month_end_dt_aware,
-            )
-            monthly_revenue = {
-                "value": current_revenue_metrics["total_revenue"],
-                "change": current_revenue_metrics["revenue_growth"],
-            }
-            # Use UTC-aware datetimes for revenue trends
-            revenue_trend_data = revenue_view.get_revenue_trends(
-                business, thirty_days_ago_dt, now
-            )
+            current_month_start_dt_aware = timezone.make_aware(datetime.combine(current_month_start_naive_date, datetime.min.time()), pytz.utc)
+            current_month_end_dt_aware = timezone.make_aware(datetime.combine(current_month_end_naive_date, datetime.max.time()), pytz.utc)
+            current_revenue_metrics = revenue_view.calculate_metrics(business, current_month_start_dt_aware, current_month_end_dt_aware)
+            monthly_revenue = {"value": current_revenue_metrics["total_gross_revenue"], "change": current_revenue_metrics["revenue_growth"]}
+            revenue_trend_data = revenue_view.get_revenue_trends(business, thirty_days_ago_utc_dt_start_of_day, now_utc)
         except Exception as e:
-            logger.error(
-                f"Error calculating revenue/trends for overview (Business {pk}): {e}",
-                exc_info=True,
-            )
-            monthly_revenue = {"value": 0, "change": 0}
-            revenue_trend_data = []
+            logger.error(f"Error calculating revenue/trends for overview (Business {pk}): {e}", exc_info=True)
+            monthly_revenue = {"value": 0, "change": 0}; revenue_trend_data = []
 
+        # --- Student Metrics ---
         try:
-            # Use naive dates for range query on DateField (booking_date__date)
-            current_students_count = (
-                CustomUser.objects.filter(
-                    bookings__schedule_instance__schedule__option__classId__businessId=business,
-                    bookings__booking_date__date__range=[  # Django handles DateField range queries well
-                        start_current_month,
-                        end_current_month,
-                    ],
-                )
-                .distinct()
-                .count()
-            )
-            previous_students_count = (
-                CustomUser.objects.filter(
-                    bookings__schedule_instance__schedule__option__classId__businessId=business,
-                    bookings__booking_date__date__range=[
-                        start_previous_month,
-                        end_previous_month,
-                    ],
-                )
-                .distinct()
-                .count()
-            )
+            current_month_start_dt_aware_for_students = timezone.make_aware(datetime.combine(current_month_start_naive_date, datetime.min.time()), pytz.utc)
+            current_month_end_dt_aware_for_students = timezone.make_aware(datetime.combine(current_month_end_naive_date, datetime.max.time()), pytz.utc)
+            previous_month_start_dt_aware_for_students = timezone.make_aware(datetime.combine(previous_month_start_naive_date, datetime.min.time()), pytz.utc)
+            previous_month_end_dt_aware_for_students = timezone.make_aware(datetime.combine(previous_month_end_naive_date, datetime.max.time()), pytz.utc)
+
+            current_students_count = CustomUser.objects.filter(
+                bookings__schedule_instance__schedule__option__classId__businessId=business,
+                bookings__booking_date__range=[current_month_start_dt_aware_for_students, current_month_end_dt_aware_for_students]
+            ).distinct().count()
+            previous_students_count = CustomUser.objects.filter(
+                bookings__schedule_instance__schedule__option__classId__businessId=business,
+                bookings__booking_date__range=[previous_month_start_dt_aware_for_students, previous_month_end_dt_aware_for_students]
+            ).distinct().count()
             student_change = 0.0
-            if previous_students_count > 0:
-                student_change = round(
-                    (
-                        (current_students_count - previous_students_count)
-                        / previous_students_count
-                    )
-                    * 100,
-                    1,
-                )
+            if previous_students_count > 0: student_change = round(((current_students_count - previous_students_count) / previous_students_count) * 100, 1)
+            elif current_students_count > 0: student_change = 100.0
             total_students = {"value": current_students_count, "change": student_change}
         except Exception as e:
-            logger.error(
-                f"Error calculating student metrics for overview (Business {pk}): {e}",
-                exc_info=True,
-            )
+            logger.error(f"Error calculating student metrics for overview (Business {pk}): {e}", exc_info=True)
             total_students = {"value": 0, "change": 0}
 
+        # --- Active Classes Metric ---
         try:
-            active_classes_count = business.classes.filter(status="active").count()
-            active_classes = {
-                "value": active_classes_count,
-                "change": 0,
-            }  # Change can be implemented if needed
+            active_classes_count = business.classes.filter(status="active").count() # Uses related_name 'classes' from ClassesMain
+            active_classes = {"value": active_classes_count, "change": 0} 
         except Exception as e:
-            logger.error(
-                f"Error calculating active classes for overview (Business {pk}): {e}",
-                exc_info=True,
-            )
+            logger.error(f"Error calculating active classes for overview (Business {pk}): {e}", exc_info=True)
             active_classes = {"value": 0, "change": 0}
 
+        # --- Average Rating Metric ---
         try:
-            # Current average rating (overall)
-            current_avg_rating_val = (
-                Reviews.objects.filter(
-                    classId__businessId=business, status="approved"
-                ).aggregate(avg=Avg("rating"))["avg"]
-                or 0.0
-            )
+            current_avg_rating_val = Reviews.objects.filter(classId__businessId=business, status="approved").aggregate(avg=Avg("rating"))["avg"] or 0.0
             current_avg_rating = round(current_avg_rating_val, 1)
-
-            # Previous month's average rating
-            # For ratings, if createdAt is DateTimeField, it's UTC.
-            # If comparing with naive date ranges, ensure the DB handles it or make createdAt naive for comparison.
-            # Assuming createdAt is DateTimeField and stored in UTC.
-            previous_month_start_dt_aware = timezone.make_aware(
-                datetime.combine(start_previous_month, datetime.min.time()),
-                timezone.utc,
-            )
-            previous_month_end_dt_aware = timezone.make_aware(
-                datetime.combine(end_previous_month, datetime.max.time()), timezone.utc
-            )
-
-            previous_avg_rating_val = (
-                Reviews.objects.filter(
-                    classId__businessId=business,
-                    status="approved",
-                    createdAt__range=[
-                        previous_month_start_dt_aware,
-                        previous_month_end_dt_aware,
-                    ],  # Compare with UTC range
-                ).aggregate(avg=Avg("rating"))["avg"]
-                or 0.0
-            )
+            previous_month_start_dt_aware_for_reviews = timezone.make_aware(datetime.combine(previous_month_start_naive_date, datetime.min.time()), pytz.utc)
+            previous_month_end_dt_aware_for_reviews = timezone.make_aware(datetime.combine(previous_month_end_naive_date, datetime.max.time()), pytz.utc)
+            previous_avg_rating_val = Reviews.objects.filter(
+                classId__businessId=business, status="approved",
+                createdAt__range=[previous_month_start_dt_aware_for_reviews, previous_month_end_dt_aware_for_reviews]
+            ).aggregate(avg=Avg("rating"))["avg"] or 0.0
             previous_avg_rating = round(previous_avg_rating_val, 1)
             rating_change = round(current_avg_rating - previous_avg_rating, 1)
             average_rating = {"value": current_avg_rating, "change": rating_change}
         except Exception as e:
-            logger.error(
-                f"Error calculating rating metrics for overview (Business {pk}): {e}",
-                exc_info=True,
-            )
+            logger.error(f"Error calculating rating metrics for overview (Business {pk}): {e}", exc_info=True)
             average_rating = {"value": 0, "change": 0}
 
+        # --- "Today's Snapshot" Data ---
+        today_snapshot_data = { "today_total_bookings": 0, "today_total_participants": 0, "today_classes_running": 0 }
         try:
-            # Upcoming classes (next 7 days from today UTC)
-            upcoming_instances_qs = (
-                ScheduleInstance.objects.filter(
-                    schedule__option__classId__businessId=business,
-                    date__gte=today,  # Compare naive date with naive date
-                    date__lte=today + timedelta(days=7),
-                    status="scheduled",
-                )
-                .select_related("schedule__option")
-                .annotate(
-                    current_participant_spots=Coalesce(
-                        Subquery(
-                            Booking.objects.filter(
-                                schedule_instance=OuterRef("pk"), status="confirmed"
-                            )
-                            .values("schedule_instance")
-                            .annotate(total_pax=Sum("participants"))
-                            .values("total_pax")[:1]
-                        ),
-                        0,
-                        output_field=IntegerField(),
-                    )
-                )
-                .order_by("date", "time")[:5]
+            today_instances_qs = ScheduleInstance.objects.filter(
+                schedule__option__classId__businessId=business,
+                date=today_utc_date, 
+                status="scheduled" 
             )
-            upcoming_classes_data = []
+            today_bookings_qs = Booking.objects.filter(
+                schedule_instance__in=Subquery(today_instances_qs.values('pk')),
+                status="confirmed"
+            )
+            today_snapshot_data["today_total_bookings"] = today_bookings_qs.count()
+            today_snapshot_data["today_total_participants"] = today_bookings_qs.aggregate(
+                sum_pax=Coalesce(Sum('participants'), Value(0))
+            )['sum_pax']
+            today_snapshot_data["today_classes_running"] = today_instances_qs.values(
+                'schedule__option__classId'
+            ).distinct().count()
+        except Exception as e:
+            logger.error(f"Error calculating today's snapshot for overview (Business {pk}): {e}", exc_info=True)
+
+        # --- Actionable Prompts Data ---
+        actionable_prompts_data = { "new_reviews_count": 0, "stripe_account_status": business.stripe_account_status or "unlinked" }
+        try:
+            seven_days_ago_aware_dt = timezone.make_aware(datetime.combine(seven_days_ago_utc_date, datetime.min.time()), pytz.utc)
+            actionable_prompts_data["new_reviews_count"] = Reviews.objects.filter(
+                classId__businessId=business,
+                status="approved",
+                createdAt__gte=seven_days_ago_aware_dt, 
+                business_response__exact='' 
+            ).count()
+        except Exception as e:
+            logger.error(f"Error calculating new reviews count for overview (Business {pk}): {e}", exc_info=True)
+
+        # --- Upcoming Classes ---
+        upcoming_classes_data = []
+        try:
+            upcoming_seven_days_end_date = today_utc_date + timedelta(days=6)
+            upcoming_instances_qs = ScheduleInstance.objects.filter(
+                schedule__option__classId__businessId=business,
+                date__range=[today_utc_date, upcoming_seven_days_end_date],
+                status="scheduled"
+            ).select_related("schedule__option__classId", "schedule__option").annotate(
+                current_participant_spots=Coalesce(Subquery(
+                    Booking.objects.filter(schedule_instance=OuterRef("pk"), status="confirmed")
+                    .values("schedule_instance").annotate(total_pax=Sum("participants")).values("total_pax")[:1]
+                ), Value(0), output_field=IntegerField())
+            ).order_by("date", "time")[:5]
+
             for inst in upcoming_instances_qs:
-                # Time formatting needs to be timezone-aware if displaying to user in their local time
-                # For now, formatting naive time as is.
-                formatted_time_str = ""
-                try:
-                    # %-I for non-padded hour on Linux/macOS, %#I on Windows. Fallback for cross-platform.
-                    formatted_time_str = (
-                        inst.time.strftime("%#I:%M %p")
-                        if hasattr(inst.time, "strftime")
-                        else inst.time.strftime("%I:%M %p").lstrip("0")
-                    )
-                except ValueError:  # Fallback for systems not supporting %#I
-                    hour = inst.time.strftime("%I")
-                    if hour.startswith("0") and len(hour) > 1:
-                        hour = hour[1:]
-                    formatted_time_str = inst.time.strftime(f"{hour}:%M %p")
-
-                upcoming_classes_data.append(
-                    {
-                        "name": f"{inst.schedule.option.title}",
-                        "time": f"{inst.date.strftime('%b %d')}, {formatted_time_str}",  # Naive date/time formatted
-                        "current_occupancy": inst.current_participant_spots,
-                        "max_occupancy": inst.max_participants,
-                    }
-                )
+                naive_schedule_datetime = datetime.combine(inst.date, inst.time)
+                display_datetime_str = f"{naive_schedule_datetime.strftime('%b %d')}, {naive_schedule_datetime.strftime('%I:%M %p').lstrip('0') if naive_schedule_datetime.strftime('%I').startswith('0') else naive_schedule_datetime.strftime('%I:%M %p')}"
+                class_main_title = inst.schedule.option.classId.title if inst.schedule.option.classId else "Class"
+                option_specific_title = inst.schedule.option.title
+                display_name = f"{class_main_title} - {option_specific_title}" if option_specific_title and option_specific_title.lower() != class_main_title.lower() else class_main_title
+                upcoming_classes_data.append({
+                    "name": display_name, "time": display_datetime_str,
+                    "current_occupancy": inst.current_participant_spots,
+                    "max_occupancy": inst.max_participants,
+                })
         except Exception as e:
-            logger.error(
-                f"Error getting upcoming classes for overview (Business {pk}): {e}",
-                exc_info=True,
-            )
+            logger.error(f"Error getting upcoming classes (Business {pk}): {e}", exc_info=True)
             upcoming_classes_data = []
 
+        # --- Popular Classes ---
+        popular_classes_data = []
         try:
-            # Popular classes (all time for this business)
-            popular_classes_raw = (
-                Booking.objects.filter(
-                    schedule_instance__schedule__option__classId__businessId=business,
-                    status__in=[
-                        "confirmed",
-                        "completed",
-                    ],  # Consider only completed for "popularity"
-                )
-                .values("schedule_instance__schedule__option__classId__title")
-                .annotate(enrollment_spots=Sum("participants"))
-                .order_by("-enrollment_spots")[:5]
-            )
-            popular_classes_data = [
-                {
-                    "name": entry[
-                        "schedule_instance__schedule__option__classId__title"
-                    ],
-                    "enrollment": entry["enrollment_spots"] or 0,
-                }
-                for entry in popular_classes_raw
-                if entry["schedule_instance__schedule__option__classId__title"]
-            ]
+            popular_classes_raw = Booking.objects.filter(
+                schedule_instance__schedule__option__classId__businessId=business,
+                status__in=["confirmed", "completed"]
+            ).values("schedule_instance__schedule__option__classId__title").annotate(
+                enrollment_spots=Sum("participants")
+            ).order_by("-enrollment_spots")[:5]
+            popular_classes_data = [{"name": entry["schedule_instance__schedule__option__classId__title"], "enrollment": entry["enrollment_spots"] or 0}
+                                    for entry in popular_classes_raw if entry["schedule_instance__schedule__option__classId__title"]]
         except Exception as e:
-            logger.error(
-                f"Error getting popular classes for overview (Business {pk}): {e}",
-                exc_info=True,
-            )
+            logger.error(f"Error getting popular classes (Business {pk}): {e}", exc_info=True)
             popular_classes_data = []
 
+        # --- Recent Activity ---
         recent_activity_data = []
         try:
-            # Recent bookings (last 3 days, UTC aware for DateTimeField)
-            recent_bookings = (
-                Booking.objects.filter(
-                    schedule_instance__schedule__option__classId__businessId=business,
-                    booking_date__gte=now
-                    - timedelta(days=3),  # Compare DateTimeField with aware datetime
-                    status="confirmed",
-                )
-                .select_related("user")
-                .order_by("-booking_date")[:3]
-            )
+            three_days_ago_utc = now_utc - timedelta(days=3)
+            recent_bookings = Booking.objects.filter(
+                schedule_instance__schedule__option__classId__businessId=business,
+                booking_date__gte=three_days_ago_utc, status="confirmed"
+            ).select_related("user").order_by("-booking_date")[:3]
             for booking in recent_bookings:
-                recent_activity_data.append(
-                    {
-                        "timestamp": booking.booking_date,  # UTC aware
-                        "message": (
-                            f"New booking: {booking.user.first_name} (+{booking.participants -1} more)"
-                            if booking.participants > 1
-                            else f"New booking: {booking.user.first_name}"
-                        ),
-                        "icon": "UserPlus",
-                        "color": colors["chart"]["blue"],
-                    }
-                )
-            # Recent payments
+                recent_activity_data.append({
+                    "timestamp": booking.booking_date.isoformat(),
+                    "message": (f"New booking: {booking.user.first_name} (+{booking.participants -1} more)" if booking.participants > 1 else f"New booking: {booking.user.first_name}"),
+                    "icon": "UserPlus", "color": colors.get("chart", {}).get("blue", "#3b82f6"), "type": "booking"
+                })
             recent_payments = Payment.objects.filter(
                 booking__schedule_instance__schedule__option__classId__businessId=business,
-                status="succeeded",
-                created_at__gte=now
-                - timedelta(days=3),  # Compare DateTimeField with aware datetime
+                status="succeeded", created_at__gte=three_days_ago_utc
             ).order_by("-created_at")[:3]
             for payment in recent_payments:
-                recent_activity_data.append(
-                    {
-                        "timestamp": payment.created_at,  # UTC aware
-                        "message": f"Payment received: ${payment.amount:.2f}",
-                        "icon": "DollarSign",
-                        "color": colors["chart"]["green"],
-                    }
-                )
-            # Recent reviews
-            recent_reviews = (
-                Reviews.objects.filter(
-                    classId__businessId=business,
-                    status="approved",
-                    createdAt__gte=now
-                    - timedelta(days=3),  # Compare DateTimeField with aware datetime
-                )
-                .select_related("userId")
-                .order_by("-createdAt")[:3]
-            )
+                recent_activity_data.append({
+                    "timestamp": payment.created_at.isoformat(),
+                    "message": f"Payment received: ${payment.amount:.2f}",
+                    "icon": "DollarSign", "color": colors.get("chart", {}).get("green", "#10b981"), "type": "payment"
+                })
+            recent_reviews = Reviews.objects.filter(
+                classId__businessId=business, status="approved",
+                createdAt__gte=three_days_ago_utc
+            ).select_related("userId").order_by("-createdAt")[:3]
             for review in recent_reviews:
-                recent_activity_data.append(
-                    {
-                        "timestamp": review.createdAt,  # UTC aware
-                        "message": f"New review: {review.rating}★ from {review.userId.first_name}",
-                        "icon": "Star",
-                        "color": colors["chart"]["orange"],
-                    }
-                )
+                recent_activity_data.append({
+                    "timestamp": review.createdAt.isoformat(),
+                    "message": f"New review: {review.rating}★ from {review.userId.first_name}",
+                    "icon": "Star", "color": colors.get("chart", {}).get("orange", "#f97316"), "type": "review"
+                })
             recent_activity_data.sort(key=lambda x: x["timestamp"], reverse=True)
             recent_activity_data = recent_activity_data[:5]
-
-            # Format timestamp for display (will be localized by frontend if needed)
-            for activity in recent_activity_data:
-                # Assuming frontend will handle localization. Outputting as UTC.
-                # dt_local = timezone.localtime(activity["timestamp"], business_tz) # If business_tz is known and needed
-                dt_utc = activity["timestamp"]  # Already UTC
-                formatted_time_str = ""
-                try:
-                    # %-I for non-padded hour on Linux/macOS, %#I on Windows. Fallback for cross-platform.
-                    formatted_time_str = (
-                        dt_utc.strftime("%#I:%M %p")
-                        if hasattr(dt_utc, "strftime")
-                        else dt_utc.strftime("%I:%M %p").lstrip("0")
-                    )
-                except ValueError:  # Fallback for systems not supporting %#I
-                    hour = dt_utc.strftime("%I")
-                    if hour.startswith("0") and len(hour) > 1:
-                        hour = hour[1:]
-                    formatted_time_str = dt_utc.strftime(f"{hour}:%M %p")
-                activity["time"] = f"{formatted_time_str}, {dt_utc.strftime('%b %d')}"
-                # Keep timestamp as ISO string for potential frontend use
-                activity["timestamp"] = dt_utc.isoformat()
-
         except Exception as e:
-            logger.error(
-                f"Error generating recent activity for overview (Business {pk}): {e}",
-                exc_info=True,
-            )
-            recent_activity_data = []
+            logger.error(f"Error generating recent activity (Business {pk}): {e}", exc_info=True)
+            if not recent_activity_data: recent_activity_data = []
+
+        # --- Setup Guide Status ---
+        profile_fields_to_check = [
+            business.businessDescription,
+            business.studentContactEmail,
+            business.studentContactPhone,
+            business.businessAddress,
+            business.businessCity,
+            business.businessState,
+            business.businessZipCode,
+            business.openingTime,
+            business.closingTime,
+        ]
+        is_profile_complete = all(field is not None and str(field).strip() != "" for field in profile_fields_to_check)
+        
+        # Check for at least one class (any status, as they might be drafting)
+        has_created_class = ClassesMain.objects.filter(businessId=business).exists()
+        # Check for at least one option linked to any class of this business
+        has_class_options = ClassOption.objects.filter(classId__businessId=business).exists()
+        # Check for at least one active schedule linked to any option of this business
+        has_schedules = Schedule.objects.filter(option__classId__businessId=business, is_active=True).exists()
+
+        setup_progress_data = {
+            "is_stripe_connected": business.stripe_account_status == 'active', # Consider 'pending' as partially complete if needed
+            "is_profile_complete": is_profile_complete,
+            "has_created_class": has_created_class,
+            "has_class_options": has_class_options,
+            "has_schedules": has_schedules,
+            # Add more checks if needed, e.g., first booking received (more complex to track here)
+        }
 
         payload = {
             "metrics": {
-                "total_students": total_students,
-                "active_classes": active_classes,
-                "monthly_revenue": monthly_revenue,
-                "average_rating": average_rating,
+                "total_students": total_students, "active_classes": active_classes,
+                "monthly_revenue": monthly_revenue, "average_rating": average_rating,
             },
+            "today_snapshot": today_snapshot_data,
+            "actionable_prompts": actionable_prompts_data,
             "revenue_trend": revenue_trend_data,
             "upcoming_classes": upcoming_classes_data,
             "popular_classes": popular_classes_data,
             "recent_activity": recent_activity_data,
+            "setup_progress": setup_progress_data, # Added setup progress
         }
         serializer = BusinessDashboardOverviewSerializer(payload)
         return Response(serializer.data)
-
 
 class BusinessDashboardViewSet(viewsets.ReadOnlyModelViewSet):
     """
@@ -678,100 +548,64 @@ class MyBusinessProfileView(generics.RetrieveUpdateDestroyAPIView):
     """
     Allows authenticated business owners/managers to view, update, or delete
     their OWN associated BusinessInfo profile.
-    (URL: /api/my-business/profile/) - No PK needed in URL
     """
-
     serializer_class = ManagedBusinessInfoSerializer
-    parser_classes = [MultiPartParser, FormParser]  # Handle image uploads via FormData
+    parser_classes = [MultiPartParser, FormParser] # For businessImage upload
     permission_classes = [permissions.IsAuthenticated, CanManageOwnBusinessProfile]
 
     def get_object(self):
-        """
-        Fetches the single BusinessInfo object associated with the requesting user.
-        """
         user = self.request.user
         try:
-            # Use filter().first() for safety, handles cases where user might somehow
-            # be linked to multiple, though ideally this is prevented elsewhere.
-            business = (
-                BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user))
-                .select_related("owner")
-                .prefetch_related("managers")
-                .first()
-            )  # Add prefetch/select_related
-
+            business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).select_related("owner").prefetch_related("managers").first()
             if not business:
-                logger.warning(
-                    f"No BusinessInfo found for user {user.email} accessing my-business/profile/"
-                )
                 raise NotFound("No business profile associated with this user found.")
-
-            # Manually check object permissions AFTER fetching, as RetrieveUpdateAPIView expects it
-            self.check_object_permissions(self.request, business)
+            self.check_object_permissions(self.request, business) # Check after fetching
             return business
-
-        except (
-            BusinessInfo.DoesNotExist
-        ):  # Should be caught by filter().first() but good practice
-            logger.warning(
-                f"BusinessInfo.DoesNotExist unexpectedly raised for user {user.email} accessing my-business/profile/"
-            )
+        except BusinessInfo.DoesNotExist: # Should be caught by first()
             raise NotFound("No business profile associated with this user found.")
-        # MultipleObjectsReturned shouldn't happen with filter().first()
 
     def get_permissions(self):
-        """Set specific permission for DELETE"""
         if self.request.method == "DELETE":
-            # Ensure user is authenticated and passes the stricter CanDeleteOwnBusinessProfile check
-            return [IsAuthenticated(), CanDeleteOwnBusinessProfile()]
-        # For GET/PUT/PATCH, rely on the class-level permissions checked by DRF + get_object
+            return [permissions.IsAuthenticated(), CanDeleteOwnBusinessProfile()]
         return super().get_permissions()
 
     def perform_update(self, serializer):
-        # Prevent changing owner or managers via this endpoint for security/simplicity
-        serializer.validated_data.pop("owner", None)
-        serializer.validated_data.pop("managers", None)
-        serializer.validated_data.pop("verificationStatus", None)
-        serializer.validated_data.pop("stripe_account_id", None)
-        serializer.validated_data.pop("stripe_account_status", None)
+        # The ManagedBusinessInfoSerializer's update method handles complex logic.
+        # We can still pop fields here if we want to absolutely ensure they are not part of the save call
+        # from validated_data, even if the serializer might handle them.
+        # This acts as a secondary safeguard at the view level.
+        
+        # Sensitive fields that should NOT be updatable via this general settings form:
+        serializer.validated_data.pop("owner", None) # Owner should not change here
+        serializer.validated_data.pop("managers", None) # Manager assignment is a separate process
+        serializer.validated_data.pop("verificationStatus", None) # Admin controlled
+        serializer.validated_data.pop("stripe_account_id", None) # System controlled
+        serializer.validated_data.pop("stripe_account_status", None) # System controlled
+        serializer.validated_data.pop("classCategory", None) # Typically set at registration
+        # JSON list fields are read-only in serializer, so no need to pop here
 
         try:
-            # <<< serializer.save() NOW ONLY USES FIELDS DEFINED IN THE UPDATED SERIALIZER >>>
-            business = serializer.save()
+            business = serializer.save() # Serializer's update method is called
             logger.info(
                 f"Business Profile '{business.businessName}' (ID: {business.pk}) updated by user {self.request.user.email}"
             )
         except Exception as e:
             logger.error(
-                f"Error during perform_update for Business Profile (User: {self.request.user.email}): {str(e)}",
+                f"Error during MyBusinessProfileView perform_update for Business (User: {self.request.user.email}): {str(e)}",
                 exc_info=True,
             )
-            raise DRFValidationError(
-                "An error occurred while updating the business profile."
-            )
+            # If serializer.save() raises DRFValidationError, it will be handled by DRF.
+            # This catches other unexpected errors during save.
+            raise DRFValidationError("An error occurred while updating the business profile.")
 
-    def perform_destroy(self, instance):
-        # Permissions already checked by get_permissions -> CanDeleteOwnBusinessProfile
-        business_name = instance.businessName
-        business_id = instance.businessId
 
-        # Handle potential image file deletion before deleting the record
+    def perform_destroy(self, instance): # Keep as is
+        business_name = instance.businessName; business_id = instance.businessId
         if instance.businessImage:
-            try:
-                instance.businessImage.delete(save=False)
-            except Exception as e:
-                logger.warning(
-                    f"Could not delete businessImage file for {business_id}: {e}"
-                )
-        if instance.verificationDocument:
-            try:
-                instance.verificationDocument.delete(save=False)
-            except Exception as e:
-                logger.warning(
-                    f"Could not delete verificationDocument file for {business_id}: {e}"
-                )
-
-        instance.delete()  # Hard delete
-        logger.warning(
-            f"Business Profile '{business_name}' (ID: {business_id}) DELETED by owner {self.request.user.email}"
-        )
+            try: instance.businessImage.delete(save=False)
+            except Exception as e: logger.warning(f"Could not delete businessImage for {business_id}: {e}")
+        # if instance.verificationDocument: # This field was removed from BusinessInfo
+        #     try: instance.verificationDocument.delete(save=False)
+        #     except Exception as e: logger.warning(f"Could not delete verificationDocument for {business_id}: {e}")
+        instance.delete()
+        logger.warning(f"Business Profile '{business_name}' (ID: {business_id}) DELETED by owner {self.request.user.email}")

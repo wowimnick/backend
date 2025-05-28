@@ -14,6 +14,7 @@ from django.contrib.postgres.indexes import GinIndex
 from django.core.exceptions import ValidationError
 from django.db.models import Count, Case, When, DecimalField, Sum, JSONField, Avg, Value
 from django.db.models.functions import Coalesce
+from django.contrib.contenttypes.fields import GenericForeignKey
 from decimal import Decimal
 from django.utils import timezone
 from django.db.models.signals import post_save, post_delete 
@@ -1113,36 +1114,6 @@ class ScheduleInstance(models.Model):
             models.Index(fields=['schedule', 'date', 'status']),
 
         ]
-        # No specific permissions needed here, controlled via Schedule -> ClassOption -> ... -> BusinessInfo
-
-class ScheduleBreak(models.Model):
-    """Defines break periods for schedules"""
-    schedule = models.ForeignKey(Schedule, on_delete=models.CASCADE, related_name='breaks')
-    start_date = models.DateField()
-    end_date = models.DateField()
-    reason = models.CharField(max_length=200)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)
-        # Automatically cancel all instances in this date range
-        instances = ScheduleInstance.objects.filter(
-            schedule=self.schedule,
-            date__range=(self.start_date, self.end_date),
-            status='scheduled'
-        )
-        instances.update(
-            status='cancelled',
-            cancellation_reason=f"Break period: {self.reason}"
-        )
-
-    class Meta:
-        db_table = 'schedule_breaks'
-        indexes = [
-            models.Index(fields=['schedule', 'start_date', 'end_date']),
-        ]
-        # No specific permissions needed here, controlled via Schedule -> ... -> BusinessInfo
-
 class Booking(models.Model):
     id = models.AutoField(primary_key=True)
     booking_group_id = models.UUIDField(null=True, blank=True)
@@ -1284,9 +1255,6 @@ class Payment(models.Model):
             ("view_payment_stats", "Can view aggregated payment statistics"),
             ("export_payment_data", "Can export payment data"),
             ("access_payment_admin", "Can access the Payment Administration section"),
-            # --- Business User Permissions (Use BusinessInfo perms for revenue) ---
-            # ("view_business_revenue_analytics", "Can view revenue analytics for own business"), # Defined on BusinessInfo
-            # ("export_business_revenue_data", "Can export revenue data for own business"), # Defined on BusinessInfo
         ]
 
 class Reviews(models.Model):
@@ -1543,3 +1511,52 @@ class UserSegment(models.Model):
              ("refresh_segment_counts", "Can trigger recalculation of segment counts"),
              ("access_segment_admin", "Can access User Segment Management section"),
         ]
+
+class Notification(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='notifications')
+    business = models.ForeignKey('BusinessInfo', on_delete=models.CASCADE, null=True, blank=True, related_name='business_notifications', help_text="Business context for this notification, if applicable.")
+
+    NOTIFICATION_TYPE_CHOICES = [
+        ('new_booking', 'New Booking'),
+        ('booking_cancelled_by_user', 'Booking Cancelled by User'),
+        ('booking_cancelled_by_biz', 'Booking Cancelled by Business'),
+        ('class_reminder_biz', 'Class Reminder for Business'), # For business owner
+        ('class_reminder_student', 'Class Reminder for Student'), # For student
+        ('new_review', 'New Review'),
+        ('review_response', 'Review Response from Business'), # For student
+        ('payment_succeeded', 'Payment Succeeded'),
+        ('payment_failed', 'Payment Failed'),
+        ('payout_initiated', 'Payout Initiated'), # Example for future
+        ('stripe_action_required', 'Stripe Action Required'),
+        ('profile_incomplete', 'Profile Incomplete'),
+        ('system_announcement', 'System Announcement'),
+        ('new_message_support', 'New Message in Support Ticket'),
+        # Add more types as needed
+    ]
+    notification_type = models.CharField(max_length=50, choices=NOTIFICATION_TYPE_CHOICES)
+    message = models.TextField()
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, null=True, blank=True)
+    object_id = models.CharField(max_length=255, null=True, blank=True) # Use CharField for UUIDs or int IDs
+    source_object = GenericForeignKey('content_type', 'object_id')
+
+    # For frontend display
+    icon = models.CharField(max_length=50, blank=True, null=True, help_text="e.g., Lucide icon name like 'UserPlus'") # From your BusinessDashboardOverviewSerializer
+    color = models.CharField(max_length=20, blank=True, null=True, help_text="e.g., '#3b82f6'")
+    link_web = models.CharField(max_length=255, blank=True, null=True, help_text="Relative URL for web client")
+
+
+    def __str__(self):
+        return f"Notification for {self.user.email} - Type: {self.get_notification_type_display()}"
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'is_read', '-created_at']),
+            models.Index(fields=['business', 'is_read', '-created_at']),
+            models.Index(fields=['notification_type']),
+        ]
+        db_table = 'notifications'

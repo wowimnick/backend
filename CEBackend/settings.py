@@ -311,54 +311,61 @@ ACCOUNT_USERNAME_REQUIRED = False
 ACCOUNT_EMAIL_VERIFICATION = 'mandatory'
 AUTH_USER_MODEL = 'quickstart.CustomUser'
 
-FRONTEND_BASE_URL = os.environ.get('FRONTEND_URL', 'https://classeasily.com')
+FRONTEND_BASE_URL = os.environ.get('FRONTEND_URL', 'http://localhost:5173')
 FRONTEND_EMAIL_VERIFICATION_PATH = '/verify-email/{key}/'
 FRONTEND_PASSWORD_RESET_CONFIRM_PATH = '/reset-password/{uid}/{token}/'
 
-# CELERY SETTINGS
-# ------------------------------------------------------------------------------
-# Use Redis as the broker
-# Ensure Redis is running: redis-server
-CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379')
-CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379')
+CURRENT_HOSTNAME = socket.gethostname()
+IS_LOCAL_MACHINE = (CURRENT_HOSTNAME == 'Banana') # Or whatever your local hostname truly is
 
-CELERY_BROKER_USE_SSL = {'ssl_cert_reqs': ssl.CERT_NONE}
-CELERY_REDIS_BACKEND_USE_SSL = {'ssl_cert_reqs': ssl.CERT_NONE}
+# --- Celery Configuration ---
+if IS_LOCAL_MACHINE:
+    print("---- DETECTED LOCAL MACHINE ('Banana') - Using local Redis settings ----")
+    CELERY_BROKER_URL = "redis://127.0.0.1:6379/1" # Local WSL Redis, DB 1
+    CELERY_RESULT_BACKEND = "redis://127.0.0.1:6379/2" # Local WSL Redis, DB 2
 
-CELERY_BROKER_TRANSPORT_OPTIONS = {
-    'is_cluster': True,
-    'unacked_key': '{celery}.unacked', 
-    'unacked_index_key': '{celery}.unacked_index', 
+    # Local Redis typically doesn't use SSL or cluster mode
+    CELERY_BROKER_USE_SSL = None
+    CELERY_REDIS_BACKEND_USE_SSL = None
 
-}
+    CELERY_BROKER_TRANSPORT_OPTIONS = {} # No special cluster options needed
+    CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {}
 
-CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {
-    'is_cluster': True,
-}
+    # Default Celery names for local, non-cluster setup
+    CELERY_CONTROL_EXCHANGE = 'celery.pidbox'
+    CELERY_EVENT_QUEUE_PREFIX = 'celeryev'
+    CELERY_TASK_DEFAULT_QUEUE = 'celery'
 
-CELERY_CONTROL_EXCHANGE = '{celery}.pidbox'
-CELERY_EVENT_QUEUE_PREFIX = '{celery}.eve'
-CELERY_TASK_DEFAULT_QUEUE = '{celery}.tasks' 
+else: # Production settings (EC2 with ElastiCache Cluster)
+    print(f"---- DETECTED PRODUCTION ENV (Hostname: {CURRENT_HOSTNAME}) - Using ElastiCache Redis Cluster settings ----")
+    CELERY_BROKER_URL = 'rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379'
+    CELERY_RESULT_BACKEND = 'rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379'
 
-# Accept JSON content for tasks
+    CELERY_BROKER_USE_SSL = {'ssl_cert_reqs': ssl.CERT_NONE}
+    CELERY_REDIS_BACKEND_USE_SSL = {'ssl_cert_reqs': ssl.CERT_NONE}
+
+    CELERY_BROKER_TRANSPORT_OPTIONS = {
+        'is_cluster': True,
+        'unacked_key': '{celery}.unacked',
+        'unacked_index_key': '{celery}.unacked_index',
+    }
+    CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {
+        'is_cluster': True,
+    }
+
+    CELERY_CONTROL_EXCHANGE = '{celery}.pidbox'
+    CELERY_EVENT_QUEUE_PREFIX = '{celery}.eve'
+    CELERY_TASK_DEFAULT_QUEUE = '{celery}.tasks'
+
+
+# --- Common Celery Settings (apply to both local and prod) ---
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
-
-# Set timezone for Celery (should match Django's TIME_ZONE)
-CELERY_TIMEZONE = TIME_ZONE # Use the TIME_ZONE already defined in settings
-
-# Optional: Task tracking and result settings
-CELERY_TASK_TRACK_STARTED = True # Track when tasks start execution
-CELERY_TASK_SEND_SENT_EVENT = True # Send event when task is sent
-# CELERY_RESULT_EXPIRES = timedelta(days=1) # How long to keep task results (if backend is used)
-
-# Optional: Routing (advanced, not needed for basic email)
-# CELERY_TASK_ROUTES = {'quickstart.tasks.some_other_task': {'queue': 'high_priority'}}
-
-# Optional: Rate limiting (example: 100 emails per minute)
-# Adjust based on your email provider limits (Resend has its own limits)
-# CELERY_ANNOTATIONS = {'quickstart.tasks.send_email_task': {'rate_limit': '100/m'}}
+# TIME_ZONE should be defined earlier in your settings.py
+CELERY_TIMEZONE = TIME_ZONE # Use TIME_ZONE from Django settings (ensure TIME_ZONE is defined)
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_SEND_SENT_EVENT = True
 
 REST_AUTH = {
     'USE_JWT': True,
@@ -420,7 +427,8 @@ CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": ["redis://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379"],
+            # "hosts": ["redis://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379"],
+            "hosts": ["redis://localhost:6379"],
         },
     },
 }
@@ -480,8 +488,7 @@ DATABASES = {
         'NAME': 'CEDB',
         'USER': 'postgres',
         'PASSWORD': 'A>a*kU>)78P?$R)|k4Ae?|ramjpU',
-        'HOST': 'database-2.czutdql9jx70.us-east-2.rds.amazonaws.com', #  localhost
-        'PORT': '5432',
+        'HOST': 'localhost', #  localhost
     }
 }
 
