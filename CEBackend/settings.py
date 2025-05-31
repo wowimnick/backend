@@ -37,7 +37,7 @@ ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'classeasily.com', '3.142.223.49']
 
 STRIPE_PUBLIC_KEY = 'pk_test_51Qn8JYFsNqYi8b0PAujbtEGNoTcLJTpaS2UefQxe5u4BquZyrIK48aRKbhHLRh45em0EFds7SNhlzys3sPxS5faR00Rj8lqQjg'
 STRIPE_SECRET_KEY = 'sk_test_51Qn8JYFsNqYi8b0P7fYDsXan82C6Q1CGWuwe9qHzaxnUf9lGW4G3cA0w2ks4svAnK9IivXKxpzOau6Kaj3N7Xx9Y00arIlzov1'
-STRIPE_WEBHOOK_SECRET = 'whsec_634bff67902f39537aeae7b8349d2368d278d2f0200d679e919425abbaac02ba'
+STRIPE_WEBHOOK_SECRET = 'whsec_KL6mF4KPBvnCumik4dGTBcBLs1uAaMdP'
 
 OPENROUTER_API_KEY = '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'
 AI_SYSTEM_PROMPT = """You are ClassEasily Support Assistant, the official AI support agent for ClassEasily, an education platform that connects students with classes and educational resources.
