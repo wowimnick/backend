@@ -542,35 +542,51 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
         user = self.request.user
         business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
         if not business: return Schedule.objects.none()
+        
         queryset = Schedule.objects.filter(option__classId__businessId=business)
+        
         option_id = self.request.query_params.get('option_id')
         if option_id and option_id.isdigit():
-            # Further ensure the requested option_id also belongs to the business
             queryset = queryset.filter(option_id=option_id, option__classId__businessId=business)
-        return queryset.select_related('option').order_by('option__title', 'day', 'time') # Improved ordering
+        
+        # Prefetch related instances and their confirmed bookings count for efficiency in serializer
+        queryset = queryset.select_related('option').prefetch_related(
+            Prefetch('instances', queryset=ScheduleInstance.objects.all().select_related('schedule')), # Prefetch all instances
+            Prefetch('instances__bookings', queryset=Booking.objects.filter(status='confirmed')) # Prefetch confirmed bookings for those instances
+        ).order_by('option__title', 'day', 'time')
+        return queryset
 
     def perform_create(self, serializer):
         option = serializer.validated_data.get('option')
         user = self.request.user
         business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
-        # Check both business existence and option ownership
         if not business or not option or option.classId.businessId != business:
              raise PermissionDenied("Cannot create schedule for an option not belonging to your business.")
-        instance = serializer.save() # Model save handles instances
+        
+        instance = serializer.save() 
         logger.info(f"Schedule created for Option ID {option.optionId} by {user.email}")
 
     def perform_update(self, serializer):
-         instance = self.get_object() # Ensures correct schedule via get_queryset
-         serializer.validated_data.pop('option', None) # Don't change parent option
-         updated_instance = serializer.save() # Model's save should handle instance updates/regen
+         instance = self.get_object() 
+         serializer.validated_data.pop('option', None) 
+         updated_instance = serializer.save()
          logger.info(f"Schedule ID {instance.pk} updated by {self.request.user.email}")
 
     def perform_destroy(self, instance):
-        # get_object ensures correct schedule
         schedule_id = instance.pk
-        # Use model's soft delete
-        instance.delete(force_delete=False)
-        logger.info(f"Schedule ID {schedule_id} deactivated by {self.request.user.email}")
+        logger.info(f"Business user {self.request.user.email} initiating deletion of Schedule ID {schedule_id}.")
+
+        # Check for confirmed bookings across all instances of this schedule
+        if Booking.objects.filter(schedule_instance__schedule=instance, status='confirmed').exists():
+            logger.warning(f"Deletion of Schedule ID {schedule_id} blocked due to existing confirmed bookings.")
+            raise PermissionDenied(
+                "Cannot delete this schedule as it has confirmed bookings. "
+                "Please cancel or reassign bookings first, or cancel individual future sessions."
+            )
+        
+        # If no confirmed bookings, proceed with deletion (which cascades to instances)
+        instance.delete() 
+        logger.info(f"Schedule ID {schedule_id} deleted by {self.request.user.email} (hard delete executed).")
 
 class BusinessScheduleInstanceViewSet(viewsets.ModelViewSet):
     serializer_class = ScheduleInstanceSerializer

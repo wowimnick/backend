@@ -1,13 +1,16 @@
 # serializers/classes/business_class_serializers.py
+from decimal import Decimal
 from rest_framework import serializers
 from django.db import transaction
-from django.db.models import Q
+from django.db.models.functions import Coalesce
+from django.db.models import Q, Sum
+from django.utils import timezone
 import json
 import logging
 
 # Adjust import paths as needed
 from ...models import (
-    BusinessInfo, ClassCategory, ClassSubcategory, ClassesMain, ClassImage,
+    Booking, BusinessInfo, ClassCategory, ClassSubcategory, ClassesMain, ClassImage,
     ClassOption, Schedule, ScheduleInstance
 )
 # Assuming business permissions are defined elsewhere
@@ -50,26 +53,58 @@ class ScheduleInstanceSerializer(serializers.ModelSerializer):
 
 class ScheduleSerializer(serializers.ModelSerializer):
     """Serializer for creating/managing schedules within a class option."""
+    booked_participants = serializers.SerializerMethodField()
+    total_revenue = serializers.SerializerMethodField()
+    has_confirmed_bookings = serializers.SerializerMethodField() # For edit/delete disabling
 
     class Meta:
         model = Schedule
         fields = [
             'id', 'option', 'day', 'time', 'duration',
-            'price', 'maxParticipants', # Renamed from max_participants if model was updated
-            'is_active',
-            'start_date', 'end_date', # For courses
-            'date', # For single sessions
+            'price', 'maxParticipants',
+            'start_date', 'end_date', 
+            'date', 
             'allow_late_enrollment',
+            'booked_participants', # Added
+            'total_revenue',       # Added
+            'has_confirmed_bookings', # Added
             'created_at', 'updated_at',
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at', 'booked_participants', 'total_revenue', 'has_confirmed_bookings']
         extra_kwargs = {
-            'option': {'write_only': True} # Option set contextually in the view
+            'option': {'write_only': True} 
         }
 
+    def get_booked_participants(self, obj):
+        # Sum of participants from confirmed bookings for all instances of this schedule
+        # This sums across all instances of a recurring schedule.
+        # If you need it per-instance, that's better done on ScheduleInstanceSerializer
+        return Booking.objects.filter(
+            schedule_instance__schedule=obj,
+            status='confirmed'
+        ).aggregate(total_booked=Coalesce(Sum('participants'), 0))['total_booked']
+
+    def get_total_revenue(self, obj):
+        # Sum of amount_paid from confirmed & paid bookings for all instances of this schedule
+        return Booking.objects.filter(
+            schedule_instance__schedule=obj,
+            status='confirmed',
+            payment_status='paid'
+        ).aggregate(total_revenue=Coalesce(Sum('amount_paid'), Decimal('0.00')))['total_revenue']
+
+    def get_has_confirmed_bookings(self, obj):
+        # Checks if any instance of this schedule (past or future) has a confirmed booking.
+        # If a schedule instance is in the past but had a booking, we still might not want to delete the parent Schedule.
+        # However, for EDITING, we primarily care about future instances with bookings.
+        # For DELETE, we care about any instance with bookings.
+        # This flag will make it simple on the frontend to disable edit/delete if ANY confirmed booking exists for the schedule.
+        return Booking.objects.filter(
+            schedule_instance__schedule=obj,
+            status='confirmed'
+        ).exists()
+
+
     def validate(self, data):
-        # Keep validation logic from original serializer
-        # Need option context for validation
         option = data.get('option') or getattr(self.instance, 'option', None)
         if not option:
              raise serializers.ValidationError("Option context is required for schedule validation.")
@@ -77,34 +112,63 @@ class ScheduleSerializer(serializers.ModelSerializer):
         booking_type = option.booking_type
         start_date = data.get('start_date')
         end_date = data.get('end_date')
-        date = data.get('date') # Single session date
-        day = data.get('day') # Course day
+        date_field = data.get('date') 
+        day = data.get('day')
 
+        # Prevent editing critical fields if there are confirmed bookings for any instance of this schedule
+        if self.instance and self.instance.pk: # If updating an existing schedule
+            # Fields that, if changed, would fundamentally alter the schedule for existing bookers
+            critical_fields_being_changed = any(
+                data.get(field) is not None and data.get(field) != getattr(self.instance, field)
+                for field in ['day', 'time', 'duration', 'price', 'start_date', 'end_date', 'date']
+            )
+            if critical_fields_being_changed:
+                 if Booking.objects.filter(schedule_instance__schedule=self.instance, status='confirmed').exists():
+                      raise serializers.ValidationError(
+                          "This schedule has confirmed bookings and critical details (like date, time, price) cannot be changed. "
+                          "Please cancel the existing schedule and create a new one if significant changes are needed."
+                      )
+        
         if booking_type == 'Full Course':
             if not all([start_date, end_date, day]):
                 raise serializers.ValidationError("Start date, end date, and day required for courses.")
             if start_date >= end_date:
                 raise serializers.ValidationError("Course end date must be after start date.")
-        else: # Single Session
-            if not date:
+            if (self.instance is None or self.instance.pk is None) and start_date < timezone.now().date():
+              raise serializers.ValidationError({'start_date': 'New course cannot start in the past.'})
+
+        else: 
+            if not date_field:
                 raise serializers.ValidationError("Date is required for single sessions.")
-            # Automatically set day from date for single sessions if not provided
-            if date and not data.get('day'):
-                 data['day'] = date.strftime('%a')
+            if date_field and not data.get('day'): # If day wasn't sent, derive it
+                 data['day'] = date_field.strftime('%a')
+            if (self.instance is None or self.instance.pk is None) and date_field < timezone.now().date():
+              raise serializers.ValidationError({'date': 'New session cannot be scheduled in the past.'})
 
 
-        # Add other validations (duration, participants, price)
         if data.get('duration', 60) < 15:
             raise serializers.ValidationError({'duration': 'Duration must be at least 15 minutes.'})
-        if data.get('maxParticipants', 1) < 1:
-            raise serializers.ValidationError({'maxParticipants': 'Max participants must be at least 1.'})
-        if data.get('price', 0) <= 0:
-             raise serializers.ValidationError({'price': 'Price must be positive.'})
-
+        
+        # Allow maxParticipants to be updated even if there are bookings,
+        # but it cannot be set lower than current confirmed bookings.
+        new_max_participants = data.get('maxParticipants')
+        if new_max_participants is not None:
+            if new_max_participants < 1:
+                raise serializers.ValidationError({'maxParticipants': 'Max participants must be at least 1.'})
+            if self.instance and self.instance.pk:
+                current_booked_sum = Booking.objects.filter(
+                    schedule_instance__schedule=self.instance,
+                    status='confirmed'
+                ).aggregate(total_booked=Coalesce(Sum('participants'), 0))['total_booked']
+                if new_max_participants < current_booked_sum:
+                    raise serializers.ValidationError({
+                        'maxParticipants': f'Cannot set capacity below current confirmed bookings ({current_booked_sum}).'
+                    })
+        
+        if data.get('price', 0) < 0: 
+             raise serializers.ValidationError({'price': 'Price cannot be negative.'})
 
         return data
-
-    # create/update logic often handled in view or model save
 
 class ManagedClassOptionSerializer(serializers.ModelSerializer):
     """Serializer for managing class options by business users."""

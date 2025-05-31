@@ -6,6 +6,8 @@ from django.urls import path, include, re_path
 from django.views.generic import TemplateView
 from django.contrib import admin
 
+from quickstart.payments.booking_status_views import BookingStatusByPaymentIntentView
+
 from .views.admin.metrics_monitoring.admin_metrics_views import AdminMetricsView
 from .views.admin.notifications.notification_views import (
     AdminNotificationAttachmentViewSet,
@@ -292,6 +294,11 @@ urlpatterns = [
     path("chat/message/", ChatMessageView.as_view(), name="chat-message"),
     # Payments
     path("payments/webhook/", ProcessBookingWebhook.as_view(), name="payment-webhook"),
+        path(
+        "booking-status/by-payment-intent/<str:payment_intent_id>/",
+        BookingStatusByPaymentIntentView.as_view(),
+        name="booking-status-by-payment-intent"
+    ),
     path(
         "payments/create-payment-intent/",
         CreatePaymentIntentView.as_view(),

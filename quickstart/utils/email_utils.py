@@ -1,9 +1,12 @@
+from datetime import datetime, timedelta
 import logging
+from icalendar import Calendar, Event, vRecur, vText
 from django.core.mail import EmailMultiAlternatives # Keep for type hints maybe
 from django.template.loader import render_to_string
 from django.conf import settings
 from django.utils import timezone
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
+import pytz
 import logging
 
 logger = logging.getLogger(__name__)
@@ -24,30 +27,26 @@ from ..models import Booking, CustomUser, Reviews, SupportTicket, BusinessInfo, 
 
 logger = logging.getLogger(__name__)
 
-# --- Helper function to safely get related data ---
+# --- Helper function to safely get related data (ensure business_timezone is included) ---
 def _get_booking_related_data(booking: Booking) -> dict:
-    """Safely retrieves common related data for booking emails."""
     data = {
         'class_title': "N/A",
         'class_id': None,
         'business_name': "N/A",
         'option_title': "N/A",
         'class_location': "N/A",
+        'business_timezone': 'UTC', # Default
+        'business_contact_email': settings.DEFAULT_FROM_EMAIL, # Default
     }
     try:
-        # Ensure relations are accessed safely
         schedule_instance = getattr(booking, 'schedule_instance', None)
         if not schedule_instance: raise AttributeError("schedule_instance missing")
-        
         schedule = getattr(schedule_instance, 'schedule', None)
         if not schedule: raise AttributeError("schedule missing")
-        
         option = getattr(schedule, 'option', None)
         if not option: raise AttributeError("option missing")
-        
         class_main = getattr(option, 'classId', None)
         if not class_main: raise AttributeError("classId missing from option")
-        
         business = getattr(class_main, 'businessId', None)
         if not business: raise AttributeError("businessId missing from class_main")
 
@@ -56,23 +55,94 @@ def _get_booking_related_data(booking: Booking) -> dict:
         data['business_name'] = getattr(business, 'businessName', "N/A")
         data['option_title'] = getattr(option, 'title', "N/A")
         data['class_location'] = getattr(class_main, 'location', "N/A")
+        data['business_timezone'] = getattr(business, 'business_timezone', 'UTC')
+        data['business_contact_email'] = getattr(business, 'studentContactEmail', settings.DEFAULT_FROM_EMAIL)
 
     except AttributeError as e:
         logger.error(f"Could not access related data for booking {booking.id} when preparing email context: {e}", exc_info=True)
     return data
 
+# --- Helper to generate ICS content ---
+def _generate_ics_content(booking: Booking, related_data: Dict[str, Any], user: CustomUser) -> Optional[str]:
+    if not booking.schedule_instance:
+        logger.warning(f"Cannot generate ICS for booking {booking.id}: schedule_instance is missing.")
+        return None
+
+    try:
+        cal = Calendar()
+        cal.add('prodid', f'-//ClassEasily Booking//classeasily.com//EN')
+        cal.add('version', '2.0')
+        cal.add('method', 'REQUEST') # For calendar invites, or PUBLISH for just event data
+
+        event = Event()
+        class_title = related_data.get('class_title', 'Class Booking')
+        option_title = related_data.get('option_title', '')
+        event_summary = f"{class_title}{f' - {option_title}' if option_title and option_title != class_title else ''}"
+        event.add('summary', vText(event_summary))
+
+        business_timezone_str = related_data.get('business_timezone', 'UTC')
+        try:
+            business_tz = pytz.timezone(business_timezone_str)
+        except pytz.UnknownTimeZoneError:
+            logger.error(f"Unknown business timezone '{business_timezone_str}' for booking {booking.id}. Defaulting to UTC for ICS.")
+            business_tz = pytz.utc
+        
+        schedule_inst = booking.schedule_instance
+        naive_start_dt = datetime.combine(schedule_inst.date, schedule_inst.time)
+        aware_start_business = business_tz.localize(naive_start_dt)
+        
+        # For ICS, DTSTART and DTEND should ideally be in UTC or have TZID specified
+        # Using UTC is generally safer for broader compatibility.
+        aware_start_utc = aware_start_business.astimezone(pytz.utc)
+        aware_end_utc = aware_start_utc + timedelta(minutes=schedule_inst.duration)
+
+        event.add('dtstart', aware_start_utc)
+        event.add('dtend', aware_end_utc)
+        event.add('dtstamp', datetime.utcnow().replace(tzinfo=pytz.utc)) # Timestamp of ICS creation
+        
+        # Unique ID for the event
+        uid_domain = settings.SITE_DOMAIN or "classeasily.com" # Get from settings or default
+        event.add('uid', f'{booking.user_facing_reference or booking.id}-{schedule_inst.date.strftime("%Y%m%d")}@{uid_domain}')
+        
+        event.add('location', vText(related_data.get('class_location', 'N/A')))
+        
+        description_parts = [
+            f"Your booking for: {event_summary}",
+            f"Business: {related_data.get('business_name', 'N/A')}",
+            f"Reference: {booking.user_facing_reference or f'ID #{booking.id}'}",
+            f"Participants: {booking.participants}",
+        ]
+        if booking.notes:
+            description_parts.append(f"Your Notes: {booking.notes}")
+        event.add('description', vText("\n".join(description_parts)))
+
+        # Organizer
+        organizer_email = related_data.get('business_contact_email', settings.DEFAULT_FROM_EMAIL)
+        event.add('organizer', f'MAILTO:{organizer_email}', parameters={'CN': vText(related_data.get('business_name', 'ClassEasily Business'))})
+
+        # Attendee (the user)
+        if user and user.email:
+            attendee_cn = vText(user.get_full_name() or user.email)
+            event.add('attendee', f'MAILTO:{user.email}', parameters={'CN': attendee_cn, 'ROLE': 'REQ-PARTICIPANT', 'PARTSTAT': 'NEEDS-ACTION', 'RSVP': 'TRUE'})
+        
+        event.add('status', 'CONFIRMED')
+        event.add('transp', 'OPAQUE') # Shows as busy time
+
+        # Recurrence for courses
+        if booking.enrollment_type == 'Full Course' and booking.booking_group_id:
+            pass # No RRULE for single instance ICS. Add if this email is for the *entire* course.
+
+
+        cal.add_component(event)
+        return cal.to_ical().decode('utf-8')
+
+    except Exception as e:
+        logger.error(f"Failed to generate ICS content for booking {booking.id}: {e}", exc_info=True)
+        return None
+
 # --- Main Function to Send Templated Emails (NOW USES TASK QUEUE) ---
 
-def send_templated_email(recipient_list, template_name, context, subject=None):
-    """
-    Renders an email using a template and queues it for sending via Celery.
-
-    Args:
-        recipient_list (list): List of email addresses (strings).
-        template_name (str): Path to the template file (e.g., 'emails/welcome_user.html').
-        context (dict): Dictionary of context variables for the template.
-        subject (str, optional): Email subject. If None, tries to derive from template title.
-    """
+def send_templated_email(recipient_list, template_name, context, subject=None, attachments=None): # Added attachments
     if not recipient_list:
         logger.warning("No recipients provided for template %s, skipping email queuing.", template_name)
         return
@@ -95,7 +165,6 @@ def send_templated_email(recipient_list, template_name, context, subject=None):
             subject = template_obj.render(Context(context)).strip()
             if not subject:
                  subject = "Notification from ClassEasily"
-                 logger.warning(f"Subject block empty or not found in '{template_name}'. Using default.")
         except Exception as e:
             logger.warning(f"Could not derive subject from template '{template_name}': {e}. Using default.")
             subject = "Notification from ClassEasily"
@@ -104,14 +173,15 @@ def send_templated_email(recipient_list, template_name, context, subject=None):
     try:
         task_kwargs = {
             'subject': subject,
-            'body': "Please view this email in an HTML-compatible client.",
+            'body': "Please view this email in an HTML-compatible client.", # Basic plain text body
             'from_email': settings.DEFAULT_FROM_EMAIL,
             'to_list': recipient_list,
             'reply_to_list': [settings.NOTIFICATION_SETTINGS.get('reply_to')] if settings.NOTIFICATION_SETTINGS.get('reply_to') else None,
-            'html_content': html_content
+            'html_content': html_content,
+            'attachments': attachments # Pass attachments to the task
         }
         send_email_task.delay(**task_kwargs)
-        logger.info(f"Email task queued for {recipient_list} using template '{template_name}'. Subject: '{subject}'.")
+        logger.info(f"Email task queued for {recipient_list} using template '{template_name}'. Subject: '{subject}'. Attachments: {'Yes' if attachments else 'No'}")
     except Exception as e:
         logger.error(f"Error queuing email task for template '{template_name}' to {recipient_list}: {e}", exc_info=True)
 
@@ -174,13 +244,6 @@ def send_account_security_email(user, change_type, new_email=None, subject=None)
     )
 
 def send_booking_confirmation_email(user: CustomUser, booking: Booking):
-    """
-    Sends the booking confirmation email to a user after successful payment.
-
-    Args:
-        user (CustomUser): The user who made the booking.
-        booking (Booking): The confirmed Booking object.
-    """
     if not user or not user.email or not booking:
         logger.warning("Attempted to send booking confirmation with invalid user or booking.")
         return
@@ -188,9 +251,7 @@ def send_booking_confirmation_email(user: CustomUser, booking: Booking):
     related_data = _get_booking_related_data(booking)
     if not related_data.get('class_id'):
         logger.error(f"Could not access essential related data for booking {booking.id} when sending confirmation.")
-        # Consider if we should still send a partial email or not
-        # For now, let's proceed but the template will show "N/A" for missing parts
-    
+
     logger.info(f"Preparing booking confirmation email for booking {booking.id} to user {user.email}")
 
     class_details_url = f"{settings.FRONTEND_BASE_URL}/classes/{related_data.get('class_id', '')}" if related_data.get('class_id') else "#"
@@ -198,8 +259,6 @@ def send_booking_confirmation_email(user: CustomUser, booking: Booking):
     
     payment = booking.payments.filter(status='succeeded').order_by('-created_at').first()
 
-    # The 'booking' object itself contains booking.participants and booking.participant_details
-    # The template will access these directly.
     context = {
         'user': user,
         'booking': booking, 
@@ -209,13 +268,29 @@ def send_booking_confirmation_email(user: CustomUser, booking: Booking):
         'related_data': related_data,
         'payment': payment 
     }
+
+    # Generate ICS content
+    ics_content_str = _generate_ics_content(booking, related_data, user)
+    email_attachments = None
+    if ics_content_str:
+        filename_class_part = (related_data.get('class_title', 'class')[:20]).replace(' ', '_').replace('/', '_')
+        ics_filename = f"{filename_class_part}_booking_{booking.schedule_instance.date.strftime('%Y%m%d')}.ics"
+        email_attachments = [{
+            'filename': ics_filename,
+            'content': ics_content_str, # Pass as string
+            'mimetype': 'text/calendar; charset=utf-8; method=REQUEST' # Method can be PUBLISH or REQUEST
+        }]
+        logger.info(f"Generated ICS attachment: {ics_filename} for booking {booking.id}")
+    else:
+        logger.warning(f"Could not generate ICS attachment for booking {booking.id}")
+
     send_templated_email(
         recipient_list=[user.email],
         template_name='emails/booking_confirmation_user.html',
         context=context,
-        subject=f"Your Booking for {related_data.get('class_title', '[Class Title]')} is Confirmed!"
+        subject=f"Your Booking for {related_data.get('class_title', '[Class Title]')} is Confirmed!",
+        attachments=email_attachments # Pass the attachments list
     )
-    logger.info(f"Booking confirmation email prepared/queued for booking {booking.id}")
 
 def send_booking_cancellation_user_email(user: CustomUser, booking: Booking, refund_details: str):
     """

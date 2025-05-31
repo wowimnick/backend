@@ -374,7 +374,7 @@ class MyBusinessOverviewView(APIView):
         # Check for at least one option linked to any class of this business
         has_class_options = ClassOption.objects.filter(classId__businessId=business).exists()
         # Check for at least one active schedule linked to any option of this business
-        has_schedules = Schedule.objects.filter(option__classId__businessId=business, is_active=True).exists()
+        has_schedules = Schedule.objects.filter(option__classId__businessId=business).exists()
 
         setup_progress_data = {
             "is_stripe_connected": business.stripe_account_status == 'active', # Consider 'pending' as partially complete if needed

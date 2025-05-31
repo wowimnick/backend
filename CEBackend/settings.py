@@ -21,6 +21,7 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent.parent
 USE_TZ = True
 TIME_ZONE = 'UTC'
+SITE_DOMAIN = 'classeasily.com'
 
 
 # Quick-start development settings - unsuitable for production
@@ -224,11 +225,20 @@ LOGGING = {
     'loggers': {
         'django': {
             'handlers': ['console'],
-            'level': 'INFO',
+            'level': 'INFO', # Keep Django general logs at INFO
         },
-        '': {  # This is the root logger
+        'quickstart': { # Assuming your app is 'quickstart'
             'handlers': ['console'],
-            'level': 'DEBUG',
+            'level': 'DEBUG', # Set your app's logger to DEBUG
+            'propagate': False, # Optional: prevent double logging if root is also DEBUG
+        },
+        'celery': { # For Celery's own logs
+            'handlers': ['console'],
+            'level': 'INFO', # Or DEBUG if you need Celery's verbose logs
+        },
+        '': {  # Root logger
+            'handlers': ['console'],
+            'level': 'INFO', # Set root to INFO or DEBUG as needed
         },
     },
 }

@@ -38,7 +38,6 @@ REVIEW_COUNT_SUBQUERY = Subquery(
 MIN_PRICE_SUBQUERY = Subquery(
      Schedule.objects.filter(
           option__classId=OuterRef('pk'),
-          is_active=True
      ).order_by('price').values('price')[:1],
      output_field=DecimalField(max_digits=10, decimal_places=2)
 )
