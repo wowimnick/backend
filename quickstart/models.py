@@ -436,14 +436,14 @@ class BusinessInfo(models.Model):
         upload_to="business_images/", storage=S3Boto3Storage(), blank=True, null=True
     )
     featured = models.BooleanField(default=False)
-    isActive = models.BooleanField(default=False)  # Typically managed by verification
+    isActive = models.BooleanField(default=False)
     createdAt = models.DateTimeField(auto_now_add=True)
     updatedAt = models.DateTimeField(auto_now=True)
 
     # --- Contact & Website ---
     studentContactPhone = models.CharField(max_length=100)
     studentContactEmail = models.EmailField()
-    website = models.URLField(max_length=255, blank=True, null=True)
+    website = models.URLField(max_length=255, blank=True, null=True) # ADDED
     preferredContact = models.CharField(
         max_length=20,
         choices=[
@@ -465,22 +465,18 @@ class BusinessInfo(models.Model):
         max_digits=11, decimal_places=8, null=True, blank=True
     )
     showExactLocation = models.BooleanField(default=True)
-    business_timezone = models.CharField(
+    business_timezone = models.CharField( # ADDED
         max_length=50,
         choices=COMMON_TIMEZONE_CHOICES,
-        default="UTC",  # Or a more common business timezone like 'America/Toronto'
-        blank=True,
-        help_text="Primary IANA timezone for this business's operations and local time display.",
+        default="UTC",
+        blank=False, # Make it required during registration
+        help_text="Primary IANA timezone for this business's operations.",
     )
 
     # --- Simplified Booking Settings ---
-    openingTime = models.TimeField()  # Naive time, interpreted in business_timezone
-    closingTime = models.TimeField()  # Naive time, interpreted in business_timezone
-    refundPolicy = models.CharField(
-        max_length=20,
-        choices=REFUND_POLICY_CHOICES,  # Assuming REFUND_POLICY_CHOICES is defined
-        default="partial",
-    )
+    openingTime = models.TimeField()
+    closingTime = models.TimeField()
+    # refundPolicy = models.CharField(...) # REMOVED
 
     # Notification fields
     newBookingNotification = models.BooleanField(default=True)
@@ -494,7 +490,7 @@ class BusinessInfo(models.Model):
     )
     stripe_account_status = models.CharField(
         max_length=30,
-        choices=STRIPE_STATUS_CHOICES,  # Assuming STRIPE_STATUS_CHOICES is defined
+        choices=STRIPE_STATUS_CHOICES,
         blank=True,
         null=True,
         db_index=True,
@@ -516,6 +512,7 @@ class BusinessInfo(models.Model):
             ("art", "Art"),
             ("technology", "Technology"),
             ("sports", "Sports"),
+            # Consider adding more categories like 'business', 'languages', 'crafts' from ClassTypesStep
         ],
     )
     subcategories = models.JSONField(default=list, blank=True)
@@ -543,6 +540,12 @@ class BusinessInfo(models.Model):
     termsAccepted = models.BooleanField(default=False)
     privacyAccepted = models.BooleanField(default=False)
 
+    # --- Additional Useful Fields ---
+    social_media_links = models.JSONField(default=dict, blank=True, help_text="e.g. {'facebook': 'url', 'instagram': 'url'}") # ADDED
+    tags_keywords = models.JSONField(default=list, blank=True, help_text="List of keywords for searchability") # ADDED
+    founding_year = models.PositiveIntegerField(null=True, blank=True, help_text="Year the business was founded") # ADDED
+
+
     # --- Cached Aggregates ---
     total_reviews_count = models.IntegerField(
         default=0,
@@ -557,16 +560,15 @@ class BusinessInfo(models.Model):
         help_text="Cached average rating from approved reviews for this business",
     )
 
-    last_booking_date = models.DateTimeField(null=True, blank=True)  # Aware datetime
+    last_booking_date = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return self.businessName
 
     def update_review_aggregates(self):
         # (Keep your existing implementation of this method)
-        # Correctly query Reviews linked to this business via ClassesMain
         approved_reviews_qs = Reviews.objects.filter(
-            classId__businessId=self,  # Filter reviews linked to classes of this business
+            classId__businessId=self,
             status="approved",
         )
         new_count = approved_reviews_qs.count()
@@ -587,7 +589,6 @@ class BusinessInfo(models.Model):
             logger.info(
                 f"Updated review aggregates for Business {self.businessId}: Count={self.total_reviews_count}, AvgRating={self.average_rating}"
             )
-
     class Meta:
         db_table = "business_info"
         verbose_name_plural = "Business Information"

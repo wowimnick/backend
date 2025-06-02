@@ -1,21 +1,20 @@
 from rest_framework import serializers
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.core.validators import validate_email
+from django.core.validators import validate_email, URLValidator
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from decimal import Decimal
-import json # Import json for parsing
+import json
 import logging
+import pytz # For timezone choices
 
-# Adjust import paths as needed
 from ...models import BusinessInfo, ClassesMain, Reviews, CustomUser, Booking, VerificationRequest
 from django.db.models import Sum, Count, Avg, Q, Subquery, OuterRef, IntegerField, F
 from django.db.models.functions import Coalesce
-from datetime import timedelta, time
+from datetime import timedelta, time, datetime # Added datetime for founding_year validation
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
-# Define colors if not imported from elsewhere
 colors = {
     'chart': {
         'blue': '#3b82f6',
@@ -26,13 +25,16 @@ colors = {
     }
 }
 
+COMMON_TIMEZONE_CHOICES_SERIALIZER = [(tz, tz.replace("_", " ")) for tz in pytz.common_timezones]
+
+# ... (Keep MetricSerializer, RevenueTrendItemSerializer, etc. as they are) ...
 class MetricSerializer(serializers.Serializer):
-    value = serializers.FloatField() # Or IntegerField/DecimalField as appropriate
-    change = serializers.FloatField() # Percentage or absolute change
+    value = serializers.FloatField()
+    change = serializers.FloatField()
 
 class RevenueTrendItemSerializer(serializers.Serializer):
-    date = serializers.CharField() # ISO date string (YYYY-MM-DD) - this is now local business date
-    gross_revenue = serializers.FloatField(required=False, default=0.0) 
+    date = serializers.CharField()
+    gross_revenue = serializers.FloatField(required=False, default=0.0)
     platform_fees = serializers.FloatField(required=False, default=0.0)
     net_revenue = serializers.FloatField(required=False, default=0.0)
 
@@ -48,9 +50,10 @@ class PopularClassSerializer(serializers.Serializer):
 
 class RecentActivitySerializer(serializers.Serializer):
     message = serializers.CharField()
-    icon = serializers.CharField()    # Name of the Lucide icon
+    icon = serializers.CharField()
     color = serializers.CharField()
     timestamp = serializers.DateTimeField(read_only=True)
+
 class MetricsContainerSerializer(serializers.Serializer):
     total_students = MetricSerializer()
     active_classes = MetricSerializer()
@@ -65,33 +68,32 @@ class SetupProgressSerializer(serializers.Serializer):
     has_schedules = serializers.BooleanField()
 
 class BusinessDashboardOverviewSerializer(serializers.Serializer):
-    """Serializer for the aggregated business overview dashboard"""
     metrics = MetricsContainerSerializer()
     revenue_trend = RevenueTrendItemSerializer(many=True)
     upcoming_classes = UpcomingClassSerializer(many=True)
     popular_classes = PopularClassSerializer(many=True)
     recent_activity = RecentActivitySerializer(many=True)
-    today_snapshot = serializers.DictField(child=serializers.IntegerField(), required=False) 
-    actionable_prompts = serializers.DictField(required=False) 
-    setup_progress = SetupProgressSerializer(required=False) 
+    today_snapshot = serializers.DictField(child=serializers.IntegerField(), required=False)
+    actionable_prompts = serializers.DictField(required=False)
+    setup_progress = SetupProgressSerializer(required=False)
+
 
 class BusinessRegistrationSerializer(serializers.ModelSerializer):
-    """
-    Handles validating and creating BusinessInfo during registration.
-    Expects list fields (subcategories, etc.) as JSON strings from FormData.
-    REMOVED verificationDocument and related validations.
-    ADDED validation for termsAccepted and privacyAccepted.
-    """
     latitude = serializers.DecimalField(max_digits=10, decimal_places=8, required=False, allow_null=True)
     longitude = serializers.DecimalField(max_digits=11, decimal_places=8, required=False, allow_null=True)
 
-    # Expect JSON strings for list fields from FormData
     subcategories = serializers.CharField(write_only=True, required=False, allow_blank=True)
     classFormats = serializers.CharField(write_only=True, required=False, allow_blank=True)
     skillLevels = serializers.CharField(write_only=True, required=False, allow_blank=True)
     ageGroups = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    
+    # New fields for registration
+    website = serializers.URLField(required=False, allow_blank=True, allow_null=True)
+    business_timezone = serializers.ChoiceField(choices=COMMON_TIMEZONE_CHOICES_SERIALIZER, required=True)
+    social_media_links = serializers.CharField(write_only=True, required=False, allow_blank=True, help_text="JSON string of social media links, e.g. {'facebook':'url'}")
+    tags_keywords = serializers.CharField(write_only=True, required=False, allow_blank=True, help_text="JSON string of a list of keywords")
+    founding_year = serializers.IntegerField(required=False, allow_null=True)
 
-    # verificationDocument removed from here
 
     class Meta:
         model = BusinessInfo
@@ -100,6 +102,11 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
             'businessName', 'businessType', 'businessDescription',
             'businessImage', 'openingTime', 'closingTime',
             'liabilityWaiver',
+            'website', # ADDED
+            'business_timezone', # ADDED
+            'social_media_links', # ADDED (as CharField for JSON string)
+            'tags_keywords', # ADDED (as CharField for JSON string)
+            'founding_year', # ADDED
 
             # Step 1: Contact Details
             'studentContactPhone', 'studentContactEmail',
@@ -108,20 +115,26 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
             # Step 2: Location
             'businessAddress', 'businessCity',
             'businessState', 'businessZipCode', 'latitude', 'longitude',
-            'showExactLocation', # Controlled by latitude/longitude presence maybe?
+            'showExactLocation',
 
             # Step 3: Class Types & Agreements
             'classCategory',
-            'subcategories', 'classFormats', 'skillLevels', 'ageGroups', # JSON strings
-            'termsAccepted', 'privacyAccepted' # Moved from Verification
+            'subcategories', 'classFormats', 'skillLevels', 'ageGroups',
+            'termsAccepted', 'privacyAccepted'
         ]
         extra_kwargs = {
             # Step 0 fields
             'businessName': {'required': True}, 'businessType': {'required': True},
             'businessDescription': {'required': True}, 'openingTime': {'required': True},
-            'closingTime': {'required': True}, 
-            'liabilityWaiver': {'required': True}, # Make sure frontend sends this
+            'closingTime': {'required': True},
+            'liabilityWaiver': {'required': True},
             'businessImage': {'required': False, 'allow_null': True},
+            'website': {'required': False, 'allow_blank': True, 'allow_null': True},
+            'business_timezone': {'required': True},
+            'social_media_links': {'required': False, 'allow_blank': True},
+            'tags_keywords': {'required': False, 'allow_blank': True},
+            'founding_year': {'required': False, 'allow_null': True},
+
 
             # Step 1 fields
             'studentContactPhone': {'required': True}, 'studentContactEmail': {'required': True},
@@ -133,26 +146,38 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
 
             # Step 3 fields
             'classCategory': {'required': True},
-            # List fields are CharField here, required depends on if the frontend *always* sends them (even empty string/JSON)
-            'subcategories': {'required': False, 'allow_blank': True}, # Make optional if empty list is acceptable
+            'subcategories': {'required': False, 'allow_blank': True},
             'classFormats': {'required': False, 'allow_blank': True},
             'skillLevels': {'required': False, 'allow_blank': True},
             'ageGroups': {'required': False, 'allow_blank': True},
-            'termsAccepted': {'required': True}, # Agreements are mandatory
+            'termsAccepted': {'required': True},
             'privacyAccepted': {'required': True},
 
-            # Fields not directly set by user during registration
-            'showExactLocation': {'read_only': True}, # Determined by lat/lon
+            'showExactLocation': {'read_only': True},
         }
+
+    def validate_website(self, value):
+        if value: # Only validate if a value is provided
+            validator = URLValidator()
+            try:
+                validator(value)
+            except DjangoValidationError:
+                raise DRFValidationError("Invalid URL format for website.")
+        return value
+
+    def validate_founding_year(self, value):
+        if value is not None:
+            current_year = datetime.now().year
+            if not (1800 <= value <= current_year): # Basic sanity check for year
+                raise DRFValidationError(f"Founding year must be between 1800 and {current_year}.")
+        return value
 
     def validate(self, data):
         # --- Email Validation ---
-        for email_field in ['studentContactEmail']: # Removed adminContactEmail
-            if email_field in data and data[email_field]: # Check if field exists and is not empty
-                try:
-                    validate_email(data[email_field])
-                except DjangoValidationError:
-                    raise DRFValidationError({email_field: "Invalid email address"})
+        for email_field in ['studentContactEmail']:
+            if email_field in data and data[email_field]:
+                try: validate_email(data[email_field])
+                except DjangoValidationError: raise DRFValidationError({email_field: "Invalid email address"})
 
         # --- Time Validation ---
         if data.get('openingTime') and data.get('closingTime'):
@@ -164,20 +189,12 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
             raise DRFValidationError({"termsAccepted": "You must accept the Terms of Service"})
         if not data.get('privacyAccepted'):
             raise DRFValidationError({"privacyAccepted": "You must accept the Privacy Policy"})
-
-        # --- Liability Waiver Validation ---
-        # Ensure it's treated as a boolean
+        
         liability_waiver = data.get('liabilityWaiver')
-        if isinstance(liability_waiver, str):
-             data['liabilityWaiver'] = liability_waiver.lower() == 'true'
-        elif liability_waiver is None: # Or handle if it's not required / missing
-             raise DRFValidationError({"liabilityWaiver": "Liability waiver agreement is required."})
-        elif not isinstance(liability_waiver, bool):
-             raise DRFValidationError({"liabilityWaiver": "Invalid value for liability waiver."})
-
-        if not data.get('liabilityWaiver'): # Check the boolean value now
-             raise DRFValidationError({"liabilityWaiver": "You must agree to the liability waiver."})
-
+        if isinstance(liability_waiver, str): data['liabilityWaiver'] = liability_waiver.lower() == 'true'
+        elif liability_waiver is None: raise DRFValidationError({"liabilityWaiver": "Liability waiver agreement is required."})
+        elif not isinstance(liability_waiver, bool): raise DRFValidationError({"liabilityWaiver": "Invalid value for liability waiver."})
+        if not data.get('liabilityWaiver'): raise DRFValidationError({"liabilityWaiver": "You must agree to the liability waiver."})
 
         # --- Coordinate Validation ---
         latitude = data.get('latitude')
@@ -185,142 +202,122 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
         if (latitude is not None and longitude is None) or \
            (longitude is not None and latitude is None):
              raise DRFValidationError("Both latitude and longitude must be provided together, or neither.")
-        # Set showExactLocation based on coordinate presence
         data['showExactLocation'] = (latitude is not None and longitude is not None)
 
-        # --- List Field JSON Parsing ---
-        list_fields = ['subcategories', 'classFormats', 'skillLevels', 'ageGroups']
-        for field in list_fields:
+        # --- List and Dict Field JSON Parsing ---
+        json_string_fields = {
+            'subcategories': list, 'classFormats': list, 'skillLevels': list, 
+            'ageGroups': list, 'tags_keywords': list, 'social_media_links': dict
+        }
+        for field, expected_type in json_string_fields.items():
             field_value = data.get(field)
-            if field_value: # Check if field exists and is not empty string/None
+            if field_value:
                 try:
-                    # Parse the JSON string into a Python list
-                    parsed_list = json.loads(field_value)
-                    if not isinstance(parsed_list, list):
-                        raise DRFValidationError({field: "Invalid format. Expected a list."})
-                    # Replace the JSON string with the parsed list in validated_data
-                    data[field] = parsed_list
+                    parsed_value = json.loads(field_value)
+                    if not isinstance(parsed_value, expected_type):
+                        raise DRFValidationError({field: f"Invalid format. Expected a {expected_type.__name__}."})
+                    data[field] = parsed_value
                 except json.JSONDecodeError:
                     raise DRFValidationError({field: f"Invalid JSON format provided for {field}."})
-                except TypeError:
-                    # Handle cases where field_value might already be a list (e.g., if not sent via FormData)
-                    if not isinstance(field_value, list):
-                         raise DRFValidationError({field: f"Unexpected type for {field}. Expected JSON string or list."})
-                    # If it's already a list, keep it as is
+                except TypeError: # Already parsed (e.g., not from FormData)
+                    if not isinstance(field_value, expected_type):
+                        raise DRFValidationError({field: f"Unexpected type for {field}. Expected JSON string or {expected_type.__name__}."})
                     data[field] = field_value
-
             elif field in data: # Field exists but is empty string or None
-                 # Handle empty string/None case - convert to empty list for JSONField
-                 data[field] = []
-            # If field not present at all in data, model's default=list will handle it
+                 data[field] = expected_type() # Default to empty list/dict
 
-        data['isActive'] = False # Default to inactive until verified
-
+        data['isActive'] = False
         return data
 
     def create(self, validated_data):
         user = self.context['request'].user
-
-        # Ensure boolean fields are correctly interpreted
         validated_data['termsAccepted'] = validated_data.get('termsAccepted', False)
         validated_data['privacyAccepted'] = validated_data.get('privacyAccepted', False)
         validated_data['liabilityWaiver'] = validated_data.get('liabilityWaiver', False)
-
-        # Pop 'isActive' if it's in validated_data from validate method,
-        # as we'll set it explicitly later based on verification
         validated_data.pop('isActive', None)
 
-        # Create the BusinessInfo instance
         business = BusinessInfo.objects.create(
             owner=user,
-            verificationStatus='pending', # Default status
-            isActive=False, # Explicitly set to inactive on creation
-            **validated_data # Pass all validated data
+            verificationStatus='pending',
+            isActive=False,
+            **validated_data
         )
-
-        VerificationRequest.objects.create(
-            user=user,
-            business=business,
-            status='pending'
-        )
-
+        VerificationRequest.objects.create(user=user, business=business, status='pending')
         return business
 
 class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
     owner_email = serializers.EmailField(source='owner.email', read_only=True)
     managers_emails = serializers.SerializerMethodField(read_only=True)
 
-    # Fields from BusinessSettings.jsx (General Tab)
-    # businessName, businessType, businessDescription are direct model fields
-    studentContactEmail = serializers.EmailField(required=False, allow_blank=True) # Primary email
-    studentContactPhone = serializers.CharField(required=False, allow_blank=True) # Primary phone
-    # website is a direct model field
-
-    # Location Tab
-    # businessAddress, latitude, longitude, showExactLocation are direct model fields
+    studentContactEmail = serializers.EmailField(required=False, allow_blank=True)
+    studentContactPhone = serializers.CharField(required=False, allow_blank=True)
     
-    # Preferences Tab
-    # openingTime, closingTime are direct model fields (TimeField)
-    business_timezone = serializers.CharField(required=False, allow_blank=True) # Maps to model's business_timezone
-    # newBookingNotification, cancellationNotification, reminderNotification, smsNotifications are direct model fields (BooleanField)
-
-    # Business Image (handled specially in update)
     businessImage = serializers.ImageField(required=False, allow_null=True, use_url=True)
     
-    # Read-only representations of JSONFields (if still needed for display, but edit forms won't use these directly)
+    # Direct model fields for new additions (editable in settings)
+    website = serializers.URLField(required=False, allow_blank=True, allow_null=True)
+    business_timezone = serializers.ChoiceField(choices=COMMON_TIMEZONE_CHOICES_SERIALIZER, required=False, allow_blank=True)
+    social_media_links = serializers.JSONField(required=False) # Allow direct JSON editing
+    tags_keywords = serializers.JSONField(required=False) # Allow direct JSON editing (list of strings)
+    founding_year = serializers.IntegerField(required=False, allow_null=True)
+
+    # Read-only representations of original JSONFields (if they are set at registration and not changed often)
     subcategories = serializers.ListField(child=serializers.CharField(), read_only=True, required=False)
     classFormats = serializers.ListField(child=serializers.CharField(), read_only=True, required=False)
     skillLevels = serializers.ListField(child=serializers.CharField(), read_only=True, required=False)
     ageGroups = serializers.ListField(child=serializers.CharField(), read_only=True, required=False)
 
-
     class Meta:
         model = BusinessInfo
-        # List all fields that can be read or written via this serializer
-        # Ensure this matches the fields you intend to manage via BusinessSettings.jsx
         fields = [
             'businessId', 'businessName', 'businessType', 'businessDescription',
-            'businessImage', 'website',
-            'studentContactEmail', 'studentContactPhone', # Primary contact fields
-            'businessAddress', 'businessCity', 'businessState', 'businessZipCode', # If still used, otherwise rely on full address and parse
+            'businessImage', 
+            'website', # ADDED
+            'business_timezone', # ADDED
+            'social_media_links', # ADDED
+            'tags_keywords', # ADDED
+            'founding_year', # ADDED
+            'studentContactEmail', 'studentContactPhone',
+            'businessAddress', 'businessCity', 'businessState', 'businessZipCode',
             'latitude', 'longitude', 'showExactLocation',
-            'openingTime', 'closingTime', 'business_timezone', # Make sure model field is 'business_timezone'
-            'preferredContact', # If still used from General tab for example
+            'openingTime', 'closingTime', 
+            'preferredContact',
             'newBookingNotification', 'cancellationNotification', 'reminderNotification', 'smsNotifications',
-            'liabilityWaiver', # If editable in settings
-            'classCategory', # Read-only representation
-            'subcategories','classFormats', 'skillLevels', 'ageGroups', # Read-only JSON representations
+            'liabilityWaiver',
+            'classCategory', 
+            'subcategories','classFormats', 'skillLevels', 'ageGroups',
             'owner_email', 'managers_emails', 'verificationStatus',
             'stripe_account_id', 'stripe_account_status',
             'createdAt', 'updatedAt',
         ]
-        read_only_fields = ( # Fields not settable by the user via this settings form
+        read_only_fields = (
             'businessId', 'owner_email', 'managers_emails', 'verificationStatus',
             'stripe_account_id', 'stripe_account_status',
             'createdAt', 'updatedAt',
             'classCategory', 
-            'subcategories', 'classFormats', 'skillLevels', 'ageGroups' # Read-only views of JSON
+            'subcategories', 'classFormats', 'skillLevels', 'ageGroups'
         )
         extra_kwargs = {
-             # Make fields optional for PATCH updates
              'businessName': {'required': False}, 'businessType': {'required': False},
              'businessDescription': {'required': False},
              'studentContactEmail': {'required': False, 'allow_blank': True},
              'studentContactPhone': {'required': False, 'allow_blank': True},
-             'website': {'required': False, 'allow_blank': True},
+             'website': {'required': False, 'allow_blank': True, 'allow_null': True},
+             'business_timezone': {'required': False, 'allow_blank': True},
+             'social_media_links': {'required': False}, # Allow empty dict
+             'tags_keywords': {'required': False}, # Allow empty list
+             'founding_year': {'required': False, 'allow_null': True},
              'businessAddress': {'required': False, 'allow_blank': True},
              'latitude': {'required': False, 'allow_null': True},
              'longitude': {'required': False, 'allow_null': True},
              'openingTime': {'required': False, 'allow_null': True},
              'closingTime': {'required': False, 'allow_null': True},
-             'business_timezone': {'required': False, 'allow_blank': True},
              'preferredContact': {'required': False},
-             'liabilityWaiver': {'required': False}, # Assuming this can be toggled
+             'liabilityWaiver': {'required': False},
         }
 
     def get_managers_emails(self, obj):
-        if hasattr(obj, 'managers'):
-             return [manager.email for manager in obj.managers.all()]
+        if hasattr(obj, 'managers'): return [manager.email for manager in obj.managers.all()]
         return []
 
     def validate_studentContactEmail(self, value):
@@ -328,12 +325,52 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             try: validate_email(value)
             except DjangoValidationError: raise DRFValidationError("Invalid business email address.")
         return value
+
+    def validate_website(self, value):
+        if value:
+            validator = URLValidator()
+            try: validator(value)
+            except DjangoValidationError: raise DRFValidationError("Invalid URL format for website.")
+        return value
     
+    def validate_founding_year(self, value):
+        if value is not None:
+            current_year = datetime.now().year
+            if not (1800 <= value <= current_year):
+                raise DRFValidationError(f"Founding year must be between 1800 and {current_year}.")
+        return value
+
+    def validate_tags_keywords(self, value):
+        if value is not None: # Allow null or empty list
+            if not isinstance(value, list):
+                raise DRFValidationError("Tags/Keywords must be a list.")
+            if not all(isinstance(item, str) for item in value):
+                raise DRFValidationError("All tags/keywords must be strings.")
+        return value if value is not None else []
+
+
+    def validate_social_media_links(self, value):
+        if value is not None: # Allow null or empty dict
+            if not isinstance(value, dict):
+                raise DRFValidationError("Social media links must be a dictionary.")
+            # Optional: validate keys (e.g., 'facebook', 'instagram') and URL format of values
+            url_validator = URLValidator()
+            for key, url_val in value.items():
+                if not isinstance(key, str) or not isinstance(url_val, str):
+                    raise DRFValidationError(f"Invalid format for social media link: {key}. Both key and URL must be strings.")
+                if url_val: # Only validate if URL is not empty
+                    try:
+                        url_validator(url_val)
+                    except DjangoValidationError:
+                        raise DRFValidationError(f"Invalid URL for social media '{key}': {url_val}")
+        return value if value is not None else {}
+
+
     def validate_openingTime(self, value):
-        if isinstance(value, str): # Frontend might send HH:mm string
+        if isinstance(value, str):
             try: return time.fromisoformat(value)
             except ValueError: raise DRFValidationError("Invalid opening time format. Use HH:MM.")
-        return value # Assume it's already a time object
+        return value
 
     def validate_closingTime(self, value):
         if isinstance(value, str):
@@ -353,76 +390,57 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
         if (latitude is not None and longitude is None) or \
            (longitude is not None and latitude is None):
              raise DRFValidationError("Both latitude and longitude must be provided, or neither.")
-        # Set showExactLocation based on coordinate presence for the update
-        # The actual model field `showExactLocation` will be updated if `saltLocation` was sent from frontend
-        # or based on lat/lon. Backend model should handle the `showExactLocation` logic based on `saltLocation`
-        # sent from frontend, or derive from lat/lon presence if `saltLocation` isn't explicitly sent.
-        # For settings, frontend controls 'hideExactLocation' which maps to 'saltLocation'
-        # Let's assume frontend sends 'showExactLocation' directly if that's the model field,
-        # or if it sends 'saltLocation', the view/serializer maps it.
-        # The frontend `BusinessSettings.jsx` sends `showExactLocation = !values.saltLocation`
-        # So, if `showExactLocation` is in `data`, use it. Otherwise, derive.
-        if 'showExactLocation' not in data: # If frontend didn't send it (e.g. location tab not saved)
+        
+        if 'showExactLocation' not in data:
             data['showExactLocation'] = (latitude is not None and longitude is not None)
         
         business_image_input = self.context['request'].data.get('businessImage', ...)
-        if business_image_input == '': # Explicit empty string means remove
-            data['businessImage'] = None
-        elif business_image_input is ...: # Not provided in request, remove from data to keep existing
-            data.pop('businessImage', None)
-        # If it's a File object, it will be handled by DRF default.
-
+        if business_image_input == '': data['businessImage'] = None
+        elif business_image_input is ...: data.pop('businessImage', None)
+        
         return data
 
     def update(self, instance, validated_data):
-        # Handle businessImage: None means clear, file object means update/new
-        # If 'businessImage' is not in validated_data, it means no change was requested for it.
-        
-        new_image_file = validated_data.pop('businessImage', ...) # Use sentinel if not present
-
-        if new_image_file is None: # Explicitly set to None in validate if frontend sent empty string
+        new_image_file = validated_data.pop('businessImage', ...)
+        if new_image_file is None:
             if instance.businessImage:
                 try: instance.businessImage.delete(save=False)
                 except Exception as e: logger.warning(f"Error deleting old businessImage for {instance.pk}: {e}")
             instance.businessImage = None
-        elif new_image_file is not ...: # A new file object was provided
-            if instance.businessImage: # Delete old if exists
+        elif new_image_file is not ...:
+            if instance.businessImage:
                  try: instance.businessImage.delete(save=False)
                  except Exception as e: logger.warning(f"Error deleting old businessImage for {instance.pk} before update: {e}")
             instance.businessImage = new_image_file
-        # If new_image_file is ..., field wasn't in validated_data, so no change to instance.businessImage
 
-        # Ensure direct model fields are updated
-        # Fields like 'studentContactEmail' are now direct model fields in `validated_data`
-        # No need for manual alias mapping if frontend sends correct field names.
-        
-        # Update showExactLocation based on coordinates if not explicitly set by a saltLocation toggle
-        # The validate method should have already set 'showExactLocation' in validated_data
-        # if latitude/longitude were part of the update.
         if 'latitude' in validated_data and 'longitude' in validated_data:
             instance.latitude = validated_data.get('latitude', instance.latitude)
             instance.longitude = validated_data.get('longitude', instance.longitude)
-            # Re-derive showExactLocation based on final coordinates, unless saltLocation was explicitly sent
-            # The `BusinessInfo` model's `save` method could also handle this derivation.
-            # For now, assuming frontend sends `showExactLocation` if it was toggled.
-            if 'showExactLocation' in validated_data: # If frontend sent it (from saltLocation toggle)
+            if 'showExactLocation' in validated_data:
                  instance.showExactLocation = validated_data.get('showExactLocation')
-            else: # Derive if not explicitly sent
+            else:
                  instance.showExactLocation = (instance.latitude is not None and instance.longitude is not None)
+        
+        # Handle JSON fields: social_media_links and tags_keywords
+        # If they are in validated_data, update them.
+        # The JSONField in the model will store them correctly.
+        if 'social_media_links' in validated_data:
+            instance.social_media_links = validated_data.get('social_media_links', instance.social_media_links)
+        if 'tags_keywords' in validated_data:
+            instance.tags_keywords = validated_data.get('tags_keywords', instance.tags_keywords)
 
-
-        # Let super().update handle the rest of the fields
         return super().update(instance, validated_data)
 
+
+# Keep BusinessStatsSerializer as is, or update if new fields affect stats directly
 class BusinessStatsSerializer(serializers.ModelSerializer):
-    """Serializer for dashboard stats - NO CHANGES NEEDED HERE"""
     total_revenue = serializers.SerializerMethodField()
     total_students = serializers.SerializerMethodField()
     total_classes = serializers.SerializerMethodField()
     average_rating = serializers.SerializerMethodField()
     recent_bookings = serializers.SerializerMethodField()
     registration_date = serializers.DateTimeField(source='createdAt', read_only=True)
-    totalReviews = serializers.SerializerMethodField() # Added this method
+    totalReviews = serializers.SerializerMethodField() 
 
     class Meta:
         model = BusinessInfo
@@ -435,15 +453,16 @@ class BusinessStatsSerializer(serializers.ModelSerializer):
         ]
 
     def get_totalReviews(self, obj):
-        # Add method to calculate total reviews
-        return obj.reviews_set.filter(status='approved').count()
+        # Assuming Reviews model has a ForeignKey to BusinessInfo named 'business' or similar
+        # If Reviews are linked via ClassesMain -> BusinessInfo, adjust the query
+        # Example: return Reviews.objects.filter(classId__businessId=obj, status='approved').count()
+        return obj.reviews_directly_to_business.filter(status='approved').count() # Use the direct relation if available
 
     def get_average_rating(self, obj):
-        avg = obj.reviews_set.filter(status='approved').aggregate(avg=Avg('rating'))['avg'] or 0.0
+        avg = obj.reviews_directly_to_business.filter(status='approved').aggregate(avg=Avg('rating'))['avg'] or 0.0
         return round(avg, 1)
 
     def get_total_revenue(self, obj):
-        # Calculate based on valid bookings (first booking per course group)
         valid_booking_ids = Booking.objects.filter(
             schedule_instance__schedule__option__classId__businessId=obj,
             payment_status='paid'
@@ -462,21 +481,21 @@ class BusinessStatsSerializer(serializers.ModelSerializer):
 
 
     def get_total_students(self, obj):
-        # Count distinct users associated with *any* booking for this business
         return Booking.objects.filter(
             schedule_instance__schedule__option__classId__businessId=obj
         ).values('user').distinct().count()
 
     def get_total_classes(self, obj):
-        return obj.classesmain_set.filter(status='active').count()
+        # Assuming ClassesMain has ForeignKey 'businessId' to BusinessInfo
+        return ClassesMain.objects.filter(businessId=obj, status='active').count()
+
 
     def get_recent_bookings(self, obj):
         thirty_days_ago = timezone.now() - timedelta(days=30)
-        # Count valid bookings in the last 30 days
         return Booking.objects.filter(
             schedule_instance__schedule__option__classId__businessId=obj,
             booking_date__gte=thirty_days_ago,
-            payment_status='paid' # Count only paid bookings here too? Or all attempts? Let's count paid.
+            payment_status='paid'
         ).filter(
             Q(booking_group_id__isnull=True) |
             Q(id=Subquery(
