@@ -7,7 +7,7 @@ import json
 import logging
 import pytz # For timezone choices
 
-from ...models import BusinessInfo, ClassesMain, Reviews, CustomUser, Booking, VerificationRequest
+from ...models import BusinessInfo, ClassesMain, Reviews, CustomUser, Booking, VerificationRequest, Role # Added Role
 from django.db.models import Sum, Count, Avg, Q, Subquery, OuterRef, IntegerField, F
 from django.db.models.functions import Coalesce
 from datetime import timedelta, time, datetime # Added datetime for founding_year validation
@@ -27,7 +27,6 @@ colors = {
 
 COMMON_TIMEZONE_CHOICES_SERIALIZER = [(tz, tz.replace("_", " ")) for tz in pytz.common_timezones]
 
-# ... (Keep MetricSerializer, RevenueTrendItemSerializer, etc. as they are) ...
 class MetricSerializer(serializers.Serializer):
     value = serializers.FloatField()
     change = serializers.FloatField()
@@ -239,10 +238,53 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
         business = BusinessInfo.objects.create(
             owner=user,
             verificationStatus='pending',
-            isActive=False,
+            isActive=False, # Business starts as inactive
             **validated_data
         )
         VerificationRequest.objects.create(user=user, business=business, status='pending')
+
+        # --- Role Assignment Logic with Hierarchy Check ---
+        # Ensure that registering a business doesn't demote users with higher-ranking roles (e.g., Admins)
+        # and potentially assigns a 'Business Owner' role if appropriate.
+        
+        # Define the name of the role intended for business owners.
+        # This could be configurable, e.g., from Django settings.
+        BUSINESS_OWNER_ROLE_NAME = "Business Owner" # Example: Ensure this role exists in your DB
+        
+        try:
+            target_business_owner_role = Role.objects.get(name=BUSINESS_OWNER_ROLE_NAME)
+            current_user_role = user.role
+            assign_new_role = False
+
+            if current_user_role is None:
+                assign_new_role = True
+                logger.info(f"User {user.email} has no current role. Attempting to assign '{target_business_owner_role.name}'.")
+            elif target_business_owner_role.hierarchy_level > current_user_role.hierarchy_level:
+                assign_new_role = True
+                logger.info(f"User {user.email}'s current role '{current_user_role.name}' (level {current_user_role.hierarchy_level}) "
+                            f"is lower than '{target_business_owner_role.name}' (level {target_business_owner_role.hierarchy_level}). "
+                            f"Attempting to upgrade role.")
+            else:
+                # Current role is of higher or equal hierarchy. Do not change.
+                logger.info(f"User {user.email} (role: '{current_user_role.name}', level: {current_user_role.hierarchy_level}) "
+                            f"retains their current role as it's higher than or equal to '{target_business_owner_role.name}' "
+                            f"(level: {target_business_owner_role.hierarchy_level}). No role change.")
+
+            if assign_new_role:
+                user.role = target_business_owner_role
+                user.save(update_fields=['role'])
+                logger.info(f"User {user.email} successfully assigned role '{target_business_owner_role.name}'.")
+
+        except Role.DoesNotExist:
+            logger.warning(f"The role '{BUSINESS_OWNER_ROLE_NAME}' was not found in the database. "
+                           f"Cannot automatically assign it to user {user.email} upon business registration. "
+                           f"User's current role (if any) remains unchanged.")
+        except Exception as e:
+            # Catch any other unexpected errors during role assignment
+            logger.error(f"An unexpected error occurred during role assignment for user {user.email} "
+                         f"after business registration: {str(e)}", exc_info=True)
+            # Business is already created. Error is in role assignment. Log and continue.
+        
         return business
 
 class ManagedBusinessInfoSerializer(serializers.ModelSerializer):

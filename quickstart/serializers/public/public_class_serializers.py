@@ -1,6 +1,6 @@
-# serializers/classes/public_class_serializers.py
+# quickstart/serializers/public_class_serializers.py
 from rest_framework import serializers
-from ...models import ClassesMain, ClassImage, ClassOption, Schedule, Reviews
+from ...models import ClassesMain, ClassImage, ClassOption, Schedule, Reviews # Ensure Schedule is imported
 from django.utils import timezone
 from django.db.models import Avg
 import logging
@@ -57,9 +57,7 @@ class PublicClassOptionSerializer(serializers.ModelSerializer):
         
         # Access schedules related to the option_instance.
         # This relies on proper prefetching in the ViewSet to be efficient.
-        # The prefetch should ensure that option_instance.schedules.all()
-        # returns only schedules where `is_active=True`.
-        active_schedules = option_instance.schedules.all()
+        active_schedules = option_instance.schedules.all() # Assuming prefetch handles active state
 
         future_schedules_objects = []
         for schedule_obj in active_schedules: # Iterate over actual Schedule model instances
@@ -82,16 +80,17 @@ class PublicClassOptionSerializer(serializers.ModelSerializer):
 class PublicClassSerializer(serializers.ModelSerializer):
     """Serializer for public listing and detail view of classes."""
     options = PublicClassOptionSerializer(many=True, read_only=True)
-    images = PublicClassImageSerializer(many=True, read_only=True) # <--- ADD THIS LINE
+    images = PublicClassImageSerializer(many=True, read_only=True) 
     business_name = serializers.CharField(source='businessId.businessName', read_only=True)
     business_image = serializers.SerializerMethodField(read_only=True)
+    business_timezone = serializers.CharField(source='businessId.business_timezone', read_only=True) # ADDED
     coordinates = serializers.SerializerMethodField(read_only=True)
-    average_rating = serializers.FloatField(read_only=True)
-    review_count = serializers.IntegerField(read_only=True)
+    average_rating = serializers.FloatField(read_only=True) # Field from annotation
+    review_count = serializers.IntegerField(read_only=True) # Field from annotation
     featured = serializers.BooleanField(source='businessId.featured', read_only=True)
     category_name = serializers.CharField(source='category.name', read_only=True, allow_null=True)
     subcategory_name = serializers.CharField(source='subcategory.name', read_only=True, allow_null=True)
-    saltLocation = serializers.BooleanField(read_only=True)
+    saltLocation = serializers.BooleanField(read_only=True) # From ClassesMain model
     is_favorited = serializers.SerializerMethodField()
 
     class Meta:
@@ -107,6 +106,7 @@ class PublicClassSerializer(serializers.ModelSerializer):
             'createdAt',
             'business_name',
             'business_image',
+            'business_timezone', 
             'options',
             'images',  
             'average_rating',
@@ -128,8 +128,8 @@ class PublicClassSerializer(serializers.ModelSerializer):
         if not obj.coordinates: return None
         try:
             lat, lng = map(float, obj.coordinates.split(','))
-            if obj.saltLocation:
-                lat_salt = uniform(-0.0005, 0.0005)
+            if obj.saltLocation: # Salt if flag is true on ClassesMain model
+                lat_salt = uniform(-0.0005, 0.0005) 
                 lng_salt = uniform(-0.0005, 0.0005)
                 lat += lat_salt
                 lng += lng_salt
@@ -141,5 +141,6 @@ class PublicClassSerializer(serializers.ModelSerializer):
     def get_is_favorited(self, obj):
         request = self.context.get('request')
         if request and hasattr(request, 'user') and request.user.is_authenticated:
+            # Assumes user.favorited is a ManyToManyField to ClassesMain
             return request.user.favorited.filter(pk=obj.pk).exists()
         return False
