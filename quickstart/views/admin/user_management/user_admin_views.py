@@ -30,21 +30,21 @@ def user_can_manage(requesting_user, target_user):
     """Checks if requesting user's role hierarchy is higher than target's."""
     if not requesting_user or not target_user: return False
     if not requesting_user.is_authenticated: return False # Must be logged in
+    
     # Allow managing users without roles (e.g., newly created)
     if not target_user.role: return True
+    
     # Deny if requester has no role
     if not requesting_user.role: return False
-    # Super Admins bypass hierarchy relative to non-Super Admins
-    # Check if roles exist before accessing name
-    req_role_name = requesting_user.role.name if requesting_user.role else None
-    target_role_name = target_user.role.name if target_user.role else None
 
-    if req_role_name == 'Super Admin' and target_role_name != 'Super Admin':
+    # If the requester is a Super Admin, they can manage ANYONE. Period.
+    # This single check replaces the old, more complex one.
+    if requesting_user.role.name == 'Super Admin':
         return True
-    # Check hierarchy level if roles exist
-    if requesting_user.role and target_user.role:
-        return requesting_user.role.hierarchy_level > target_user.role.hierarchy_level
-    return False # Default deny if roles are missing for comparison
+
+    # The rest of the logic handles non-Super Admins.
+    # Check hierarchy level if roles exist (we know both roles exist at this point)
+    return requesting_user.role.hierarchy_level > target_user.role.hierarchy_level
 
 
 # --- Custom Permission Classes ---
