@@ -450,7 +450,7 @@ CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
         # Use a different DB number than your Celery broker/backend
-        "LOCATION": "redis://127.0.0.1:6379/3" if IS_LOCAL_MACHINE else "rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379/3",
+        "LOCATION": "redis://127.0.0.1:6379" if IS_LOCAL_MACHINE else "rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379",
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
         },
