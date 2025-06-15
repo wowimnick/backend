@@ -8,6 +8,7 @@ from .auth.auth_serializers import (
 
 from .public.public_business_serializers import (
     PublicBusinessInfoSerializer,
+    BusinessContactDetailSerializer
 )
 
 from .business.business_management_serializers import (
@@ -44,6 +45,7 @@ from .public.public_booking_serializers import (
     BookingCreateSerializer, 
     StudentBookingSerializer, 
     BookingDetailSerializer,
+    StudentBookingDetailSerializer
 )
 
 from .business.business_student_serializers import (
@@ -99,6 +101,7 @@ __all__ = [
     'BusinessBookingListSerializer',
     'BusinessBookingDetailSerializer',
     'NotificationSerializer',
+    'BusinessContactDetailSerializer',
     'colors',
 
     # Class Serializers
@@ -117,6 +120,7 @@ __all__ = [
     'BookingCreateSerializer',
     'StudentBookingSerializer',
     'BookingDetailSerializer',
+    'StudentBookingDetailSerializer',
 
     # Student Serializers
     'BusinessStudentNoteSerializer',

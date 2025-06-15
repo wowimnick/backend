@@ -1,3 +1,5 @@
+# quickstart/serializers/admin/user_management/verification_serializers.py
+
 from rest_framework import serializers
 from django.utils import timezone
 from ....models import VerificationRequest, VerificationDocument
@@ -39,7 +41,6 @@ class VerificationRequestListSerializer(serializers.ModelSerializer):
             'business', 'business_name', 'status', 
             'submitted_at', 'document_count', 'role',
             'role_color', 'user_avatar', 'business_avatar',
-            # Add these fields to make sure they're included in the list response
             'reviewed_by', 'reviewer_name', 'notes', 'rejection_reason',
             'reviewed_at', 'updated_at'
         ]
@@ -66,17 +67,26 @@ class VerificationRequestListSerializer(serializers.ModelSerializer):
         return None
 
 class VerificationRequestDetailSerializer(serializers.ModelSerializer):
-    """Detailed serializer for verification requests"""
+    """Detailed serializer for verification requests. Leverages the existing relationship to BusinessInfo."""
     user_name = serializers.SerializerMethodField()
-    user_email = serializers.EmailField(source='user.email')
-    business_name = serializers.CharField(source='business.businessName', read_only=True)
-    documents = VerificationDocumentSerializer(many=True, read_only=True)
-    reviewer_name = serializers.SerializerMethodField()
-    reviewer_avatar = serializers.SerializerMethodField()
+    user_email = serializers.EmailField(source='user.email', read_only=True)
     user_avatar = serializers.SerializerMethodField()
-    business_avatar = serializers.SerializerMethodField()
-    business_type = serializers.CharField(source='business.businessType', read_only=True)
-    business_description = serializers.CharField(source='business.businessDescription', read_only=True)
+    
+    # --- Comprehensive Business Information ---
+    business_name = serializers.CharField(source='business.businessName', read_only=True, default='')
+    business_image = serializers.ImageField(source='business.businessImage', read_only=True, use_url=True, allow_null=True) # <<< ADDED
+    business_type = serializers.CharField(source='business.businessType', read_only=True, default='')
+    business_description = serializers.CharField(source='business.businessDescription', read_only=True, default='')
+    business_address = serializers.CharField(source='business.businessAddress', read_only=True, default='')
+    business_city = serializers.CharField(source='business.businessCity', read_only=True, default='')
+    business_state = serializers.CharField(source='business.businessState', read_only=True, default='')
+    business_zip = serializers.CharField(source='business.businessZipCode', read_only=True, default='')
+    business_contact_email = serializers.EmailField(source='business.studentContactEmail', read_only=True, default='')
+    business_contact_phone = serializers.CharField(source='business.studentContactPhone', read_only=True, default='')
+    business_website = serializers.URLField(source='business.website', read_only=True, default='', allow_null=True)
+    social_media_links = serializers.JSONField(source='business.social_media_links', read_only=True, default=dict)
+
+    reviewer_name = serializers.SerializerMethodField()
     role = serializers.CharField(source='user.role.name', read_only=True)
     role_color = serializers.CharField(source='user.role.color', read_only=True)
     
@@ -84,16 +94,13 @@ class VerificationRequestDetailSerializer(serializers.ModelSerializer):
         model = VerificationRequest
         fields = [
             'id', 'user', 'user_name', 'user_email', 'user_avatar',
-            'business', 'business_name', 'business_avatar', 'business_type', 'business_description',
+            'business', 'business_name', 'business_image', 'business_type', 'business_description', # <<< ADDED business_image
+            'business_address', 'business_city', 'business_state', 'business_zip',
+            'business_contact_email', 'business_contact_phone', 'business_website', 'social_media_links',
             'status', 'submitted_at', 'updated_at', 'reviewed_by', 'role', 'role_color',
-            'reviewer_name', 'reviewer_avatar', 'reviewed_at', 'rejection_reason',
-            'notes', 'documents'
+            'reviewer_name', 'reviewed_at', 'rejection_reason', 'notes'
         ]
-        read_only_fields = [
-            'id', 'user', 'business', 'submitted_at', 
-            'updated_at', 'reviewer_name', 'reviewer_avatar', 'user_avatar', 'business_avatar',
-            'role', 'role_color'
-        ]
+        read_only_fields = fields
     
     def get_user_name(self, obj):
         return f"{obj.user.first_name} {obj.user.last_name}".strip()
@@ -102,22 +109,12 @@ class VerificationRequestDetailSerializer(serializers.ModelSerializer):
         if obj.reviewed_by:
             return f"{obj.reviewed_by.first_name} {obj.reviewed_by.last_name}".strip()
         return None
-    
-    def get_reviewer_avatar(self, obj):
-        if obj.reviewed_by and obj.reviewed_by.avatar:
-            return obj.reviewed_by.avatar.url
-        return None
-    
+
     def get_user_avatar(self, obj):
         if obj.user and obj.user.avatar:
             return obj.user.avatar.url
         return None
-    
-    def get_business_avatar(self, obj):
-        if obj.business and obj.business.businessImage:
-            return obj.business.businessImage.url
-        return None
-    
+
 class VerificationSubmissionSerializer(serializers.ModelSerializer):
     """Serializer for users submitting verification requests"""
     documents = serializers.ListField(
@@ -134,25 +131,21 @@ class VerificationSubmissionSerializer(serializers.ModelSerializer):
         fields = ['business', 'documents', 'document_types', 'notes']
     
     def validate(self, data):
-        # Ensure documents and document_types have the same length
         if len(data['documents']) != len(data['document_types']):
             raise serializers.ValidationError(
                 "Number of documents and document types must match."
             )
-        
         return data
     
     def create(self, validated_data):
         documents = validated_data.pop('documents')
         document_types = validated_data.pop('document_types')
         
-        # Create the verification request
         request = VerificationRequest.objects.create(
             user=self.context['request'].user,
             **validated_data
         )
         
-        # Create document records
         for i, document_file in enumerate(documents):
             VerificationDocument.objects.create(
                 verification_request=request,
@@ -161,55 +154,40 @@ class VerificationSubmissionSerializer(serializers.ModelSerializer):
                 filename=document_file.name,
                 file_type=document_file.content_type
             )
-        
         return request
 
 class VerificationProcessSerializer(serializers.ModelSerializer):
     """Serializer for admins to process verification requests"""
-    # Allow 'approve' and 'reject' from frontend for clarity
-    status = serializers.ChoiceField(choices=[('approve', 'Approve'), ('reject', 'Reject')])
-    # Map these to backend status choices ('approved', 'rejected') in validate/update
+    status = serializers.ChoiceField(choices=[('approved', 'Approved'), ('rejected', 'Rejected')])
 
     class Meta:
         model = VerificationRequest
         fields = ['status', 'rejection_reason', 'notes']
 
     def validate(self, data):
-        # Ensure rejection reason is provided when rejecting
-        if data.get('status') == 'reject' and not data.get('rejection_reason'):
+        if data.get('status') == 'rejected' and not data.get('rejection_reason'):
             raise serializers.ValidationError({
                 'rejection_reason': 'Rejection reason is required when rejecting a request.'
             })
-
-        # Clean rejection_reason if approving
-        if data.get('status') == 'approve':
-            data['rejection_reason'] = '' # Clear rejection reason if approving
-
+        if data.get('status') == 'approved':
+            data['rejection_reason'] = ''
         return data
 
     def update(self, instance, validated_data):
-        # Map frontend status ('approve'/'reject') to backend status ('approved'/'rejected')
-        backend_status = 'approved' if validated_data['status'] == 'approve' else 'rejected'
-
-        # Record who processed the request
+        backend_status = 'verified' if validated_data['status'] == 'approved' else 'rejected'
         instance.reviewed_by = self.context['request'].user
         instance.reviewed_at = timezone.now()
-
-        # Update VerificationRequest fields
         instance.status = backend_status
         instance.rejection_reason = validated_data.get('rejection_reason', '')
-        instance.notes = validated_data.get('notes', instance.notes) # Keep existing notes if not provided
-
+        instance.notes = validated_data.get('notes', instance.notes)
         instance.save()
 
-        # *** UPDATE BUSINESS STATUS AND ACTIVITY ***
         if instance.business:
-            if instance.status == 'approved':
-                instance.business.verificationStatus = 'verified' # Map 'approved' to 'verified'
-                instance.business.isActive = True # <-- ACTIVATE the business
+            instance.business.verificationStatus = instance.status
+            if instance.status == 'verified':
+                instance.business.isActive = True
             elif instance.status == 'rejected':
-                instance.business.verificationStatus = 'rejected'
-                instance.business.isActive = False # <-- Ensure business remains inactive
+                instance.business.isActive = False
             instance.business.save(update_fields=['verificationStatus', 'isActive'])
 
         return instance

@@ -28,6 +28,7 @@ class _BusinessDetailClassSerializer(serializers.ModelSerializer):
 
 # --- Nested Serializer for Option Details (Minimal, with Class Info) ---
 class _BusinessDetailOptionSerializer(serializers.ModelSerializer):
+    title = serializers.CharField(source='classId.title', read_only=True)
     class_info = _BusinessDetailClassSerializer(source='classId', read_only=True)
     class Meta:
         model = ClassOption
@@ -81,12 +82,12 @@ class _PaymentDetailSerializerForBusiness(serializers.ModelSerializer):
 # --- Serializer for LISTING bookings (Business Context) ---
 class BusinessBookingListSerializer(serializers.ModelSerializer):
     class_name = serializers.CharField(source='schedule_instance.schedule.option.classId.title', read_only=True)
-    option_name = serializers.CharField(source='schedule_instance.schedule.option.title', read_only=True)
+    option_name = serializers.CharField(source='schedule_instance.schedule.option.classId.title', read_only=True)
     user_name = serializers.SerializerMethodField(read_only=True)
     user_email = serializers.CharField(source='user.email', read_only=True)
     date = serializers.DateField(source='schedule_instance.date', read_only=True)
     time = serializers.TimeField(source='schedule_instance.time', read_only=True)
-    duration = serializers.IntegerField(source='schedule_instance.duration', read_only=True) # Changed to instance.duration
+    duration = serializers.IntegerField(source='schedule_instance.duration', read_only=True)
     session_info = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
@@ -97,8 +98,8 @@ class BusinessBookingListSerializer(serializers.ModelSerializer):
             'participants', 'participant_details',
             'status', 'enrollment_type',
             'amount_paid', 'payment_status',
-            'notes', 'booking_date', 'attendance_marked',
-            'attended', 'session_info'
+            'notes', 'booking_date', 
+            'session_info'
         ]
         read_only_fields = fields
 
@@ -146,28 +147,27 @@ class BusinessBookingDetailSerializer(serializers.ModelSerializer):
     schedule_instance_details = _BusinessDetailScheduleInstanceSerializer(source='schedule_instance', read_only=True)
     business_context = _BusinessContextSerializer(source='schedule_instance.schedule.option.classId.businessId', read_only=True)
     session_info = serializers.SerializerMethodField(read_only=True)
-    payment_info = serializers.SerializerMethodField(read_only=True) # New field
+    payment_info = serializers.SerializerMethodField(read_only=True)
 
-    # Keeping flat fields for easier consumption on frontend, alongside nested structures
     class_name = serializers.CharField(source='schedule_instance.schedule.option.classId.title', read_only=True)
-    option_name = serializers.CharField(source='schedule_instance.schedule.option.title', read_only=True)
+    option_name = serializers.CharField(source='schedule_instance.schedule.option.classId.title', read_only=True)
     date = serializers.DateField(source='schedule_instance.date', read_only=True)
     time = serializers.TimeField(source='schedule_instance.time', read_only=True)
-    duration = serializers.IntegerField(source='schedule_instance.duration', read_only=True) # Changed to instance.duration
+    duration = serializers.IntegerField(source='schedule_instance.duration', read_only=True)
 
     class Meta:
         model = Booking
         fields = [
             'id',
-            'user_facing_reference', # Added user-facing reference
+            'user_facing_reference',
             'booking_group_id',
             'user_details',
             
-            'class_name', # Flat field
-            'option_name',# Flat field
-            'date',       # Flat field
-            'time',       # Flat field
-            'duration',   # Flat field
+            'class_name',
+            'option_name',
+            'date',
+            'time',
+            'duration',
 
             'schedule_instance_details',
             'business_context',
@@ -180,12 +180,10 @@ class BusinessBookingDetailSerializer(serializers.ModelSerializer):
             'notes',
             'cancelled_at',
             'cancellation_reason',
-            'amount_paid',        # From Booking model
-            'payment_status',     # From Booking model
-            'attendance_marked',
-            'attended',
+            'amount_paid',
+            'payment_status',
             'session_info',
-            'payment_info',       # Added payment details from Payment model
+            'payment_info',
         ]
         read_only_fields = fields
 

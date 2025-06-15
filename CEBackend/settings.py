@@ -21,11 +21,14 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent.parent
 USE_TZ = True
 TIME_ZONE = 'UTC'
-SITE_DOMAIN = 'classeasily.com'
+SITE_DOMAIN = os.environ.get('SITE_DOMAIN', 'classeasily.com')
 
+RESEND_API_KEY = os.environ.get('RESEND_API_KEY', 're_R6FMGC6t_B2T88HHXmcRkmxuBtkPq7gdZ')
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/4.1/howto/deployment/checklist/
+# Temporarily not implemented 
+RESEND_WEBHOOK_SECRET = os.environ.get('RESEND_WEBHOOK_SECRET', 'your_super_secret_webhook_key') 
+UNSUBSCRIBE_SECRET_KEY = os.environ.get('UNSUBSCRIBE_SECRET_KEY', 'another-super-secret-key-for-unsubscribe') 
+# Temporarily not implemented 
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = 'django-insecure-1yfmf)77ngglvh_18m&(7ub5a$abwu!99$2lmx@)3dk4)!=m4l'
@@ -40,7 +43,7 @@ STRIPE_SECRET_KEY = 'sk_test_51Qn8JYFsNqYi8b0P7fYDsXan82C6Q1CGWuwe9qHzaxnUf9lGW4
 STRIPE_WEBHOOK_SECRET = 'whsec_KL6mF4KPBvnCumik4dGTBcBLs1uAaMdP'
 
 OPENROUTER_API_KEY = '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'
-AI_SYSTEM_PROMPT = """You are ClassEasily Support Assistant, the official AI support agent for ClassEasily, an education platform that connects students with classes and educational resources
+AI_SYSTEM_PROMPT = """You are ClassEasily Support Assistant, the official AI support agent for ClassEasily, an education platform that connects students with classes and educational resources.
 
 CORE ROLE:
 - Provide helpful, accurate information about ClassEasily's services, classes, and features
@@ -154,7 +157,6 @@ Be rather strict in your judgement.
   </TERMINATE_CHAT>
 """
 
-RESEND_API_KEY = os.environ.get('RESEND_API_KEY', 're_R6FMGC6t_B2T88HHXmcRkmxuBtkPq7gdZ')
 
 # Notification settings
 NOTIFICATION_SETTINGS = {
@@ -422,6 +424,7 @@ MIDDLEWARE = [
     'silk.middleware.SilkyMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
+    'quickstart.monitoring.middleware.MetricsMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -443,6 +446,17 @@ CHANNEL_LAYERS = {
     },
 }
 
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        # Use a different DB number than your Celery broker/backend
+        "LOCATION": "redis://127.0.0.1:6379/3" if IS_LOCAL_MACHINE else "rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379/3",
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+        },
+        "KEY_PREFIX": "classeasily"
+    }
+}
 
 # Silk configuration
 SILKY_PYTHON_PROFILER_RESULT_PATH = os.path.join(BASE_DIR, 'quickstart/monitoring/profiler')

@@ -21,7 +21,7 @@ class CustomLoginSerializer(DefaultLoginSerializer):
 class RoleNestedSerializer(serializers.ModelSerializer):
     class Meta:
         model = Role
-        fields = ('id', 'name', 'color')
+        fields = ('id', 'name', 'color', 'hierarchy_level')
         read_only_fields = fields
 
 class CustomUserDetailsSerializer(serializers.ModelSerializer):

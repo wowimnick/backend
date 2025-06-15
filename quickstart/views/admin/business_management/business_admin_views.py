@@ -14,16 +14,12 @@ import csv
 from django.http import Http404, HttpResponse
 import logging 
 
-from ....models import BusinessInfo, ClassCategory, ClassOption, Booking, ClassesMain, Reviews
+from ....models import AuditLog, BusinessInfo, ClassCategory, ClassOption, Booking, ClassesMain, Payment, Reviews
 from ....serializers.admin.business_management.admin_business_serializers import AdminBusinessDetailSerializer, AdminBusinessListSerializer
 
 try:
     from ..user_management.user_admin_views import user_can_manage
 except ImportError:
-    # Provide a fallback or raise a configuration error if the import fails
-    # Fallback (less secure, ignores hierarchy):
-    # def user_can_manage(requesting_user, target_user): return True
-    # Or raise error:
     raise ImportError("Could not import user_can_manage helper function. Check path.")
 
 
@@ -103,8 +99,8 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
             Booking.objects.filter(
                 schedule_instance__schedule__option__classId__businessId=OuterRef('pk'),
                 status__in=['confirmed', 'completed']
-            ).values('schedule_instance__schedule__option__classId__businessId') # Group by business
-            .annotate(c=Count('pk', distinct=True)) # Count distinct bookings per business
+            ).values('schedule_instance__schedule__option__classId__businessId')
+            .annotate(c=Count('pk', distinct=True))
             .values('c'),
             output_field=IntegerField()
         )
@@ -114,39 +110,35 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
              Booking.objects.filter(
                 schedule_instance__schedule__option__classId__businessId=OuterRef('pk'),
                 status__in=['confirmed', 'completed']
-            ).values('schedule_instance__schedule__option__classId__businessId') # Group by business
-            .annotate(s=Sum('amount_paid')) # Sum amount per business
+            ).values('schedule_instance__schedule__option__classId__businessId')
+            .annotate(s=Sum('amount_paid'))
             .values('s'),
-            # Ensure output_field matches expected type, handle potential None
             output_field=DecimalField(max_digits=12, decimal_places=2)
         )
 
         review_count_subquery = Subquery(
             Reviews.objects.filter(
                 businessId=OuterRef('pk'),
-                status='approved' # Count only approved reviews
-            ).values('businessId') # Group by business
-            .annotate(c=Count('pk')) # Count reviews per business
+                status='approved'
+            ).values('businessId')
+            .annotate(c=Count('pk'))
             .values('c'),
             output_field=IntegerField()
         )
         
         rating_subquery = Subquery(
             Reviews.objects.filter(
-                businessId=OuterRef('pk'), # Direct link
+                businessId=OuterRef('pk'),
                 status='approved'
-            ).values('businessId') # Group by business
-            .annotate(avg=Avg('rating')) # Calculate average per business
+            ).values('businessId')
+            .annotate(avg=Avg('rating'))
             .values('avg'),
-            output_field=FloatField() # Use FloatField for Avg
+            output_field=FloatField()
         )
 
-
-        # Subquery for has_active_schedules (remains Exists)
         has_active_schedules_subquery = Exists(
             ClassOption.objects.filter(
                 classId__businessId=OuterRef('pk'),
-                schedules__is_active=True,
                 schedules__instances__status='scheduled',
                 schedules__instances__date__gte=timezone.now().date()
             )
@@ -157,7 +149,7 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
             has_active_schedules=has_active_schedules_subquery,
             classes_count=Coalesce(classes_subquery, 0),
             bookings_count=Coalesce(bookings_subquery, 0),
-            revenue=Coalesce(revenue_subquery, Value(Decimal('0.00'))), # Coalesce Decimal
+            revenue=Coalesce(revenue_subquery, Value(Decimal('0.00'))),
             rating=Coalesce(rating_subquery, Value(0.0)), 
             review_count=Coalesce(review_count_subquery, 0),
 
@@ -178,13 +170,11 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
         if category:
             queryset = queryset.filter(classCategory=category)
         if status_param:
-            # Filter on the annotated status
             queryset = queryset.filter(status=status_param)
         if featured is not None:
             is_featured = str(featured).lower() in ['true', '1', 'yes']
             queryset = queryset.filter(featured=is_featured)
 
-        # DRF filters (SearchFilter, OrderingFilter) will be applied automatically after this
         return queryset
 
     # --- Standard Actions (Override with Permissions/Hierarchy) ---
@@ -223,12 +213,13 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
     def update(self, request, *args, **kwargs):
-        partial = kwargs.pop('partial', True) # Default to partial for PATCH
+        partial = kwargs.pop('partial', True)
         if not request.user.has_perm('quickstart.change_businessinfo'):
             self.permission_denied(request, message="You do not have permission to update businesses.")
 
         instance = self.get_object()
-        # Apply hierarchy check
+        old_is_active = instance.isActive # Capture state before update
+
         if not user_can_manage(request.user, instance.owner):
              self.permission_denied(request, message="You cannot manage this business due to hierarchy restrictions.")
 
@@ -236,13 +227,20 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
 
-        # Log action (optional)
+        # Log action with more detail
         logger.info(f"Business '{instance.businessName}' (ID: {instance.pk}) updated by Admin {request.user.email}")
-        # Optionally use AuditLog model here
+        
+        # Check if isActive status was changed and log it
+        new_is_active = serializer.instance.isActive
+        if old_is_active != new_is_active:
+            action_code = 'business_activate' if new_is_active else 'business_deactivate'
+            details = f"Business '{instance.businessName}' was {'activated' if new_is_active else 'deactivated'} by admin."
+            self._log_business_action(instance, action_code, details, request)
+        else:
+            # Generic update log if status didn't change
+            self._log_business_action(instance, 'business_update', f"Business '{instance.businessName}' details updated by admin.", request)
 
         if getattr(instance, '_prefetched_objects_cache', None):
-            # If 'prefetch_related' has been used, contents of the cache are possibly stale.
-            # Ensure the instance is reloaded before returning to the client, following expiry.
             instance._prefetched_objects_cache = {}
 
         return Response(serializer.data)
@@ -252,14 +250,23 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
             self.permission_denied(request, message="You do not have permission to delete businesses.")
 
         instance = self.get_object()
-        business_name = instance.businessName # Get name before deletion
-        # Apply hierarchy check
+        business_name = instance.businessName
+
         if not user_can_manage(request.user, instance.owner):
             self.permission_denied(request, message="You cannot delete this business due to hierarchy restrictions.")
 
-        # Log action (optional)
-        logger.info(f"Business '{business_name}' (ID: {instance.pk}) deleted by Admin {request.user.email}")
-        # Optionally use AuditLog model here
+        if Booking.objects.filter(schedule_instance__schedule__option__classId__businessId=instance).exists():
+            details = f"Attempted to delete business '{business_name}' which has existing bookings. Action denied."
+            logger.warning(details)
+            self._log_business_action(instance, 'business_delete_failed', details, request)
+            return Response(
+                {'error': 'Cannot delete business with existing bookings. Please deactivate it instead.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Log action before deletion
+        logger.warning(f"Business '{business_name}' (ID: {instance.pk}) will be deleted by Admin {request.user.email}")
+        self._log_business_action(instance, 'business_delete', f"Business '{business_name}' deleted by admin.", request)
 
         self.perform_destroy(instance)
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -268,30 +275,31 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated, CanAccessBusinessAdmin])
     def toggle_feature(self, request, pk=None):
-        """Toggle featured status for a business (Hierarchy checked by decorator)"""
-        # Check specific permission for the action
         if not request.user.has_perm('quickstart.toggle_business_feature'):
              self.permission_denied(request, message="You do not have permission to feature/unfeature businesses.")
 
         business = self.get_object()
-        featured = request.data.get('featured', not business.featured) # Get value from request or toggle
+        # Hierarchy check - can this admin manage this business?
+        if not user_can_manage(request.user, business.owner):
+             self.permission_denied(request, message="You cannot manage this business due to hierarchy restrictions.")
 
-        # Validate input type
+        featured = request.data.get('featured', not business.featured)
+
         if not isinstance(featured, bool):
              try:
-                 # Attempt to convert common string representations
                  featured = str(featured).lower() in ['true', '1', 'yes']
              except Exception:
                  return Response({'detail': 'Invalid value for featured status (must be true or false).'}, status=status.HTTP_400_BAD_REQUEST)
 
-
         business.featured = featured
-        business.save(update_fields=['featured']) # Optimize save
+        business.save(update_fields=['featured'])
 
-        # Log action
+        # Log action with details
         action_text = "featured" if featured else "unfeatured"
-        logger.info(f"Business '{business.businessName}' (ID: {business.pk}) {action_text} by Admin {request.user.email}")
-        # Optionally add to AuditLog as well
+        action_code = 'business_feature' if featured else 'business_unfeature'
+        details = f"Business '{business.businessName}' was {action_text} by admin."
+        logger.info(f"{details} (Admin: {request.user.email})")
+        self._log_business_action(business, action_code, details, request)
 
         return Response({
             'businessId': business.businessId,
@@ -315,46 +323,55 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
             new_businesses_30d=Count('pk', filter=Q(createdAt__date__gte=thirty_days_ago))
         )
 
-        # Calculate growth rate (can be refined for efficiency)
+        # Calculate growth rate
         businesses_30d_ago_count = BusinessInfo.objects.filter(createdAt__date__lt=thirty_days_ago).count()
         total_business_growth = 0
         if businesses_30d_ago_count > 0:
             total_business_growth = ((business_counts['total_businesses'] - businesses_30d_ago_count) / businesses_30d_ago_count) * 100
 
-        # Total revenue
-        total_revenue = Booking.objects.filter(
+        # --- MODIFICATION: Calculate both Gross and Platform Revenue ---
+        # Total Gross Revenue (Total value of paid bookings)
+        total_gross_revenue = Booking.objects.filter(
             status__in=['confirmed', 'completed']
         ).aggregate(
             total=Coalesce(Sum('amount_paid'), Value(0), output_field=DecimalField(max_digits=12, decimal_places=2))
         )['total']
 
-        # 1. Get all ClassCategory objects with their colors
+        # NEW: Total Platform Revenue (The 13% fee collected by the platform)
+        total_platform_revenue = Payment.objects.filter(
+            status__in=['succeeded', 'partially_refunded']
+        ).aggregate(
+            total=Coalesce(Sum('service_fee_amount'), Value(0), output_field=DecimalField(max_digits=12, decimal_places=2))
+        )['total']
+        # --- END MODIFICATION ---
+
+        # Get all ClassCategory objects with their colors
         all_categories = ClassCategory.objects.all()
         category_color_dict = {category.key: category.color for category in all_categories}
-        category_name_dict = {category.key: category.name for category in all_categories} # For display name
+        category_name_dict = {category.key: category.name for category in all_categories}
 
-        # 2. Group businesses by category key (assuming BusinessInfo.classCategory stores the key)
+        # Group businesses by category key
         category_distribution_qs = BusinessInfo.objects.values(
-            'classCategory' # This should be the key like 'academic', 'music'
+            'classCategory'
         ).annotate(
             count=Count('pk')
         ).order_by('-count')
 
-        # 3. Build the distribution list using dynamic names and colors
+        # Build the distribution list
         category_distribution = []
         for item in category_distribution_qs:
             category_key = item['classCategory']
-            if category_key: # Ensure category key exists
+            if category_key:
                  category_distribution.append({
-                    'name': category_name_dict.get(category_key, category_key.capitalize()), # Use stored name or fallback
+                    'name': category_name_dict.get(category_key, category_key.capitalize()),
                     'value': item['count'],
-                    'color': category_color_dict.get(category_key, '#64748b') # Use stored color or default
+                    'color': category_color_dict.get(category_key, '#64748b')
                 })
 
-        # Growth trend (Monthly example) - Use helper
+        # Growth trend
         monthly_growth_data = self._get_growth_data('month', 6)
 
-        # Location distribution (Top 12 example)
+        # Location distribution
         location_distribution_qs = BusinessInfo.objects.values(
             'businessCity', 'businessState'
         ).annotate(count=Count('pk')).order_by('-count')[:12]
@@ -367,11 +384,9 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
             } for loc in location_distribution_qs
         ]
 
-        # Top businesses (reuse get_queryset for consistency with filters/annotations)
-        # Ensure get_queryset includes necessary annotations like 'revenue'
+        # Top businesses
         top_businesses_queryset = self.filter_queryset(self.get_queryset()).order_by('-revenue')[:5]
         top_businesses_data = self.get_serializer(top_businesses_queryset, many=True).data
-
 
         return Response({
             'total_businesses': business_counts['total_businesses'],
@@ -379,12 +394,96 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
             'total_business_growth': round(total_business_growth, 2),
             'featured_businesses': business_counts['featured_businesses'],
             'new_businesses_30d': business_counts['new_businesses_30d'],
-            'total_revenue': float(total_revenue),
-            'category_distribution': category_distribution, # Use corrected list
+            'total_revenue': float(total_gross_revenue), # This is GMV for the frontend
+            'total_platform_revenue': float(total_platform_revenue), # NEW: Your actual revenue
+            'category_distribution': category_distribution,
             'growth_trend': monthly_growth_data,
             'location_distribution': location_distribution,
             'top_businesses': top_businesses_data
         })
+    
+    def _log_business_action(self, business, action_code, details, request):
+        """ Helper to log business related actions to the AuditLog """
+        try:
+            AuditLog.objects.create(
+                user=request.user,
+                user_email=request.user.email,
+                action=action_code,
+                details=details,
+                target_user=business.owner, # Target user is the business owner
+                target_model='BusinessInfo',
+                target_id=str(business.businessId),
+                ip_address=request.META.get('REMOTE_ADDR'),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                metadata={
+                    'business_name': business.businessName,
+                    'business_id': business.businessId,
+                    'owner_id': business.owner_id,
+                }
+            )
+        except Exception as e:
+             logger.error(f"Failed to create audit log for business action {action_code}: {str(e)}", exc_info=True)
+
+    @action(detail=False, methods=['get'])
+    def export(self, request):
+        """Export businesses data as CSV"""
+        if not request.user.has_perm('quickstart.export_business_data'):
+             self.permission_denied(request, message="You do not have permission to export business data.")
+
+        queryset = self.filter_queryset(self.get_queryset())
+
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = 'attachment; filename="businesses_export.csv"'
+        writer = csv.writer(response)
+
+        headers = [
+            'Business ID', 'Business Name', 'Type', 'Category',
+            'City', 'State', 'Status', 'Featured', 'Avg Rating',
+            'Reviews Count', 'Bookings Count', 'Classes Count', 'Total Revenue',
+            'Created At', 'Owner Email'
+        ]
+        writer.writerow(headers)
+
+        # --- FIX: Changed 'totalReviews' to 'review_count' to match annotation ---
+        business_data = queryset.values_list(
+            'businessId',         # 0
+            'businessName',       # 1
+            'businessType',       # 2
+            'classCategory',      # 3
+            'businessCity',       # 4
+            'businessState',      # 5
+            'status',             # 6 (Annotation)
+            'featured',           # 7
+            'rating',             # 8 (Annotation)
+            'review_count',       # 9 (FIXED: Was 'totalReviews')
+            'bookings_count',     # 10 (Annotation)
+            'classes_count',      # 11 (Annotation)
+            'revenue',            # 12 (Annotation)
+            'createdAt',          # 13
+            'owner__email'        # 14 (From select_related)
+        )
+
+        for business in business_data:
+            row = [
+                business[0],  # Business ID
+                business[1],  # Business Name
+                business[2],  # Type
+                business[3],  # Category
+                business[4],  # City
+                business[5],  # State
+                business[6],  # Calculated Status
+                'Yes' if business[7] else 'No',  # Featured
+                round(business[8] or 0, 1),      # Avg Rating
+                business[9],  # Reviews Count
+                business[10], # Bookings Count
+                business[11], # Classes Count
+                float(business[12] or 0),  # Total Revenue
+                business[13].strftime('%Y-%m-%d %H:%M:%S') if business[13] else '',  # Created At
+                business[14]  # Owner Email
+            ]
+            writer.writerow(row)
+
+        return response
 
 
     def _get_growth_data(self, timeframe='month', periods=6):
@@ -588,70 +687,6 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
 
         print(f"Geographical data prepared: {len(result_data)} cities.")
         return Response(result_data)
-
-    @action(detail=False, methods=['get'])
-    def export(self, request):
-        """Export businesses data as CSV"""
-        if not request.user.has_perm('quickstart.export_business_data'):
-             self.permission_denied(request, message="You do not have permission to export business data.")
-
-        # Apply request filters to the queryset before exporting
-        queryset = self.filter_queryset(self.get_queryset())
-
-        response = HttpResponse(content_type='text/csv')
-        response['Content-Disposition'] = 'attachment; filename="businesses_export.csv"'
-        writer = csv.writer(response)
-
-        # Define headers based on annotated/model fields available in get_queryset
-        headers = [
-            'Business ID', 'Business Name', 'Type', 'Category',
-            'City', 'State', 'Status', 'Featured', 'Avg Rating',
-            'Reviews Count', 'Bookings Count', 'Classes Count', 'Total Revenue',
-            'Created At', 'Owner Email'
-        ]
-        writer.writerow(headers)
-
-        # Fetch data efficiently using values_list
-        # Ensure the order matches the headers precisely
-        business_data = queryset.values_list(
-            'businessId',         # 0
-            'businessName',       # 1
-            'businessType',       # 2
-            'classCategory',      # 3
-            'businessCity',       # 4
-            'businessState',      # 5
-            'status',  # 6 (Annotation)
-            'featured',           # 7
-            'rating',             # 8 (Annotation)
-            'totalReviews',       # 9 (Model field - ensure it's accurate or re-annotate)
-            'bookings_count',     # 10 (Annotation)
-            'classes_count',      # 11 (Annotation)
-            'revenue',            # 12 (Annotation)
-            'createdAt',          # 13
-            'owner__email'        # 14 (From select_related)
-        )
-
-        for business in business_data:
-            row = [
-                business[0],  # Business ID
-                business[1],  # Business Name
-                business[2],  # Type
-                business[3],  # Category
-                business[4],  # City
-                business[5],  # State
-                business[6],  # Calculated Status
-                'Yes' if business[7] else 'No',  # Featured
-                round(business[8] or 0, 1),  # Avg Rating
-                business[9],  # Reviews Count
-                business[10], # Bookings Count
-                business[11], # Classes Count
-                float(business[12] or 0),  # Total Revenue
-                business[13].strftime('%Y-%m-%d %H:%M:%S') if business[13] else '',  # Created At
-                business[14]  # Owner Email
-            ]
-            writer.writerow(row)
-
-        return response
 
     @action(detail=False, methods=['post'])
     def announcements(self, request):

@@ -1,5 +1,6 @@
 import re
 from rest_framework import serializers
+from django.db import transaction
 
 from ...models import ChatMessage, ChatSession, CustomUser, SupportTicket
 
@@ -172,26 +173,25 @@ class CreateSupportTicketSerializer(serializers.ModelSerializer):
         ]
         
     def create(self, validated_data):
-        # Add user from request context
         user = self.context['request'].user
         validated_data['user'] = user
         
-        # Create ticket
-        ticket = SupportTicket.objects.create(**validated_data)
-        
-        # Create chat session with initial message
-        chat_session = ChatSession.objects.create(userId=user)
-        
-        # Add the description as the first message
-        ChatMessage.objects.create(
-            session=chat_session,
-            content=validated_data['description'],
-            is_user=True
-        )
-        
-        # Connect session to ticket
-        ticket.chat_session = chat_session
-        ticket.save(update_fields=['chat_session'])
+        # Use a transaction to ensure both Ticket and Session are created or neither are.
+        with transaction.atomic():
+            # First, create the chat session for this new ticket
+            chat_session = ChatSession.objects.create(userId=user)
+            
+            # Add the ticket description as the first message in this new session
+            ChatMessage.objects.create(
+                session=chat_session,
+                content=validated_data['description'],
+                is_user=True,
+                sender_type='user' # Explicitly set sender type
+            )
+            
+            # Now, create the ticket and link it to the session we just made
+            validated_data['chat_session'] = chat_session
+            ticket = SupportTicket.objects.create(**validated_data)
         
         return ticket
 

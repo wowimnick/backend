@@ -17,7 +17,6 @@
         <h2 style="font-size: 18px; font-weight: 600; color: #111827; margin-top: 0; margin-bottom: 12px;">{% trans "Booking Details:" %}</h2>
         <p style="margin-bottom: 6px;"><strong>{% trans "Booker Name:" %}</strong> {{ booking.user.get_full_name|default:"N/A" }}</p> {# Changed to "Booker Name" for clarity #}
         <p style="margin-bottom: 6px;"><strong>{% trans "Booker Email:" %}</strong> {{ booking.user.email }}</p> {# Changed to "Booker Email" #}
-        <p style="margin-bottom: 6px;"><strong>{% trans "Class Option:" %}</strong> {{ related_data.option_title|default:"N/A" }}</p>
         <p style="margin-bottom: 6px;"><strong>{% trans "Date:" %}</strong> {{ booking.schedule_instance.date|date:"l, F j, Y" }}</p>
         <p style="margin-bottom: 6px;"><strong>{% trans "Time:" %}</strong> {{ booking.schedule_instance.time|time:"P" }}</p>
         <p style="margin-bottom: 6px;"><strong>{% trans "Total Participants:" %}</strong> {{ booking.participants }}</p>

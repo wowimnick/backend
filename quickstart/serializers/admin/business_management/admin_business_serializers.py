@@ -101,87 +101,88 @@ class AdminBusinessDetailSerializer(serializers.ModelSerializer):
         # Define ALL fields this serializer should handle (display or update)
         fields = [
             # --- Identifiers & Core Info ---
-            'businessId',         # Read-only PK
-            'businessName',       # Editable
-            'businessType',       # Editable
-            'businessImage',    # Editable (handles file upload/URL)
-            'businessDescription',# Editable
-            'createdAt',          # Read-only
+            'businessId',
+            'businessName',
+            'businessType',
+            'businessImage',
+            'businessDescription',
+            'createdAt',
 
             # --- Operational Details ---
-            'openingTime',        # Editable
-            'closingTime',        # Editable
-            'liabilityWaiver',    # Editable
+            'openingTime',
+            'closingTime',
+            'liabilityWaiver',
 
             # --- Contact Info ---
-            'studentContactPhone',# Editable
-            'studentContactEmail',# Editable
-            'preferredContact',   # Editable
+            'studentContactPhone',
+            'studentContactEmail',
+            'preferredContact',
+            'website', # ADDED
 
             # --- Location ---
-            'businessAddress',    # Editable
-            'businessCity',       # Editable
-            'businessState',      # Editable
-            'businessZipCode',    # Editable
-            'latitude',           # Editable
-            'longitude',          # Editable
-            'showExactLocation',  # Editable
+            'businessAddress',
+            'businessCity',
+            'businessState',
+            'businessZipCode',
+            'latitude',
+            'longitude',
+            'showExactLocation',
 
             # --- Classification (Editable Strings) ---
-            'classCategory',      # Editable
-            'subcategories',      # Editable (Admin updates the comma-separated string)
-            'classFormats',       # Editable
-            'skillLevels',        # Editable
-            'ageGroups',          # Editable
+            'classCategory',
+            'subcategories',
+            'classFormats',
+            'skillLevels',
+            'ageGroups',
+            
+            # --- NEW: Social Media & SEO ---
+            'social_media_links',
+            'tags_keywords',
+            # --- END NEW ---
 
             # --- Admin Controls & Status ---
-            'featured',           # Editable (Admin can feature/unfeature)
-            'isActive',           # Editable (Admin can activate/deactivate)
-            'verificationStatus', # Read-only (Managed by verification process)
+            'featured',
+            'isActive',
+            'verificationStatus',
 
             # --- Related Info (Read-Only) ---
-            'owner_email',        # Read-only
-            'managers_emails',    # Read-only Method Field
+            'owner_email',
+            'managers_emails',
 
             # --- Annotated Metrics (Read-Only) ---
-            'status',  # Read-only
-            'rating',             # Read-only
-            'revenue',            # Read-only
-            'classes_count',      # Read-only
-            'bookings_count',     # Read-only
-            'review_count',       # Read-only
-
-            # --- List Representations (Read-Only) ---
-            'subcategories_list', # Read-only Method Field
-            'classFormats_list',  # Read-only Method Field
-            'skillLevels_list',   # Read-only Method Field
-            'ageGroups_list',     # Read-only Method Field
-        ]
-
-        # Explicitly list fields that CANNOT be updated via this serializer
-        read_only_fields = [
-            'businessId',         # Cannot change PK
-            'createdAt',          # Cannot change creation time
-            'verificationStatus', # Managed elsewhere
-            'owner_email',        # Display only
-            'managers_emails',    # Display only (Method Field)
-            # Annotated fields are derived, not set directly
             'status',
             'rating',
             'revenue',
             'classes_count',
             'bookings_count',
             'review_count',
-            # List representations are derived, not set directly
+
+            # --- List Representations (Read-Only) ---
             'subcategories_list',
             'classFormats_list',
             'skillLevels_list',
             'ageGroups_list',
         ]
-        # NOTE: Any field listed in `fields` but NOT in `read_only_fields` is considered writable/editable.
-        # This includes 'businessName', 'businessType', 'businessDescription', 'openingTime', etc.
-        # It also includes the comma-separated string fields like 'subcategories', allowing admins to edit the source string.
 
+        # Explicitly list fields that CANNOT be updated via this serializer
+        read_only_fields = [
+            'businessId',
+            'createdAt',
+            'verificationStatus',
+            'owner_email',
+            'managers_emails',
+            'status',
+            'rating',
+            'revenue',
+            'classes_count',
+            'bookings_count',
+            'review_count',
+            'subcategories_list',
+            'classFormats_list',
+            'skillLevels_list',
+            'ageGroups_list',
+        ]
+        
     # --- Methods for Read-Only List Representations ---
     def get_subcategories_list(self, obj):
         return _split_string_to_list(obj.subcategories)

@@ -39,18 +39,15 @@ class ScheduleInstanceSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'schedule', 'date', 'time', 'duration', 'price',
             'max_participants', 'status', 'cancellation_reason',
-            'instructor_notes', 'attendance_marked',
             'current_bookings_count', 'available_spots',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'schedule', 'created_at', 'updated_at', 'current_bookings_count', 'available_spots']
-        # Make fields like status, reason, notes updatable via specific actions
 
     def get_available_spots(self, obj):
         # Calculation based on annotation or property
         current_bookings = getattr(obj, 'current_bookings_count', 0)
         return obj.max_participants - current_bookings
-
 class ScheduleSerializer(serializers.ModelSerializer):
     """Serializer for creating/managing schedules within a class option."""
     booked_participants = serializers.SerializerMethodField()
@@ -172,33 +169,41 @@ class ScheduleSerializer(serializers.ModelSerializer):
 
 class ManagedClassOptionSerializer(serializers.ModelSerializer):
     """Serializer for managing class options by business users."""
-    schedules = ScheduleSerializer(many=True, read_only=True) # Show schedules for management
-    image_url = serializers.SerializerMethodField()
-    # Add annotation counts if needed
-    total_students = serializers.IntegerField(read_only=True)
-    active_schedules_count = serializers.IntegerField(read_only=True)
+    schedules = ScheduleSerializer(many=True, read_only=True)
+    total_students = serializers.IntegerField(read_only=True) # Assuming this is annotated in the queryset
+    active_schedules_count = serializers.IntegerField(read_only=True) # Assuming this is annotated
 
     class Meta:
         model = ClassOption
-        # Include all fields needed for management, including 'active'
         fields = [
-            'optionId', 'classId', 'title', 'description',
+            'optionId', 'classId', 
             'booking_type', 'level', 'equipment', 'tags',
-            'cancellationPolicy', 'price_type', # Allow managing price type
-            'image', 'image_url', 
+            'cancellationPolicy', 'cancellationRefundPercentage',
+            'price_type',
             'createdAt', 'updatedAt', 'schedules',
-            'total_students', 'active_schedules_count' # Example computed fields
+            'total_students', 'active_schedules_count'
         ]
-        read_only_fields = ['optionId', 'classId', 'createdAt', 'updatedAt', 'image_url', 'schedules', 'total_students', 'active_schedules_count']
+        read_only_fields = [
+            'optionId', 'classId', 'createdAt', 'updatedAt', 
+            'schedules',
+            'total_students', 'active_schedules_count'
+        ]
         extra_kwargs = {
-            'image': {'write_only': True, 'required': False}, # Image is write-only here, URL is provided
+            'equipment': {'required': False},
+            'tags': {'required': False},
+            'level': {'default': ClassOption._meta.get_field('level').get_default()},
+            'cancellationPolicy': {'default': ClassOption._meta.get_field('cancellationPolicy').get_default()},
+            'cancellationRefundPercentage': {'default': ClassOption._meta.get_field('cancellationRefundPercentage').get_default()},
+            'booking_type': {'default': ClassOption._meta.get_field('booking_type').get_default()},
+            'price_type': {'default': ClassOption._meta.get_field('price_type').get_default()},
         }
 
-    def get_image_url(self, obj):
+    def get_image_url(self, obj): 
         if obj.image and hasattr(obj.image, 'url'):
              try:
                  return obj.image.url
-             except ValueError: return None
+             except ValueError:
+                 return None
         return None
 
 class ManagedClassSerializer(serializers.ModelSerializer):

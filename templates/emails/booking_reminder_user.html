@@ -16,7 +16,6 @@
     <div style="background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin: 20px 0;">
         <h2 style="font-size: 18px; font-weight: 600; color: #111827; margin-top: 0; margin-bottom: 12px;">{% trans "Class Details:" %}</h2>
         <p style="margin-bottom: 6px;"><strong>{% trans "Class:" %}</strong> {{ related_data.class_title|default:"N/A" }}</p>
-        <p style="margin-bottom: 6px;"><strong>{% trans "Option:" %}</strong> {{ related_data.option_title|default:"N/A" }}</p>
         <p style="margin-bottom: 6px;"><strong>{% trans "Date:" %}</strong> {{ booking.schedule_instance.date|date:"l, F j, Y" }}</p>
         <p style="margin-bottom: 6px;"><strong>{% trans "Time:" %}</strong> {{ booking.schedule_instance.time|time:"P" }}</p>
         <p style="margin-bottom: 6px;"><strong>{% trans "Business:" %}</strong> {{ related_data.business_name|default:"N/A" }}</p>

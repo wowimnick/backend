@@ -10,6 +10,8 @@ from django.contrib.auth import get_user_model
 from django.conf import settings
 import logging
 
+from ...models import AuditLog
+
 from ...serializers import (
     CustomTokenObtainPairSerializer,
     CustomUserDetailsSerializer,
@@ -18,8 +20,17 @@ from ...serializers import (
 
 logger = logging.getLogger(__name__)
 
+def get_client_ip(request):
+    """Get client IP address from request."""
+    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+    if x_forwarded_for:
+        ip = x_forwarded_for.split(',')[0]
+    else:
+        ip = request.META.get('REMOTE_ADDR')
+    return ip
+
 class CustomTokenObtainPairView(TokenObtainPairView):
-    serializer_class = CustomTokenObtainPairSerializer # Uses the modified serializer
+    serializer_class = CustomTokenObtainPairSerializer
 
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -27,26 +38,42 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         try:
             serializer.is_valid(raise_exception=True)
         except TokenError as e:
-            logger.error(f"Token Error during login: {e} for user attempt: {request.data.get('email')}")
-            # Optionally check if e.args[0] is a dict and contains specific error codes
+            logger.warning(f"Failed login attempt for user: {request.data.get('email')}")
+            # You could add a 'failed_login' audit log here if desired
+            # AuditLog.objects.create(...)
             error_detail = e.args[0] if e.args else "Invalid credentials."
             return Response({"detail": error_detail}, status=status.HTTP_401_UNAUTHORIZED)
-            # raise InvalidToken(e.args[0]) # Original behaviour
+        
+        # --- LOGIN IS SUCCESSFUL AT THIS POINT ---
 
-        # Serializer.validated_data now contains 'user' (with permissions) and 'role'
         validated_data = serializer.validated_data
+        user = serializer.user # The serializer conveniently gives us the user object
 
-        # --- Response Payload ---
+        try:
+            AuditLog.objects.create(
+                user=user,
+                user_email=user.email,
+                action='login',
+                details=f"User '{user.email}' logged in successfully.",
+                ip_address=get_client_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', '')
+            )
+            logger.info(f"Successful login audited for user: {user.email}")
+        except Exception as audit_error:
+            # Log the error but don't fail the login process
+            logger.error(f"Failed to create login audit log for user {user.email}: {audit_error}")
+
+
+        # --- 2. ASSEMBLE RESPONSE PAYLOAD ---
         response_data = {
             'user': validated_data['user'],
         }
         response = Response(response_data, status=status.HTTP_200_OK)
-        # -----------------------
 
-        # Set cookies using access/refresh from validated_data
+        # --- 3. SET COOKIES ---
         response.set_cookie(
             settings.SIMPLE_JWT['AUTH_COOKIE'],
-            validated_data['access'], # Get token from validated_data
+            validated_data['access'],
             max_age=settings.SIMPLE_JWT['ACCESS_TOKEN_LIFETIME'].total_seconds(),
             httponly=True,
             samesite=settings.SIMPLE_JWT['AUTH_COOKIE_SAMESITE'],
@@ -55,7 +82,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
 
         response.set_cookie(
             settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'],
-            validated_data['refresh'], # Get token from validated_data
+            validated_data['refresh'],
             max_age=settings.SIMPLE_JWT['REFRESH_TOKEN_LIFETIME'].total_seconds(),
             httponly=True,
             samesite=settings.SIMPLE_JWT['AUTH_COOKIE_SAMESITE'],

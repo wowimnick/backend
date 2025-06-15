@@ -18,7 +18,7 @@ from rest_framework.exceptions import (
     NotFound,
     ValidationError as DRFValidationError,
 )
-from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 import pytz
 import logging
 
@@ -288,11 +288,9 @@ class MyBusinessOverviewView(APIView):
             for inst in upcoming_instances_qs:
                 naive_schedule_datetime = datetime.combine(inst.date, inst.time)
                 display_datetime_str = f"{naive_schedule_datetime.strftime('%b %d')}, {naive_schedule_datetime.strftime('%I:%M %p').lstrip('0') if naive_schedule_datetime.strftime('%I').startswith('0') else naive_schedule_datetime.strftime('%I:%M %p')}"
-                class_main_title = inst.schedule.option.classId.title if inst.schedule.option.classId else "Class"
-                option_specific_title = inst.schedule.option.title
-                display_name = f"{class_main_title} - {option_specific_title}" if option_specific_title and option_specific_title.lower() != class_main_title.lower() else class_main_title
                 upcoming_classes_data.append({
-                    "name": display_name, "time": display_datetime_str,
+                    "name": inst.schedule.option.classId.title,
+                    "time": display_datetime_str,
                     "current_occupancy": inst.current_participant_spots,
                     "max_occupancy": inst.max_participants,
                 })
@@ -548,64 +546,134 @@ class MyBusinessProfileView(generics.RetrieveUpdateDestroyAPIView):
     """
     Allows authenticated business owners/managers to view, update, or delete
     their OWN associated BusinessInfo profile.
+    
+    GET: Retrieve the business profile.
+    PUT/PATCH: Update the business profile. `FormData` is supported for file uploads (businessImage).
+    DELETE: Delete the business profile (requires specific permission).
     """
     serializer_class = ManagedBusinessInfoSerializer
-    parser_classes = [MultiPartParser, FormParser] # For businessImage upload
-    permission_classes = [permissions.IsAuthenticated, CanManageOwnBusinessProfile]
+    permission_classes = [permissions.IsAuthenticated, CanManageOwnBusinessProfile] # Base permission
+    parser_classes = [MultiPartParser, FormParser, JSONParser] # Support FormData for image & JSON for other clients
 
     def get_object(self):
+        """
+        Retrieves the business profile for the current authenticated user.
+        Ensures the user owns or manages the business.
+        """
         user = self.request.user
-        try:
-            business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).select_related("owner").prefetch_related("managers").first()
-            if not business:
-                raise NotFound("No business profile associated with this user found.")
-            self.check_object_permissions(self.request, business) # Check after fetching
-            return business
-        except BusinessInfo.DoesNotExist: # Should be caught by first()
+        # Using filter().first() is robust for cases where a user might accidentally be linked to multiple.
+        # The CanManageOwnBusinessProfile permission should ideally enforce the "own or manage" logic too.
+        business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).select_related("owner").prefetch_related("managers").first()
+        
+        if not business:
             raise NotFound("No business profile associated with this user found.")
+        
+        # `self.check_object_permissions` is automatically called by DRF for detail views (like RetrieveUpdateDestroyAPIView)
+        # if the view has `permission_classes` and the permissions implement `has_object_permission`.
+        # Your CanManageOwnBusinessProfile should implement has_object_permission.
+        return business
 
     def get_permissions(self):
-        if self.request.method == "DELETE":
+        """
+        Instance-level permissions.
+        For DELETE, require CanDeleteOwnBusinessProfile.
+        """
+        if self.request.method == 'DELETE':
             return [permissions.IsAuthenticated(), CanDeleteOwnBusinessProfile()]
         return super().get_permissions()
 
-    def perform_update(self, serializer):
-        # The ManagedBusinessInfoSerializer's update method handles complex logic.
-        # We can still pop fields here if we want to absolutely ensure they are not part of the save call
-        # from validated_data, even if the serializer might handle them.
-        # This acts as a secondary safeguard at the view level.
+    def update(self, request, *args, **kwargs):
+        """
+        Handle PUT/PATCH requests to update the business profile.
+        The serializer's `to_internal_value` and `validate` methods will process
+        and validate the incoming data (including FormData parsing for booleans/JSON).
+        """
+        partial = kwargs.pop('partial', False) # True for PATCH, False for PUT
+        instance = self.get_object()
         
-        # Sensitive fields that should NOT be updatable via this general settings form:
-        serializer.validated_data.pop("owner", None) # Owner should not change here
-        serializer.validated_data.pop("managers", None) # Manager assignment is a separate process
-        serializer.validated_data.pop("verificationStatus", None) # Admin controlled
-        serializer.validated_data.pop("stripe_account_id", None) # System controlled
-        serializer.validated_data.pop("stripe_account_status", None) # System controlled
-        serializer.validated_data.pop("classCategory", None) # Typically set at registration
-        # JSON list fields are read-only in serializer, so no need to pop here
+        # request.data will contain data parsed by DRF's parsers (MultiPart, Form, JSON)
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        
+        try:
+            serializer.is_valid(raise_exception=True)
+        except DRFValidationError as e:
+            logger.warning(
+                f"Validation Error updating Business Profile ID {instance.pk} by user {request.user.email}. Errors: {e.detail}"
+            )
+            return Response({"error": e.detail}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            business = serializer.save() # Serializer's update method is called
+            self.perform_update(serializer) # Calls serializer.save()
+        except Exception as e: # Catch any other unexpected error during save
+            logger.error(
+                f"Unexpected Error updating Business Profile ID {instance.pk} by user {request.user.email}: {str(e)}",
+                exc_info=True
+            )
+            return Response(
+                {"error": "An unexpected error occurred while updating the profile."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        if getattr(instance, '_prefetched_objects_cache', None):
+            # If 'prefetch_related' has been used, ensure the instance is
+            # reloaded from the database to get the latest state.
+            instance = self.get_object()
+            serializer = self.get_serializer(instance)
+            
+        return Response(serializer.data)
+
+    def perform_update(self, serializer):
+        """
+        Called by `update` method. Saves the serializer.
+        Sensitive fields are expected to be handled by `read_only_fields` in the serializer
+        or by not being included in the `fields` list for update operations.
+        The serializer's `update` method contains the specific logic for saving fields
+        (e.g., handling `businessImage` removal/update).
+        """
+        try:
+            business = serializer.save()
             logger.info(
                 f"Business Profile '{business.businessName}' (ID: {business.pk}) updated by user {self.request.user.email}"
             )
         except Exception as e:
+            # This will typically catch database errors or model clean errors not caught by serializer validation
             logger.error(
-                f"Error during MyBusinessProfileView perform_update for Business (User: {self.request.user.email}): {str(e)}",
+                f"Error in perform_update for Business (ID: {serializer.instance.pk}, User: {self.request.user.email}): {str(e)}",
                 exc_info=True,
             )
-            # If serializer.save() raises DRFValidationError, it will be handled by DRF.
-            # This catches other unexpected errors during save.
-            raise DRFValidationError("An error occurred while updating the business profile.")
+            # Re-raise a DRFValidationError to ensure a proper 400 response if it's a save-time validation issue,
+            # or let it propagate if it's a more critical server error.
+            # For simplicity here, we'll let the generic exception handler in `update` catch it.
+            raise # Re-raise the original exception to be caught by the caller
 
 
-    def perform_destroy(self, instance): # Keep as is
-        business_name = instance.businessName; business_id = instance.businessId
+    def perform_destroy(self, instance):
+        """
+        Handles the deletion of the business profile.
+        """
+        business_name = instance.businessName
+        business_id = instance.businessId
+        
+        # Handle related file deletions carefully
         if instance.businessImage:
-            try: instance.businessImage.delete(save=False)
-            except Exception as e: logger.warning(f"Could not delete businessImage for {business_id}: {e}")
-        # if instance.verificationDocument: # This field was removed from BusinessInfo
-        #     try: instance.verificationDocument.delete(save=False)
-        #     except Exception as e: logger.warning(f"Could not delete verificationDocument for {business_id}: {e}")
-        instance.delete()
-        logger.warning(f"Business Profile '{business_name}' (ID: {business_id}) DELETED by owner {self.request.user.email}")
+            try:
+                instance.businessImage.delete(save=False) # `save=False` because the instance itself will be deleted
+            except Exception as e:
+                logger.warning(f"Could not delete businessImage for Business ID {business_id} during profile deletion: {e}")
+        
+        # Any other related file fields would be handled similarly.
+        # if instance.verificationDocument: ... (if this field existed)
+
+        try:
+            instance.delete()
+            logger.warning(f"Business Profile '{business_name}' (ID: {business_id}) DELETED by owner/manager {self.request.user.email}")
+        except Exception as e:
+            logger.error(
+                f"Error deleting Business Profile '{business_name}' (ID: {business_id}) by user {self.request.user.email}: {str(e)}",
+                exc_info=True
+            )
+            # It's good practice to return a server error if deletion fails unexpectedly
+            # However, DRF's DestroyModelMixin typically returns 204 on success and doesn't expect a Response here.
+            # If an error occurs, DRF will likely handle it and return 500.
+            # For explicit control:
+            raise DRFValidationError({"detail": "Failed to delete business profile due to a server error."})

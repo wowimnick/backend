@@ -44,7 +44,7 @@ from ...models import (
 from ...serializers.business.business_student_serializers import (
     BusinessStudentProfileSerializer,
     BusinessStudentNoteSerializer,
-    StudentAttendanceHistorySerializer,
+    BookingHistorySerializer,
 )
 import logging
 
@@ -96,7 +96,6 @@ class BusinessStudentViewSet(viewsets.ReadOnlyModelViewSet):
         "email",
         "active_bookings_count",
         "completed_bookings_count",
-        "annotated_average_attendance",
         "last_booking_date_this_business",
         "total_spent_this_business",
     ]
@@ -132,16 +131,14 @@ class BusinessStudentViewSet(viewsets.ReadOnlyModelViewSet):
         )
         thirty_days_ago_date = (timezone.now() - timezone.timedelta(days=30)).date()
 
-        # Subquery to find the first booking ID for each course group for revenue calculation
-        # This subquery finds the ID of the first *paid* booking in a course group *for this business*
         first_paid_course_booking_id_subquery = Subquery(
             Booking.objects.filter(
                 booking_group_id=OuterRef("bookings__booking_group_id"),
-                schedule_instance__schedule__option__classId__businessId=business,  # Business scope
-                payment_status="paid",  # Must be paid
+                schedule_instance__schedule__option__classId__businessId=business,
+                payment_status="paid",
             )
             .order_by("booking_date", "id")
-            .values("id")[:1]  # Earliest by date, then ID
+            .values("id")[:1]
         )
 
         queryset = queryset.annotate(
@@ -151,56 +148,34 @@ class BusinessStudentViewSet(viewsets.ReadOnlyModelViewSet):
             completed_bookings_count=Count(
                 "bookings", filter=Q(bookings__status="completed") & business_filter_q
             ),
-            total_finished_bookings_for_rate=Count(
-                "bookings",
-                filter=Q(bookings__status__in=["completed", "cancelled"])
-                & business_filter_q,
-            ),
             is_active_student=Exists(
                 Booking.objects.filter(
                     user=OuterRef("pk"),
                     status="confirmed",
-                    schedule_instance__date__gte=thirty_days_ago_date,  # Compare DateField with date
+                    schedule_instance__date__gte=thirty_days_ago_date,
                     schedule_instance__schedule__option__classId__businessId=business,
                 )
             ),
-            # Max of booking_date (DateTimeField) will return a datetime
             last_booking_datetime_this_business=Max(
                 "bookings__booking_date", filter=business_filter_q
             ),
-            # Annotate total spent ensuring courses are not double counted for revenue
             total_spent_this_business=Coalesce(
                 Sum(
                     "bookings__amount_paid",
                     filter=business_filter_q
                     & Q(bookings__payment_status="paid")
                     & (
-                        Q(bookings__booking_group_id__isnull=True)  # Single sessions
-                        | Q(
-                            bookings__id=first_paid_course_booking_id_subquery
-                        )  # First paid booking of a course
+                        Q(bookings__booking_group_id__isnull=True)
+                        | Q(bookings__id=first_paid_course_booking_id_subquery)
                     ),
                 ),
                 Value(Decimal("0.0")),
                 output_field=DecimalField(),
             ),
         ).annotate(
-            last_booking_date_this_business=ExpressionWrapper(  # Convert datetime to date
+            last_booking_date_this_business=ExpressionWrapper(
                 TruncDate(F("last_booking_datetime_this_business")),
                 output_field=DateField(),
-            ),
-            annotated_average_attendance=Case(
-                When(
-                    total_finished_bookings_for_rate__gt=0,
-                    then=ExpressionWrapper(
-                        100.0
-                        * F("completed_bookings_count")
-                        / F("total_finished_bookings_for_rate"),
-                        output_field=DecimalField(max_digits=5, decimal_places=2),
-                    ),
-                ),
-                default=Value(Decimal("0.00")),
-                output_field=DecimalField(max_digits=5, decimal_places=2),
             ),
         )
 
@@ -224,42 +199,31 @@ class BusinessStudentViewSet(viewsets.ReadOnlyModelViewSet):
                     to_attr="notes_for_this_business",
                 )
             )
-        return queryset  # Search and Ordering will be applied by DRF filter_backends
+        return queryset
 
     def retrieve(self, request, *args, **kwargs):
-        instance = self.get_object()  # CustomUser instance with annotations
+        instance = self.get_object()
         business = self.get_business_context()
 
-        # Fetch attendance history for this student within this business context
-        # This includes completed and cancelled bookings to show full history.
-        # Status will be derived by serializer for display.
-        attendance_bookings = (
+        # Fetch booking history for this student within this business context
+        booking_history_qs = (
             Booking.objects.filter(
                 user=instance,
                 schedule_instance__schedule__option__classId__businessId=business,
-                status__in=[
-                    "completed",
-                    "cancelled",
-                ],  # Could also include 'confirmed' if you want to show future non-attended
             )
             .select_related(
-                "schedule_instance__schedule__option__classId",  # For class_name
-                "schedule_instance__schedule__option",  # For option_name
+                "schedule_instance__schedule__option__classId",
+                "schedule_instance__schedule__option",
             )
             .order_by("-schedule_instance__date", "-schedule_instance__time")[:50]
-        )  # Limit for profile view
+        )
 
-        # Add this fetched data directly to the instance object before serialization
-        # The serializer's 'attendance_history' field will pick this up if source is not set,
-        # or if source='attendance_history_data_for_serialization'.
-        # Let's name the attribute to match the serializer field for simplicity.
-        instance.attendance_history = attendance_bookings  # The serializer expects a queryset or list of model instances
+        # Attach the data to the instance for the serializer
+        instance.booking_history = booking_history_qs
 
         serializer = self.get_serializer(instance, context={"request": request})
         return Response(serializer.data)
 
-    # list method will use pagination class automatically by DRF
-    # add_note action remains the same
     @action(
         detail=True,
         methods=["post"],

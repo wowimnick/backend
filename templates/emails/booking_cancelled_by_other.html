@@ -11,7 +11,6 @@
     
     <p>
         We are writing to inform you that your booking for <strong>{{ related_data.class_title|default:"the class" }}</strong> 
-        (Option: {{ related_data.option_title|default:"N/A" }})
         scheduled for {{ booking.schedule_instance.date|date:"F j, Y" }} at {{ booking.schedule_instance.time|time:"P" }} 
         has been cancelled by {{ cancelled_by }}.
     </p>

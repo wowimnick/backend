@@ -24,50 +24,39 @@ class PublicScheduleSerializer(serializers.ModelSerializer):
 class PublicClassOptionSerializer(serializers.ModelSerializer):
     """Serializer for publicly displaying class options."""
     schedules = serializers.SerializerMethodField()
-    image_url = serializers.SerializerMethodField()
 
     class Meta:
         model = ClassOption
         fields = [
             'optionId',
-            'title', 'description',
-            'booking_type', 'level',
+            'booking_type', 
+            'level',
             'equipment',
             'tags',
             'cancellationPolicy',
-            'image_url',
-            'schedules', # This will now include price/capacity
-            'price_type', # Include if relevant for public display
+            'schedules', 
+            'price_type', 
         ]
         read_only_fields = fields
 
-    def get_image_url(self, obj):
-        if obj.image and hasattr(obj.image, 'url'):
-            try:
-                 return obj.image.url
-            except ValueError:
-                 return None
-        return None
-    
     def get_schedules(self, option_instance: ClassOption):
         """
         Returns only active and future schedules for the given class option.
+        This relies on prefetching in the ViewSet to be efficient.
         """
         today = timezone.now().date()
         
         # Access schedules related to the option_instance.
-        # This relies on proper prefetching in the ViewSet to be efficient.
-        active_schedules = option_instance.schedules.all() # Assuming prefetch handles active state
+        active_schedules = option_instance.schedules.all()
 
         future_schedules_objects = []
-        for schedule_obj in active_schedules: # Iterate over actual Schedule model instances
+        for schedule_obj in active_schedules:
             is_future = False
+            # Logic for course or single session based on parent option booking_type
             if option_instance.booking_type == 'Full Course':
-                # For courses, relevant if its end_date is today or in the future.
                 if schedule_obj.end_date and schedule_obj.end_date >= today:
                     is_future = True
             else: # Single Session
-                # For single sessions, relevant if its date is today or in the future.
                 if schedule_obj.date and schedule_obj.date >= today:
                     is_future = True
             
@@ -78,57 +67,48 @@ class PublicClassOptionSerializer(serializers.ModelSerializer):
         return PublicScheduleSerializer(future_schedules_objects, many=True, context=self.context).data
 
 class PublicClassSerializer(serializers.ModelSerializer):
-    """Serializer for public listing and detail view of classes."""
+    """Serializer for public listing and detail view of classes. (CLEANED UP)"""
     options = PublicClassOptionSerializer(many=True, read_only=True)
     images = PublicClassImageSerializer(many=True, read_only=True) 
-    business_name = serializers.CharField(source='businessId.businessName', read_only=True)
-    business_image = serializers.SerializerMethodField(read_only=True)
-    business_timezone = serializers.CharField(source='businessId.business_timezone', read_only=True) # ADDED
-    coordinates = serializers.SerializerMethodField(read_only=True)
-    average_rating = serializers.FloatField(read_only=True) # Field from annotation
-    review_count = serializers.IntegerField(read_only=True) # Field from annotation
-    featured = serializers.BooleanField(source='businessId.featured', read_only=True)
+    
+    # These fields are pre-annotated in the viewset's get_queryset
+    average_rating = serializers.FloatField(read_only=True)
+    review_count = serializers.IntegerField(read_only=True)
+
+    # These fields come from the model itself or related models (category/subcategory)
     category_name = serializers.CharField(source='category.name', read_only=True, allow_null=True)
     subcategory_name = serializers.CharField(source='subcategory.name', read_only=True, allow_null=True)
-    saltLocation = serializers.BooleanField(read_only=True) # From ClassesMain model
+    coordinates = serializers.SerializerMethodField(read_only=True)
+    
+    # This field is calculated based on the user's request context
     is_favorited = serializers.SerializerMethodField()
 
     class Meta:
         model = ClassesMain
         fields = [
-            'classId', 'businessId', 'title', 'description',
+            'classId', 
+            'businessId', 
+            'title', 
+            'description',
             'features',
             'category_name',
             'subcategory_name',
             'coordinates',
-            'studentContactEmail',
-            'studentContactPhone',
+            'saltLocation', 
             'createdAt',
-            'business_name',
-            'business_image',
-            'business_timezone', 
             'options',
             'images',  
             'average_rating',
             'review_count',
-            'featured',
-            'saltLocation',
             'is_favorited',
         ]
         read_only_fields = fields
-
-    def get_business_image(self, obj):
-        if obj.businessId and hasattr(obj.businessId, 'businessImage') and obj.businessId.businessImage:
-            try:
-                return obj.businessId.businessImage.url
-            except ValueError: return None
-        return None
 
     def get_coordinates(self, obj):
         if not obj.coordinates: return None
         try:
             lat, lng = map(float, obj.coordinates.split(','))
-            if obj.saltLocation: # Salt if flag is true on ClassesMain model
+            if obj.saltLocation:
                 lat_salt = uniform(-0.0005, 0.0005) 
                 lng_salt = uniform(-0.0005, 0.0005)
                 lat += lat_salt
@@ -141,6 +121,12 @@ class PublicClassSerializer(serializers.ModelSerializer):
     def get_is_favorited(self, obj):
         request = self.context.get('request')
         if request and hasattr(request, 'user') and request.user.is_authenticated:
-            # Assumes user.favorited is a ManyToManyField to ClassesMain
             return request.user.favorited.filter(pk=obj.pk).exists()
         return False
+
+    def get_business_image(self, obj):
+        if obj.businessId and hasattr(obj.businessId, 'businessImage') and obj.businessId.businessImage:
+            try:
+                return obj.businessId.businessImage.url
+            except ValueError: return None
+        return None

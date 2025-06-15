@@ -27,7 +27,6 @@
         {% endif %}
 
         <p style="margin-bottom: 6px;"><strong>{% trans "Class:" %}</strong> {{ related_data.class_title|default:"N/A" }}</p>
-        <p style="margin-bottom: 6px;"><strong>{% trans "Option:" %}</strong> {{ related_data.option_title|default:"N/A" }}</p>
         
         {% if booking.schedule_instance %}
             <p style="margin-bottom: 6px;"><strong>{% trans "Date:" %}</strong> {{ booking.schedule_instance.date|date:"l, F j, Y" }}</p>

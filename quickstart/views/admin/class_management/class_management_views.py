@@ -1,8 +1,8 @@
-# quickstart/views/admin/class_management/class_management_views.py
-
+from datetime import timedelta
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated, BasePermission
 from django.db.models import (
     Q,
@@ -18,7 +18,11 @@ from django.db.models import (
     OuterRef,
     DecimalField,
     FloatField,
-)  # Ensure all needed imports are here
+    ExpressionWrapper,
+    fields,
+    Sum,
+)
+from decimal import Decimal
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from django.http import HttpResponse  # For CSV export
@@ -30,11 +34,13 @@ from ....models import (
     ClassSubcategory,
     ClassesMain,
     ClassOption,
+    Payment,
     Schedule,
     ScheduleInstance,
     Booking,
     Reviews,
-    BusinessInfo,  # Ensure BusinessInfo is imported if needed for hierarchy checks
+    BusinessInfo,
+    VerificationRequest,  # Ensure BusinessInfo is imported if needed for hierarchy checks
 )
 from ....serializers.admin.class_management.class_management_serializers import (
     AdminClassSerializer,
@@ -44,10 +50,6 @@ from ....serializers.admin.class_management.class_management_serializers import 
     AdminReviewSerializer,
     SubcategorySerializer,
 )
-
-# Optional: Import hierarchy helper if needed for actions
-# from ..user_management.user_admin_views import user_can_manage
-
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +102,10 @@ class CanAccessReviewAdmin(BasePermission):
         )  # Make sure this permission exists
 
 
-# --- AdminClassViewSet ---
+class StandardResultsSetPagination(PageNumberPagination):
+    page_size = 10
+    page_size_query_param = "page_size"
+    max_page_size = 100
 
 
 class AdminClassViewSet(viewsets.ModelViewSet):
@@ -109,6 +114,13 @@ class AdminClassViewSet(viewsets.ModelViewSet):
     """
 
     permission_classes = [IsAuthenticated, CanAccessClassAdmin]
+    pagination_class = StandardResultsSetPagination
+
+    def get_serializer_class(self):
+        if self.action == "retrieve":
+            return AdminClassDetailSerializer
+        return AdminClassSerializer
+
     http_method_names = [
         "get",
         "post",
@@ -117,10 +129,9 @@ class AdminClassViewSet(viewsets.ModelViewSet):
         "head",
         "options",
         "trace",
-    ]  # Ensure PATCH is allowed for status update
+    ]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["title", "businessId__businessName", "category__name", "location"]
-    # Define orderable fields - ensure annotations exist in get_queryset if sorting by them
     ordering_fields = [
         "title",
         "createdAt",
@@ -129,20 +140,14 @@ class AdminClassViewSet(viewsets.ModelViewSet):
         "active_schedules_count",
         "business_name",
         "status",
-        "min_price",  # Added min_price for sorting
+        "min_price",
+        "platform_revenue",  # Added for sorting
     ]
     ordering = ["-createdAt"]
-
-    def get_serializer_class(self):
-        if self.action == "retrieve":
-            return AdminClassDetailSerializer
-        # Use AdminClassSerializer for list which includes the annotated fields
-        return AdminClassSerializer
 
     def get_queryset(self):
         """
         Get queryset for admin class views, annotated with necessary metrics.
-        Includes prefetch for options__schedules for accurate price fallback.
         """
         if not self.request.user.has_perm("quickstart.view_classesmain"):
             logger.warning(
@@ -156,12 +161,10 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                     "businessId", "category", "subcategory", "businessId__owner"
                 )
                 .prefetch_related(
-                    # --- FIX: Removed is_active=True from Schedule filter ---
                     Prefetch(
                         "options__schedules",
                         queryset=Schedule.objects.filter(price__isnull=False),
-                    ),  # Filter for schedules that have a price for min/max calculations
-                    # --- End Fix ---
+                    ),
                     "options__schedules__instances",
                     "reviews",
                     "images",
@@ -169,7 +172,7 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 .distinct()
             )
 
-            # --- Annotations (Ensure these subqueries are correct for your DB) ---
+            # --- Annotations ---
             approved_rating_subquery = Subquery(
                 Reviews.objects.filter(classId=OuterRef("pk"), status="approved")
                 .values("classId")
@@ -184,8 +187,7 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 .values("c"),
                 output_field=Count("pk").output_field,
             )
-            # Ensure schedules related name is correct and price field exists
-            # --- FIX: Removed is_active=True from Schedule filter in subqueries ---
+
             min_price_subquery = Subquery(
                 Schedule.objects.filter(
                     option__classId=OuterRef("pk"), price__isnull=False
@@ -202,7 +204,7 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 .values("price")[:1],
                 output_field=DecimalField(),
             )
-            # --- End Fix ---
+
             active_instances_subquery = Subquery(
                 ScheduleInstance.objects.filter(
                     schedule__option__classId=OuterRef("pk"),
@@ -215,7 +217,21 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 output_field=Count("pk").output_field,
             )
 
-            # Apply Annotations with Coalesce
+            platform_revenue_subquery = Subquery(
+                Payment.objects.filter(
+                    booking__schedule_instance__schedule__option__classId=OuterRef(
+                        "pk"
+                    ),
+                    status="succeeded",
+                )
+                .values(
+                    "booking__schedule_instance__schedule__option__classId"
+                )  # Group by class
+                .annotate(total_fees=Sum("service_fee_amount"))
+                .values("total_fees")[:1],
+                output_field=DecimalField(),
+            )
+
             queryset = queryset.annotate(
                 business_name=F("businessId__businessName"),
                 business_featured=F("businessId__featured"),
@@ -241,6 +257,11 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                     active_instances_subquery,
                     Value(0),
                     output_field=Count("pk").output_field,
+                ),
+                platform_revenue=Coalesce(
+                    platform_revenue_subquery,
+                    Value(Decimal("0.00")),
+                    output_field=DecimalField(),
                 ),
             )
 
@@ -327,28 +348,23 @@ class AdminClassViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["get"])
     def analytics(self, request):
+        """
+        Provides high-level statistics for the Class Management dashboard,
+        including class, category, and subcategory overviews.
+        """
         if not request.user.has_perm("quickstart.view_class_analytics"):
             self.permission_denied(request, message="You cannot view class analytics.")
 
         try:
+            # --- Class Stats ---
+            # Filter for active classes now includes checking the business status
+            active_classes_count = ClassesMain.objects.filter(
+                status="active", businessId__isActive=True
+            ).count()
+
             base_qs = ClassesMain.objects.all()
             total_classes = base_qs.count()
-            active_classes_count = base_qs.filter(
-                status="active"
-            ).count()  # Renamed for clarity
-
-            avg_rating_result = Reviews.objects.filter(status="approved").aggregate(
-                avg=Coalesce(Avg("rating"), Value(0.0))
-            )
-            avg_rating = avg_rating_result["avg"]
-
-            category_counts_qs = (
-                ClassCategory.objects.annotate(count=Count("classes", distinct=True))
-                .values("id", "name", "key", "color", "count")
-                .order_by("-count")
-            )
-            category_counts = list(category_counts_qs)
-
+            featured_classes_count = base_qs.filter(businessId__featured=True).count()
             status_counts_qs = (
                 base_qs.values("status")
                 .annotate(count=Count("classId"))
@@ -356,6 +372,61 @@ class AdminClassViewSet(viewsets.ModelViewSet):
             )
             status_counts = {item["status"]: item["count"] for item in status_counts_qs}
 
+            # --- Review Stats (Aggregated) ---
+            avg_rating_result = Reviews.objects.filter(status="approved").aggregate(
+                avg=Coalesce(Avg("rating"), Value(0.0))
+            )
+            avg_rating = avg_rating_result["avg"]
+
+            # Define the filter to be reused
+            active_class_filter = Q(
+                classes_in_category__status="active",
+                classes_in_category__businessId__isActive=True,
+            )
+
+            # --- Category Stats ---
+            category_counts_qs = (
+                ClassCategory.objects.annotate(
+                    class_count=Count(
+                        "classes_in_category", filter=active_class_filter, distinct=True
+                    )
+                )
+                .values("id", "name", "key", "color", "class_count")
+                .order_by("-class_count")
+            )
+            total_categories = ClassCategory.objects.count()
+            total_subcategories = ClassSubcategory.objects.count()
+
+            # Define the filter for subcategories to be reused
+            active_subclass_filter = Q(
+                classes_in_subcategory__status="active",
+                classes_in_subcategory__businessId__isActive=True,
+            )
+
+            # --- Subcategory Stats ---
+            subcategory_counts_qs = (
+                ClassSubcategory.objects.select_related("category")
+                .annotate(
+                    class_count=Count(
+                        "classes_in_subcategory",
+                        filter=active_subclass_filter,
+                        distinct=True,
+                    )
+                )
+                .filter(class_count__gt=0)
+                .values(
+                    "id",
+                    "name",
+                    "key",
+                    "category_id",
+                    "category__color",
+                    "class_count",
+                )
+                .order_by("-class_count")
+            )
+
+            # --- Top 5 Performers (Bookings & Ratings) ---
+            # (No changes needed here as they are based on bookings/ratings, not just "active" status)
             popular_classes_qs = (
                 ClassesMain.objects.annotate(
                     bookings_count=Count(
@@ -391,14 +462,15 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 top_rated_classes_qs.values("classId", "title", "average_rating")
             )
 
-            featured_classes_count = base_qs.filter(businessId__featured=True).count()
-
             return Response(
                 {
                     "totalClasses": total_classes,
-                    "activeClasses": active_classes_count,  # Use consistent naming
+                    "activeClasses": active_classes_count,  # This count is now accurate
                     "averageRating": round(avg_rating, 1),
-                    "categoryCounts": category_counts,
+                    "totalCategories": total_categories,
+                    "totalSubcategories": total_subcategories,
+                    "categoryClassCounts": list(category_counts_qs),
+                    "subcategoryClassCounts": list(subcategory_counts_qs),
                     "featuredClasses": featured_classes_count,
                     "statusCounts": status_counts,
                     "popularClasses": popular_classes_data,
@@ -580,24 +652,23 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
             self.permission_denied(request, message="You cannot delete categories.")
 
         instance = self.get_object()
-        if instance.classes.exists():
+
+        # FIX: Corrected attribute from 'classes' to 'classes_in_category'
+        if instance.classes_in_category.exists():
             return Response(
                 {
-                    "detail": f"Cannot delete category '{instance.name}' as it is used by {instance.classes.count()} classes."
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if instance.subcategories.exists():
-            return Response(
-                {
-                    "detail": f"Cannot delete category '{instance.name}' as it has subcategories. Delete subcategories first."
+                    "detail": f"Cannot delete category '{instance.name}' as it is used by {instance.classes_in_category.count()} classes. Reassign them first."
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # REMOVED: The check for subcategories is removed. The `on_delete=models.CASCADE`
+        # on the ClassSubcategory model will now handle the deletion of subcategories automatically
+        # when the parent category is deleted.
+
         category_name = instance.name
         logger.warning(
-            f"Category '{category_name}' (ID: {instance.pk}) deleted by Admin {request.user.email}"
+            f"Category '{category_name}' (ID: {instance.pk}) and its subcategories deleted by Admin {request.user.email}"
         )
 
         return super().destroy(request, *args, **kwargs)
@@ -605,8 +676,19 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
     def list(self, request, *args, **kwargs):
         if not request.user.has_perm("quickstart.view_classcategory"):
             self.permission_denied(request, message="You cannot view categories.")
+
         queryset = self.filter_queryset(self.get_queryset())
-        page = self.paginate_queryset(queryset)
+
+        # Add the annotation for active classes
+        annotated_queryset = queryset.annotate(
+            active_classes=Count(
+                "classes_in_category",
+                filter=Q(classes_in_category__status="active"),
+                distinct=True,
+            )
+        )
+
+        page = self.paginate_queryset(annotated_queryset)
         if page is not None:
             serializer = self.get_serializer(
                 page, many=True, context={"request": request}
@@ -614,7 +696,7 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
             return self.get_paginated_response(serializer.data)
 
         serializer = self.get_serializer(
-            queryset, many=True, context={"request": request}
+            annotated_queryset, many=True, context={"request": request}
         )
         return Response(serializer.data)
 
@@ -627,28 +709,72 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["get"])
     def stats(self, request):
-        if not request.user.has_perm("quickstart.view_classcategory"):
-            self.permission_denied(request, message="You cannot view categories.")
+        """Get payment statistics for admin dashboard"""
+        if not request.user.has_perm("quickstart.view_payment_stats"):
+            self.permission_denied(
+                request, message="You cannot view payment statistics."
+            )
 
         try:
-            queryset = self.filter_queryset(self.get_queryset())
+            end_date = timezone.now()
+            days = int(request.query_params.get("days", 30))  # Allow specifying days
+            start_date = end_date - timedelta(days=days)
 
-            annotated_queryset = queryset.annotate(
-                active_classes=Count(
-                    "classes", filter=Q(classes__status="active"), distinct=True
-                )
+            payments_in_period = Payment.objects.filter(
+                created_at__range=[start_date, end_date], status="succeeded"
             )
-            serializer = self.get_serializer(
-                annotated_queryset, many=True, context={"request": request}
-            )
-            return Response(serializer.data)
 
-        except Exception as e:
-            logger.error(
-                f"Error generating category list with stats: {e}", exc_info=True
+            # --- UPDATED: Calculate Gross Revenue (GMV) and Platform Revenue ---
+            aggregates = payments_in_period.aggregate(
+                total_revenue=Coalesce(Sum("amount"), Decimal(0)),
+                platform_revenue=Coalesce(Sum("service_fee_amount"), Decimal(0)),
             )
+            total_revenue = aggregates["total_revenue"]
+            platform_revenue = aggregates["platform_revenue"]
+
+            previous_start = start_date - timedelta(days=days)
+            previous_revenue = Payment.objects.filter(
+                created_at__range=[previous_start, start_date], status="succeeded"
+            ).aggregate(total=Coalesce(Sum("amount"), Decimal(0)))["total"]
+
+            revenue_growth = 0
+            if previous_revenue > 0:
+                revenue_growth = (
+                    (total_revenue - previous_revenue) / previous_revenue
+                ) * 100
+
+            pending_payments = Payment.objects.filter(status="pending").count()
+
+            refunded_amount = Payment.objects.filter(
+                created_at__range=[start_date, end_date],
+                status__in=["refunded", "partially_refunded"],
+            ).aggregate(total=Coalesce(Sum("refunded_amount"), Decimal(0)))["total"]
+
+            total_transactions = Payment.objects.filter(
+                created_at__range=[start_date, end_date]
+            ).count()
+            successful_transactions = payments_in_period.count()
+
             return Response(
-                {"error": "Could not retrieve category data"},
+                {
+                    "total_revenue": float(
+                        total_revenue
+                    ),  # This is Gross Merchandise Volume (GMV)
+                    "platform_revenue": float(
+                        platform_revenue
+                    ),  # This is your platform's cut
+                    "revenue_growth": round(revenue_growth, 1),
+                    "pending_payments": pending_payments,
+                    "refunded_amount": float(refunded_amount),
+                    "total_transactions": total_transactions,
+                    "successful_transactions": successful_transactions,
+                    "period_days": days,
+                }
+            )
+        except Exception as e:
+            logger.error(f"Error getting payment stats: {str(e)}", exc_info=True)
+            return Response(
+                {"error": "Failed to retrieve payment statistics"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -708,11 +834,47 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
         else:
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+    @action(
+        detail=True,
+        methods=["delete"],
+        url_path="subcategories/(?P<subcategory_pk>[^/.]+)",
+    )
+    def delete_subcategory(self, request, pk=None, subcategory_pk=None):
+        if not request.user.has_perm("quickstart.delete_classsubcategory"):
+            self.permission_denied(request, message="You cannot delete subcategories.")
 
-# --- AdminReviewViewSet ---
+        try:
+            category = self.get_object()
+            subcategory = ClassSubcategory.objects.get(
+                pk=subcategory_pk, category=category
+            )
+        except ClassSubcategory.DoesNotExist:
+            return Response(
+                {"detail": "Subcategory not found for this category."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Check if the subcategory is in use before deleting
+        if subcategory.classes_in_subcategory.exists():
+            return Response(
+                {
+                    "detail": f"Cannot delete subcategory '{subcategory.name}' as it is used by {subcategory.classes_in_subcategory.count()} classes."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        subcategory_name = subcategory.name
+        subcategory.delete()
+        logger.warning(
+            f"Subcategory '{subcategory_name}' (ID: {subcategory_pk}) from Category '{category.name}' deleted by Admin {request.user.email}"
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 class AdminReviewViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, CanAccessReviewAdmin]
     serializer_class = AdminReviewSerializer
+    pagination_class = StandardResultsSetPagination
     queryset = (
         Reviews.objects.select_related(
             "userId", "userId__role", "classId", "classId__businessId", "businessId"
@@ -778,47 +940,109 @@ class AdminReviewViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(instance, context={"request": request})
         return Response(serializer.data)
 
+    @action(detail=False, methods=["get"])
+    def analytics(self, request):
+        """Provides statistics for the Review Moderation dashboard."""
+        if not request.user.has_perm(
+            "quickstart.view_reviews"
+        ):  # Use a relevant permission
+            self.permission_denied(
+                request, message="You cannot view review statistics."
+            )
+
+        try:
+            base_qs = Reviews.objects.all()
+
+            # --- Status Counts ---
+            status_counts = (
+                base_qs.values("status").annotate(count=Count("reviewId")).order_by()
+            )
+            status_dict = {item["status"]: item["count"] for item in status_counts}
+
+            # --- Other Counts ---
+            total_reviews = base_qs.count()
+            reported_reviews = base_qs.filter(reported=True).count()
+
+            # --- Average Rating ---
+            avg_rating_data = base_qs.filter(status="approved").aggregate(
+                avg=Avg("rating")
+            )
+            average_rating = avg_rating_data.get("avg") or 0.0
+
+            # --- Average Moderation Time ---
+            # For reviews that have been reported and subsequently responded to/status changed.
+            moderated_reviews_qs = base_qs.filter(
+                reported=True,
+                responded_at__isnull=False,
+                reported_at__isnull=False,
+                responded_at__gt=F("reported_at"),
+            ).annotate(
+                mod_time=ExpressionWrapper(
+                    F("responded_at") - F("reported_at"),
+                    output_field=fields.DurationField(),
+                )
+            )
+
+            avg_mod_duration = moderated_reviews_qs.aggregate(avg=Avg("mod_time")).get(
+                "avg"
+            )
+
+            avg_mod_formatted = "N/A"
+            if avg_mod_duration:
+                total_seconds = avg_mod_duration.total_seconds()
+                days = total_seconds // 86400
+                hours = (total_seconds % 86400) // 3600
+                minutes = (total_seconds % 3600) // 60
+                if days > 1:
+                    avg_mod_formatted = f"{days:.1f} days"
+                elif hours > 1:
+                    avg_mod_formatted = f"{hours:.1f} hours"
+                else:
+                    avg_mod_formatted = f"{minutes:.0f} mins"
+
+            data = {
+                "total": total_reviews,
+                "approved": status_dict.get("approved", 0),
+                "underReview": status_dict.get("under_review", 0),
+                "hidden": status_dict.get("hidden", 0),
+                "reported": reported_reviews,
+                "averageRating": average_rating,
+                "avgModerationTimeDisplay": avg_mod_formatted,
+            }
+            return Response(data)
+
+        except Exception as e:
+            logger.error(f"Error generating review analytics: {e}", exc_info=True)
+            return Response(
+                {"error": "Could not generate analytics"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
     def partial_update(self, request, *args, **kwargs):
         if not request.user.has_perm("quickstart.change_reviews"):
             self.permission_denied(request, message="You cannot moderate reviews.")
 
         instance = self.get_object()
-        allowed_fields = ["status", "business_response", "reported", "report_reason"]
+        # Define fields an admin can change in one go
+        allowed_fields = ["status", "business_response"]
         update_data = {}
-        valid_update = False
+
         for field in allowed_fields:
             if field in request.data:
                 update_data[field] = request.data[field]
-                valid_update = True
 
-        if not valid_update:
+        if not update_data:
             return Response(
                 {"detail": "No valid fields provided for update."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if "status" in update_data:
-            valid_statuses = [
-                choice[0] for choice in Reviews._meta.get_field("status").choices
-            ]
-            if update_data["status"] not in valid_statuses:
-                return Response(
-                    {
-                        "status": [
-                            f"Invalid status. Choose from: {', '.join(valid_statuses)}"
-                        ]
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-        if "reported" in update_data:
-            update_data["reported"] = str(update_data["reported"]).lower() in [
-                "true",
-                "1",
-                "yes",
-            ]
-            if not update_data["reported"] and "report_reason" not in update_data:
-                update_data["report_reason"] = ""
+        if (
+            "business_response" in update_data
+            and instance.business_response != update_data["business_response"]
+        ):
+            instance.responded_at = timezone.now()
+            instance.save(update_fields=["responded_at"])
 
         serializer = self.get_serializer(instance, data=update_data, partial=True)
         serializer.is_valid(raise_exception=True)

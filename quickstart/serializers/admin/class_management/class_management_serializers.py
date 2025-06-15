@@ -17,8 +17,8 @@ class AdminScheduleInstanceSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'date', 'time', 'duration', 'price',
             'max_participants', 'status', 'booking_count',
-            'available_spots', 'attendance_marked',
-            'instructor_notes', 'cancellation_reason',
+            'available_spots', 
+            'cancellation_reason',
             'created_at', 'updated_at'
         ]
 
@@ -31,42 +31,40 @@ class AdminScheduleSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'day', 'time', 'duration', 'price',
             'maxParticipants', 'start_date', 'end_date',
-            'date', 'is_active', 'allow_late_enrollment',
+            'date', 'allow_late_enrollment',
             'instances'
         ]
 
 # --- AdminClassOptionSerializer ---
 class AdminClassOptionSerializer(serializers.ModelSerializer):
     schedules = AdminScheduleSerializer(many=True, read_only=True)
-    image_url = serializers.SerializerMethodField()
     price_range = serializers.SerializerMethodField()
     total_students = serializers.IntegerField(read_only=True, default=0)
+    parent_class_title = serializers.CharField(source='classId.title', read_only=True)
 
     class Meta:
         model = ClassOption
         fields = [
-            'optionId', 'title', 'description',
+            'optionId', 'parent_class_title',
             'booking_type', 'level',
             'price_type', 'equipment', 'tags',
             'cancellationPolicy', 'schedules',
-            'image', 'image_url', 'price_range',
+            'price_range',
             'total_students', 'createdAt', 'updatedAt'
         ]
-        read_only_fields = ['image_url', 'price_range', 'total_students']
-
-    def get_image_url(self, obj):
-        if obj.image and hasattr(obj.image, 'url'):
-            return obj.image.url
-        return None
+        read_only_fields = [
+            'optionId', 'parent_class_title', 'price_range', 
+            'total_students', 'createdAt', 'updatedAt'
+        ]
 
     def get_price_range(self, obj):
-        # Ensure schedules are loaded (prefetch in view is recommended)
-        # Consider filtering only active schedules for price range
-        active_schedules = obj.schedules.filter(is_active=True)
-        if not active_schedules.exists():
+        # In a real scenario, this should likely filter on active schedules
+        # but for now, we'll keep it simple as per the original.
+        all_schedules = obj.schedules.all()
+        if not all_schedules:
             return None
 
-        prices = [schedule.price for schedule in active_schedules if schedule.price is not None]
+        prices = [schedule.price for schedule in all_schedules if schedule.price is not None]
         if not prices:
             return None
 
@@ -101,6 +99,7 @@ class AdminClassSerializer(serializers.ModelSerializer):
     images = AdminClassImageSerializer(many=True, read_only=True)
     business = AdminBusinessSerializer(source='businessId', read_only=True)
     businessId = serializers.IntegerField(source='businessId.pk', read_only=True)
+    business_name = serializers.CharField(read_only=True) # Will be populated by the annotation in the view
     business_featured = serializers.BooleanField(read_only=True, default=False)
     average_rating = serializers.FloatField(read_only=True, default=0.0)
     review_count = serializers.IntegerField(read_only=True, default=0)
@@ -110,6 +109,7 @@ class AdminClassSerializer(serializers.ModelSerializer):
     category = serializers.SerializerMethodField()
     subcategory = serializers.SerializerMethodField()
     price_range = serializers.SerializerMethodField()
+    platform_revenue = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True, default=Decimal('0.00'))
 
     class Meta:
         model = ClassesMain
@@ -119,8 +119,9 @@ class AdminClassSerializer(serializers.ModelSerializer):
             'min_price', 'max_price', # Included here now
             'price_range', 'status',
             'active_schedules_count', 'business_featured',
-            'images', 'business', 'businessId',
+            'images', 'business', 'businessId', 'business_name', # MODIFIED: Added business_name
             'average_rating', 'review_count',
+            'platform_revenue',
             'createdAt', 'updatedAt'
         ]
         read_only_fields = fields
@@ -132,13 +133,15 @@ class AdminClassSerializer(serializers.ModelSerializer):
         # Fallback logic if annotations are None (requires prefetch of options__schedules)
         if min_price is None and max_price is None:
              prices = []
-             for option in obj.options.all(): # Assumes prefetch_related('options__schedules')
-                 for schedule in option.schedules.filter(is_active=True):
-                      if schedule.price is not None:
-                          prices.append(schedule.price)
-             if not prices: return None
-             min_price = min(prices)
-             max_price = max(prices)
+             # This fallback is inefficient and should be avoided by ensuring annotations are always present
+             if hasattr(obj, 'options'):
+                 for option in obj.options.all(): # Assumes prefetch_related('options__schedules')
+                     for schedule in option.schedules.all():
+                          if schedule.price is not None:
+                              prices.append(schedule.price)
+                 if not prices: return None
+                 min_price = min(prices)
+                 max_price = max(prices)
         elif min_price is None: # Handle only max exists
              min_price = max_price
         elif max_price is None: # Handle only min exists
@@ -229,14 +232,14 @@ class SubcategorySerializer(serializers.ModelSerializer):
 # --- AdminClassCategorySerializer ---
 class AdminClassCategorySerializer(serializers.ModelSerializer):
     subcategories = SubcategorySerializer(many=True, read_only=True)
-    activeClasses = serializers.IntegerField(read_only=True, default=0, source='active_classes') # Use source to match annotation name
+    activeClasses = serializers.IntegerField(read_only=True, default=0, source='active_classes')
 
     class Meta:
         model = ClassCategory
         fields = [
             'id', 'name', 'key', 'color',
             'created_at', 'updated_at',
-            'subcategories', # Ensure this is included
-            'activeClasses', # Include the statistic
+            'subcategories',
+            'activeClasses', # This will now be populated by the annotation
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at', 'activeClasses'] # Add stats to read_only
+        read_only_fields = ['id', 'created_at', 'updated_at', 'activeClasses']

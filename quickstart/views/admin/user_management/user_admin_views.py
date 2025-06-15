@@ -1,3 +1,4 @@
+from datetime import timedelta
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -166,7 +167,7 @@ class UserAdminViewSet(viewsets.ModelViewSet):
             try:
                 target_role = Role.objects.get(pk=role_id)
                  # Prevent assigning a role higher than or equal to own, unless self-assigning same level (excluding Super Admin)
-                if request.user.role and request.user.role.hierarchy_level < target_role.hierarchy_level:
+                if request.user.role and request.user.role.hierarchy_level <= target_role.hierarchy_level:
                      self.permission_denied(
                          request, message=f"You cannot assign the role '{target_role.name}' (higher hierarchy)."
                      )
@@ -239,7 +240,7 @@ class UserAdminViewSet(viewsets.ModelViewSet):
                 try:
                     new_role = Role.objects.get(pk=new_role_id)
                      # Prevent assigning a role higher than or equal to own, with exceptions
-                    if request.user.role and request.user.role.hierarchy_level < new_role.hierarchy_level:
+                    if request.user.role and request.user.role.hierarchy_level <= new_role.hierarchy_level:
                          self.permission_denied(
                             request, message=f"You cannot assign the role '{new_role.name}' (higher hierarchy)."
                          )
@@ -391,53 +392,78 @@ class UserAdminViewSet(viewsets.ModelViewSet):
                 request, message="You do not have permission to view user metrics."
             )
 
-        # --- metrics calculation code remains the same ---
-        from django.db.models.functions import TruncMonth
+        # --- 1. Date Range Processing ---
+        try:
+            # Get date range from query params, default to last 30 days
+            end_date_str = request.query_params.get('end_date', timezone.now().strftime('%Y-%m-%d'))
+            default_start_date = (timezone.datetime.strptime(end_date_str, '%Y-%m-%d') - timedelta(days=29)).strftime('%Y-%m-%d')
+            start_date_str = request.query_params.get('start_date', default_start_date)
 
-        # Get all basic counts in a single query using conditional aggregation
+            # Convert to datetime objects
+            start_date_dt = timezone.make_aware(timezone.datetime.strptime(start_date_str, '%Y-%m-%d'))
+            end_date_dt = timezone.make_aware(
+                timezone.datetime.strptime(end_date_str, '%Y-%m-%d')
+            ).replace(hour=23, minute=59, second=59)
+        except (ValueError, TypeError):
+            # Fallback if date format is invalid
+            end_date_dt = timezone.now()
+            start_date_dt = end_date_dt - timedelta(days=30)
+
+        # --- 2. User Model Aggregations ---
         user_counts = User.objects.aggregate(
             total_users=Count('userId'),
-            active_users=Count('userId', filter=Q(is_active=True, last_login__isnull=False)), # Refined active
+            active_users=Count('userId', filter=Q(is_active=True, last_login__isnull=False)),
             inactive_users=Count('userId', filter=Q(is_active=False)),
-            pending_users=Count('userId', filter=Q(is_active=True, last_login__isnull=True)), # Refined pending
-            new_users_30_days=Count('userId', filter=Q(
-                createdAt__gte=timezone.now() - timezone.timedelta(days=30)
+            pending_users=Count('userId', filter=Q(is_active=True, last_login__isnull=True)),
+            # This count is now dynamic based on the date range
+            new_users_in_period=Count('userId', filter=Q(
+                createdAt__range=[start_date_dt, end_date_dt]
             ))
         )
 
-        # Get role distribution in a single query
-        role_distribution = User.objects.filter(role__isnull=False).values( # Exclude users without roles
+        # --- 3. Active User (Engagement) Metric from AuditLog ---
+        active_users_in_period = AuditLog.objects.filter(
+            action='login',
+            timestamp__range=[start_date_dt, end_date_dt]
+        ).values('user_id').distinct().count()
+
+        # --- 4. Role and Trend Aggregations ---
+        role_distribution = User.objects.filter(role__isnull=False).values(
             'role__name', 'role__color'
         ).annotate(
             count=Count('userId')
         ).order_by('-count')
-
-        # Get registration trend data with proper date trunc
-        six_months_ago = timezone.now().date() - timezone.timedelta(days=180)
+        
+        # Trend is now also based on the provided date range
+        from django.db.models.functions import TruncDay
         registration_trend = User.objects.filter(
-            createdAt__date__gte=six_months_ago # Use date for comparison
+            createdAt__range=[start_date_dt, end_date_dt]
         ).annotate(
-            month=TruncMonth('createdAt')
-        ).values('month').annotate(
+            day=TruncDay('createdAt')
+        ).values('day').annotate(
             count=Count('userId')
-        ).order_by('month')
+        ).order_by('day')
 
+        # --- 5. Assemble Response ---
         return Response({
             'total_users': user_counts['total_users'],
-            'active_users': user_counts['active_users'],
+            'active_users': user_counts['active_users'], # This is "ever active"
             'inactive_users': user_counts['inactive_users'],
             'pending_users': user_counts['pending_users'],
-            'new_users_30_days': user_counts['new_users_30_days'],
+            'new_users_in_period': user_counts['new_users_in_period'], # Dynamic name
+            'active_users_in_period': active_users_in_period, # True engagement metric
             'role_distribution': list(role_distribution),
             'registration_trend': [
                 {
-                    # Format month correctly, handle potential None if no users in a month
-                    'month': item['month'].strftime('%Y-%m') if item.get('month') else 'N/A',
+                    'day': item['day'].strftime('%Y-%m-%d'),
                     'registrations': item.get('count', 0)
                 }
                 for item in registration_trend
-            ]
+            ],
+            'query_start_date': start_date_dt.strftime('%Y-%m-%d'),
+            'query_end_date': end_date_dt.strftime('%Y-%m-%d'),
         })
+
 
     def _log_user_action(self, target_user, action, details, metadata=None):
         """Helper method to log user actions for audit trail"""

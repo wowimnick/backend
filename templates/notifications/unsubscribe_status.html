@@ -1,0 +1,58 @@
+<!-- templates/notifications/unsubscribe_status.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Unsubscribe Status</title>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            min-height: 100vh; 
+            background-color: #f3f4f6; /* Match email background */
+            color: #374151; /* Match email text color */
+            margin: 0; 
+        }
+        .container { 
+            background-color: white; 
+            padding: 40px; 
+            border-radius: 8px; /* Match email container radius */
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05); /* Match email shadow */
+            text-align: center; 
+            max-width: 500px;
+            border: 1px solid #e5e7eb;
+        }
+        h1 { 
+            color: #111827; /* Match email heading color */
+            font-size: 24px;
+            font-weight: 600;
+        }
+        .success { color: #10b981; }
+        .error { color: #ef4444; }
+        p {
+            line-height: 1.6;
+            font-size: 16px;
+        }
+        a {
+            color: #ff385c; /* Match email button/link color */
+            text-decoration: none;
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        {% if success %}
+            <h1 class="success">Unsubscribed</h1>
+        {% else %}
+            <h1 class="error">Request Failed</h1>
+        {% endif %}
+        <p>{{ message }}</p>
+        <br>
+        <p><a href="https://classeasily.com">Return to ClassEasily Home</a></p>
+    </div>
+</body>
+</html>

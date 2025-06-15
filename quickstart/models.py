@@ -206,6 +206,13 @@ class AuditLog(models.Model):
         ("verification_reject", "Verification Rejected"),
         ("system_setting_change", "System Setting Changed"),
         ("data_export", "Data Exported"),
+        ("business_update", "Business Updated"),
+        ("business_delete", "Business Deleted"),
+        ("business_delete_failed", "Business Delete Failed"),
+        ("business_activate", "Business Activated"),
+        ("business_deactivate", "Business Deactivated"),
+        ("business_feature", "Business Featured"),
+        ("business_unfeature", "Business Unfeatured"),
     ]
     action = models.CharField(max_length=30, choices=ACTION_CHOICES)
 
@@ -294,7 +301,10 @@ class CustomUser(AbstractUser):
         "Role", on_delete=models.SET_NULL, null=True, blank=True
     )  # Assuming Role model is defined
     favorited = models.ManyToManyField(
-        "ClassesMain", related_name="favorited_by", blank=True
+        "ClassesMain", 
+        through="Favorites", 
+        related_name="favorited_by", 
+        blank=True
     )
     user_timezone = models.CharField(
         max_length=50,
@@ -303,6 +313,8 @@ class CustomUser(AbstractUser):
         blank=True,  # Allow blank if you want to prompt user or guess later
         help_text="User's preferred IANA timezone for displaying dates/times.",
     )
+    is_unsubscribed = models.BooleanField(default=False, help_text="User has opted out of marketing emails.")
+    unsubscribed_at = models.DateTimeField(null=True, blank=True)
 
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = [
@@ -396,12 +408,13 @@ REFUND_POLICY_CHOICES = [
     ("none", "No refunds"),
 ]
 
-CANCELLATION_POLICY_CHOICES = [
-    ("flexible", "Flexible (e.g., 24 hours notice)"),
-    ("moderate", "Moderate (e.g., 48 hours notice)"),
-    ("strict", "Strict (e.g., 72 hours notice)"),
-    ("non_refundable", "Non-refundable"),
-]
+CANCELLATION_POLICY_CHOICES = [ 
+        ("flexible", "Flexible (up to 1 hour before)"), 
+        ("24h", "24 Hours Notice"),
+        ("48h", "48 Hours Notice"),
+        ("72h", "72 Hours Notice"),
+        ("strict", "Strict (Non-refundable)") 
+    ]
 
 STRIPE_STATUS_CHOICES = [
     ("unlinked", "Unlinked"),
@@ -421,6 +434,17 @@ class BusinessInfo(models.Model):
         related_name="owned_businesses",
     )
     businessName = models.CharField(max_length=100)
+    CONTACT_PRIVACY_CHOICES = [
+        ('on_booking', 'Show After Booking'),
+        ('public', 'Show Publicly'),
+        ('public_with_chat', 'Show Publicly & Allow Chat'), 
+    ]
+    contact_privacy = models.CharField(
+        max_length=20,
+        choices=CONTACT_PRIVACY_CHOICES,
+        default='on_booking',
+        help_text="Choose who can see your direct contact information."
+    )
     businessType = models.CharField(
         max_length=50,
         choices=[
@@ -799,10 +823,10 @@ def get_classesmain_search_vector(instance: ClassesMain):
     vector_components = [
         SearchVector(
             Value(instance.title), weight="A", config="english"
-        ),  # title field
+        ),
         SearchVector(
             Value(instance.description), weight="B", config="english"
-        ),  # description field
+        ),
     ]
     if instance.businessId:
         vector_components.append(
@@ -825,24 +849,8 @@ def get_classesmain_search_vector(instance: ClassesMain):
             )
         )
 
-    try:
-        if instance.pk and hasattr(instance, "options") and instance.options.exists():
-            related_options_titles = " ".join(
-                instance.options.values_list("title", flat=True)
-            )
-            if related_options_titles:
-                vector_components.append(
-                    SearchVector(
-                        Value(related_options_titles),
-                        weight="C",
-                        config="pg_catalog.english",
-                    )
-                )
-    except AttributeError:
-        pass  # options might not be loaded or related_name is different
-
     if not vector_components:
-        return SearchVector(Value(""))  # Return empty vector if no components
+        return SearchVector(Value(""))
 
     final_vector = vector_components[0]
     for component in vector_components[1:]:
@@ -948,6 +956,9 @@ class Favorites(models.Model):
     class Meta:
         db_table = "favorites"
         unique_together = ("userId", "classId")
+        indexes = [
+            models.Index(fields=['userId', '-createdAt']) 
+        ]
 
 
 class ClassOption(models.Model):
@@ -956,20 +967,15 @@ class ClassOption(models.Model):
         "ClassesMain", on_delete=models.CASCADE, related_name="options"
     )
 
-    # Basic Info
-    title = models.CharField(max_length=100)
-    description = models.TextField(null=True, blank=True)
+    # Title and Description are now sourced from the parent ClassesMain instance.
+    # No separate title or description fields on ClassOption.
 
     BOOKING_TYPES = [
         ("Single Session", "Single Session"),
-        ("Full Course", "Full Course"),
+        # ("Full Course", "Full Course"), # Kept for potential future use
     ]
     booking_type = models.CharField(
         max_length=20, choices=BOOKING_TYPES, default="Single Session"
-    )
-
-    image = models.ImageField(
-        upload_to="class_options/", storage=S3Boto3Storage(), null=True, blank=True
     )
 
     level = models.CharField(
@@ -980,39 +986,55 @@ class ClassOption(models.Model):
             ("advanced", "Advanced"),
             ("all", "All Levels"),
         ],
+        default="all",
     )
 
-    # Pricing
     PRICE_TYPES = [("per_session", "Per Session"), ("full_course", "Full Course")]
     price_type = models.CharField(
         max_length=20, choices=PRICE_TYPES, default="per_session"
     )
 
     # Additional Info
-    equipment = models.JSONField(default=list)
-    tags = models.JSONField(default=list)
+    equipment = models.JSONField(default=list, blank=True)
+    tags = models.JSONField(default=list, blank=True)
+    
+    CANCELLATION_POLICY_CHOICES = [
+        ("flexible", "Flexible (up to 1 hour before)"),
+        ("24h", "24 Hours Notice"),
+        ("48h", "48 Hours Notice"),
+        ("72h", "72 Hours Notice"),
+        ("strict", "Strict (Non-refundable)")
+    ]
     cancellationPolicy = models.CharField(
         max_length=30,
-        choices=[
-            ("24h", "24 Hours Notice"),
-            ("48h", "48 Hours Notice"),
-            ("72h", "72 Hours Notice"),
-            ("flexible", "Flexible"),
-        ],
+        choices=CANCELLATION_POLICY_CHOICES,
+        default="flexible",
     )
+    cancellationRefundPercentage = models.PositiveIntegerField(
+        default=100,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+        help_text="Percentage of refund if cancellation policy conditions are met (0-100)."
+    )
+
     createdAt = models.DateTimeField(auto_now_add=True)
     updatedAt = models.DateTimeField(auto_now=True)
 
-    def get_image_url(self):
-        if self.image:
-            return self.image.url
-        return None
+    # Property to access parent class title
+    @property
+    def parent_class_title(self): 
+        return self.classId.title
+
+    @property
+    def parent_class_description(self): 
+        return self.classId.description
+    
+    def __str__(self):
+        # Refer to the class's title for identification
+        return f"Option for {self.classId.title} (ID: {self.optionId})"
 
     class Meta:
         db_table = "class_options"
         indexes = [models.Index(fields=["classId"])]
-        # No specific permissions needed here, controlled via ClassesMain -> BusinessInfo
-
 
 class Schedule(models.Model):
     option = models.ForeignKey(
@@ -1145,21 +1167,21 @@ class Schedule(models.Model):
                         updated_count += 1
                 if updated_count > 0:
                     logger.info(
-                        f"Updated {updated_count} future instances for course Schedule {self.id}"
+                        f"Updated {updated_count} future instances for course Schedule {self.pk}"
                     )
 
     def delete(self, *args, **kwargs):
-        schedule_id_log = self.id
-        option_title_log = self.option.title if self.option else "N/A"
+        schedule_id_log = self.pk
+        option_title_log = self.option.classId.title if self.option else "N/A"
 
         # Log before actual deletion attempt
         logger.info(
-            f"Attempting to delete Schedule ID {schedule_id_log} for option '{option_title_log}'. Associated instances will also be deleted."
+            f"Attempting to delete Schedule ID {schedule_id_log} for option of class '{option_title_log}'. Associated instances will also be deleted."
         )
 
         super().delete(*args, **kwargs)  # This will trigger cascaded deletes.
         logger.info(
-            f"Schedule ID {schedule_id_log} for option '{option_title_log}' successfully deleted."
+            f"Schedule ID {schedule_id_log} for option of class '{option_title_log}' successfully deleted."
         )
 
     def generate_course_instances(self):
@@ -1252,9 +1274,6 @@ class ScheduleInstance(models.Model):
         max_length=20, choices=STATUS_CHOICES, default="scheduled"
     )
     cancellation_reason = models.TextField(blank=True)
-
-    attendance_marked = models.BooleanField(default=False)
-    instructor_notes = models.TextField(blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -1409,9 +1428,6 @@ class Booking(models.Model):
         default="pending",
     )
 
-    attendance_marked = models.BooleanField(default=False)
-    attended = models.BooleanField(default=False)
-
     def _generate_user_facing_reference(self):
         # Generate a unique reference, e.g., BKG-XXXXXX
         # Ensure it's unique before saving.
@@ -1444,7 +1460,6 @@ class Booking(models.Model):
             ("view_booking_analytics", "Can view aggregated booking analytics"),
             ("export_booking_data", "Can export booking data"),
             ("access_booking_admin", "Can access the Booking Administration section"),
-            ("mark_booking_attendance", "Can mark attendance for bookings in own business"),
             ("view_own_booking_analytics", "Can view booking analytics for own business"),
             ("cancel_business_booking", "Can cancel bookings within own business"),
         ]
@@ -1463,7 +1478,10 @@ class Payment(models.Model):
     stripe_charge_id = models.CharField(max_length=255, null=True, blank=True)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     service_fee_amount = models.DecimalField(
-        max_digits=10, decimal_places=2, default=Decimal("0.00")
+        max_digits=10, 
+        decimal_places=2, 
+        default=Decimal("0.00"),
+        help_text="The portion of the payment amount that is the platform's service fee."
     )
     currency = models.CharField(max_length=3, default="USD")
 
@@ -1732,6 +1750,7 @@ class SupportTicket(models.Model):
     # Timestamps and management
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    first_responded_at = models.DateTimeField(null=True, blank=True, help_text="Timestamp of the first agent reply.")
     assigned_to = models.ForeignKey(
         CustomUser,
         on_delete=models.SET_NULL,
@@ -1767,7 +1786,7 @@ class NotificationCampaign(models.Model):
     """Notification campaign records"""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-
+    celery_task_id = models.CharField(max_length=255, blank=True, null=True, help_text="ID of the master Celery task for sending this campaign.")
     title = models.CharField(max_length=255)
 
     NOTIFICATION_TYPES = [
@@ -1801,6 +1820,7 @@ class NotificationCampaign(models.Model):
     STATUS_CHOICES = [
         ("draft", "Draft"),
         ("scheduled", "Scheduled"),
+        ("sending", "Sending"),
         ("sent", "Sent"),
         ("failed", "Failed"),
     ]
@@ -1813,7 +1833,8 @@ class NotificationCampaign(models.Model):
     # Metadata
     recipient_count = models.IntegerField(default=0)
     delivered_count = models.IntegerField(default=0)
-    success_rate = models.FloatField(default=0.0)  # Percentage of successful deliveries
+    click_count = models.IntegerField(default=0, help_text="Count of unique clicks.")
+    success_rate = models.FloatField(default=0.0)
 
     created_by = models.ForeignKey(
         "CustomUser",
@@ -1839,6 +1860,7 @@ class NotificationCampaign(models.Model):
             models.Index(fields=["scheduled_for"]),
             models.Index(fields=["sent_at"]),
             models.Index(fields=["created_at"]),
+            models.Index(fields=["celery_task_id"]),
         ]
         permissions = [
             # --- Platform Admin Permissions ---

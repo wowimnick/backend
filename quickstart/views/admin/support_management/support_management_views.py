@@ -43,6 +43,23 @@ class CanManageTargetTicket(BasePermission):
 
 # --- ViewSet ---
 
+def format_duration(duration):
+    if not duration:
+        return "N/A"
+    
+    total_seconds = duration.total_seconds()
+    days = total_seconds // 86400
+    hours = (total_seconds % 86400) // 3600
+    minutes = (total_seconds % 3600) // 60
+    
+    if days >= 1:
+        return f"{days:.1f} days"
+    if hours >= 1:
+        return f"{hours:.1f} hours"
+    if minutes >= 1:
+        return f"{minutes:.0f} min"
+    return f"{total_seconds:.0f} sec"
+
 class AdminSupportTicketViewSet(viewsets.ModelViewSet):
     """
     API endpoint for Admin/Support staff managing support tickets
@@ -201,13 +218,14 @@ class AdminSupportTicketViewSet(viewsets.ModelViewSet):
         if not message_content:
             return Response({'error': 'Message content is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        try: # Wrap in try/except
-            with transaction.atomic():
-                chat_session, created = ChatSession.objects.get_or_create(userId=ticket.user)
-                if not ticket.chat_session:
-                    ticket.chat_session = chat_session
-                    ticket.save(update_fields=['chat_session'])
+        # The ticket should ALWAYS have a chat session. If not, it's an integrity error.
+        if not ticket.chat_session:
+            logger.error(f"CRITICAL: Ticket {pk} is missing its chat_session. Cannot process reply.")
+            return Response({'error': 'Cannot reply to this ticket due to a system error.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+        try:
+            chat_session = ticket.chat_session
+            
             message = ChatMessage.objects.create(
                 session=chat_session,
                 content=message_content,
@@ -216,53 +234,76 @@ class AdminSupportTicketViewSet(viewsets.ModelViewSet):
             )
 
             updated_fields = []
+            
+            # --- ROBUST TIMESTAMP AND STATUS LOGIC ---
+            
+            # 1. Set first response time if it hasn't been set yet. This is the key.
+            if not ticket.first_responded_at:
+                ticket.first_responded_at = timezone.now()
+                updated_fields.append('first_responded_at')
+
+            # 2. Handle status changes separately.
             if ticket.status == 'open':
                 ticket.status = 'in_progress'
                 updated_fields.append('status')
+                # Also auto-assign on first reply if ticket is unassigned
                 if not ticket.assigned_to:
                     ticket.assigned_to = request.user
                     updated_fields.append('assigned_to')
             elif ticket.status == 'resolved':
-                ticket.status = 'in_progress' # Reopen if agent replies after resolving
+                # Re-open the ticket if an agent replies to a resolved ticket
+                ticket.status = 'in_progress'
                 updated_fields.append('status')
+            
             if updated_fields:
                 ticket.save(update_fields=updated_fields)
 
             logger.info(f"Admin {request.user.email} replied to Ticket {pk}")
 
             try:
-                # Ensure the ticket has a user associated
                 if ticket.user:
-                    send_agent_reply_email(ticket.user, ticket, request.user) # Pass agent too
-                    logger.info(f"Agent reply notification email prepared/queued for ticket {pk} to user {ticket.user.email}")
-                else:
-                    logger.warning(f"Cannot send agent reply notification for ticket {pk} because user is missing.")
+                    send_agent_reply_email(ticket.user, ticket, request.user)
             except Exception as email_error:
                 logger.error(f"Failed to send agent reply notification for ticket {pk}: {email_error}", exc_info=True)
 
-            return Response(
-                ChatMessageSerializer(message).data,
-                status=status.HTTP_201_CREATED
-            )
+            # Return the updated ticket details so the frontend has the latest state
+            serializer = SupportTicketDetailSerializer(ticket, context={'request': request})
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            
         except Exception as e:
             logger.error(f"Error processing admin reply for ticket {pk}: {e}", exc_info=True)
             return Response({'error': 'An error occurred while processing the reply.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+        
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated, CanAccessSupportAdmin])
     def assign(self, request, pk=None):
-        """Assign ticket to an agent (Hierarchy checked by decorator)"""
+        """Assign ticket to an agent"""
         if not request.user.has_perm('quickstart.assign_support_ticket'):
-             self.permission_denied(request, message="You do not have permission to assign tickets.")
+            self.permission_denied(request, message="You do not have permission to assign tickets.")
 
         ticket = self.get_object()
-        agent_id = request.data.get('agent_id')
 
-        if not agent_id or not str(agent_id).isdigit():
-            return Response({'error': 'Valid agent_id (integer) is required'}, status=status.HTTP_400_BAD_REQUEST)
+        # --- Robust payload extraction to handle potential frontend nesting issues ---
+        payload = request.data
+        agent_user_id = payload.get('agent_id')
+
+        # This block defensively handles the exact error you're seeing.
+        if isinstance(agent_user_id, dict):
+            logger.warning(f"Received a nested dictionary for agent_id. Extracting value. Payload was: {payload}")
+            agent_user_id = agent_user_id.get('agent_id')
+        
+        if agent_user_id is None:
+            return Response({'error': 'agent_id is required and was not found in the payload.'}, status=status.HTTP_400_BAD_REQUEST)
+        # --- End of robust extraction ---
 
         try:
-            agent = User.objects.get(userId=int(agent_id))
+            # At this point, agent_user_id should be a number or a string that can be an int.
+            agent = User.objects.get(userId=int(agent_user_id))
+        except (User.DoesNotExist, ValueError, TypeError):
+            # This will catch if the ID is invalid, not found, or still not a number.
+            logger.error(f"Failed to find a valid agent for ID '{agent_user_id}'. The lookup `User.objects.get(userId=..)` failed.", exc_info=True)
+            return Response({'error': f"A valid agent with the provided ID '{agent_user_id}' was not found."}, status=status.HTTP_404_NOT_FOUND)
 
+        with transaction.atomic():
             # Update ticket
             old_assignee_email = ticket.assigned_to.email if ticket.assigned_to else "Unassigned"
             ticket.assigned_to = agent
@@ -272,23 +313,23 @@ class AdminSupportTicketViewSet(viewsets.ModelViewSet):
 
             # Add system message
             if ticket.chat_session:
+                full_name = agent.get_full_name()
+                display_name = full_name.strip() or agent.email
                 ChatMessage.objects.create(
                     session=ticket.chat_session,
-                    content=f"Ticket assigned to {agent.get_full_name()}",
+                    content=f"Ticket assigned to {display_name}",
                     is_user=False, sender_type='system'
                 )
+            else:
+                logger.warning(f"Ticket {pk} has no chat_session during assignment.")
 
-            logger.info(f"Ticket {pk} assigned to {agent.email} by Admin {request.user.email}")
-            # Add to AuditLog
-            self._log_ticket_action(ticket, 'ticket_assign', f"Assigned to {agent.email} from {old_assignee_email}", request)
+        logger.info(f"Ticket {pk} assigned to {agent.email} by Admin {request.user.email}")
+        # Add to AuditLog
+        self._log_ticket_action(ticket, 'ticket_assign', f"Assigned to {agent.email} from {old_assignee_email}", request)
 
-
-            # Return *updated* ticket detail
-            serializer = SupportTicketDetailSerializer(ticket, context={'request': request})
-            return Response(serializer.data, status=status.HTTP_200_OK)
-
-        except CustomUser.DoesNotExist:
-            return Response({'error': 'Agent user not found'}, status=status.HTTP_404_NOT_FOUND)
+        # Return updated ticket detail which now includes the conversation with the new system message
+        serializer = SupportTicketDetailSerializer(ticket, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated, CanAccessSupportAdmin])
     def resolve(self, request, pk=None):
@@ -416,18 +457,22 @@ class AdminSupportTicketViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def stats(self, request):
-        """Get ticket statistics for dashboard"""
+        """Get comprehensive ticket statistics for the support dashboard."""
         if not request.user.has_perm('quickstart.view_support_ticket_stats'):
             self.permission_denied(request, message="You do not have permission to view ticket statistics.")
 
         try:
-            status_counts = SupportTicket.objects.values('status').annotate(count=Count('ticket_id')) # Use ticket_id
+            thirty_days_ago = timezone.now() - timedelta(days=30)
+            
+            # --- Ticket Counts by Status (existing) ---
+            status_counts = SupportTicket.objects.values('status').annotate(count=Count('ticket_id')).order_by()
             status_dict = {item['status']: item['count'] for item in status_counts}
 
+            # --- New Tickets (existing) ---
             today_start = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            tickets_today = SupportTicket.objects.filter(created_at__gte=today_start).count() # count() is fine here
+            tickets_today = SupportTicket.objects.filter(created_at__gte=today_start).count()
 
-            thirty_days_ago = timezone.now() - timedelta(days=30)
+            # --- Average Resolution Time (existing - now uses helper) ---
             resolved_tickets = SupportTicket.objects.filter(
                 status__in=['resolved', 'closed'],
                 updated_at__gte=F('created_at'),
@@ -437,50 +482,58 @@ class AdminSupportTicketViewSet(viewsets.ModelViewSet):
                     F('updated_at') - F('created_at'), output_field=fields.DurationField()
                 )
             )
-            avg_resolution_data = resolved_tickets.aggregate(avg=Avg('resolution_time'))
-            avg_resolution_duration = avg_resolution_data.get('avg')
+            avg_resolution_duration = resolved_tickets.aggregate(avg=Avg('resolution_time')).get('avg')
+            
+            # --- Average First Response Time (FRT) ---
+            responded_tickets = SupportTicket.objects.filter(
+                first_responded_at__isnull=False,
+                created_at__gte=thirty_days_ago
+            ).annotate(
+                frt_duration=ExpressionWrapper(
+                    F('first_responded_at') - F('created_at'), output_field=fields.DurationField()
+                )
+            )
+            avg_frt_duration = responded_tickets.aggregate(avg=Avg('frt_duration')).get('avg')
 
-            avg_resolution_formatted = "N/A"
-            if avg_resolution_duration:
-                 total_seconds = avg_resolution_duration.total_seconds()
-                 days = total_seconds // 86400
-                 hours = (total_seconds % 86400) // 3600
-                 if days > 0:
-                     avg_resolution_formatted = f"{days:.1f} days"
-                 elif hours > 0:
-                      avg_resolution_formatted = f"{hours:.1f} hours"
-                 else:
-                      avg_resolution_formatted = f"{total_seconds / 60:.1f} mins"
+            # --- Agent Performance (Tickets Resolved in last 30 days) ---
+            agent_performance = list(
+                SupportTicket.objects.filter(
+                    status__in=['resolved', 'closed'],
+                    updated_at__gte=thirty_days_ago,
+                    assigned_to__isnull=False
+                )
+                .values(
+                    'assigned_to__userId',
+                    'assigned_to__first_name',
+                    'assigned_to__last_name',
+                    'assigned_to__avatar'
+                )
+                .annotate(resolved_count=Count('ticket_id'))
+                .order_by('-resolved_count')[:5] # Top 5 agents
+            )
+            # Format avatar URL
+            for agent in agent_performance:
+                 agent['full_name'] = f"{agent.pop('assigned_to__first_name', '')} {agent.pop('assigned_to__last_name', '')}".strip()
+                 avatar_path = agent.pop('assigned_to__avatar', None)
+                 agent['avatar_url'] = request.build_absolute_uri(avatar_path.url) if avatar_path else None
+                 agent['user_id'] = agent.pop('assigned_to__userId')
 
-            categories = list(SupportTicket.objects.values(
-                name=F('category')
-                ).annotate(value=Count('ticket_id')).order_by('-value')) # Use ticket_id
-
-            agent_tickets = list(SupportTicket.objects.filter(assigned_to__isnull=False)
-                                .values(label=F('assigned_to__email'))
-                                .annotate(value=Count('ticket_id')).order_by('-value')[:5]) # Use ticket_id
-
-            total_tickets = SupportTicket.objects.count() # count() without args is efficient
 
             data = {
-                'total_tickets': total_tickets,
                 'open_tickets': status_dict.get('open', 0),
                 'in_progress_tickets': status_dict.get('in_progress', 0),
-                'resolved_tickets': status_dict.get('resolved', 0),
-                'closed_tickets': status_dict.get('closed', 0),
                 'tickets_today': tickets_today,
-                'avg_resolution_time_display': avg_resolution_formatted,
-                'avg_resolution_time_seconds': avg_resolution_duration.total_seconds() if avg_resolution_duration else None,
-                'category_distribution': categories,
-                'agent_ticket_load': agent_tickets,
+                'avg_resolution_time': format_duration(avg_resolution_duration),
+                
+                # --- NEW METRICS ---
+                'avg_first_response_time': format_duration(avg_frt_duration),
+                'agent_performance': agent_performance, # A list of top agents and their resolved counts
             }
-            logger.info(f"Successfully generated support ticket stats: {data}") # Log success
             return Response(data)
 
         except Exception as e:
             logger.error(f"Error generating support ticket stats: {e}", exc_info=True)
-            return Response({"error": "Could not generate statistics."}, status=500) # Keep status 500
-
+            return Response({"error": "Could not generate statistics."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=False, methods=['get'])
     def export(self, request):

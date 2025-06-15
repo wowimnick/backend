@@ -154,9 +154,9 @@ class RoleManagementViewSet(viewsets.ModelViewSet):
         
         # Basic permission checks
         user_role = request.user.role
-        if user_role and user_role.hierarchy_level < instance.hierarchy_level:
+        if user_role and user_role.hierarchy_level <= instance.hierarchy_level:
             return Response(
-                {'detail': 'You cannot edit a role with higher privileges than your own.'},
+                {'detail': 'You cannot edit a role with equal or higher privileges than your own.'},
                 status=status.HTTP_403_FORBIDDEN
             )
         

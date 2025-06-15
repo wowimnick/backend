@@ -1,102 +1,161 @@
 # quickstart/tasks.py
+
 import logging
-from celery import shared_task
-from django.core.mail import EmailMultiAlternatives
+from celery import shared_task, group
+from django.core.cache import cache
 from django.conf import settings
+from django.core.mail import EmailMultiAlternatives
+from django.urls import reverse
+from .models import CustomUser, NotificationCampaign
+from .views.admin.notifications.utils import generate_unsubscribe_token
+import resend
 
 logger = logging.getLogger(__name__)
+resend.api_key = settings.RESEND_API_KEY
 
-@shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def send_email_task(self, subject, body, from_email, to_list, reply_to_list=None, html_content=None, attachments=None, **kwargs):
+def get_progress_cache_key(campaign_id):
+    """Helper to get the standardized Redis cache key."""
+    return f"campaign_progress_{campaign_id}"
+
+@shared_task(bind=True)
+def send_campaign_task(self, campaign_id, template_variables):
     """
-    Celery task to send an email asynchronously using Django's mail functions.
-    Handles potential exceptions and retries.
-    `attachments` should be a list of dicts:
-    [{'filename': 'event.ics', 'content': 'ICS_CONTENT_STRING', 'mimetype': 'text/calendar'}]
+    Master task to manage sending a notification campaign.
+    It fetches recipients, dispatches individual email tasks, and tracks progress in Redis.
     """
-    logger.info(f"Task send_email_task received: Subject='{subject}', To={to_list}, Attachments: {'Yes' if attachments else 'No'}")
-    # Added detailed logging for attachments argument itself
-    logger.debug(f"send_email_task: Initial attachments type: {type(attachments)}, value (first item if list): {attachments[0] if isinstance(attachments, list) and attachments else attachments}")
+    cache_key = get_progress_cache_key(campaign_id)
+    try:
+        campaign = NotificationCampaign.objects.get(id=campaign_id)
+        # Update campaign status to 'sending'
+        campaign.status = 'sending'
+        campaign.celery_task_id = self.request.id
+        campaign.save(update_fields=['status', 'celery_task_id'])
+
+        # Fetch all recipient emails at once to avoid multiple DB hits
+        # This part is reused from your view, but now it's in the background
+        if campaign.audience_type == 'all_users':
+            recipients_qs = CustomUser.objects.filter(is_active=True, is_unsubscribed=False)
+        elif campaign.audience_type == 'segment' and campaign.segment:
+            # You need a way to get the segment user queryset here.
+            # This is a simplification. A real implementation would need the same
+            # logic from your AdminNotificationCampaignViewSet._get_segment_users.
+            # For now, let's assume a simplified lookup.
+            from .views.admin.notifications.notification_views import AdminNotificationCampaignViewSet
+            segment_logic_helper = AdminNotificationCampaignViewSet()
+            recipients_qs = segment_logic_helper._get_segment_users_by_id(campaign.segment).filter(is_active=True, is_unsubscribed=False)
+        elif campaign.audience_type == 'individual' and campaign.target_user_ids:
+            recipients_qs = CustomUser.objects.filter(userId__in=campaign.target_user_ids, is_active=True, is_unsubscribed=False)
+        else:
+            recipients_qs = CustomUser.objects.none()
+
+        # Get the final list of user data (id, email, name)
+        recipients_data = list(recipients_qs.values('userId', 'email', 'first_name'))
+        total_recipients = len(recipients_data)
+        
+        # Update recipient count in the DB
+        campaign.recipient_count = total_recipients
+        campaign.save(update_fields=['recipient_count'])
+
+        logger.info(f"Campaign {campaign_id}: Found {total_recipients} valid recipients. Starting dispatch.")
+        cache.set(cache_key, {'total': total_recipients, 'processed': 0, 'status': 'sending'}, timeout=86400)
+
+        # Prepare common email data once
+        common_data = {
+            'subject': campaign.subject,
+            'body_template': campaign.content,
+            'html_template': campaign.html_content or "",
+            'campaign_id': str(campaign_id), # Ensure it's a string
+        }
+
+        # Dispatch individual email tasks
+        # Using Celery's `group` can be more efficient for managing a large set of tasks
+        tasks_to_run = [
+            send_email_task.s(user_data=recipient, common_data=common_data)
+            for recipient in recipients_data
+        ]
+        
+        task_group = group(tasks_to_run)
+        group_result = task_group.apply_async()
+        
+        # Now, monitor the group task progress
+        while not group_result.ready():
+            completed_count = group_result.completed_count()
+            cache.set(cache_key, {'total': total_recipients, 'processed': completed_count, 'status': 'sending'}, timeout=86400)
+            logger.debug(f"Campaign {campaign_id} progress: {completed_count}/{total_recipients}")
+            # Sleep for a bit to avoid hammering Redis and the result backend
+            import time
+            time.sleep(2)
+
+        # Final update after the group is finished
+        final_processed = group_result.completed_count()
+        cache.set(cache_key, {'total': total_recipients, 'processed': final_processed, 'status': 'complete'}, timeout=3600) # Keep for 1 hour
+        
+        # Mark campaign as sent. Final stats will come from webhooks.
+        campaign.status = 'sent'
+        campaign.sent_at = timezone.now()
+        campaign.save(update_fields=['status', 'sent_at'])
+        logger.info(f"Campaign {campaign_id} finished sending. {final_processed} tasks completed.")
+
+    except NotificationCampaign.DoesNotExist:
+        logger.error(f"Campaign {campaign_id} not found for sending.")
+        cache.set(cache_key, {'total': 0, 'processed': 0, 'status': 'error', 'message': 'Campaign not found'}, timeout=3600)
+    except Exception as e:
+        logger.error(f"Critical error in send_campaign_task for campaign {campaign_id}: {e}", exc_info=True)
+        cache.set(cache_key, {'total': 0, 'processed': 0, 'status': 'error', 'message': str(e)}, timeout=3600)
+        # Mark campaign as failed in DB
+        NotificationCampaign.objects.filter(id=campaign_id).update(status='failed', error_message=str(e))
+        raise
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=60, acks_late=True)
+def send_email_task(self, user_data, common_data):
+    """
+    Sends a single, personalized email using Resend.
+    This task is designed to be dispatched by the master campaign task.
+    """
+    recipient_email = user_data.get('email')
+    recipient_name = user_data.get('first_name') or 'there'
+    user_id = user_data.get('userId')
+    campaign_id = common_data.get('campaign_id')
+
+    logger.debug(f"Executing send_email_task for {recipient_email} in campaign {campaign_id}")
 
     try:
-        msg = EmailMultiAlternatives(
-            subject=subject,
-            body=body, # Plain text version
-            from_email=from_email,
-            to=to_list,
-            reply_to=reply_to_list
-        )
-        if html_content:
-            msg.attach_alternative(html_content, "text/html")
+        # Generate unsubscribe token
+        unsubscribe_token = generate_unsubscribe_token(user_id)
+        unsubscribe_url = settings.FRONTEND_BASE_URL + reverse('notification-unsubscribe', kwargs={'token': unsubscribe_token})
 
-        if attachments:
-            logger.debug(f"send_email_task: Processing attachments. Full attachments list: {attachments}")
-            if not isinstance(attachments, list):
-                logger.warning(f"Attachments for email '{subject}' is not a list, skipping. Got: {type(attachments)}")
-            else:
-                for i, attachment_data in enumerate(attachments):
-                    logger.debug(f"send_email_task: Processing attachment #{i+1}/{len(attachments)}: {attachment_data.get('filename', 'N/A')}")
-                    
-                    if isinstance(attachment_data, dict) and \
-                       'filename' in attachment_data and \
-                       'content' in attachment_data:
-                        
-                        filename = attachment_data['filename']
-                        content = attachment_data['content']
-                        mimetype = attachment_data.get('mimetype')
+        # Personalize content
+        placeholders = {
+            '{{name}}': recipient_name,
+            '{{email}}': recipient_email,
+            '{{unsubscribe_url}}': unsubscribe_url,
+        }
+        
+        html_body = common_data['html_template']
+        text_body = common_data['body_template']
+        for key, value in placeholders.items():
+            html_body = html_body.replace(key, value)
+            text_body = text_body.replace(key, value)
 
-                        logger.debug(f"send_email_task: Attachment #{i+1} - Filename: {filename}, Content type: {type(content)}, Mimetype: {mimetype}")
-                        
-                        if content is None:
-                            logger.warning(f"send_email_task: Attachment #{i+1} ('{filename}') has None content. Skipping this attachment.")
-                            continue
+        # Build Resend payload
+        notification_settings = getattr(settings, 'NOTIFICATION_SETTINGS', {})
+        from_email = f"{notification_settings.get('default_from_name', 'ClassEasily')} <{notification_settings.get('default_from_email', 'noreply@classeasily.com')}>"
+        
+        params = {
+            "from": from_email,
+            "to": [recipient_email],
+            "subject": common_data['subject'],
+            "html": html_body,
+            "text": text_body,
+            "headers": {
+                "X-Campaign-ID": campaign_id,
+            },
+        }
 
-                        content_bytes = None 
-                        if isinstance(content, str):
-                            # All string content will be encoded to UTF-8
-                            logger.debug(f"send_email_task: Attachment #{i+1} ('{filename}') - Content is string. Encoding to UTF-8.")
-                            try:
-                                content_bytes = content.encode('utf-8')
-                                logger.debug(f"send_email_task: Attachment #{i+1} ('{filename}') - UTF-8 encoding successful. Bytes length: {len(content_bytes)}")
-                            except UnicodeEncodeError as ue_err:
-                                logger.error(f"Could not encode attachment content for '{filename}' to UTF-8: {ue_err}. Skipping attachment.")
-                                continue
-                        elif isinstance(content, bytes):
-                            content_bytes = content
-                            logger.debug(f"send_email_task: Attachment #{i+1} ('{filename}') - Content is already bytes. Length: {len(content_bytes)}")
-                        else:
-                            logger.error(f"Attachment content for '{filename}' is not a string or bytes. Skipping attachment. Type: {type(content)}")
-                            continue
-                        
-                        if content_bytes is not None: # Should always be true if we didn't continue
-                            if len(content_bytes) == 0:
-                                logger.warning(f"send_email_task: Attachment #{i+1} ('{filename}') - Content bytes are empty after processing. Attachment might be empty or invalid.")
-                            
-                            logger.debug(f"send_email_task: Attempting to msg.attach: Filename='{filename}', Mimetype='{mimetype}', content_bytes length={len(content_bytes)}")
-                            try:
-                                msg.attach(filename, content_bytes, mimetype)
-                                # More specific success log for msg.attach itself
-                                logger.info(f"SUCCESSFULLY CALLED msg.attach for '{filename}' (MIME: {mimetype or 'auto-detected'}) on email Subject='{subject}'")
-                            except Exception as attach_err:
-                                logger.error(f"ERROR during msg.attach() for '{filename}': {attach_err}", exc_info=True)
-                                # Depending on severity, you might want to stop or continue
-                                # For now, we'll let it continue to try sending the email without this attachment
-                        else:
-                            # This case should ideally not be reached due to prior checks
-                            logger.error(f"send_email_task: Attachment #{i+1} ('{filename}') - content_bytes is None unexpectedly. Skipping.")
-                    else:
-                        logger.warning(f"Invalid attachment_data structure for email '{subject}'. Skipping one attachment. Data: {attachment_data}")
-
-        result = msg.send(fail_silently=False)
-        logger.info(f"Email task successful for Subject='{subject}', To={to_list}. Result: {result}")
-        return result
+        email = resend.Emails.send(params)
+        logger.info(f"Email sent to {recipient_email} for campaign {campaign_id}. Resend ID: {email['id']}")
+        return {"status": "success", "email": recipient_email}
 
     except Exception as exc:
-        logger.error(f"Email task FAILED for Subject='{subject}', To={to_list}. Error: {exc}", exc_info=True)
-        try:
-            retry_count = self.request.retries
-            logger.warning(f"Retrying email task (attempt {retry_count + 1}/{self.max_retries})...")
-            raise self.retry(exc=exc) 
-        except self.MaxRetriesExceededError:
-            logger.critical(f"Email task failed permanently after {self.max_retries} retries for Subject='{subject}', To={to_list}.")
-            return f"Failed after {self.max_retries} retries."
+        logger.error(f"Email task FAILED for {recipient_email}, campaign {campaign_id}. Error: {exc}", exc_info=True)
+        raise self.retry(exc=exc)

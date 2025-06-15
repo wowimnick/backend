@@ -27,10 +27,8 @@ from ....serializers.admin.notifications.notification_serializers import (
 )
 import resend # Ensure resend is imported
 from django.conf import settings
-import json
 import logging
 from datetime import timedelta
-from decimal import Decimal # Added Decimal
 
 # Configure Resend
 resend.api_key = settings.RESEND_API_KEY
@@ -110,48 +108,34 @@ class AdminNotificationCampaignViewSet(viewsets.ModelViewSet):
 
     def create(self, request, *args, **kwargs):
         if not request.user.has_perm('quickstart.add_notificationcampaign'):
-            self.permission_denied(request, message="You do not have permission to create notification campaigns.")
+            self.permission_denied(request, message="You do not have permission to create campaigns.")
 
-        serializer = self.get_serializer(data=request.data, context={'request': request}) # Pass context for created_by
+        serializer = self.get_serializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
 
-        # Handle immediate send logic from perform_create
         should_send_now = serializer.validated_data.get('status') == 'sent'
         if should_send_now:
             if not request.user.has_perm('quickstart.send_notification_campaign'):
                  self.permission_denied(request, message="You have permission to create, but not to send campaigns immediately.")
-            # Save as draft first, send logic will happen after save
-            serializer.validated_data['status'] = 'draft'
+            serializer.validated_data['status'] = 'draft' # Save as draft first
 
-        # Use perform_create which now handles the created_by field
         self.perform_create(serializer)
         campaign = serializer.instance
 
-        # Trigger immediate send if requested and permitted
         if should_send_now:
-            try:
-                logger.info(f"Triggering immediate send for new campaign {campaign.id}")
-                # Note: _process_and_send_campaign doesn't check permissions, assumes check happened before call
-                self._process_and_send_campaign(campaign, request.data.get('template_variables', {}))
-                campaign.status = 'sent' # Update status after sending attempt
-                campaign.save(update_fields=['status', 'sent_at', 'recipient_count', 'delivered_count', 'success_rate', 'error_message'])
-                logger.info(f"Campaign {campaign.id} marked as sent after immediate creation.")
-            except Exception as e:
-                logger.error(f"Immediate send failed for campaign {campaign.id}: {str(e)}")
-                campaign.status = 'failed'
-                campaign.error_message = str(e)
-                campaign.save(update_fields=['status', 'error_message'])
-                # Return detail but indicate send failure? Or raise validation error?
-                # For now, let creation succeed but log the error.
+            template_variables = request.data.get('template_variables', {})
+            task_result = send_campaign_task.delay(campaign_id=campaign.id, template_variables=template_variables)
+            campaign.status = 'sending'
+            campaign.celery_task_id = task_result.id
+            campaign.save(update_fields=['status', 'celery_task_id'])
+            logger.info(f"New campaign {campaign.id} immediately dispatched to Celery with task ID {task_result.id}.")
 
-        # Return detail view of the created campaign
         detail_serializer = NotificationCampaignDetailSerializer(campaign, context={'request': request})
         headers = self.get_success_headers(detail_serializer.data)
         return Response(detail_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
 
     def perform_create(self, serializer):
-        # Saves instance and sets created_by
         instance = serializer.save(created_by=self.request.user)
         logger.info(f"Campaign '{instance.title}' created by Admin {self.request.user.email}")
 
@@ -160,49 +144,27 @@ class AdminNotificationCampaignViewSet(viewsets.ModelViewSet):
         if not request.user.has_perm('quickstart.change_notificationcampaign'):
             self.permission_denied(request, message="You do not have permission to update campaigns.")
 
-        partial = kwargs.pop('partial', False)
+        partial = kwargs.pop('partial', True) # Default to partial update (PATCH)
         instance = self.get_object()
 
-        if instance.status in ['sent', 'failed']:
-            return Response({"detail": f"Cannot update a campaign with status '{instance.status}'."}, status=status.HTTP_400_BAD_REQUEST)
+        # Prevent updates to campaigns that are already in a final or active state
+        if instance.status in ['sending', 'sent']:
+            return Response(
+                {"detail": f"Cannot update a campaign with status '{instance.status}'. Please duplicate it instead."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
 
-        # --- Handle immediate send on update ---
-        should_send_now = serializer.validated_data.get('status') == 'sent' and instance.status != 'sent'
-        if should_send_now:
-            if not request.user.has_perm('quickstart.send_notification_campaign'):
-                 self.permission_denied(request, message="You have permission to update, but not to send this campaign immediately.")
+        self.perform_update(serializer)
 
-            # Save changes BEFORE sending, marking as draft temporarily
-            original_status = instance.status
-            temp_data = serializer.validated_data.copy()
-            temp_data['status'] = 'draft' # Set to draft before sending attempt
+        if getattr(instance, '_prefetched_objects_cache', None):
+            # If 'prefetch_related' has been used, we need to clear the cache
+            # to prevent stale data from being returned.
+            instance._prefetched_objects_cache = {}
 
-            # Apply all validated changes
-            for attr, value in temp_data.items():
-                 setattr(instance, attr, value)
-            instance.save() # Save changes as draft
-
-            # Now attempt to send
-            try:
-                logger.info(f"Triggering immediate send for updated campaign {instance.id}")
-                self._process_and_send_campaign(instance, request.data.get('template_variables', {}))
-                instance.status = 'sent' # Update status after sending attempt
-                instance.save(update_fields=['status', 'sent_at', 'recipient_count', 'delivered_count', 'success_rate', 'error_message'])
-                logger.info(f"Campaign {instance.id} marked as sent after immediate update.")
-            except Exception as e:
-                logger.error(f"Immediate send failed for campaign {instance.id}: {str(e)}")
-                instance.status = 'failed'
-                instance.error_message = str(e)
-                instance.save(update_fields=['status', 'error_message'])
-                # Decide if this should prevent the 200 OK response, maybe return 207?
-        else:
-             # If not sending now, just save validated data
-             self.perform_update(serializer) # This saves the instance from the serializer
-
-        # Return detail view
+        # Return the updated data using the detailed serializer
         detail_serializer = NotificationCampaignDetailSerializer(instance, context={'request': request})
         return Response(detail_serializer.data)
 
@@ -233,101 +195,67 @@ class AdminNotificationCampaignViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def send(self, request, pk=None):
-        """Send a notification campaign (for drafts/scheduled)"""
+        """Send a notification campaign by dispatching a Celery task."""
         if not request.user.has_perm('quickstart.send_notification_campaign'):
              self.permission_denied(request, message="You do not have permission to send campaigns.")
 
         campaign = self.get_object()
-        logger.info(f"Received request to send campaign {pk} via dedicated /send endpoint.")
+        logger.info(f"Admin {request.user.email} initiated send for campaign {pk}.")
 
-        if campaign.status == 'sent':
-            logger.warning(f"Campaign {pk} has already been sent.")
+        if campaign.status in ['sending', 'sent']:
+            logger.warning(f"Attempt to send campaign {pk} which is already '{campaign.status}'.")
             return Response(
-                {'error': 'This campaign has already been sent'},
+                {'error': f'This campaign is already {campaign.status}.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        # Allow resending failed? Or require duplication? Current logic allows resend.
-
+        
         template_variables = request.data.get('template_variables', {})
 
         try:
-            # Mark as 'sending' maybe? Or keep draft until success/fail
-            # campaign.status = 'sending'
-            # campaign.save(update_fields=['status'])
+            # Dispatch the master task to Celery
+            task_result = send_campaign_task.delay(campaign_id=campaign.id, template_variables=template_variables)
+            
+            # Update the campaign to reflect it's now being sent
+            campaign.status = 'sending'
+            campaign.celery_task_id = task_result.id
+            campaign.save(update_fields=['status', 'celery_task_id'])
+            
+            logger.info(f"Campaign {pk} dispatched to Celery with task ID {task_result.id}.")
 
-            self._process_and_send_campaign(campaign, template_variables)
-
-            campaign.status = 'sent' # Update status after successful processing
-            campaign.save(update_fields=['status', 'sent_at', 'recipient_count', 'delivered_count', 'success_rate', 'error_message'])
-            logger.info(f"Campaign {pk} marked as sent via dedicated endpoint.")
-
-            # Use detail serializer for response
-            serializer = NotificationCampaignDetailSerializer(campaign, context={'request': request})
-            return Response(serializer.data)
+            serializer = self.get_serializer(campaign)
+            return Response(serializer.data, status=status.HTTP_202_ACCEPTED)
 
         except Exception as e:
-            # Log error and update campaign status to failed
-            logger.error(f"Error sending campaign {pk} via dedicated endpoint: {str(e)}", exc_info=True)
+            logger.error(f"Error dispatching Celery task for campaign {pk}: {str(e)}", exc_info=True)
             campaign.status = 'failed'
-            campaign.error_message = str(e)
+            campaign.error_message = f"Failed to dispatch to background worker: {str(e)}"
             campaign.save(update_fields=['status', 'error_message'])
             return Response(
-                {'error': f'Failed to send campaign: {str(e)}'},
+                {'error': 'Failed to start the sending process.'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-    # Internal helper, no direct permission check needed here (checked before calling)
-    def _process_and_send_campaign(self, campaign, template_variables):
-        """Processes recipients and calls the appropriate send method."""
-        logger.info(f"Processing campaign {campaign.id} ('{campaign.title}') for sending.")
-        recipients = []
-        recipient_ids = set() # Use set for efficient uniqueness check
+    @action(detail=True, methods=['get'], url_path='send-progress')
+    def get_send_progress(self, request, pk=None):
+        """
+        Pollable endpoint for the frontend to get the sending progress of a campaign.
+        """
+        campaign = self.get_object()
+        cache_key = get_progress_cache_key(campaign.id)
+        progress_data = cache.get(cache_key)
 
-        if campaign.audience_type == 'all_users':
-            # Optimization: Use values_list for large user bases if only email is needed
-            recipients_data = CustomUser.objects.filter(is_active=True, email__isnull=False).exclude(email='').values('userId', 'email', 'first_name') # Add first_name if needed for templates
-            recipient_ids.update([r['userId'] for r in recipients_data])
-        elif campaign.audience_type == 'segment' and campaign.segment:
-            try:
-                # Use the segment helper which should return a queryset
-                segment_qs = self._get_segment_users_by_id(campaign.segment)
-                recipients_data = segment_qs.filter(is_active=True, email__isnull=False).exclude(email='').values('userId', 'email', 'first_name')
-                recipient_ids.update([r['userId'] for r in recipients_data])
-            except UserSegment.DoesNotExist:
-                logger.error(f"Segment {campaign.segment} not found for campaign {campaign.id}")
-                raise ValueError(f"Segment {campaign.segment} not found") # Raise error to mark campaign as failed
-        elif campaign.audience_type == 'individual' and campaign.target_user_ids:
-            target_ids = [int(uid) for uid in campaign.target_user_ids if isinstance(uid, (int, str)) and str(uid).isdigit()]
-            recipients_data = CustomUser.objects.filter(userId__in=target_ids, is_active=True, email__isnull=False).exclude(email='').values('userId', 'email', 'first_name')
-            recipient_ids.update([r['userId'] for r in recipients_data])
+        if progress_data:
+            return Response(progress_data)
+        
+        # If no data in cache, provide a default based on DB status
+        if campaign.status == 'sending':
+            return Response({'status': 'sending', 'processed': 0, 'total': campaign.recipient_count or 0, 'message': 'Initializing...'})
+        elif campaign.status == 'sent':
+            return Response({'status': 'complete', 'processed': campaign.recipient_count, 'total': campaign.recipient_count})
+        elif campaign.status == 'failed':
+            return Response({'status': 'error', 'message': campaign.error_message or 'An unknown error occurred.'})
         else:
-             logger.warning(f"Campaign {campaign.id} has invalid or missing audience configuration.")
-             recipients_data = [] # Ensure it's an empty list
-
-        # Convert recipient_data list of dicts to list of objects or pass dicts directly if sender supports it
-        # For simplicity, let's assume sender needs email and potentially name
-        final_recipients_info = list(recipients_data)
-
-        campaign.recipient_count = len(recipient_ids) # Count unique recipients
-        campaign.sent_at = timezone.now() # Set send time
-
-        # Call the correct sender based on type
-        if not final_recipients_info:
-             logger.warning(f"No valid recipients found for campaign {campaign.id}. Skipping send.")
-             campaign.delivered_count = 0
-             campaign.success_rate = 0.0
-             campaign.error_message = "No valid recipients found for the selected audience."
-        elif campaign.notification_type == 'email':
-            self._send_email_notifications(campaign, final_recipients_info, template_variables)
-        elif campaign.notification_type == 'sms':
-             self._send_sms_notifications(campaign, final_recipients_info) # Pass info list
-        else:
-             logger.warning(f"Unsupported notification type '{campaign.notification_type}' for campaign {campaign.id}")
-             campaign.error_message = f"Unsupported notification type: {campaign.notification_type}"
-             campaign.delivered_count = 0
-             campaign.success_rate = 0.0
-
-        logger.info(f"Finished processing send for campaign {campaign.id}")
+            return Response({'status': 'pending', 'message': 'Not yet sent.'})
 
     # Internal helper - No permission check needed
     def _get_segment_users_by_id(self, segment_id):
@@ -422,125 +350,6 @@ class AdminNotificationCampaignViewSet(viewsets.ModelViewSet):
         # Default to empty queryset if no matching logic found
         logger.warning(f"Could not determine user set for segment '{segment_name}' (ID: {segment.id})")
         return CustomUser.objects.none()
-
-    def _send_email_notifications(self, campaign, recipients_info, template_variables=None):
-        """Send email notifications using Resend's batch API"""
-        successful_sends = 0
-        total_recipients = len(recipients_info)
-        logger.info(f"Sending email notifications for campaign {campaign.id} to {total_recipients} recipients.")
-
-        # --- Get Attachments ---
-        attachments = []
-        try:
-            for attachment in campaign.attachments.all():
-                try:
-                    attachment.file.seek(0)
-                    file_content = attachment.file.read()
-                    attachments.append({
-                        "filename": attachment.name,
-                        "content": file_content,
-                    })
-                except Exception as attach_err:
-                     logger.error(f"Error reading attachment {attachment.name} for campaign {campaign.id}: {attach_err}")
-        except Exception as e:
-             logger.error(f"Error accessing attachments for campaign {campaign.id}: {e}")
-
-        logger.info(f"Prepared {len(attachments)} attachments for campaign {campaign.id}.")
-
-        # --- Prepare Email Content ---
-        subject = campaign.subject
-        text_content = campaign.content
-        html_template = campaign.html_content or ""
-
-        template_defaults = getattr(settings, 'EMAIL_TEMPLATE_DEFAULTS', {})
-        final_template_vars = {**template_defaults, **(template_variables or {})}
-
-        notification_settings = getattr(settings, 'NOTIFICATION_SETTINGS', {})
-        default_from_email = notification_settings.get('default_from_email', 'noreply@classeasily.com')
-        default_from_name = notification_settings.get('default_from_name', 'ClassEasily Notifications')
-        from_email = f"{default_from_name} <{default_from_email}>"
-
-        batch_size = 100 # Resend batch limit is often 100
-
-        for i in range(0, total_recipients, batch_size):
-            batch_info = recipients_info[i:i+batch_size]
-            batch_emails_payload = [] # This is the list of email objects
-            logger.info(f"Processing email batch {i//batch_size + 1}/{ (total_recipients + batch_size - 1)//batch_size }, size: {len(batch_info)}")
-
-            for recipient_info in batch_info:
-                 recipient_email = recipient_info.get('email')
-                 if not recipient_email:
-                     logger.warning(f"Skipping recipient due to missing email in info: {recipient_info}")
-                     continue
-
-                 try:
-                     personalized_html = html_template
-                     personalized_text = text_content
-                     recipient_name = recipient_info.get('first_name', 'there')
-
-                     # Apply general template variables
-                     for key, value in final_template_vars.items():
-                          placeholder = f"{{{{{key}}}}}"
-                          personalized_html = personalized_html.replace(placeholder, str(value))
-                          personalized_text = personalized_text.replace(placeholder, str(value))
-
-                     # Apply recipient-specific variables
-                     personalized_html = personalized_html.replace("{{name}}", recipient_name)
-                     personalized_html = personalized_html.replace("{{email}}", recipient_email)
-                     personalized_text = personalized_text.replace("{{name}}", recipient_name)
-                     personalized_text = personalized_text.replace("{{email}}", recipient_email)
-
-                     # Construct the individual email payload (dictionary)
-                     email_payload = {
-                         "from": from_email,
-                         "to": [recipient_email], # Resend batch expects 'to' to be a list
-                         "subject": subject,
-                         "text": personalized_text,
-                     }
-                     if personalized_html: email_payload["html"] = personalized_html
-                     if attachments: email_payload["attachments"] = attachments
-
-                     # Add the dictionary to the list
-                     batch_emails_payload.append(email_payload)
-
-                 except Exception as e:
-                      logger.error(f"Error preparing email payload for {recipient_email}: {str(e)}")
-
-            # Send the batch using resend.Batch.send()
-            if batch_emails_payload:
-                try:
-                    if not resend.api_key: raise ValueError("Resend API key not configured.")
-                    logger.info(f"Sending batch of {len(batch_emails_payload)} emails via Resend...")
-                    # *** USE THE CORRECT BATCH METHOD ***
-                    response = resend.Batch.send(batch_emails_payload)
-                    # ***********************************
-                    logger.debug(f"Resend API Response: {response}")
-
-                    # Process response (The response handling seems correct for batch)
-                    if isinstance(response, dict) and 'data' in response and isinstance(response['data'], list):
-                         batch_success_count = sum(1 for item in response['data'] if isinstance(item, dict) and item.get('id'))
-                         successful_sends += batch_success_count
-                         logger.info(f"Batch sent. Success: {batch_success_count}/{len(batch_emails_payload)}")
-                         if batch_success_count < len(batch_emails_payload):
-                              # Log errors from the response if possible
-                              errors = [item.get('error', 'Unknown error') for item in response['data'] if not (isinstance(item, dict) and item.get('id'))]
-                              logger.warning(f"Some emails failed in batch: {errors}")
-                              campaign.error_message = (campaign.error_message or "") + f"\nBatch {i//batch_size + 1} send errors: {errors[:5]}" # Log first few errors
-                    else:
-                        logger.error(f"Unexpected response structure from Resend batch API: {response}")
-                        campaign.error_message = (campaign.error_message or "") + f"\nUnexpected Resend API response structure for batch {i//batch_size + 1}."
-
-                except Exception as e:
-                    logger.error(f"Error sending email batch {i//batch_size + 1} via Resend: {str(e)}", exc_info=True)
-                    campaign.error_message = (campaign.error_message or "") + f"\nError sending batch {i//batch_size + 1}: {str(e)}"
-
-            # Delay between batches if needed
-            if i + batch_size < total_recipients: time.sleep(0.5) # Small delay
-
-        # Update campaign stats after all batches
-        campaign.delivered_count = successful_sends
-        campaign.success_rate = (successful_sends / total_recipients * 100) if total_recipients > 0 else 0.0
-        logger.info(f"Email sending complete for campaign {campaign.id}. Delivered: {successful_sends}/{total_recipients}, Rate: {campaign.success_rate:.2f}%")
 
     # Internal helper - No permission check needed
     def _send_sms_notifications(self, campaign, recipients_info):

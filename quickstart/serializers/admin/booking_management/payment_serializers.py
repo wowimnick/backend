@@ -15,7 +15,7 @@ class AdminPaymentSerializer(serializers.ModelSerializer):
         model = Payment
         fields = [
             'id', 'stripe_payment_intent_id', 'stripe_charge_id', 
-            'amount', 'currency', 'status', 'formatted_status',
+            'amount', 'service_fee_amount', 'currency', 'status', 'formatted_status',
             'payment_method_type', 'card_brand', 'card_last4',
             'card_exp_month', 'card_exp_year', 'card_details',
             'refunded_amount', 'refund_reason', 'refund_date',
@@ -53,24 +53,26 @@ class AdminPaymentSerializer(serializers.ModelSerializer):
         return None
         
     def get_business_name(self, obj):
+        # Traversing from Payment -> Booking -> ScheduleInstance -> Schedule -> ClassOption -> ClassesMain -> BusinessInfo
         if obj.booking and obj.booking.schedule_instance and obj.booking.schedule_instance.schedule.option.classId.businessId:
             return obj.booking.schedule_instance.schedule.option.classId.businessId.businessName
         return None
         
     def get_class_name(self, obj):
+        # Traversing from Payment -> Booking -> ScheduleInstance -> Schedule -> ClassOption -> ClassesMain
         if obj.booking and obj.booking.schedule_instance and obj.booking.schedule_instance.schedule.option.classId:
             return obj.booking.schedule_instance.schedule.option.classId.title
         return None
-
 class AdminBookingPaymentSerializer(serializers.ModelSerializer):
     """Lightweight serializer for showing payment info in the admin booking view"""
     available_refund_amount = serializers.ReadOnlyField()
     formatted_status = serializers.ReadOnlyField()
+    service_fee_amount = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     
     class Meta:
         model = Payment
         fields = [
-            'id', 'stripe_payment_intent_id', 'amount', 'currency', 
+            'id', 'stripe_payment_intent_id', 'amount', 'service_fee_amount', 'currency', 
             'status', 'formatted_status', 'payment_method_type', 
             'card_brand', 'card_last4', 'receipt_url', 'created_at',
             'refunded_amount', 'refund_date', 'refund_reason',
@@ -78,43 +80,50 @@ class AdminBookingPaymentSerializer(serializers.ModelSerializer):
         ]
 
 class AdminBookingListSerializer(serializers.ModelSerializer):
-    class_name = serializers.CharField(source='schedule_instance.schedule.option.classId.title', read_only=True, allow_null=True) # Added allow_null
-    option_name = serializers.CharField(source='schedule_instance.schedule.option.title', read_only=True, allow_null=True) # Added allow_null
+    # This serializer correctly sources its fields.
+    # The 'option_name' field was changed to use the property on the ClassOption model.
+    class_name = serializers.CharField(source='schedule_instance.schedule.option.classId.title', read_only=True, allow_null=True)
+    option_name = serializers.CharField(source='schedule_instance.schedule.option.parent_class_title', read_only=True, allow_null=True) 
     user_name = serializers.SerializerMethodField()
     user_email = serializers.CharField(source='user.email', read_only=True)
-    business_name = serializers.CharField(source='schedule_instance.schedule.option.classId.businessId.businessName', read_only=True, allow_null=True) # ADDED THIS
+    business_name = serializers.CharField(source='schedule_instance.schedule.option.classId.businessId.businessName', read_only=True, allow_null=True)
     date = serializers.DateField(source='schedule_instance.date', read_only=True)
     time = serializers.TimeField(source='schedule_instance.time', read_only=True)
-    duration = serializers.IntegerField(source='schedule_instance.schedule.duration', read_only=True)
+    duration = serializers.IntegerField(source='schedule_instance.duration', read_only=True) # Sourced from instance for accuracy
     session_info = serializers.SerializerMethodField()
-    payment = serializers.SerializerMethodField()
-    user = serializers.PrimaryKeyRelatedField(read_only=True) # Or a nested serializer
+    payment = AdminBookingPaymentSerializer(source='payments.first', read_only=True) # Using the detailed serializer for consistency
+    user = serializers.PrimaryKeyRelatedField(read_only=True)
 
     class Meta:
         model = Booking
         fields = [
-            'id', 'user', 'user_name', 'user_email', 'class_name', 'business_name', # Added business_name
+            'id', 'user_facing_reference', 'user', 'user_name', 'user_email', 'class_name', 'business_name',
             'option_name', 'date', 'time', 'duration',
-            'participants', 'status', 'enrollment_type', # Replaced booking_type with enrollment_type
+            'participants', 'status', 'enrollment_type',
             'amount_paid', 'payment_status',
-            'notes', 'booking_date', 'attendance_marked',
-            'attended', 'session_info', 'payment'
+            'notes', 'booking_date', 'session_info', 'payment'
         ]
+
     def get_user_name(self, obj):
-        return f"{obj.user.first_name} {obj.user.last_name}".strip()
+        if obj.user:
+            return f"{obj.user.first_name} {obj.user.last_name}".strip()
+        return "N/A"
     
     def get_session_info(self, obj):
-        if obj.enrollment_type == 'Full Course':
-            # Get all bookings in the same group
-            related_bookings = Booking.objects.filter(
-                booking_group_id=obj.booking_group_id
-            ).order_by('schedule_instance__date')
+        if obj.enrollment_type == 'Full Course' and obj.booking_group_id:
+            # This logic assumes that for a course booking, all related bookings share the same group ID.
+            # Getting the count can be optimized if needed, but this is functionally correct.
+            related_bookings = Booking.objects.filter(booking_group_id=obj.booking_group_id).order_by('schedule_instance__date', 'schedule_instance__time')
             
             total_sessions = related_bookings.count()
-            current_session = list(related_bookings).index(obj) + 1
-            
+            # This is a bit inefficient but works for smaller courses. For very large courses, a more optimized approach might be needed.
+            try:
+                current_session_index = list(related_bookings.values_list('id', flat=True)).index(obj.id) + 1
+            except ValueError:
+                current_session_index = '?'
+
             return {
-                'current_session': current_session,
+                'current_session': current_session_index,
                 'total_sessions': total_sessions
             }
         return None

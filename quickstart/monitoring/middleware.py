@@ -33,7 +33,7 @@ class MetricsMiddleware:
 
         # Requests per minute counter (reset periodically by a separate task or metric system)
         try:
-            # Use incr, handles initialization if key expired
+            cache.add('requests_per_minute', 0, timeout=70)
             cache.incr('requests_per_minute')
         except Exception as cache_err:
              logger.error(f"Cache error incrementing requests_per_minute: {cache_err}")
@@ -61,12 +61,21 @@ class MetricsMiddleware:
         path_prefix = request.path.split('/')[1] or 'root' # Get first part of path
 
         try:
+            cache.add('error_count', 0) # timeout=None is default for .add if not specified
+            cache.add('error_rate', 0, timeout=70) # Set timeout to match __init__
+
             # Increment general error counters
             cache.incr('error_count')
             cache.incr('error_rate') # Represents errors in the current interval
 
+            # 2. Ensure the DYNAMIC path-specific counter key exists.
+            path_error_key = f'error_count_{path_prefix}'
+            # Give it a long timeout so old paths eventually expire from cache.
+            cache.add(path_error_key, 0, timeout=86400) # 24 hours
+
             # Increment error counter for the specific path prefix
-            cache.incr(f'error_count_{path_prefix}')
+            cache.incr(path_error_key)
+
         except Exception as cache_err:
              logger.error(f"Cache error incrementing error metrics: {cache_err}")
 

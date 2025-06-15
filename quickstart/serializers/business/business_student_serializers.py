@@ -42,18 +42,15 @@ class BusinessStudentNoteSerializer(serializers.ModelSerializer):
         return None
 
 
-# New Serializer for Attendance History
-class StudentAttendanceHistorySerializer(serializers.ModelSerializer):
+class BookingHistorySerializer(serializers.ModelSerializer):
     class_name = serializers.CharField(
         source="schedule_instance.schedule.option.classId.title", read_only=True
     )
     option_name = serializers.CharField(
-        source="schedule_instance.schedule.option.title", read_only=True
+        source="schedule_instance.schedule.option.classId.title", read_only=True
     )
     date = serializers.DateField(source="schedule_instance.date", read_only=True)
     time = serializers.TimeField(source="schedule_instance.time", read_only=True)
-    # Status will be derived based on 'attended' and 'attendance_marked'
-    attendance_status_display = serializers.SerializerMethodField()
 
     class Meta:
         model = Booking
@@ -63,11 +60,9 @@ class StudentAttendanceHistorySerializer(serializers.ModelSerializer):
             "option_name",
             "date",
             "time",
-            "attended",
-            "attendance_marked",
-            "status",  # Include original status if needed
-            "attendance_status_display",
+            "status",
         ]
+
 
     def get_attendance_status_display(self, obj):
         if obj.status == "cancelled":
@@ -78,25 +73,17 @@ class StudentAttendanceHistorySerializer(serializers.ModelSerializer):
 
 
 class BusinessStudentProfileSerializer(serializers.ModelSerializer):
-    average_attendance = serializers.DecimalField(
-        source="annotated_average_attendance",  # From ViewSet annotation
-        max_digits=5,
-        decimal_places=2,
-        read_only=True,
-        default=Decimal("0.00"),
-    )
     active_classes = serializers.IntegerField(
         source="active_bookings_count", read_only=True, default=0
-    )  # From ViewSet annotation
+    )
     total_classes_taken = serializers.IntegerField(
         source="completed_bookings_count", read_only=True, default=0
-    )  # From ViewSet annotation
+    )
     is_active = serializers.BooleanField(
         source="is_active_student", read_only=True
-    )  # From ViewSet annotation
+    )
     avatar_url = serializers.SerializerMethodField()
 
-    # New fields from annotations
     last_booking_date_this_business = serializers.DateField(
         read_only=True, allow_null=True
     )
@@ -108,8 +95,8 @@ class BusinessStudentProfileSerializer(serializers.ModelSerializer):
         source="notes_for_this_business", many=True, read_only=True
     )
 
-    # Field for attendance history - this will be populated by a custom action in the ViewSet for the detail view
-    attendance_history = StudentAttendanceHistorySerializer(
+    # Updated to use the new serializer
+    booking_history = BookingHistorySerializer(
         many=True, read_only=True, required=False
     )
 
@@ -124,13 +111,12 @@ class BusinessStudentProfileSerializer(serializers.ModelSerializer):
             "avatar_url",
             "active_classes",
             "total_classes_taken",
-            "average_attendance",
             "notes",
             "is_active",
             "createdAt",
             "last_booking_date_this_business",
             "total_spent_this_business",
-            "attendance_history",  # Added
+            "booking_history", # Updated
         ]
         read_only_fields = fields
 

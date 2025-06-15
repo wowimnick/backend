@@ -1,25 +1,50 @@
 import os
 from celery import Celery
-from django.conf import settings # Import Django settings
+from celery.signals import task_failure 
+from django.conf import settings
+from django.core.cache import cache 
+import time
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Set the default Django settings module for the 'celery' program.
-# Replace 'CEBackend.settings' with the actual Python path to your settings module
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'CEBackend.settings')
 
-# Create the Celery application instance
-# The first argument is the project name, often the main Django app name.
 app = Celery('CEBackend')
 
-# Using a string here means the worker doesn't have to serialize
-# the configuration object to child processes.
-# - namespace='CELERY' means all celery-related configuration keys
-#   should have a `CELERY_` prefix in settings.py.
 app.config_from_object('django.conf:settings', namespace='CELERY')
 
-# Load task modules from all registered Django app configs.
-# Celery will automatically discover tasks defined in files named 'tasks.py'
-# within your installed apps.
 app.autodiscover_tasks()
+
+@task_failure.connect
+def handle_task_failure(sender=None, task_id=None, exception=None, args=None, kwargs=None, traceback=None, einfo=None, **kw):
+    """
+    Catches failed celery tasks and logs them to the cache for dashboard visibility.
+    """
+    logger.error(f"Celery task {sender.name} [{task_id}] failed: {exception}")
+    
+    # Structure the error info
+    error_info = {
+        'timestamp': time.time(),
+        'task_name': sender.name,
+        'task_id': task_id,
+        'exception_type': exception.__class__.__name__,
+        'exception_message': str(exception),
+        'args': str(args),
+        'kwargs': str(kwargs),
+        'traceback': str(traceback)
+    }
+
+    try:
+        # Store the last N failed tasks (e.g., 20) in cache
+        failed_tasks = cache.get('celery_failed_tasks', [])
+        failed_tasks.insert(0, error_info) # Add to the beginning
+        # Store for 1 day
+        cache.set('celery_failed_tasks', failed_tasks[:20], timeout=86400)
+    except Exception as e:
+        logger.error(f"Could not log celery task failure to cache: {e}")
+
 
 # Optional: Example task for debugging
 @app.task(bind=True)
