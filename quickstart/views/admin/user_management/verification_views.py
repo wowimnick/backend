@@ -143,14 +143,14 @@ class VerificationRequestViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
 
         validated_data = serializer.validated_data
-        action_input = validated_data.get('status') # 'approve' or 'reject' from serializer
+        action_input = validated_data.get('status') # Will be 'approved' or 'rejected'
         notes = validated_data.get('notes', '')
-        rejection_reason_from_notes = notes if action_input == 'reject' else ''
+        rejection_reason = validated_data.get('rejection_reason', '') # Now correctly uses the validated field
 
         target_db_status = None
-        if action_input == 'approve':
-            target_db_status = VERIFIED_STATUS # Use consistent 'verified' status
-        elif action_input == 'reject':
+        if action_input == 'approved': # CORRECTED: Was 'approve'
+            target_db_status = VERIFIED_STATUS # This correctly uses the 'verified' constant
+        elif action_input == 'rejected': # CORRECTED: Was 'reject'
             target_db_status = 'rejected'
 
         if target_db_status is None:
@@ -161,7 +161,7 @@ class VerificationRequestViewSet(viewsets.ModelViewSet):
         # The VerificationRequest.save() method will handle syncing `status` to `BusinessInfo.verificationStatus`
         verification.status = target_db_status
         verification.notes = notes
-        verification.rejection_reason = rejection_reason_from_notes
+        verification.rejection_reason = rejection_reason # Use the correct, validated reason
         verification.reviewed_by = request.user
         verification.reviewed_at = timezone.now()
         verification.save() # This triggers the sync in VerificationRequest.save()
@@ -170,7 +170,7 @@ class VerificationRequestViewSet(viewsets.ModelViewSet):
         action_code = None
         log_details = f"Verification request {verification.status}"
         if verification.status == VERIFIED_STATUS: # Check against consistent 'verified'
-            action_code = 'verification_approve' # Keep audit log action consistent, or change to 'verification_verified'
+            action_code = 'verification_approve'
             try:
                 if verification.user and verification.business:
                     send_business_verification_approved_email(
@@ -205,8 +205,6 @@ class VerificationRequestViewSet(viewsets.ModelViewSet):
 
                     if not verification.business.isActive:
                         verification.business.isActive = True
-                        # The BusinessInfo.verificationStatus is already updated by VerificationRequest's save() method
-                        # So we only need to save isActive here.
                         verification.business.save(update_fields=['isActive'])
                         logger.info(f"Business {verification.business.businessId} automatically set to active upon verification.")
                     else:

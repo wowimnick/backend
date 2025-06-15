@@ -185,23 +185,18 @@ class AdminBusinessDetailSerializer(serializers.ModelSerializer):
         
     # --- Methods for Read-Only List Representations ---
     def get_subcategories_list(self, obj):
-        return _split_string_to_list(obj.subcategories)
+        return obj.subcategories if isinstance(obj.subcategories, list) else []
 
     def get_classFormats_list(self, obj):
-        return _split_string_to_list(obj.classFormats)
+        return obj.classFormats if isinstance(obj.classFormats, list) else []
 
     def get_skillLevels_list(self, obj):
-        return _split_string_to_list(obj.skillLevels)
+        return obj.skillLevels if isinstance(obj.skillLevels, list) else []
 
     def get_ageGroups_list(self, obj):
-        return _split_string_to_list(obj.ageGroups)
+        return obj.ageGroups if isinstance(obj.ageGroups, list) else []
 
     def get_managers_emails(self, obj):
-        # Access managers through the related name
-        if hasattr(obj, 'managers'): # Check if the M2M field exists
+        if hasattr(obj, 'managers'):
             return [manager.email for manager in obj.managers.all()]
         return []
-
-    # No custom 'update' needed if frontend sends comma-separated strings
-    # for subcategories, classFormats, etc. during updates. The ModelSerializer
-    # will handle saving these string fields directly.
