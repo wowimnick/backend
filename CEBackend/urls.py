@@ -16,7 +16,7 @@ urlpatterns = [
     # 1. Admin Interface (at the root)
     path('classeasily-control-panel/', admin.site.urls),
 
-    # 2. API Routes (all prefixed with 'api/')
+    # 2. API Routes (all prefixed with 'api/')j
     # This will include all the URLs from your quickstart/urls.py file.
     path('api/', include('quickstart.urls')),
 
