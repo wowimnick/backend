@@ -37,12 +37,11 @@ class PublicBusinessInfoViewSet(viewsets.ReadOnlyModelViewSet):
         Applies the default ordering.
         """
         logger.debug("Fetching public business info queryset (active & verified)")
-        # Move the filtering logic here
         queryset = BusinessInfo.objects.select_related(
-            'owner' # Keep selecting owner if needed by the PublicBusinessInfoSerializer
+            'owner', 'classCategory'
         ).filter(
-            isActive=True,               # Ensure business is active
-            verificationStatus='verified' # Ensure business is verified
+            isActive=True,
+            verificationStatus='verified'
         )
         return queryset
     

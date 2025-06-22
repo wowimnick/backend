@@ -526,18 +526,13 @@ class BusinessInfo(models.Model):
     liabilityWaiver = models.BooleanField(default=False)
 
     # --- Class/Category Information ---
-    classCategory = models.CharField(
-        max_length=50,
-        choices=[
-            ("academic", "Academic"),
-            ("music", "Music"),
-            ("dance", "Dance"),
-            ("fitness", "Fitness"),
-            ("art", "Art"),
-            ("technology", "Technology"),
-            ("sports", "Sports"),
-            # Consider adding more categories like 'business', 'languages', 'crafts' from ClassTypesStep
-        ],
+    classCategory = models.ForeignKey(
+        'ClassCategory',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=False, # Still required in forms
+        related_name="businesses_in_category",
+        help_text="The primary category that defines the business."
     )
     subcategories = models.JSONField(default=list, blank=True)
     classFormats = models.JSONField(default=list, blank=True)

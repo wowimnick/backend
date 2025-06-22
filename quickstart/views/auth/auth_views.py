@@ -5,6 +5,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.throttling import ScopedRateThrottle
 from dj_rest_auth.registration.views import RegisterView
 from django.contrib.auth import get_user_model
 from django.conf import settings
@@ -31,6 +32,9 @@ def get_client_ip(request):
 
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
+    # --- Rate Limiting ---
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'sensitive'
 
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -123,10 +127,10 @@ class CustomTokenRefreshView(APIView):
             }
 
             if settings.SIMPLE_JWT['ROTATE_REFRESH_TOKENS']:
-                new_refresh = RefreshToken.for_user(user) 
+                new_refresh = RefreshToken.for_user(user)
                 data['refresh'] = str(new_refresh)
 
-            response = Response(data, status=status.HTTP_200_OK) 
+            response = Response(data, status=status.HTTP_200_OK)
 
             response.set_cookie(
                 settings.SIMPLE_JWT['AUTH_COOKIE'],
@@ -153,7 +157,7 @@ class CustomTokenRefreshView(APIView):
 
             return response
 
-        except (TokenError, AttributeError, User.DoesNotExist) as e: 
+        except (TokenError, AttributeError, User.DoesNotExist) as e:
             logger.error(f"Token Refresh Error: {e}")
             # Ensure cookies are cleared on refresh failure as well
             response = Response(
@@ -165,7 +169,7 @@ class CustomTokenRefreshView(APIView):
             return response
 
 class UserUpdateView(APIView):
-    permission_classes = [IsAuthenticated] 
+    permission_classes = [IsAuthenticated]
 
     def patch(self, request):
         print(f"UserUpdateView: Authenticated user: {request.user.email if request.user.is_authenticated else 'Anonymous'}") # Debug log
@@ -188,13 +192,13 @@ class LogoutView(APIView):
     def post(self, request):
         try:
             refresh_token = request.COOKIES.get(settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'])
-            
+
             response = Response(status=status.HTTP_205_RESET_CONTENT)
-            
+
             # Always delete cookies, even if token processing fails
             response.delete_cookie(settings.SIMPLE_JWT['AUTH_COOKIE'])
             response.delete_cookie(settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'])
-            
+
             # Optional: Attempt to blacklist token if present
             if refresh_token:
                 try:
@@ -202,9 +206,9 @@ class LogoutView(APIView):
                     token.blacklist()
                 except Exception as token_error:
                     logger.warning(f"Token blacklist failed: {token_error}")
-            
+
             return response
-            
+
         except Exception as e:
             logger.error(f"Logout error: {e}")
             response = Response(
@@ -217,6 +221,9 @@ class LogoutView(APIView):
 
 class CustomRegisterView(RegisterView):
     serializer_class = CustomRegisterSerializer
+    # --- Rate Limiting ---
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'sensitive'
 
     def post(self, request, *args, **kwargs):
         logger.debug(f"Registration request received: {request.data.get('email')}")

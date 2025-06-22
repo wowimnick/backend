@@ -1,3 +1,4 @@
+from datetime import timedelta
 from decimal import Decimal
 from rest_framework import viewsets, status, filters, generics, permissions
 from rest_framework.decorators import action
@@ -31,10 +32,6 @@ import logging
 import json
 from django.utils import timezone
 
-from quickstart.serializers.admin.class_management.class_management_serializers import (
-    AdminClassCategorySerializer,
-)
-
 from ...models import (
     BusinessInfo,
     ClassCategory,
@@ -55,6 +52,10 @@ from ...serializers import (
     ManagedClassOptionSerializer,
     ScheduleSerializer,
     ScheduleInstanceSerializer,
+    BulkScheduleCreateSerializer,
+    PublicCategorySerializer,
+    PublicSubcategorySerializer,
+    BusinessContactInfoSerializer,
 )
 
 from ...utils.permissions import (
@@ -70,15 +71,11 @@ logger = logging.getLogger(__name__)
 class PublicCategoryViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Provides a list of class categories and their subcategories.
-    Accessible by authenticated users (e.g., business owners creating classes).
+    Accessible publicly or by authenticated users for populating forms.
     """
 
-    permission_classes = [
-        permissions.IsAuthenticated
-    ]  # Or AllowAny if categories are fully public
-    serializer_class = (
-        AdminClassCategorySerializer  # Adjust if a different serializer is needed
-    )
+    permission_classes = [permissions.AllowAny]  # It's safe to make categories public
+    serializer_class = PublicCategorySerializer  # Use our new, simpler serializer
     queryset = ClassCategory.objects.prefetch_related("subcategories").order_by("name")
 
     def list(self, request, *args, **kwargs):
@@ -366,30 +363,31 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
             )
 
     def perform_update(self, serializer):
-        instance = serializer.instance # Get instance before saving serializer
+        instance = serializer.instance  # Get instance before saving serializer
         user = self.request.user
 
         # Prevent changing businessId, category, subcategory via PATCH/PUT
-        serializer.validated_data.pop('businessId', None)
-        serializer.validated_data.pop('category', None)
-        serializer.validated_data.pop('subcategory', None)
-        serializer.validated_data.pop('category_key', None)
-        serializer.validated_data.pop('subcategory_key', None)
+        serializer.validated_data.pop("businessId", None)
+        serializer.validated_data.pop("category", None)
+        serializer.validated_data.pop("subcategory", None)
+        serializer.validated_data.pop("category_key", None)
+        serializer.validated_data.pop("subcategory_key", None)
 
         # Handle status changes carefully
-        new_status = serializer.validated_data.get('status')
-        if new_status == 'suspended':
-            if instance.status != 'suspended':
+        new_status = serializer.validated_data.get("status")
+        if new_status == "suspended":
+            if instance.status != "suspended":
                 raise PermissionDenied("You do not have permission to suspend a class.")
             # Allow saving if status is already suspended (no change needed)
-            serializer.validated_data.pop('status', None)
-
+            serializer.validated_data.pop("status", None)
 
         # --- Start Transaction ---
         with transaction.atomic():
             # Save the main class instance first with allowed changes
             updated_instance = serializer.save()
-            logger.info(f"Class '{updated_instance.title}' (ID: {updated_instance.pk}) base fields updated by user {user.email}")
+            logger.info(
+                f"Class '{updated_instance.title}' (ID: {updated_instance.pk}) base fields updated by user {user.email}"
+            )
 
             # --- Process Image Updates ---
             request_data = self.request.data
@@ -397,122 +395,190 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
 
             # 1. Delete images marked for deletion
             try:
-                delete_ids_json = request_data.get('delete_image_ids', '[]')
+                delete_ids_json = request_data.get("delete_image_ids", "[]")
                 delete_ids = json.loads(delete_ids_json)
                 if delete_ids:
-                    images_to_delete = ClassImage.objects.filter(classId=instance, imageId__in=delete_ids)
+                    images_to_delete = ClassImage.objects.filter(
+                        classId=instance, imageId__in=delete_ids
+                    )
                     for img in images_to_delete:
                         if img.image:
                             try:
-                                default_storage.delete(img.image.name) # Ensure default_storage is imported
+                                default_storage.delete(
+                                    img.image.name
+                                )  # Ensure default_storage is imported
                             except Exception as e:
-                                logger.warning(f"Could not delete S3 file for image {img.imageId} during update: {e}")
+                                logger.warning(
+                                    f"Could not delete S3 file for image {img.imageId} during update: {e}"
+                                )
                     deleted_count, _ = images_to_delete.delete()
                     if deleted_count:
-                        logger.info(f"Deleted {deleted_count} images for class {instance.pk} based on request.")
+                        logger.info(
+                            f"Deleted {deleted_count} images for class {instance.pk} based on request."
+                        )
             except json.JSONDecodeError:
-                logger.warning(f"Invalid JSON for delete_image_ids for class {instance.pk}")
+                logger.warning(
+                    f"Invalid JSON for delete_image_ids for class {instance.pk}"
+                )
             except Exception as e:
-                logger.error(f"Error deleting images for class {instance.pk}: {e}", exc_info=True)
+                logger.error(
+                    f"Error deleting images for class {instance.pk}: {e}", exc_info=True
+                )
 
             # 2. Add new images
-            new_image_files = request_files.getlist('images')
+            new_image_files = request_files.getlist("images")
             newly_created_images = []
             if new_image_files:
-                img_objects = [ClassImage(classId=instance, image=f) for f in new_image_files]
+                img_objects = [
+                    ClassImage(classId=instance, image=f) for f in new_image_files
+                ]
                 newly_created_images = ClassImage.objects.bulk_create(img_objects)
-                logger.info(f"Added {len(newly_created_images)} new images for class {instance.pk}.")
+                logger.info(
+                    f"Added {len(newly_created_images)} new images for class {instance.pk}."
+                )
 
             # 3. Set Cover Image
-            cover_image_id = request_data.get('cover_image_id')
-            cover_image_filename = request_data.get('cover_image_filename') # For newly uploaded cover
+            cover_image_id = request_data.get("cover_image_id")
+            cover_image_filename = request_data.get(
+                "cover_image_filename"
+            )  # For newly uploaded cover
 
             new_cover_set = False
             if cover_image_filename:
                 # Find the newly uploaded image by filename
                 found_new_cover = False
                 for img_instance in newly_created_images:
-                    if img_instance.image.name.endswith(cover_image_filename): # Basic check
-                        ClassImage.objects.filter(classId=instance).update(isCover=False)
+                    if img_instance.image.name.endswith(
+                        cover_image_filename
+                    ):  # Basic check
+                        ClassImage.objects.filter(classId=instance).update(
+                            isCover=False
+                        )
                         img_instance.isCover = True
-                        img_instance.save(update_fields=['isCover'])
-                        logger.info(f"Set newly uploaded image '{cover_image_filename}' as cover for class {instance.pk}")
+                        img_instance.save(update_fields=["isCover"])
+                        logger.info(
+                            f"Set newly uploaded image '{cover_image_filename}' as cover for class {instance.pk}"
+                        )
                         new_cover_set = True
                         found_new_cover = True
                         break
                 if not found_new_cover:
-                    logger.warning(f"Could not find newly uploaded image with filename '{cover_image_filename}' to set as cover for class {instance.pk}")
+                    logger.warning(
+                        f"Could not find newly uploaded image with filename '{cover_image_filename}' to set as cover for class {instance.pk}"
+                    )
 
             elif cover_image_id and not new_cover_set:
                 try:
                     cover_image_id_int = int(cover_image_id)
-                    if ClassImage.objects.filter(classId=instance, imageId=cover_image_id_int).exists():
-                        ClassImage.objects.filter(classId=instance).exclude(imageId=cover_image_id_int).update(isCover=False)
-                        ClassImage.objects.filter(classId=instance, imageId=cover_image_id_int).update(isCover=True)
-                        logger.info(f"Set existing image ID {cover_image_id_int} as cover for class {instance.pk}")
+                    if ClassImage.objects.filter(
+                        classId=instance, imageId=cover_image_id_int
+                    ).exists():
+                        ClassImage.objects.filter(classId=instance).exclude(
+                            imageId=cover_image_id_int
+                        ).update(isCover=False)
+                        ClassImage.objects.filter(
+                            classId=instance, imageId=cover_image_id_int
+                        ).update(isCover=True)
+                        logger.info(
+                            f"Set existing image ID {cover_image_id_int} as cover for class {instance.pk}"
+                        )
                         new_cover_set = True
                     else:
-                        logger.warning(f"Requested cover image ID {cover_image_id} not found or doesn't belong to class {instance.pk}")
+                        logger.warning(
+                            f"Requested cover image ID {cover_image_id} not found or doesn't belong to class {instance.pk}"
+                        )
                 except (ValueError, TypeError):
                     logger.warning(f"Invalid cover_image_id format: {cover_image_id}")
 
             if not new_cover_set:
                 remaining_images = ClassImage.objects.filter(classId=instance)
-                if remaining_images.exists() and not remaining_images.filter(isCover=True).exists():
+                if (
+                    remaining_images.exists()
+                    and not remaining_images.filter(isCover=True).exists()
+                ):
                     first_image = remaining_images.first()
                     first_image.isCover = True
-                    first_image.save(update_fields=['isCover'])
-                    logger.info(f"Set image ID {first_image.imageId} as default cover for class {instance.pk} as no specific cover was set/found.")
-
+                    first_image.save(update_fields=["isCover"])
+                    logger.info(
+                        f"Set image ID {first_image.imageId} as default cover for class {instance.pk} as no specific cover was set/found."
+                    )
 
             # --- Process Option Updates (Assuming single option model) ---
-            options_json_string = request_data.get('options')
+            options_json_string = request_data.get("options")
             if options_json_string:
                 try:
                     options_data = json.loads(options_json_string)
                     if isinstance(options_data, list) and len(options_data) > 0:
-                        option_dict = options_data[0] # Get the first (only) option data
-                        option_id = option_dict.get('optionId')
+                        option_dict = options_data[
+                            0
+                        ]  # Get the first (only) option data
+                        option_id = option_dict.get("optionId")
                         option_instance = None
                         if option_id:
                             try:
-                                option_instance = ClassOption.objects.get(optionId=option_id, classId=instance)
+                                option_instance = ClassOption.objects.get(
+                                    optionId=option_id, classId=instance
+                                )
                             except ClassOption.DoesNotExist:
-                                logger.warning(f"Option ID {option_id} provided but not found for class {instance.pk}. Cannot update.")
+                                logger.warning(
+                                    f"Option ID {option_id} provided but not found for class {instance.pk}. Cannot update."
+                                )
 
                         if option_instance:
-                            option_dict.pop('title', None)
-                            option_dict.pop('description', None)
-                            option_dict.pop('image', None) 
+                            option_dict.pop("title", None)
+                            option_dict.pop("description", None)
+                            option_dict.pop("image", None)
 
                             option_serializer = ManagedClassOptionSerializer(
                                 option_instance,
                                 data=option_dict,
-                                partial=True, 
-                                context=serializer.context 
+                                partial=True,
+                                context=serializer.context,
                             )
                             if option_serializer.is_valid():
                                 # ClassOption no longer has an image field.
                                 # All direct image handling for ClassOption is removed.
-                                option_instance = option_serializer.save() 
-                                logger.info(f"Updated option ID {option_instance.optionId} for class {instance.pk}")
+                                option_instance = option_serializer.save()
+                                logger.info(
+                                    f"Updated option ID {option_instance.optionId} for class {instance.pk}"
+                                )
                             else:
-                                logger.error(f"Option data validation failed for option {option_id}: {option_serializer.errors}")
-                                raise DRFValidationError({'options': f"Validation failed for option {option_id}: {option_serializer.errors}"})
+                                logger.error(
+                                    f"Option data validation failed for option {option_id}: {option_serializer.errors}"
+                                )
+                                raise DRFValidationError(
+                                    {
+                                        "options": f"Validation failed for option {option_id}: {option_serializer.errors}"
+                                    }
+                                )
                         else:
-                            logger.warning(f"Could not find existing option to update for class {instance.pk} based on provided data: {option_dict}. Ensure optionId is correct.")
-                            if option_id: 
-                                 raise DRFValidationError({'options': f"Option with ID {option_id} not found for this class."})
-
+                            logger.warning(
+                                f"Could not find existing option to update for class {instance.pk} based on provided data: {option_dict}. Ensure optionId is correct."
+                            )
+                            if option_id:
+                                raise DRFValidationError(
+                                    {
+                                        "options": f"Option with ID {option_id} not found for this class."
+                                    }
+                                )
 
                 except json.JSONDecodeError:
-                    logger.error(f"Invalid JSON in 'options' field during update for class {instance.pk}.")
-                    raise DRFValidationError({"options": "Invalid JSON format for options data."})
-                except DRFValidationError: # Re-raise validation errors from serializer
+                    logger.error(
+                        f"Invalid JSON in 'options' field during update for class {instance.pk}."
+                    )
+                    raise DRFValidationError(
+                        {"options": "Invalid JSON format for options data."}
+                    )
+                except DRFValidationError:  # Re-raise validation errors from serializer
                     raise
                 except Exception as e:
-                    logger.error(f"Error processing options update for class {instance.pk}: {e}", exc_info=True)
-                    raise DRFValidationError(f"An error occurred while updating class options: {str(e)}")
+                    logger.error(
+                        f"Error processing options update for class {instance.pk}: {e}",
+                        exc_info=True,
+                    )
+                    raise DRFValidationError(
+                        f"An error occurred while updating class options: {str(e)}"
+                    )
 
     def perform_destroy(self, instance):
         # Permissions checked by get_object.
@@ -538,6 +604,20 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
             raise DRFValidationError(f"Could not deactivate class: {str(e)}")
 
     # --- Custom Actions for Business Management ---
+
+    @action(detail=False, methods=["get"], url_path="contact-info")
+    def contact_info(self, request, *args, **kwargs):
+        """
+        Retrieves the primary contact information for the user's associated business.
+        Used to pre-fill forms like the class creation contact step.
+        """
+        user = request.user
+        business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
+        if not business:
+            raise NotFound("No active business profile found for this user.")
+
+        serializer = BusinessContactInfoSerializer(business)
+        return Response(serializer.data)
 
     @action(detail=True, methods=["post"], parser_classes=[MultiPartParser, FormParser])
     def images(self, request, pk=None):
@@ -668,7 +748,7 @@ class BusinessClassOptionDetail(generics.RetrieveUpdateDestroyAPIView):
 
     def perform_destroy(self, instance):
         option_id = instance.optionId
-        instance.schedules.update(is_active=False) 
+        instance.schedules.update(is_active=False)
         instance.delete()
         logger.info(f"ClassOption ID {option_id} deleted by {self.request.user.email}")
 
@@ -719,6 +799,112 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
 
         instance = serializer.save()
         logger.info(f"Schedule created for Option ID {option.optionId} by {user.email}")
+
+    @action(detail=False, methods=["post"], url_path="bulk-create")
+    def bulk_create(self, request, *args, **kwargs):
+        """
+        Bulk creates multiple independent Schedule objects, skipping any conflicts.
+        """
+        serializer = BulkScheduleCreateSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        option = data["option"]
+        start_date = data["start_date"]
+        end_date = data["end_date"]
+        days_of_week_map = {
+            "Mon": 0,
+            "Tue": 1,
+            "Wed": 2,
+            "Thu": 3,
+            "Fri": 4,
+            "Sat": 5,
+            "Sun": 6,
+        }
+        target_weekdays = {days_of_week_map[day] for day in data["days_of_week"]}
+
+        schedules_to_create = []
+        skipped_count = 0
+
+        # Fetch existing schedules in the date range for conflict checking
+        existing_schedules = Schedule.objects.filter(
+            option=option, date__range=[start_date, end_date]
+        ).values_list("date", "time")
+
+        # Use a set for efficient conflict lookups
+        existing_schedule_set = {(date, time) for date, time in existing_schedules}
+
+        current_date = start_date
+        while current_date <= end_date:
+            if current_date.weekday() in target_weekdays:
+                for time_val in data["times"]:
+                    # CONFLICT CHECK
+                    if (current_date, time_val) in existing_schedule_set:
+                        skipped_count += 1
+                        continue  # Skip this conflicting schedule
+
+                    schedules_to_create.append(
+                        Schedule(
+                            option=option,
+                            date=current_date,
+                            time=time_val,
+                            duration=data["duration"],
+                            price=data["price"],
+                            maxParticipants=data["maxParticipants"],
+                        )
+                    )
+            current_date += timedelta(days=1)
+
+        if not schedules_to_create:
+            message = "No new schedules were created."
+            if skipped_count > 0:
+                message += f" {skipped_count} conflicting schedule(s) were skipped."
+            return Response({"detail": message}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            with transaction.atomic():
+                created_schedules = Schedule.objects.bulk_create(schedules_to_create)
+
+                # Manually generate ScheduleInstance for each created Schedule
+                instances_to_create = [
+                    ScheduleInstance(
+                        schedule=schedule,
+                        date=schedule.date,
+                        time=schedule.time,
+                        duration=schedule.duration,
+                        price=schedule.price,
+                        max_participants=schedule.maxParticipants,
+                        status="scheduled",
+                    )
+                    for schedule in created_schedules
+                ]
+                ScheduleInstance.objects.bulk_create(instances_to_create)
+
+            logger.info(
+                f"Bulk created {len(created_schedules)} schedules for option {option.pk} by {request.user.email} ({skipped_count} skipped)."
+            )
+
+            response_serializer = self.get_serializer(created_schedules, many=True)
+            return Response(
+                {
+                    "message": f"Successfully created {len(created_schedules)} schedules. {skipped_count} were skipped due to conflicts.",
+                    "created_count": len(created_schedules),
+                    "skipped_count": skipped_count,
+                    "data": response_serializer.data,
+                },
+                status=status.HTTP_201_CREATED,
+            )
+
+        except Exception as e:
+            logger.error(
+                f"Error during schedule bulk creation: {str(e)}", exc_info=True
+            )
+            return Response(
+                {"detail": f"An error occurred: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     def perform_update(self, serializer):
         instance = self.get_object()

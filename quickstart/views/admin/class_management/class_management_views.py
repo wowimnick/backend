@@ -1024,7 +1024,7 @@ class AdminReviewViewSet(viewsets.ModelViewSet):
 
         instance = self.get_object()
         # Define fields an admin can change in one go
-        allowed_fields = ["status", "business_response"]
+        allowed_fields = ["status"]  # Admin can only change status
         update_data = {}
 
         for field in allowed_fields:
@@ -1033,16 +1033,11 @@ class AdminReviewViewSet(viewsets.ModelViewSet):
 
         if not update_data:
             return Response(
-                {"detail": "No valid fields provided for update."},
+                {
+                    "detail": "No valid fields provided for update. Only 'status' is allowed."
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-        if (
-            "business_response" in update_data
-            and instance.business_response != update_data["business_response"]
-        ):
-            instance.responded_at = timezone.now()
-            instance.save(update_fields=["responded_at"])
 
         serializer = self.get_serializer(instance, data=update_data, partial=True)
         serializer.is_valid(raise_exception=True)

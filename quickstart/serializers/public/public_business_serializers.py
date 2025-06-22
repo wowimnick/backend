@@ -9,12 +9,13 @@ class BusinessContactDetailSerializer(serializers.ModelSerializer):
     """
     class Meta:
         model = BusinessInfo
-        # Explicitly list ONLY the fields to be revealed.
         fields = [
             'studentContactPhone',
             'studentContactEmail',
+            'website', 
         ]
         read_only_fields = fields
+
 class PublicBusinessInfoSerializer(serializers.ModelSerializer):
     """
     Serializer for PUBLIC display of Business Information.
@@ -23,6 +24,9 @@ class PublicBusinessInfoSerializer(serializers.ModelSerializer):
     """
     average_rating = serializers.DecimalField(max_digits=3, decimal_places=1, read_only=True)
     totalReviews = serializers.IntegerField(source='total_reviews_count', read_only=True)
+    
+    # Create a new read-only field that gets the name from the related category object.
+    classCategoryName = serializers.CharField(source='classCategory.name', read_only=True, allow_null=True)
 
     class Meta:
         model = BusinessInfo
@@ -41,14 +45,13 @@ class PublicBusinessInfoSerializer(serializers.ModelSerializer):
             'studentContactEmail',  
             'businessCity',
             'businessState',
-            'classCategory',
+            'classCategoryName', 
             'totalReviews',
             'average_rating',
             'featured',
             'contact_privacy',     
             'founding_year',
             'createdAt',
-            'contact_privacy',
         ]
         read_only_fields = fields 
 
@@ -64,6 +67,7 @@ class PublicBusinessInfoSerializer(serializers.ModelSerializer):
         if instance.contact_privacy != 'public':
             representation.pop('studentContactPhone', None)
             representation.pop('studentContactEmail', None)
+            representation.pop('website', None) 
 
         return representation
 

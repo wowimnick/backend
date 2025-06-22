@@ -34,6 +34,7 @@ class PublicClassOptionSerializer(serializers.ModelSerializer):
             'equipment',
             'tags',
             'cancellationPolicy',
+            'cancellationRefundPercentage',
             'schedules', 
             'price_type', 
         ]
@@ -83,6 +84,8 @@ class PublicClassSerializer(serializers.ModelSerializer):
     # This field is calculated based on the user's request context
     is_favorited = serializers.SerializerMethodField()
 
+    business_timezone = serializers.CharField(source='businessId.business_timezone', read_only=True)
+
     class Meta:
         model = ClassesMain
         fields = [
@@ -101,6 +104,7 @@ class PublicClassSerializer(serializers.ModelSerializer):
             'average_rating',
             'review_count',
             'is_favorited',
+            'business_timezone',
         ]
         read_only_fields = fields
 

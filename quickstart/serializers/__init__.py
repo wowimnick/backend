@@ -26,6 +26,10 @@ from .business.business_class_serializers import (
     ScheduleSerializer,
     ScheduleInstanceSerializer,
     ManagedClassOptionSerializer,
+    BulkScheduleCreateSerializer,
+    PublicCategorySerializer,
+    PublicSubcategorySerializer,
+    BusinessContactInfoSerializer
 )
 
 from .public.public_class_serializers import (
@@ -102,6 +106,10 @@ __all__ = [
     'BusinessBookingDetailSerializer',
     'NotificationSerializer',
     'BusinessContactDetailSerializer',
+    'BulkScheduleCreateSerializer',
+    'PublicCategorySerializer',
+    'PublicSubcategorySerializer',
+    'BusinessContactInfoSerializer',
     'colors',
 
     # Class Serializers

@@ -4,8 +4,9 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.exceptions import ValidationError as DRFValidationError, PermissionDenied
+from rest_framework.pagination import PageNumberPagination
+from rest_framework.throttling import ScopedRateThrottle
 from django.db import transaction
-from django.shortcuts import get_object_or_404
 import logging
 
 from ...utils.email_utils import send_review_submission_confirmation_email
@@ -18,6 +19,11 @@ from ...serializers.public.public_review_serializers import (
 
 logger = logging.getLogger(__name__)
 
+class StandardResultsSetPagination(PageNumberPagination):
+    page_size = 10  # Number of reviews per page
+    page_size_query_param = 'page_size' # Allows client to override page_size e.g. ?page_size=20
+    max_page_size = 100 # Max page size client can request
+
 class ReviewSubmission(APIView):
     """
     API endpoint for authenticated users to submit reviews for completed bookings.
@@ -25,6 +31,9 @@ class ReviewSubmission(APIView):
     """
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
+    # --- Rate Limiting ---
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'sensitive'
 
     @transaction.atomic
     def post(self, request):
@@ -117,19 +126,18 @@ class ClassReviews(generics.ListAPIView):
     """
     serializer_class = PublicReviewSerializer
     permission_classes = [AllowAny]
-    # pagination_class = ... # Add pagination if needed
+    pagination_class = StandardResultsSetPagination  
 
     def get_queryset(self):
         try:
             class_id = int(self.kwargs.get('pk'))
         except (ValueError, TypeError):
             logger.warning(f"Invalid class ID format in ClassReviews URL: {self.kwargs.get('pk')}")
-            return Reviews.objects.none() # Return empty for invalid ID
+            return Reviews.objects.none()
 
-        # Filter public, approved reviews for the class
         return Reviews.objects.filter(
             classId=class_id,
             status='approved'
         ).select_related(
-            'userId' # Optimize user fetching
+            'userId'
         ).order_by('-createdAt')

@@ -4,8 +4,10 @@ from rest_framework.decorators import (
     api_view,
     permission_classes,
     parser_classes,
+    throttle_classes,
 )
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from django.utils import timezone
 from django.db.models.functions import Coalesce
 from django.db.models import Q, Sum, Count, Avg, Subquery, OuterRef, IntegerField, F, Value
@@ -55,63 +57,47 @@ logger = logging.getLogger(__name__)
 
 
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])  # User must be logged in
+@permission_classes([IsAuthenticated])
 @parser_classes([MultiPartParser, FormParser])
+@throttle_classes([ScopedRateThrottle])
 def register_business(request):
     """
     Handles the creation of a new BusinessInfo instance by an authenticated user.
-    Uses BusinessRegistrationSerializer which now handles 4 steps including agreements.
-    (URL: /api/business/register/)
     """
-    # Serializer context handles associating the user as owner.
+    # Set the scope for the ScopedRateThrottle on the request object
+    request.throttle_scope = 'sensitive'
+
     try:
-        # Pass request.data and context to the updated serializer
         serializer = BusinessRegistrationSerializer(
             data=request.data, context={"request": request}
         )
-        # Validate all data (including agreements, parsed lists, etc.)
-        serializer.is_valid(raise_exception=True)
-        # Save the business instance (owner, verificationStatus set internally)
+        if not serializer.is_valid():
+            logger.warning(f"Business registration validation failed for user {request.user.email}. Errors: {serializer.errors}")
+            # CHANGED: Return the structured error object from the serializer
+            return Response({"error": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
         business = serializer.save()
-        logger.info(
-            f"Business '{business.businessName}' (ID: {business.businessId}) registered by user {request.user.email} (4-step flow completed)."
-        )
+        logger.info(f"Business '{business.businessName}' (ID: {business.businessId}) registered by user {request.user.email}.")
         return Response(
             {
-                "status": "success",
-                "message": "Business registered successfully!",  # Simplified message
+                "success": True, # Use boolean for success
+                "message": "Business registration submitted successfully!",
                 "businessId": business.businessId,
             },
             status=status.HTTP_201_CREATED,
         )
 
     except DRFValidationError as e:
-        # Log validation errors from any step
-        logger.warning(
-            f"Business registration validation failed for user {request.user.email}. Errors: {e.detail}"
-        )
-        return Response(
-            {
-                "status": "error",
-                "errors": e.detail,  # Return detailed validation errors
-            },
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+        # This can catch validation errors raised outside the .is_valid() call, e.g., in .save()
+        logger.warning(f"Business registration validation error for user {request.user.email}. Errors: {e.detail}")
+        return Response({"error": e.detail}, status=status.HTTP_400_BAD_REQUEST)
+
     except Exception as e:
-        logger.error(
-            f"Error in business registration for user {request.user.email}: {str(e)}",
-            exc_info=True,
-        )
+        logger.error(f"Unexpected error in business registration for user {request.user.email}: {str(e)}", exc_info=True)
         return Response(
-            {
-                "status": "error",
-                "errors": {
-                    "message": "An unexpected error occurred during registration."
-                },
-            },
+            {"error": "An unexpected server error occurred. Please try again later."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
-
 
 # --- Views for Logged-in Business Users ---
 

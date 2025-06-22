@@ -57,8 +57,7 @@ class PublicReviewSerializer(serializers.ModelSerializer):
     """Serializer for publicly displaying reviews (e.g., on a class page)."""
     user = UserReviewSerializer(source='userId', read_only=True) # Use the privacy-conscious user serializer
     image_url = serializers.SerializerMethodField()
-    # Exclude business_response - not typically public unless desired
-
+    
     class Meta:
         model = Reviews
         # Fields safe for public display
@@ -69,7 +68,7 @@ class PublicReviewSerializer(serializers.ModelSerializer):
             'comment',
             'image_url', # URL for the image
             'createdAt',
-            # Add 'business_response' here if you want it public
+            'business_response', # Make the business response public
         ]
         read_only_fields = fields # All fields read-only in this context
 

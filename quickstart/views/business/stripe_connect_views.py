@@ -6,6 +6,7 @@ from rest_framework import views, status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import NotFound
+from rest_framework.throttling import ScopedRateThrottle
 from django.db.models import Q
 
 from ...models import BusinessInfo  # Ensure this path is correct
@@ -22,6 +23,9 @@ stripe.api_key = settings.STRIPE_SECRET_KEY
 
 class StripeConnectView(views.APIView):
     permission_classes = [IsAuthenticated, CanManageOwnBusinessProfile]
+    # --- Rate Limiting ---
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'sensitive'
 
     def get_business_object(self, request):
         user = request.user

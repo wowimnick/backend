@@ -2,7 +2,7 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.db.models import Count
 
-from ....models import Booking
+from ....models import Booking, Role
 
 User = get_user_model()
 
@@ -39,7 +39,8 @@ class AdminUserListSerializer(serializers.ModelSerializer):
     last_login_date = serializers.DateTimeField(source='last_login', read_only=True)
     bookings_count = serializers.IntegerField(read_only=True)
     avatar_url = serializers.SerializerMethodField()
-    
+    owned_business_name = serializers.SerializerMethodField()
+
     class Meta:
         model = User
         fields = [
@@ -52,9 +53,10 @@ class AdminUserListSerializer(serializers.ModelSerializer):
             'last_login_date',
             'phone_number', 'country', 'city', 
             'bookings_count',
-            'avatar_url'
+            'avatar_url',
+            'owned_business_name',
         ]
-        read_only_fields = ['last_login_date', 'bookings_count', 'avatar_url', 'createdAt', 'status', 'role_name', 'role_color']
+        read_only_fields = ['last_login_date', 'bookings_count', 'avatar_url', 'createdAt', 'status', 'role_name', 'role_color', 'owned_business_name']
     
     def get_status(self, obj):
         """
@@ -74,12 +76,20 @@ class AdminUserListSerializer(serializers.ModelSerializer):
             return obj.avatar.url
         return None
 
+    def get_owned_business_name(self, obj):
+        # Using the prefetched related manager
+        businesses = obj.owned_businesses.all()
+        if businesses:
+            return businesses[0].businessName
+        return None
+
 class AdminUserDetailSerializer(serializers.ModelSerializer):
     """Detailed serializer for user management"""
     role_name = serializers.CharField(source='role.name', read_only=True, allow_null=True, default='Unknown Role')
     role_color = serializers.CharField(source='role.color', read_only=True, allow_null=True, default='#64748b')
     status = serializers.SerializerMethodField()
     avatar_url = serializers.SerializerMethodField()
+    owned_businesses_info = serializers.SerializerMethodField()
     
     class Meta:
         model = User
@@ -97,11 +107,12 @@ class AdminUserDetailSerializer(serializers.ModelSerializer):
             'is_staff',
             'is_superuser',
             'date_joined', 
+            'owned_businesses_info',
         ]
         read_only_fields = [
             'userId', 'status', 'avatar_url', 'createdAt', 'last_login',
             'role_name', 'role_color', 'is_active', 'is_staff',
-            'is_superuser', 'date_joined'
+            'is_superuser', 'date_joined', 'owned_businesses_info',
         ]
 
     def get_status(self, obj):
@@ -117,6 +128,16 @@ class AdminUserDetailSerializer(serializers.ModelSerializer):
         if obj.avatar and hasattr(obj.avatar, 'url'):
             return obj.avatar.url
         return None
+    
+    def get_owned_businesses_info(self, obj):
+        # Using the prefetched related manager
+        businesses = obj.owned_businesses.all()
+        if businesses:
+            return [
+                {'businessId': b.businessId, 'businessName': b.businessName}
+                for b in businesses
+            ]
+        return []
 
 class AdminUserCreateUpdateSerializer(serializers.ModelSerializer):
     """Serializer for creating/updating users by admins"""
@@ -126,7 +147,7 @@ class AdminUserCreateUpdateSerializer(serializers.ModelSerializer):
     # Email validation remains important
     email = serializers.EmailField(required=True)
     role = serializers.PrimaryKeyRelatedField(
-        queryset=User.role.field.related_model.objects.all(), # Dynamically get Role model
+        queryset=Role.objects.all(),
         allow_null=True, # Allow assigning 'no role'
         required=False # Role might not be mandatory initially
     )
@@ -178,10 +199,6 @@ class AdminUserCreateUpdateSerializer(serializers.ModelSerializer):
             user.avatar = avatar
 
         user.save() # Save password hash and avatar
-
-        # Send welcome email logic would go here if needed
-        # if send_welcome_email:
-        #     pass
 
         return user
 

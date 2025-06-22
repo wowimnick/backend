@@ -178,31 +178,46 @@ class VerificationRequestViewSet(viewsets.ModelViewSet):
                     )
                     logger.info(f"Verification '{VERIFIED_STATUS}' email prepared for business {verification.business.businessId}, user {verification.user.email}")
 
-                    # Change user role
                     try:
-                        business_owner_role = Role.objects.get(name=BUSINESS_OWNER_ROLE_NAME)
-                        if verification.user.role != business_owner_role:
-                            original_role_name = verification.user.role.name if verification.user.role else "None"
-                            verification.user.role = business_owner_role
+                        target_role = Role.objects.get(name=BUSINESS_OWNER_ROLE_NAME)
+                        current_role = verification.user.role
+                        
+                        # Determine if we should assign the new role
+                        should_assign_role = False
+                        if current_role is None:
+                            # If user has no role, assign the Business Owner role
+                            should_assign_role = True
+                            logger.info(f"User {verification.user.email} has no current role. Assigning '{target_role.name}'.")
+                        elif target_role.hierarchy_level > current_role.hierarchy_level:
+                            # Only assign if the Business Owner role is a promotion
+                            should_assign_role = True
+                            logger.info(f"Upgrading user {verification.user.email} from '{current_role.name}' (level {current_role.hierarchy_level}) to '{target_role.name}' (level {target_role.hierarchy_level}).")
+                        else:
+                            # Do not demote or change role if current role is of equal or higher hierarchy
+                            logger.info(f"User {verification.user.email} retains current role '{current_role.name}' (level {current_role.hierarchy_level}) as it is not lower than '{target_role.name}'. No role change.")
+
+                        if should_assign_role:
+                            original_role_name = current_role.name if current_role else "None"
+                            verification.user.role = target_role
                             verification.user.save(update_fields=['role'])
-                            logger.info(f"User {verification.user.email}'s role changed from '{original_role_name}' to '{BUSINESS_OWNER_ROLE_NAME}'.")
-                            # Optional AuditLog for role change
+                            logger.info(f"User {verification.user.email}'s role successfully changed to '{target_role.name}'.")
+
                             try:
                                 AuditLog.objects.create(
                                     user=request.user, user_email=request.user.email, action='role_change',
-                                    details=f"User {verification.user.email} role changed to '{BUSINESS_OWNER_ROLE_NAME}' due to business verification.",
+                                    details=f"User {verification.user.email} role changed to '{target_role.name}' due to business verification.",
                                     target_user=verification.user, target_model='CustomUser', target_id=str(verification.user.userId),
                                     ip_address=request.META.get('REMOTE_ADDR'), user_agent=request.META.get('HTTP_USER_AGENT', ''),
-                                    metadata={'verification_request_id': str(verification.id), 'previous_role': original_role_name, 'new_role': BUSINESS_OWNER_ROLE_NAME }
+                                    metadata={'verification_request_id': str(verification.id), 'previous_role': original_role_name, 'new_role': target_role.name }
                                 )
-                            except Exception as audit_e: logger.error(f"Failed to create audit log for role change (user {verification.user.email}): {audit_e}")
-                        else:
-                            logger.info(f"User {verification.user.email} already has role '{BUSINESS_OWNER_ROLE_NAME}'. No role change needed.")
+                            except Exception as audit_e: 
+                                logger.error(f"Failed to create audit log for role change (user {verification.user.email}): {audit_e}")
+                                
                     except Role.DoesNotExist:
                         logger.error(f"CRITICAL: Role '{BUSINESS_OWNER_ROLE_NAME}' not found. Cannot assign role to user {verification.user.email}.")
                     except Exception as role_change_error:
                         logger.error(f"Failed to change role for user {verification.user.email}: {role_change_error}", exc_info=True)
-
+                    
                     if not verification.business.isActive:
                         verification.business.isActive = True
                         verification.business.save(update_fields=['isActive'])

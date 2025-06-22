@@ -1,6 +1,8 @@
+import re
+import string
 from rest_framework import serializers
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.core.validators import validate_email, URLValidator
+from django.core.validators import validate_email, URLValidator, RegexValidator
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from decimal import Decimal, InvalidOperation
 import json
@@ -9,6 +11,7 @@ import pytz  # For timezone choices
 
 from ...models import (
     BusinessInfo,
+    ClassCategory,
     ClassesMain,
     Reviews,
     CustomUser,
@@ -109,6 +112,13 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
         max_digits=11, decimal_places=8, required=False, allow_null=True
     )
 
+    classCategory = serializers.SlugRelatedField(
+        slug_field='key',
+        queryset=ClassCategory.objects.all(),
+        required=True,
+        help_text="The unique key of the primary category for this business (e.g., 'music', 'academic')."
+    )
+
     subcategories = serializers.CharField(
         write_only=True, required=False, allow_blank=True
     )
@@ -120,7 +130,6 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
     )
     ageGroups = serializers.CharField(write_only=True, required=False, allow_blank=True)
 
-    # New fields for registration
     website = serializers.URLField(required=False, allow_blank=True, allow_null=True)
     business_timezone = serializers.ChoiceField(
         choices=COMMON_TIMEZONE_CHOICES_SERIALIZER, required=True
@@ -139,304 +148,196 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
     )
     founding_year = serializers.IntegerField(required=False, allow_null=True)
 
+    phone_regex = RegexValidator(
+        regex=r'^\+?1?\d{9,15}$', 
+        message="Phone number must be entered in the format: '+999999999'. Up to 15 digits allowed."
+    )
+    studentContactPhone = serializers.CharField(validators=[phone_regex], required=True)
+
     class Meta:
         model = BusinessInfo
         fields = [
             # Step 0: Business Info
-            "businessName",
-            "businessType",
-            "businessDescription",
-            "businessImage",
-            "openingTime",
-            "closingTime",
-            "liabilityWaiver",
-            "website",
-            "business_timezone",
-            "social_media_links",
-            "tags_keywords",
-            "founding_year",
-            "contact_privacy",
+            "businessName", "businessType", "businessDescription", "businessImage",
+            "openingTime", "closingTime", "liabilityWaiver", "website",
+            "business_timezone", "social_media_links", "tags_keywords", "founding_year",
             # Step 1: Contact Details
-            "studentContactPhone",
-            "studentContactEmail",
-            "preferredContact",
+            "studentContactPhone", "studentContactEmail", "preferredContact", "contact_privacy",
             # Step 2: Location
-            "businessAddress",
-            "businessCity",
-            "businessState",
-            "businessZipCode",
-            "latitude",
-            "longitude",
-            "showExactLocation",
+            "businessAddress", "businessCity", "businessState", "businessZipCode",
+            "latitude", "longitude", "showExactLocation",
             # Step 3: Class Types & Agreements
-            "classCategory",
-            "subcategories",
-            "classFormats",
-            "skillLevels",
-            "ageGroups",
-            "termsAccepted",
-            "privacyAccepted",
+            "classCategory", "subcategories", "classFormats", "skillLevels",
+            "ageGroups", "termsAccepted", "privacyAccepted",
         ]
         extra_kwargs = {
-            # Step 0 fields
             "businessName": {"required": True},
             "businessType": {"required": True},
-            "businessDescription": {"required": True},
+            "businessDescription": {"required": True, "min_length": 250, "max_length": 750},
             "openingTime": {"required": True},
             "closingTime": {"required": True},
             "liabilityWaiver": {"required": True},
             "businessImage": {"required": False, "allow_null": True},
             "website": {"required": False, "allow_blank": True, "allow_null": True},
             "business_timezone": {"required": True},
-            "social_media_links": {"required": False, "allow_blank": True},
-            "tags_keywords": {"required": False, "allow_blank": True},
-            "founding_year": {"required": False, "allow_null": True},
-            # Step 1 fields
-            "studentContactPhone": {"required": True},
             "studentContactEmail": {"required": True},
             "preferredContact": {"required": True},
             "contact_privacy": {"required": True},
-            # Step 2 fields
             "businessAddress": {"required": True},
             "businessCity": {"required": True},
             "businessState": {"required": True},
             "businessZipCode": {"required": True},
-            # Step 3 fields
-            "classCategory": {"required": True},
-            "subcategories": {"required": False, "allow_blank": True},
-            "classFormats": {"required": False, "allow_blank": True},
-            "skillLevels": {"required": False, "allow_blank": True},
-            "ageGroups": {"required": False, "allow_blank": True},
             "termsAccepted": {"required": True},
             "privacyAccepted": {"required": True},
             "showExactLocation": {"read_only": True},
         }
 
     def validate_website(self, value):
-        if value:  # Only validate if a value is provided
+        if value:
+            if not all(c in string.ascii_letters + string.digits + '-._~:/?#[]@!$&\'()*+,;=' for c in value.replace('https://', '').replace('http://', '')):
+                 raise DRFValidationError("Website URL contains invalid characters.")
             validator = URLValidator()
             try:
                 validator(value)
             except DjangoValidationError:
                 raise DRFValidationError("Invalid URL format for website.")
         return value
+        
+    def validate_studentContactPhone(self, value):
+        cleaned_number = ''.join(filter(str.isdigit, value))
+        if value.startswith('+'):
+            cleaned_number = '+' + cleaned_number
+        
+        phone_regex = r'^\+?[1-9]\d{1,14}$'
+        if not re.match(phone_regex, cleaned_number):
+            raise DRFValidationError("Please enter a valid phone number, including country code if applicable.")
+        return cleaned_number
 
     def validate_founding_year(self, value):
         if value is not None:
             current_year = datetime.now().year
-            if not (1800 <= value <= current_year):  # Basic sanity check for year
+            if not (1800 <= value <= current_year):
                 raise DRFValidationError(
                     f"Founding year must be between 1800 and {current_year}."
                 )
         return value
 
     def validate(self, data):
-        # --- Email Validation ---
-        for email_field in ["studentContactEmail"]:
-            if email_field in data and data[email_field]:
-                try:
-                    validate_email(data[email_field])
-                except DjangoValidationError:
-                    raise DRFValidationError({email_field: "Invalid email address"})
+        if data.get("studentContactEmail"):
+            try:
+                validate_email(data["studentContactEmail"])
+            except DjangoValidationError:
+                raise DRFValidationError({"studentContactEmail": "Invalid email address"})
 
-        # --- Time Validation ---
         if data.get("openingTime") and data.get("closingTime"):
             if data["openingTime"] >= data["closingTime"]:
                 raise DRFValidationError(
                     {"closingTime": "Closing time must be after opening time"}
                 )
 
-        # --- AGREEMENTS Validation ---
         if not data.get("termsAccepted"):
-            raise DRFValidationError(
-                {"termsAccepted": "You must accept the Terms of Service"}
-            )
+            raise DRFValidationError({"termsAccepted": "You must accept the Terms of Service"})
         if not data.get("privacyAccepted"):
-            raise DRFValidationError(
-                {"privacyAccepted": "You must accept the Privacy Policy"}
-            )
-
+            raise DRFValidationError({"privacyAccepted": "You must accept the Privacy Policy"})
+        
         liability_waiver = data.get("liabilityWaiver")
         if isinstance(liability_waiver, str):
             data["liabilityWaiver"] = liability_waiver.lower() == "true"
-        elif liability_waiver is None:
-            raise DRFValidationError(
-                {"liabilityWaiver": "Liability waiver agreement is required."}
-            )
         elif not isinstance(liability_waiver, bool):
-            raise DRFValidationError(
-                {"liabilityWaiver": "Invalid value for liability waiver."}
-            )
+            raise DRFValidationError({"liabilityWaiver": "Invalid value for liability waiver."})
         if not data.get("liabilityWaiver"):
-            raise DRFValidationError(
-                {"liabilityWaiver": "You must agree to the liability waiver."}
-            )
+            raise DRFValidationError({"liabilityWaiver": "You must agree to the liability waiver."})
 
-        # --- Coordinate Validation ---
         latitude = data.get("latitude")
         longitude = data.get("longitude")
-        if (latitude is not None and longitude is None) or (
-            longitude is not None and latitude is None
-        ):
-            raise DRFValidationError(
-                "Both latitude and longitude must be provided together, or neither."
-            )
+        if (latitude is not None and longitude is None) or (longitude is not None and latitude is None):
+            raise DRFValidationError("Both latitude and longitude must be provided together, or neither.")
         data["showExactLocation"] = latitude is not None and longitude is not None
 
-        # --- List and Dict Field JSON Parsing ---
         json_string_fields = {
-            "subcategories": list,
-            "classFormats": list,
-            "skillLevels": list,
-            "ageGroups": list,
-            "tags_keywords": list,
-            "social_media_links": dict,
+            "subcategories": list, "classFormats": list, "skillLevels": list,
+            "ageGroups": list, "tags_keywords": list, "social_media_links": dict,
         }
         for field, expected_type in json_string_fields.items():
             field_value = data.get(field)
-            if field_value:
+            if field_value and isinstance(field_value, str):
                 try:
                     parsed_value = json.loads(field_value)
                     if not isinstance(parsed_value, expected_type):
-                        raise DRFValidationError(
-                            {
-                                field: f"Invalid format. Expected a {expected_type.__name__}."
-                            }
-                        )
+                        raise DRFValidationError({field: f"Invalid format. Expected a {expected_type.__name__}."})
                     data[field] = parsed_value
                 except json.JSONDecodeError:
-                    raise DRFValidationError(
-                        {field: f"Invalid JSON format provided for {field}."}
-                    )
-                except TypeError:  # Already parsed (e.g., not from FormData)
-                    if not isinstance(field_value, expected_type):
-                        raise DRFValidationError(
-                            {
-                                field: f"Unexpected type for {field}. Expected JSON string or {expected_type.__name__}."
-                            }
-                        )
-                    data[field] = field_value
-            elif field in data:  # Field exists but is empty string or None
-                data[field] = expected_type()  # Default to empty list/dict
+                    raise DRFValidationError({field: f"Invalid JSON format for {field}."})
+            elif field in data and not field_value:
+                data[field] = expected_type()
 
+        # FIXED: This is where isActive should be set.
         data["isActive"] = False
         return data
 
     def create(self, validated_data):
         user = self.context["request"].user
-        validated_data["termsAccepted"] = validated_data.get("termsAccepted", False)
-        validated_data["privacyAccepted"] = validated_data.get("privacyAccepted", False)
-        validated_data["liabilityWaiver"] = validated_data.get("liabilityWaiver", False)
-        validated_data.pop("isActive", None)
+        
+        # Pop list/dict fields to handle them separately
+        subcategories_data = validated_data.pop("subcategories", [])
+        classformats_data = validated_data.pop("classFormats", [])
+        skilllevels_data = validated_data.pop("skillLevels", [])
+        agegroups_data = validated_data.pop("ageGroups", [])
+        tags_keywords_data = validated_data.pop("tags_keywords", [])
+        social_media_data = validated_data.pop("social_media_links", {})
 
+        # FIXED: Removed the redundant `isActive=False` keyword argument.
+        # It's already in `validated_data` from the `validate` method.
         business = BusinessInfo.objects.create(
             owner=user,
             verificationStatus="pending",
-            isActive=False,  # Business starts as inactive
+            subcategories=subcategories_data,
+            classFormats=classformats_data,
+            skillLevels=skilllevels_data,
+            ageGroups=agegroups_data,
+            tags_keywords=tags_keywords_data,
+            social_media_links=social_media_data,
             **validated_data,
         )
+        
         VerificationRequest.objects.create(
             user=user, business=business, status="pending"
         )
 
-        # --- Role Assignment Logic with Hierarchy Check ---
-        BUSINESS_OWNER_ROLE_NAME = (
-            "Business Owner"  # Example: Ensure this role exists in your DB
-        )
-
+        BUSINESS_OWNER_ROLE_NAME = "Business Owner"
         try:
-            target_business_owner_role = Role.objects.get(name=BUSINESS_OWNER_ROLE_NAME)
-            current_user_role = user.role
-            assign_new_role = False
-
-            if current_user_role is None:
-                assign_new_role = True
-                logger.info(
-                    f"User {user.email} has no current role. Attempting to assign '{target_business_owner_role.name}'."
-                )
-            elif (
-                target_business_owner_role.hierarchy_level
-                > current_user_role.hierarchy_level
-            ):
-                assign_new_role = True
-                logger.info(
-                    f"User {user.email}'s current role '{current_user_role.name}' (level {current_user_role.hierarchy_level}) "
-                    f"is lower than '{target_business_owner_role.name}' (level {target_business_owner_role.hierarchy_level}). "
-                    f"Attempting to upgrade role."
-                )
-            else:
-                # Current role is of higher or equal hierarchy. Do not change.
-                logger.info(
-                    f"User {user.email} (role: '{current_user_role.name}', level: {current_user_role.hierarchy_level}) "
-                    f"retains their current role as it's higher than or equal to '{target_business_owner_role.name}' "
-                    f"(level: {target_business_owner_role.hierarchy_level}). No role change."
-                )
-
-            if assign_new_role:
-                user.role = target_business_owner_role
+            target_role = Role.objects.get(name=BUSINESS_OWNER_ROLE_NAME)
+            if user.role is None or target_role.hierarchy_level > user.role.hierarchy_level:
+                user.role = target_role
                 user.save(update_fields=["role"])
-                logger.info(
-                    f"User {user.email} successfully assigned role '{target_business_owner_role.name}'."
-                )
-
+                logger.info(f"User {user.email} assigned role '{target_role.name}'.")
         except Role.DoesNotExist:
-            logger.warning(
-                f"The role '{BUSINESS_OWNER_ROLE_NAME}' was not found in the database. "
-                f"Cannot automatically assign it to user {user.email} upon business registration. "
-                f"User's current role (if any) remains unchanged."
-            )
+            logger.warning(f"Role '{BUSINESS_OWNER_ROLE_NAME}' not found. Cannot assign to user {user.email}.")
         except Exception as e:
-            # Catch any other unexpected errors during role assignment
-            logger.error(
-                f"An unexpected error occurred during role assignment for user {user.email} "
-                f"after business registration: {str(e)}",
-                exc_info=True,
-            )
-            # Business is already created. Error is in role assignment. Log and continue.
+            logger.error(f"Error assigning role to {user.email}: {str(e)}", exc_info=True)
 
         return business
-
 
 class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
     owner_email = serializers.EmailField(source="owner.email", read_only=True)
     managers_emails = serializers.SerializerMethodField(read_only=True)
-
-    businessImage = serializers.ImageField(
-        required=False, allow_null=True, use_url=True
-    )
-
-    # Fields from BusinessSettings.jsx
+    businessImage = serializers.ImageField(required=False, allow_null=True, use_url=True)
     website = serializers.URLField(required=False, allow_blank=True, allow_null=True)
-    business_timezone = serializers.ChoiceField(
-        choices=COMMON_TIMEZONE_CHOICES_SERIALIZER, required=False, allow_blank=True
-    )
-
-    # JSONFields handled as JSON strings from FormData, then parsed
+    business_timezone = serializers.ChoiceField(choices=COMMON_TIMEZONE_CHOICES_SERIALIZER, required=False, allow_blank=True)
     social_media_links = serializers.JSONField(required=False, allow_null=True)
     tags_keywords = serializers.JSONField(required=False, allow_null=True)
-
     founding_year = serializers.IntegerField(required=False, allow_null=True)
-
-    latitude = serializers.DecimalField(
-        max_digits=10, decimal_places=8, required=False, allow_null=True
-    )
-    longitude = serializers.DecimalField(
-        max_digits=11, decimal_places=8, required=False, allow_null=True
-    )
-
-    # Read-only representations of fields typically set during registration/class setup
-    # These are not expected to be updated via this specific settings form for now.
-    subcategories = serializers.ListField(
-        child=serializers.CharField(), read_only=True, required=False
-    )
-    classFormats = serializers.ListField(
-        child=serializers.CharField(), read_only=True, required=False
-    )
-    skillLevels = serializers.ListField(
-        child=serializers.CharField(), read_only=True, required=False
-    )
-    ageGroups = serializers.ListField(
-        child=serializers.CharField(), read_only=True, required=False
+    latitude = serializers.DecimalField(max_digits=10, decimal_places=8, required=False, allow_null=True)
+    longitude = serializers.DecimalField(max_digits=11, decimal_places=8, required=False, allow_null=True)
+    subcategories = serializers.ListField(child=serializers.CharField(), read_only=True, required=False)
+    classFormats = serializers.ListField(child=serializers.CharField(), read_only=True, required=False)
+    skillLevels = serializers.ListField(child=serializers.CharField(), read_only=True, required=False)
+    ageGroups = serializers.ListField(child=serializers.CharField(), read_only=True, required=False)
+    
+    # FIXED: Return the category's string 'key' instead of its ID for all read operations.
+    classCategory = serializers.SlugRelatedField(
+        slug_field='key',
+        read_only=True
     )
 
     class Meta:
