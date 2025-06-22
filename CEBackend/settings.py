@@ -45,7 +45,7 @@ if not DEBUG:
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
     # The following should be your actual production domains
-    ALLOWED_HOSTS = ['api.classeasily.com', 'www.classeasily.com']
+    ALLOWED_HOSTS = ['classeasily.com', 'www.classeasily.com']
 else:
     # Development hosts
     ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'classeasily.com', '3.142.223.49']
