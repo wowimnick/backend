@@ -25,22 +25,35 @@ SITE_DOMAIN = os.environ.get('SITE_DOMAIN', 'classeasily.com')
 
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY', 're_R6FMGC6t_B2T88HHXmcRkmxuBtkPq7gdZ')
 
-# Temporarily not implemented 
-RESEND_WEBHOOK_SECRET = os.environ.get('RESEND_WEBHOOK_SECRET', 'your_super_secret_webhook_key') 
-UNSUBSCRIBE_SECRET_KEY = os.environ.get('UNSUBSCRIBE_SECRET_KEY', 'another-super-secret-key-for-unsubscribe') 
-# Temporarily not implemented 
+# Temporarily not implemented
+RESEND_WEBHOOK_SECRET = os.environ.get('RESEND_WEBHOOK_SECRET', 'your_super_secret_webhook_key')
+UNSUBSCRIBE_SECRET_KEY = os.environ.get('UNSUBSCRIBE_SECRET_KEY', 'another-super-secret-key-for-unsubscribe')
+# Temporarily not implemented
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-1yfmf)77ngglvh_18m&(7ub5a$abwu!99$2lmx@)3dk4)!=m4l'
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'django-insecure-1yfmf)77ngglvh_18m&(7ub5a$abwu!99$2lmx@)3dk4)!=m4l')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = False
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'classeasily.com', '3.142.223.49']
+# --- Production Security Settings (Enabled when DEBUG is False) ---
+if not DEBUG:
+    SECURE_SSL_REDIRECT = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 31536000  # 1 year
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    # The following should be your actual production domains
+    ALLOWED_HOSTS = ['api.classeasily.com', 'www.classeasily.com']
+else:
+    # Development hosts
+    ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'classeasily.com', '3.142.223.49']
+
 
 STRIPE_PUBLIC_KEY = 'pk_test_51Qn8JYFsNqYi8b0PAujbtEGNoTcLJTpaS2UefQxe5u4BquZyrIK48aRKbhHLRh45em0EFds7SNhlzys3sPxS5faR00Rj8lqQjg'
 STRIPE_SECRET_KEY = 'sk_test_51Qn8JYFsNqYi8b0P7fYDsXan82C6Q1CGWuwe9qHzaxnUf9lGW4G3cA0w2ks4svAnK9IivXKxpzOau6Kaj3N7Xx9Y00arIlzov1'
-STRIPE_WEBHOOK_SECRET = 'whsec_KL6mF4KPBvnCumik4dGTBcBLs1uAaMdP'
+STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET', 'whsec_634bff67902f39537aeae7b8349d2368d278d2f0200d679e919425abbaac02ba')
 
 OPENROUTER_API_KEY = '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'
 AI_SYSTEM_PROMPT = """You are ClassEasily Support Assistant, the official AI support agent for ClassEasily, an education platform that connects students with classes and educational resources.
@@ -251,6 +264,18 @@ REST_FRAMEWORK = {
         'rest_framework.authentication.TokenAuthentication',
         'rest_framework.authentication.SessionAuthentication',
     ],
+    # --- Rate Limiting Configuration ---
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle'
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '20/minute',          # For anonymous users
+        'user': '100/minute',         # For authenticated users
+        'burst': '150/minute',        # A higher-rate scope for non-critical actions
+        'sensitive': '5/minute',      # A lower-rate scope for sensitive actions like login/register
+        'chat': '30/minute',          # Custom scope for chat to control API costs
+    }
 }
 
 AUTHENTICATION_BACKENDS = [
@@ -308,7 +333,7 @@ DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'noreply@classeasily.c
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
 
 ANYMAIL = {
-    "RESEND_API_KEY": RESEND_API_KEY, 
+    "RESEND_API_KEY": RESEND_API_KEY,
     # Optional: Add extra send defaults like tags
     # "RESEND_SEND_DEFAULTS": {
     #     "tags": ["django-registration"],
@@ -327,44 +352,34 @@ FRONTEND_BASE_URL = os.environ.get('FRONTEND_URL', 'http://localhost:5173')
 FRONTEND_EMAIL_VERIFICATION_PATH = '/verify-email/{key}/'
 FRONTEND_PASSWORD_RESET_CONFIRM_PATH = '/reset-password/{uid}/{token}/'
 
-#CURRENT_HOSTNAME = socket.gethostname()
-IS_LOCAL_MACHINE = ('Hehe' == 'Banana') # Or whatever your local hostname truly is
-
 # --- Celery Configuration ---
-if IS_LOCAL_MACHINE:
-    print("---- DETECTED LOCAL MACHINE ('Banana') - Using local Redis settings ----")
-    CELERY_BROKER_URL = "redis://127.0.0.1:6379/1" # Local WSL Redis, DB 1
-    CELERY_RESULT_BACKEND = "redis://127.0.0.1:6379/2" # Local WSL Redis, DB 2
+if DEBUG:
+    print("---- DETECTED DEBUG MODE - Using local Redis settings ----")
+    # For local development (e.g., Docker or local Redis server)
+    CELERY_BROKER_URL = "redis://127.0.0.1:6379/1"
+    CELERY_RESULT_BACKEND = "redis://127.0.0.1:6379/2"
 
-    # Local Redis typically doesn't use SSL or cluster mode
     CELERY_BROKER_USE_SSL = None
     CELERY_REDIS_BACKEND_USE_SSL = None
-
-    CELERY_BROKER_TRANSPORT_OPTIONS = {} # No special cluster options needed
+    CELERY_BROKER_TRANSPORT_OPTIONS = {}
     CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {}
-
-    # Default Celery names for local, non-cluster setup
     CELERY_CONTROL_EXCHANGE = 'celery.pidbox'
     CELERY_EVENT_QUEUE_PREFIX = 'celeryev'
     CELERY_TASK_DEFAULT_QUEUE = 'celery'
-
-else: # Production settings (EC2 with ElastiCache Cluster)
-    print(f"---- DETECTED PRODUCTION ENV (Hostname: ) - Using ElastiCache Redis Cluster settings ----")
-    CELERY_BROKER_URL = 'rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379'
-    CELERY_RESULT_BACKEND = 'rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379'
+else:
+    # For production (e.g., AWS ElastiCache with SSL)
+    print("---- DETECTED PRODUCTION MODE (DEBUG=False) - Using ElastiCache Redis Cluster settings ----")
+    # Example production URLs - replace with your actual ElastiCache endpoint
+    ELASTICACHE_URL = 'rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379'
+    CELERY_BROKER_URL = ELASTICACHE_URL
+    CELERY_RESULT_BACKEND = ELASTICACHE_URL
 
     CELERY_BROKER_USE_SSL = {'ssl_cert_reqs': ssl.CERT_NONE}
     CELERY_REDIS_BACKEND_USE_SSL = {'ssl_cert_reqs': ssl.CERT_NONE}
+    CELERY_BROKER_TRANSPORT_OPTIONS = {'is_cluster': True}
+    CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {'is_cluster': True}
 
-    CELERY_BROKER_TRANSPORT_OPTIONS = {
-        'is_cluster': True,
-        'unacked_key': '{celery}.unacked',
-        'unacked_index_key': '{celery}.unacked_index',
-    }
-    CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {
-        'is_cluster': True,
-    }
-
+    # Use namespaced queues for cluster mode
     CELERY_CONTROL_EXCHANGE = '{celery}.pidbox'
     CELERY_EVENT_QUEUE_PREFIX = '{celery}.eve'
     CELERY_TASK_DEFAULT_QUEUE = '{celery}.tasks'
@@ -374,8 +389,7 @@ else: # Production settings (EC2 with ElastiCache Cluster)
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
-# TIME_ZONE should be defined earlier in your settings.py
-CELERY_TIMEZONE = TIME_ZONE # Use TIME_ZONE from Django settings (ensure TIME_ZONE is defined)
+CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_SEND_SENT_EVENT = True
 
@@ -386,7 +400,7 @@ REST_AUTH = {
     'JWT_AUTH_SAMESITE': 'Lax',  # Match your SIMPLE_JWT setting
     'OLD_PASSWORD_FIELD_ENABLED': True,
     'PASSWORD_RESET_CONFIRM_SERIALIZER': 'dj_rest_auth.serializers.PasswordResetConfirmSerializer',
-    'PASSWORD_RESET_USE_SITES_DOMAIN': False, 
+    'PASSWORD_RESET_USE_SITES_DOMAIN': False,
     'PASSWORD_RESET_CONFIRM_URL_PATH': FRONTEND_PASSWORD_RESET_CONFIRM_PATH
 }
 
@@ -421,38 +435,43 @@ SOCIALACCOUNT_PROVIDERS = {
 }
 
 MIDDLEWARE = [
-    'silk.middleware.SilkyMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware', 
     'django.contrib.sessions.middleware.SessionMiddleware',
-    'quickstart.monitoring.middleware.MetricsMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'allauth.account.middleware.AccountMiddleware',
-    'quickstart.middleware.JWTCookieMiddleware'
+    'quickstart.middleware.JWTCookieMiddleware',
+    'silk.middleware.SilkyMiddleware',
+    'quickstart.monitoring.middleware.MetricsMiddleware',
 ]
 
+
+# --- Channels & Caches Configuration ---
+if DEBUG:
+    CHANNEL_LAYERS_HOSTS = ["redis://localhost:6379"]
+    CACHES_LOCATION = "redis://127.0.0.1:6379"
+else:
+    CHANNEL_LAYERS_HOSTS = ["rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379"]
+    CACHES_LOCATION = "rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379"
 
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {
-            "hosts": ["redis://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379"],
-            # "hosts": ["redis://localhost:6379"],
-        },
+        "CONFIG": {"hosts": CHANNEL_LAYERS_HOSTS},
     },
 }
-
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
-        # Use a different DB number than your Celery broker/backend
-        "LOCATION": "redis://127.0.0.1:6379" if IS_LOCAL_MACHINE else "rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379",
+        "LOCATION": CACHES_LOCATION,
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
+             # Add SSL options for production Redis if needed
+            **({'CONNECTION_POOL_KWARGS': {"ssl_cert_reqs": ssl.CERT_NONE}} if not DEBUG else {})
         },
         "KEY_PREFIX": "classeasily"
     }
