@@ -120,7 +120,7 @@ class CustomTokenRefreshView(APIView):
             user_id = refresh.payload.get("user_id")
             User = get_user_model()  # Moved import here or add globally
             try:
-                user = User.objects.select_related("role").get(id=user_id)
+                user = User.objects.select_related("role").get(userId=user_id)
                 user_serializer = CustomUserDetailsSerializer(
                     user
                 )  # Serialize user with permissions
