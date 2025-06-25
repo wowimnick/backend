@@ -4,6 +4,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated, BasePermission
+from django.db import transaction
 from django.db.models import (
     Q,
     Min,
@@ -48,6 +49,7 @@ from ....serializers.admin.class_management.class_management_serializers import 
     # AdminClassCreateSerializer, # Keep if used, commented out if not needed in this file context
     AdminClassCategorySerializer,
     AdminReviewSerializer,
+    ReassignmentSerializer,
     SubcategorySerializer,
 )
 
@@ -619,12 +621,32 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
 
     permission_classes = [IsAuthenticated, CanAccessCategoryAdmin]
     serializer_class = AdminClassCategorySerializer
-    queryset = ClassCategory.objects.prefetch_related("subcategories").order_by("name")
+    queryset = ClassCategory.objects.all().order_by("name")
     http_method_names = ["get", "post", "put", "patch", "delete", "head", "options"]
     filter_backends = [filters.SearchFilter]
     search_fields = ["name", "key"]
 
-    # --- Standard CRUD with Permissions ---
+    def get_queryset(self):
+        # Using get_queryset to handle annotations centrally
+        queryset = super().get_queryset()
+
+        # Prefetch subcategories with their own class counts
+        subcat_queryset = ClassSubcategory.objects.annotate(
+            class_count=Count("classes_in_subcategory", distinct=True)
+        )
+
+        # Annotate categories with their class counts
+        annotated_queryset = queryset.annotate(
+            active_classes=Count(
+                "classes_in_category",
+                filter=Q(classes_in_category__status="active"),
+                distinct=True,
+            ),
+            class_count=Count("classes_in_category", distinct=True),
+        ).prefetch_related(Prefetch("subcategories", queryset=subcat_queryset))
+
+        return annotated_queryset
+
     def create(self, request, *args, **kwargs):
         if not request.user.has_perm("quickstart.add_classcategory"):
             self.permission_denied(request, message="You cannot create categories.")
@@ -653,25 +675,22 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
 
         instance = self.get_object()
 
-        # FIX: Corrected attribute from 'classes' to 'classes_in_category'
         if instance.classes_in_category.exists():
             return Response(
                 {
-                    "detail": f"Cannot delete category '{instance.name}' as it is used by {instance.classes_in_category.count()} classes. Reassign them first."
+                    "error": "This category is in use. Please use the reassignment workflow.",
+                    "code": "reassignment_required",
+                    "class_count": instance.classes_in_category.count(),
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # REMOVED: The check for subcategories is removed. The `on_delete=models.CASCADE`
-        # on the ClassSubcategory model will now handle the deletion of subcategories automatically
-        # when the parent category is deleted.
-
         category_name = instance.name
+        instance.delete()
         logger.warning(
-            f"Category '{category_name}' (ID: {instance.pk}) and its subcategories deleted by Admin {request.user.email}"
+            f"Category '{category_name}' (ID: {instance.pk}) with no classes deleted by Admin {request.user.email}"
         )
-
-        return super().destroy(request, *args, **kwargs)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     def list(self, request, *args, **kwargs):
         if not request.user.has_perm("quickstart.view_classcategory"):
@@ -679,16 +698,7 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
 
         queryset = self.filter_queryset(self.get_queryset())
 
-        # Add the annotation for active classes
-        annotated_queryset = queryset.annotate(
-            active_classes=Count(
-                "classes_in_category",
-                filter=Q(classes_in_category__status="active"),
-                distinct=True,
-            )
-        )
-
-        page = self.paginate_queryset(annotated_queryset)
+        page = self.paginate_queryset(queryset)
         if page is not None:
             serializer = self.get_serializer(
                 page, many=True, context={"request": request}
@@ -696,7 +706,7 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
             return self.get_paginated_response(serializer.data)
 
         serializer = self.get_serializer(
-            annotated_queryset, many=True, context={"request": request}
+            queryset, many=True, context={"request": request}
         )
         return Response(serializer.data)
 
@@ -707,76 +717,56 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(instance, context={"request": request})
         return Response(serializer.data)
 
-    @action(detail=False, methods=["get"])
-    def stats(self, request):
-        """Get payment statistics for admin dashboard"""
-        if not request.user.has_perm("quickstart.view_payment_stats"):
+    @action(detail=True, methods=["post"], url_path="delete-with-reassignment")
+    @transaction.atomic
+    def delete_with_reassignment(self, request, pk=None):
+        if not request.user.has_perm("quickstart.delete_classcategory"):
             self.permission_denied(
-                request, message="You cannot view payment statistics."
+                request, message="You do not have permission to perform this action."
+            )
+
+        category_to_delete = self.get_object()
+        serializer = ReassignmentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        new_category_id = serializer.validated_data["new_id"]
+
+        if category_to_delete.id == new_category_id:
+            return Response(
+                {"error": "Cannot reassign to the same category."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         try:
-            end_date = timezone.now()
-            days = int(request.query_params.get("days", 30))  # Allow specifying days
-            start_date = end_date - timedelta(days=days)
-
-            payments_in_period = Payment.objects.filter(
-                created_at__range=[start_date, end_date], status="succeeded"
-            )
-
-            # --- UPDATED: Calculate Gross Revenue (GMV) and Platform Revenue ---
-            aggregates = payments_in_period.aggregate(
-                total_revenue=Coalesce(Sum("amount"), Decimal(0)),
-                platform_revenue=Coalesce(Sum("service_fee_amount"), Decimal(0)),
-            )
-            total_revenue = aggregates["total_revenue"]
-            platform_revenue = aggregates["platform_revenue"]
-
-            previous_start = start_date - timedelta(days=days)
-            previous_revenue = Payment.objects.filter(
-                created_at__range=[previous_start, start_date], status="succeeded"
-            ).aggregate(total=Coalesce(Sum("amount"), Decimal(0)))["total"]
-
-            revenue_growth = 0
-            if previous_revenue > 0:
-                revenue_growth = (
-                    (total_revenue - previous_revenue) / previous_revenue
-                ) * 100
-
-            pending_payments = Payment.objects.filter(status="pending").count()
-
-            refunded_amount = Payment.objects.filter(
-                created_at__range=[start_date, end_date],
-                status__in=["refunded", "partially_refunded"],
-            ).aggregate(total=Coalesce(Sum("refunded_amount"), Decimal(0)))["total"]
-
-            total_transactions = Payment.objects.filter(
-                created_at__range=[start_date, end_date]
-            ).count()
-            successful_transactions = payments_in_period.count()
-
+            new_category = ClassCategory.objects.get(pk=new_category_id)
+        except ClassCategory.DoesNotExist:
             return Response(
-                {
-                    "total_revenue": float(
-                        total_revenue
-                    ),  # This is Gross Merchandise Volume (GMV)
-                    "platform_revenue": float(
-                        platform_revenue
-                    ),  # This is your platform's cut
-                    "revenue_growth": round(revenue_growth, 1),
-                    "pending_payments": pending_payments,
-                    "refunded_amount": float(refunded_amount),
-                    "total_transactions": total_transactions,
-                    "successful_transactions": successful_transactions,
-                    "period_days": days,
-                }
+                {"error": "The selected new category does not exist."},
+                status=status.HTTP_404_NOT_FOUND,
             )
-        except Exception as e:
-            logger.error(f"Error getting payment stats: {str(e)}", exc_info=True)
-            return Response(
-                {"error": "Failed to retrieve payment statistics"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+
+        # MODIFIED: When reassigning a category, the subcategory MUST be cleared.
+        updated_count = ClassesMain.objects.filter(category=category_to_delete).update(
+            category=new_category, subcategory=None
+        )
+
+        logger.info(
+            f"{updated_count} classes reassigned from Category '{category_to_delete.name}' to '{new_category.name}' and subcategories cleared."
+        )
+
+        # Now, delete the old category (this will cascade to its subcategories)
+        category_name = category_to_delete.name
+        category_to_delete.delete()
+
+        logger.warning(
+            f"Category '{category_name}' (ID: {pk}) deleted after reassigning classes by Admin {request.user.email}."
+        )
+
+        return Response(
+            {
+                "detail": f"Successfully reassigned {updated_count} classes and deleted category '{category_name}'."
+            },
+            status=status.HTTP_200_OK,
+        )
 
     @action(detail=True, methods=["post"], url_path="subcategories")
     def add_subcategory(self, request, pk=None):
@@ -836,12 +826,14 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
 
     @action(
         detail=True,
-        methods=["delete"],
+        methods=["patch", "delete", "post"],
         url_path="subcategories/(?P<subcategory_pk>[^/.]+)",
     )
-    def delete_subcategory(self, request, pk=None, subcategory_pk=None):
-        if not request.user.has_perm("quickstart.delete_classsubcategory"):
-            self.permission_denied(request, message="You cannot delete subcategories.")
+    def update_or_delete_subcategory(self, request, pk=None, subcategory_pk=None):
+        if request.method == "POST":
+            return self.delete_subcategory_with_reassignment(
+                request, pk, subcategory_pk
+            )
 
         try:
             category = self.get_object()
@@ -854,21 +846,99 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # Check if the subcategory is in use before deleting
-        if subcategory.classes_in_subcategory.exists():
+        if request.method == "PATCH":
+            if not request.user.has_perm("quickstart.change_classsubcategory"):
+                self.permission_denied(
+                    request, message="You cannot edit subcategories."
+                )
+
+            serializer = SubcategorySerializer(
+                instance=subcategory, data=request.data, partial=True
+            )
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            logger.info(
+                f"Subcategory '{subcategory.name}' (ID: {subcategory_pk}) updated by Admin {request.user.email}"
+            )
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        if request.method == "DELETE":
+            if not request.user.has_perm("quickstart.delete_classsubcategory"):
+                self.permission_denied(
+                    request, message="You cannot delete subcategories."
+                )
+
+            if subcategory.classes_in_subcategory.exists():
+                return Response(
+                    {
+                        "error": "This subcategory is in use. Please use the reassignment workflow.",
+                        "code": "reassignment_required",
+                        "class_count": subcategory.classes_in_subcategory.count(),
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            subcategory_name = subcategory.name
+            subcategory.delete()
+            logger.warning(
+                f"Subcategory '{subcategory_name}' (ID: {subcategory_pk}) from Category '{category.name}' deleted by Admin {request.user.email}"
+            )
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @transaction.atomic
+    def delete_subcategory_with_reassignment(
+        self, request, category_pk, subcategory_pk
+    ):
+        if not request.user.has_perm("quickstart.delete_classsubcategory"):
+            self.permission_denied(
+                request, message="You do not have permission to perform this action."
+            )
+
+        serializer = ReassignmentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        new_subcategory_id = serializer.validated_data["new_id"]
+
+        try:
+            category = ClassCategory.objects.get(pk=category_pk)
+            subcategory_to_delete = ClassSubcategory.objects.get(
+                pk=subcategory_pk, category=category
+            )
+            new_subcategory = ClassSubcategory.objects.get(
+                pk=new_subcategory_id, category=category
+            )
+        except (ClassCategory.DoesNotExist, ClassSubcategory.DoesNotExist):
             return Response(
-                {
-                    "detail": f"Cannot delete subcategory '{subcategory.name}' as it is used by {subcategory.classes_in_subcategory.count()} classes."
-                },
+                {"error": "Invalid category or subcategory ID."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if subcategory_to_delete.id == new_subcategory.id:
+            return Response(
+                {"error": "Cannot reassign to the same subcategory."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        subcategory_name = subcategory.name
-        subcategory.delete()
-        logger.warning(
-            f"Subcategory '{subcategory_name}' (ID: {subcategory_pk}) from Category '{category.name}' deleted by Admin {request.user.email}"
+        updated_count = ClassesMain.objects.filter(
+            subcategory=subcategory_to_delete
+        ).update(subcategory=new_subcategory)
+
+        logger.info(
+            f"{updated_count} classes reassigned from Subcategory '{subcategory_to_delete.name}' to '{new_subcategory.name}'."
         )
-        return Response(status=status.HTTP_204_NO_CONTENT)
+
+        subcategory_name = subcategory_to_delete.name
+        subcategory_to_delete.delete()
+
+        logger.warning(
+            f"Subcategory '{subcategory_name}' deleted after reassigning classes by Admin {request.user.email}."
+        )
+
+        return Response(
+            {
+                "detail": f"Successfully reassigned {updated_count} classes and deleted subcategory '{subcategory_name}'."
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class AdminReviewViewSet(viewsets.ModelViewSet):

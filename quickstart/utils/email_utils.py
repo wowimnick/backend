@@ -9,23 +9,15 @@ from typing import Any, Dict, List, Optional
 import pytz
 import logging
 
-logger = logging.getLogger(__name__)
-try:
-    from ..tasks import send_email_task
-    CELERY_ENABLED = True
-except ImportError:
-    logger.error("Celery task 'send_email_task' not found. Email sending will be logged only.")
-    CELERY_ENABLED = False
-    # Define a dummy delay method if celery isn't installed/configured properly
-    class DummyTask:
-        def delay(self, *args, **kwargs):
-            logger.warning("Celery not configured. send_email_task.delay called but task not queued.")
-            pass
-    send_email_task = DummyTask()
+from CEBackend.celery import app as celery_app
 
 from ..models import Booking, CustomUser, Reviews, SupportTicket, BusinessInfo, VerificationRequest
 
 logger = logging.getLogger(__name__)
+
+_celery_task_found_and_logged = False
+TASK_NAME = 'quickstart.tasks.send_email_task'
+TRANSACTIONAL_TASK_NAME = 'quickstart.tasks.send_transactional_email_task'
 
 # --- Helper function to safely get related data (ensure business_timezone is included) ---
 def _get_booking_related_data(booking: Booking) -> dict:
@@ -142,7 +134,17 @@ def _generate_ics_content(booking: Booking, related_data: Dict[str, Any], user: 
 
 # --- Main Function to Send Templated Emails (NOW USES TASK QUEUE) ---
 
-def send_templated_email(recipient_list, template_name, context, subject=None, attachments=None): # Added attachments
+def send_templated_email(recipient_list, template_name, context, subject=None, attachments=None):
+    global _celery_task_found_and_logged
+
+    # 3. Add the one-time check and log message
+    if not _celery_task_found_and_logged:
+        if TASK_NAME in celery_app.tasks:
+            logger.info(f"✅ Celery integration successful. Task '{TASK_NAME}' is registered and ready.")
+        else:
+            logger.error(f"❌ Celery integration FAILED. Task '{TASK_NAME}' not found in Celery's task registry. Emails will not be sent.")
+        _celery_task_found_and_logged = True # Ensure this block runs only once
+
     if not recipient_list:
         logger.warning("No recipients provided for template %s, skipping email queuing.", template_name)
         return
@@ -171,21 +173,23 @@ def send_templated_email(recipient_list, template_name, context, subject=None, a
     subject = subject or "Notification from ClassEasily"
 
     try:
+        # Prepare the arguments for our NEW task
         task_kwargs = {
             'subject': subject,
-            'body': "Please view this email in an HTML-compatible client.", # Basic plain text body
-            'from_email': settings.DEFAULT_FROM_EMAIL,
+            'from_email': f"{settings.NOTIFICATION_SETTINGS.get('default_from_name', 'ClassEasily')} <{settings.DEFAULT_FROM_EMAIL}>",
             'to_list': recipient_list,
             'reply_to_list': [settings.NOTIFICATION_SETTINGS.get('reply_to')] if settings.NOTIFICATION_SETTINGS.get('reply_to') else None,
             'html_content': html_content,
-            'attachments': attachments # Pass attachments to the task
+            'attachments': attachments
         }
-        send_email_task.delay(**task_kwargs)
-        logger.info(f"Email task queued for {recipient_list} using template '{template_name}'. Subject: '{subject}'. Attachments: {'Yes' if attachments else 'No'}")
-    except Exception as e:
-        logger.error(f"Error queuing email task for template '{template_name}' to {recipient_list}: {e}", exc_info=True)
+        
+        # Call the task by its string name. This is the robust way.
+        celery_app.send_task(TRANSACTIONAL_TASK_NAME, kwargs=task_kwargs)
+        
+        logger.info(f"✅ Email task '{TRANSACTIONAL_TASK_NAME}' successfully queued for {recipient_list}.")
 
-# --- Specific Email Trigger Functions ---
+    except Exception as e:
+        logger.error(f"❌ An unexpected error occurred while trying to queue email task: {e}", exc_info=True)
 
 def send_welcome_email(user):
     """Sends the welcome email to a newly registered user."""

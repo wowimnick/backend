@@ -16,25 +16,27 @@ from ...models import AuditLog
 from ...serializers import (
     CustomTokenObtainPairSerializer,
     CustomUserDetailsSerializer,
-    CustomRegisterSerializer
+    CustomRegisterSerializer,
 )
 
 logger = logging.getLogger(__name__)
 
+
 def get_client_ip(request):
     """Get client IP address from request."""
-    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+    x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
     if x_forwarded_for:
-        ip = x_forwarded_for.split(',')[0]
+        ip = x_forwarded_for.split(",")[0]
     else:
-        ip = request.META.get('REMOTE_ADDR')
+        ip = request.META.get("REMOTE_ADDR")
     return ip
+
 
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
     # --- Rate Limiting ---
     throttle_classes = [ScopedRateThrottle]
-    throttle_scope = 'sensitive'
+    throttle_scope = "sensitive"
 
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -42,118 +44,127 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         try:
             serializer.is_valid(raise_exception=True)
         except TokenError as e:
-            logger.warning(f"Failed login attempt for user: {request.data.get('email')}")
+            logger.warning(
+                f"Failed login attempt for user: {request.data.get('email')}"
+            )
             # You could add a 'failed_login' audit log here if desired
             # AuditLog.objects.create(...)
             error_detail = e.args[0] if e.args else "Invalid credentials."
-            return Response({"detail": error_detail}, status=status.HTTP_401_UNAUTHORIZED)
-        
+            return Response(
+                {"detail": error_detail}, status=status.HTTP_401_UNAUTHORIZED
+            )
+
         # --- LOGIN IS SUCCESSFUL AT THIS POINT ---
 
         validated_data = serializer.validated_data
-        user = serializer.user # The serializer conveniently gives us the user object
+        user = serializer.user  # The serializer conveniently gives us the user object
 
         try:
             AuditLog.objects.create(
                 user=user,
                 user_email=user.email,
-                action='login',
+                action="login",
                 details=f"User '{user.email}' logged in successfully.",
                 ip_address=get_client_ip(request),
-                user_agent=request.META.get('HTTP_USER_AGENT', '')
+                user_agent=request.META.get("HTTP_USER_AGENT", ""),
             )
             logger.info(f"Successful login audited for user: {user.email}")
         except Exception as audit_error:
             # Log the error but don't fail the login process
-            logger.error(f"Failed to create login audit log for user {user.email}: {audit_error}")
-
+            logger.error(
+                f"Failed to create login audit log for user {user.email}: {audit_error}"
+            )
 
         # --- 2. ASSEMBLE RESPONSE PAYLOAD ---
         response_data = {
-            'user': validated_data['user'],
+            "user": validated_data["user"],
         }
         response = Response(response_data, status=status.HTTP_200_OK)
 
         # --- 3. SET COOKIES ---
         response.set_cookie(
-            settings.SIMPLE_JWT['AUTH_COOKIE'],
-            validated_data['access'],
-            max_age=settings.SIMPLE_JWT['ACCESS_TOKEN_LIFETIME'].total_seconds(),
+            settings.SIMPLE_JWT["AUTH_COOKIE"],
+            validated_data["access"],
+            max_age=settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"].total_seconds(),
             httponly=True,
-            samesite=settings.SIMPLE_JWT['AUTH_COOKIE_SAMESITE'],
-            secure=settings.SIMPLE_JWT['AUTH_COOKIE_SECURE']
+            samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],
+            secure=settings.SIMPLE_JWT["AUTH_COOKIE_SECURE"],
         )
 
         response.set_cookie(
-            settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'],
-            validated_data['refresh'],
-            max_age=settings.SIMPLE_JWT['REFRESH_TOKEN_LIFETIME'].total_seconds(),
+            settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"],
+            validated_data["refresh"],
+            max_age=settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds(),
             httponly=True,
-            samesite=settings.SIMPLE_JWT['AUTH_COOKIE_SAMESITE'],
-            secure=settings.SIMPLE_JWT['AUTH_COOKIE_SECURE']
+            samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],
+            secure=settings.SIMPLE_JWT["AUTH_COOKIE_SECURE"],
         )
 
         return response
 
+
 class CustomTokenRefreshView(APIView):
-     def post(self, request, *args, **kwargs):
-        refresh_token = request.COOKIES.get(settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'])
+    def post(self, request, *args, **kwargs):
+        refresh_token = request.COOKIES.get(settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"])
 
         if not refresh_token:
             return Response(
                 {"detail": "Refresh token not found in cookies"},
-                status=status.HTTP_401_UNAUTHORIZED
+                status=status.HTTP_401_UNAUTHORIZED,
             )
 
         try:
             refresh = RefreshToken(refresh_token)
 
             # --- Get User and Permissions ---
-            user_id = refresh.payload.get('user_id')
-            User = get_user_model() # Moved import here or add globally
+            user_id = refresh.payload.get("user_id")
+            User = get_user_model()  # Moved import here or add globally
             try:
-                user = User.objects.select_related('role').get(id=user_id)
-                user_serializer = CustomUserDetailsSerializer(user) # Serialize user with permissions
+                user = User.objects.select_related("role").get(id=user_id)
+                user_serializer = CustomUserDetailsSerializer(
+                    user
+                )  # Serialize user with permissions
                 user_data = user_serializer.data
             except User.DoesNotExist:
-                 # Should not happen if token is valid, but handle defensively
-                 logger.error(f"User with ID {user_id} from valid refresh token not found.")
-                 raise TokenError("User not found.")
+                # Should not happen if token is valid, but handle defensively
+                logger.error(
+                    f"User with ID {user_id} from valid refresh token not found."
+                )
+                raise TokenError("User not found.")
             # ----------------------------
 
-            data = {
-                'access': str(refresh.access_token),
-                'user': user_data
-            }
+            data = {"access": str(refresh.access_token), "user": user_data}
 
-            if settings.SIMPLE_JWT['ROTATE_REFRESH_TOKENS']:
+            if settings.SIMPLE_JWT["ROTATE_REFRESH_TOKENS"]:
                 new_refresh = RefreshToken.for_user(user)
-                data['refresh'] = str(new_refresh)
+                data["refresh"] = str(new_refresh)
 
             response = Response(data, status=status.HTTP_200_OK)
 
             response.set_cookie(
-                settings.SIMPLE_JWT['AUTH_COOKIE'],
-                data['access'],
-                max_age=settings.SIMPLE_JWT['ACCESS_TOKEN_LIFETIME'].total_seconds(),
+                settings.SIMPLE_JWT["AUTH_COOKIE"],
+                data["access"],
+                max_age=settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"].total_seconds(),
                 httponly=True,
-                samesite=settings.SIMPLE_JWT['AUTH_COOKIE_SAMESITE'],
-                secure=settings.SIMPLE_JWT['AUTH_COOKIE_SECURE']
+                samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],
+                secure=settings.SIMPLE_JWT["AUTH_COOKIE_SECURE"],
             )
-            if settings.SIMPLE_JWT['ROTATE_REFRESH_TOKENS']:
-                 response.set_cookie(
-                    settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'],
-                    data['refresh'],
-                    max_age=settings.SIMPLE_JWT['REFRESH_TOKEN_LIFETIME'].total_seconds(),
+            if settings.SIMPLE_JWT["ROTATE_REFRESH_TOKENS"]:
+                response.set_cookie(
+                    settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"],
+                    data["refresh"],
+                    max_age=settings.SIMPLE_JWT[
+                        "REFRESH_TOKEN_LIFETIME"
+                    ].total_seconds(),
                     httponly=True,
-                    samesite=settings.SIMPLE_JWT['AUTH_COOKIE_SAMESITE'],
-                    secure=settings.SIMPLE_JWT['AUTH_COOKIE_SECURE']
-                 )
-                 if settings.SIMPLE_JWT['BLACKLIST_AFTER_ROTATION']:
-                     try:
-                         refresh.blacklist()
-                     except AttributeError:
-                         pass
+                    samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],
+                    secure=settings.SIMPLE_JWT["AUTH_COOKIE_SECURE"],
+                )
+                if settings.SIMPLE_JWT["BLACKLIST_AFTER_ROTATION"]:
+                    try:
+                        refresh.blacklist()
+                    except AttributeError:
+                        pass
 
             return response
 
@@ -162,24 +173,27 @@ class CustomTokenRefreshView(APIView):
             # Ensure cookies are cleared on refresh failure as well
             response = Response(
                 {"detail": "Token refresh failed or user not found."},
-                status=status.HTTP_401_UNAUTHORIZED
+                status=status.HTTP_401_UNAUTHORIZED,
             )
-            response.delete_cookie(settings.SIMPLE_JWT['AUTH_COOKIE'])
-            response.delete_cookie(settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'])
+            response.delete_cookie(settings.SIMPLE_JWT["AUTH_COOKIE"])
+            response.delete_cookie(settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"])
             return response
+
 
 class UserUpdateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def patch(self, request):
-        print(f"UserUpdateView: Authenticated user: {request.user.email if request.user.is_authenticated else 'Anonymous'}") # Debug log
+        print(
+            f"UserUpdateView: Authenticated user: {request.user.email if request.user.is_authenticated else 'Anonymous'}"
+        )  # Debug log
         print("Received data:", request.data)
 
         serializer = CustomUserDetailsSerializer(
-            request.user, # This should now be the authenticated user instance
+            request.user,  # This should now be the authenticated user instance
             data=request.data,
             partial=True,
-            context={'request': request} # Good practice to pass request context
+            context={"request": request},  # Good practice to pass request context
         )
         if serializer.is_valid():
             print("Valid data:", serializer.validated_data)
@@ -188,16 +202,21 @@ class UserUpdateView(APIView):
         print("Serializer errors:", serializer.errors)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+
 class LogoutView(APIView):
     def post(self, request):
         try:
-            refresh_token = request.COOKIES.get(settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'])
+            refresh_token = request.COOKIES.get(
+                settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"]
+            )
 
             response = Response(status=status.HTTP_205_RESET_CONTENT)
 
             # Always delete cookies, even if token processing fails
-            response.delete_cookie(settings.SIMPLE_JWT['AUTH_COOKIE'])
-            response.delete_cookie(settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'])
+            response.delete_cookie(settings.SIMPLE_JWT["AUTH_COOKIE"])
+            response.delete_cookie(settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"])
+            # Also delete the CSRF token to ensure a clean state for the next session.
+            response.delete_cookie(settings.CSRF_COOKIE_NAME)
 
             # Optional: Attempt to blacklist token if present
             if refresh_token:
@@ -212,24 +231,27 @@ class LogoutView(APIView):
         except Exception as e:
             logger.error(f"Logout error: {e}")
             response = Response(
-                {"detail": "Logout failed"},
-                status=status.HTTP_400_BAD_REQUEST
+                {"detail": "Logout failed"}, status=status.HTTP_400_BAD_REQUEST
             )
-            response.delete_cookie(settings.SIMPLE_JWT['AUTH_COOKIE'])
-            response.delete_cookie(settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'])
+            response.delete_cookie(settings.SIMPLE_JWT["AUTH_COOKIE"])
+            response.delete_cookie(settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"])
+            response.delete_cookie(settings.CSRF_COOKIE_NAME)
             return response
+
 
 class CustomRegisterView(RegisterView):
     serializer_class = CustomRegisterSerializer
     # --- Rate Limiting ---
     throttle_classes = [ScopedRateThrottle]
-    throttle_scope = 'sensitive'
+    throttle_scope = "sensitive"
 
     def post(self, request, *args, **kwargs):
         logger.debug(f"Registration request received: {request.data.get('email')}")
         serializer = self.get_serializer(data=request.data)
         if not serializer.is_valid():
-            logger.error(f"Registration Serializer errors for {request.data.get('email')}: {serializer.errors}")
+            logger.error(
+                f"Registration Serializer errors for {request.data.get('email')}: {serializer.errors}"
+            )
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         try:
@@ -237,21 +259,31 @@ class CustomRegisterView(RegisterView):
             response = super().post(request, *args, **kwargs)
 
             # Log *after* the super().post() call, which includes user creation and signal sending
-            if response.status_code in [status.HTTP_201_CREATED, status.HTTP_200_OK]: # Check for success status
-                logger.info(f"REGISTRATION VIEW LOG: super().post completed successfully for {request.data.get('email')}. Status: {response.status_code}. About to return response.")
+            if response.status_code in [
+                status.HTTP_201_CREATED,
+                status.HTTP_200_OK,
+            ]:  # Check for success status
+                logger.info(
+                    f"REGISTRATION VIEW LOG: super().post completed successfully for {request.data.get('email')}. Status: {response.status_code}. About to return response."
+                )
                 # At this point, the email confirmation *should* have been triggered by allauth/dj-rest-auth
                 # If you see this log, but NO adapter logs, the problem is likely in the connection
                 # between dj-rest-auth/allauth and your adapter, or settings.
             else:
-                 logger.warning(f"REGISTRATION VIEW LOG: super().post for {request.data.get('email')} returned non-success status: {response.status_code}, Response data: {response.data}")
+                logger.warning(
+                    f"REGISTRATION VIEW LOG: super().post for {request.data.get('email')} returned non-success status: {response.status_code}, Response data: {response.data}"
+                )
 
             return response
 
         except Exception as e:
             # Catch any unexpected errors during the super().post call or user creation
-            logger.error(f"REGISTRATION VIEW LOG: Error during super().post or signup flow for {request.data.get('email')}: {e}", exc_info=True)
+            logger.error(
+                f"REGISTRATION VIEW LOG: Error during super().post or signup flow for {request.data.get('email')}: {e}",
+                exc_info=True,
+            )
             # Return a generic error response
             return Response(
                 {"detail": "An internal error occurred during registration."},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )

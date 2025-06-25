@@ -136,44 +136,37 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
     def get_serializer_class(self):
         if self.action == "create":
             return ClassCreateSerializer
-        # Add specific serializers for actions if needed (e.g., images)
-        # if self.action == 'images': return ClassImageSerializer # Not standard, handled in action
-        return ManagedClassSerializer  # Default for list, retrieve, update
+        return ManagedClassSerializer
 
     def get_queryset(self):
         """Filter queryset to only classes belonging to the user's associated business."""
         user = self.request.user
-        # CanManageOwnClasses permission is checked by DRF automatically.
-        # Find the business associated with the user (owner or manager).
-        # This relies on the user being linked correctly to a BusinessInfo instance.
         business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
 
         if not business:
-            # Should not happen if permissions are set correctly, but safeguard.
             logger.warning(
                 f"User {user.email} lacks associated business for BusinessClassViewSet."
             )
             return ClassesMain.objects.none()
 
-        # Filter classes by the user's business
+        # MODIFIED: Removed prefetching of schedules to make this query much lighter.
+        # Schedules will now be fetched on-demand by the frontend when needed.
         return (
             ClassesMain.objects.filter(businessId=business)
             .exclude(status="suspended")
             .select_related("businessId", "category", "subcategory")
             .prefetch_related(
                 "images",
-                # Prefetch options with schedules for management view
+                # Prefetch options, but NOT their schedules. This is the key change.
                 Prefetch(
                     "options",
-                    queryset=ClassOption.objects.prefetch_related("schedules").order_by(
-                        "optionId"
-                    ),
+                    queryset=ClassOption.objects.order_by("optionId"),
                 ),
             )
             .annotate(
                 average_rating=Coalesce(
                     self.AVERAGE_RATING_SUBQUERY, Value(Decimal("0.0"))
-                ),  # Default to Decimal
+                ),
                 review_count=Coalesce(self.REVIEW_COUNT_SUBQUERY, Value(0)),
             )
             .distinct()
@@ -365,15 +358,9 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         instance = serializer.instance  # Get instance before saving serializer
         user = self.request.user
+        request_data = self.request.data  # Get raw request data
 
-        # Prevent changing businessId, category, subcategory via PATCH/PUT
-        serializer.validated_data.pop("businessId", None)
-        serializer.validated_data.pop("category", None)
-        serializer.validated_data.pop("subcategory", None)
-        serializer.validated_data.pop("category_key", None)
-        serializer.validated_data.pop("subcategory_key", None)
-
-        # Handle status changes carefully
+        # --- Handle status changes carefully ---
         new_status = serializer.validated_data.get("status")
         if new_status == "suspended":
             if instance.status != "suspended":
@@ -383,14 +370,57 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
 
         # --- Start Transaction ---
         with transaction.atomic():
-            # Save the main class instance first with allowed changes
-            updated_instance = serializer.save()
+            # --- Prepare category/subcategory for update (THE FIX) ---
+            update_kwargs = {}
+            category_key = request_data.get("category_key")
+
+            # Check if category_key was provided in the request
+            if category_key is not None:
+                try:
+                    new_category = ClassCategory.objects.get(key=category_key)
+                    update_kwargs["category"] = new_category
+                    logger.info(
+                        f"Preparing to update category for class {instance.pk} to '{new_category.name}'."
+                    )
+
+                    # When category changes, subcategory MUST be re-evaluated.
+                    subcategory_key = request_data.get("subcategory_key")
+                    if subcategory_key:
+                        new_subcategory = ClassSubcategory.objects.get(
+                            category=new_category, key=subcategory_key
+                        )
+                        update_kwargs["subcategory"] = new_subcategory
+                        logger.info(
+                            f"Preparing to update subcategory for class {instance.pk} to '{new_subcategory.name}'."
+                        )
+                    else:
+                        # If a new category is set but no subcategory is provided, clear the subcategory.
+                        update_kwargs["subcategory"] = None
+                        logger.info(
+                            f"Clearing subcategory for class {instance.pk} due to category change."
+                        )
+
+                except ClassCategory.DoesNotExist:
+                    raise DRFValidationError(
+                        {
+                            "category_key": f"Category with key '{category_key}' not found."
+                        }
+                    )
+                except ClassSubcategory.DoesNotExist:
+                    raise DRFValidationError(
+                        {
+                            "subcategory_key": f"Subcategory with key '{subcategory_key}' not found in the selected category."
+                        }
+                    )
+
+            # Save the main class instance first with allowed changes from the serializer
+            # and the manually prepared category/subcategory changes.
+            updated_instance = serializer.save(**update_kwargs)
             logger.info(
                 f"Class '{updated_instance.title}' (ID: {updated_instance.pk}) base fields updated by user {user.email}"
             )
 
             # --- Process Image Updates ---
-            request_data = self.request.data
             request_files = self.request.FILES
 
             # 1. Delete images marked for deletion
@@ -404,9 +434,7 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                     for img in images_to_delete:
                         if img.image:
                             try:
-                                default_storage.delete(
-                                    img.image.name
-                                )  # Ensure default_storage is imported
+                                default_storage.delete(img.image.name)
                             except Exception as e:
                                 logger.warning(
                                     f"Could not delete S3 file for image {img.imageId} during update: {e}"
@@ -590,10 +618,6 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
         try:
             instance.status = "suspended"
             instance.save(update_fields=["status"])
-            # Optionally deactivate related options/schedules here if needed
-            # instance.options.update(active=False)
-            # Schedule.objects.filter(option__classId=instance).update(is_active=False)
-            # Consider cancelling future bookings associated with this class's instances
             logger.info(
                 f"Class '{class_title}' (ID: {class_pk}) deactivated by business user {user_email}"
             )
@@ -847,6 +871,7 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
 
                     schedules_to_create.append(
                         Schedule(
+                            name=data.get("name"),  # Pass the name to each new schedule
                             option=option,
                             date=current_date,
                             time=time_val,

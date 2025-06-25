@@ -301,10 +301,7 @@ class CustomUser(AbstractUser):
         "Role", on_delete=models.SET_NULL, null=True, blank=True
     )  # Assuming Role model is defined
     favorited = models.ManyToManyField(
-        "ClassesMain", 
-        through="Favorites", 
-        related_name="favorited_by", 
-        blank=True
+        "ClassesMain", through="Favorites", related_name="favorited_by", blank=True
     )
     user_timezone = models.CharField(
         max_length=50,
@@ -313,7 +310,9 @@ class CustomUser(AbstractUser):
         blank=True,  # Allow blank if you want to prompt user or guess later
         help_text="User's preferred IANA timezone for displaying dates/times.",
     )
-    is_unsubscribed = models.BooleanField(default=False, help_text="User has opted out of marketing emails.")
+    is_unsubscribed = models.BooleanField(
+        default=False, help_text="User has opted out of marketing emails."
+    )
     unsubscribed_at = models.DateTimeField(null=True, blank=True)
 
     USERNAME_FIELD = "email"
@@ -408,13 +407,13 @@ REFUND_POLICY_CHOICES = [
     ("none", "No refunds"),
 ]
 
-CANCELLATION_POLICY_CHOICES = [ 
-        ("flexible", "Flexible (up to 1 hour before)"), 
-        ("24h", "24 Hours Notice"),
-        ("48h", "48 Hours Notice"),
-        ("72h", "72 Hours Notice"),
-        ("strict", "Strict (Non-refundable)") 
-    ]
+CANCELLATION_POLICY_CHOICES = [
+    ("flexible", "Flexible (up to 1 hour before)"),
+    ("24h", "24 Hours Notice"),
+    ("48h", "48 Hours Notice"),
+    ("72h", "72 Hours Notice"),
+    ("strict", "Strict (Non-refundable)"),
+]
 
 STRIPE_STATUS_CHOICES = [
     ("unlinked", "Unlinked"),
@@ -435,15 +434,15 @@ class BusinessInfo(models.Model):
     )
     businessName = models.CharField(max_length=100)
     CONTACT_PRIVACY_CHOICES = [
-        ('on_booking', 'Show After Booking'),
-        ('public', 'Show Publicly'),
-        ('public_with_chat', 'Show Publicly & Allow Chat'), 
+        ("on_booking", "Show After Booking"),
+        ("public", "Show Publicly"),
+        ("public_with_chat", "Show Publicly & Allow Chat"),
     ]
     contact_privacy = models.CharField(
         max_length=20,
         choices=CONTACT_PRIVACY_CHOICES,
-        default='on_booking',
-        help_text="Choose who can see your direct contact information."
+        default="on_booking",
+        help_text="Choose who can see your direct contact information.",
     )
     businessType = models.CharField(
         max_length=50,
@@ -467,7 +466,7 @@ class BusinessInfo(models.Model):
     # --- Contact & Website ---
     studentContactPhone = models.CharField(max_length=100)
     studentContactEmail = models.EmailField()
-    website = models.URLField(max_length=255, blank=True, null=True) # ADDED
+    website = models.URLField(max_length=255, blank=True, null=True)  # ADDED
     preferredContact = models.CharField(
         max_length=20,
         choices=[
@@ -489,11 +488,11 @@ class BusinessInfo(models.Model):
         max_digits=11, decimal_places=8, null=True, blank=True
     )
     showExactLocation = models.BooleanField(default=True)
-    business_timezone = models.CharField( # ADDED
+    business_timezone = models.CharField(  # ADDED
         max_length=50,
         choices=COMMON_TIMEZONE_CHOICES,
         default="UTC",
-        blank=False, # Make it required during registration
+        blank=False,  # Make it required during registration
         help_text="Primary IANA timezone for this business's operations.",
     )
 
@@ -527,12 +526,12 @@ class BusinessInfo(models.Model):
 
     # --- Class/Category Information ---
     classCategory = models.ForeignKey(
-        'ClassCategory',
+        "ClassCategory",
         on_delete=models.SET_NULL,
         null=True,
-        blank=False, # Still required in forms
+        blank=False,  # Still required in forms
         related_name="businesses_in_category",
-        help_text="The primary category that defines the business."
+        help_text="The primary category that defines the business.",
     )
     subcategories = models.JSONField(default=list, blank=True)
     classFormats = models.JSONField(default=list, blank=True)
@@ -560,10 +559,17 @@ class BusinessInfo(models.Model):
     privacyAccepted = models.BooleanField(default=False)
 
     # --- Additional Useful Fields ---
-    social_media_links = models.JSONField(default=dict, blank=True, help_text="e.g. {'facebook': 'url', 'instagram': 'url'}") # ADDED
-    tags_keywords = models.JSONField(default=list, blank=True, help_text="List of keywords for searchability") # ADDED
-    founding_year = models.PositiveIntegerField(null=True, blank=True, help_text="Year the business was founded") # ADDED
-
+    social_media_links = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="e.g. {'facebook': 'url', 'instagram': 'url'}",
+    )  # ADDED
+    tags_keywords = models.JSONField(
+        default=list, blank=True, help_text="List of keywords for searchability"
+    )  # ADDED
+    founding_year = models.PositiveIntegerField(
+        null=True, blank=True, help_text="Year the business was founded"
+    )  # ADDED
 
     # --- Cached Aggregates ---
     total_reviews_count = models.IntegerField(
@@ -608,6 +614,7 @@ class BusinessInfo(models.Model):
             logger.info(
                 f"Updated review aggregates for Business {self.businessId}: Count={self.total_reviews_count}, AvgRating={self.average_rating}"
             )
+
     class Meta:
         db_table = "business_info"
         verbose_name_plural = "Business Information"
@@ -816,12 +823,8 @@ class ClassesMain(models.Model):
 def get_classesmain_search_vector(instance: ClassesMain):
     """Helper function to construct the search vector for a ClassesMain instance."""
     vector_components = [
-        SearchVector(
-            Value(instance.title), weight="A", config="english"
-        ),
-        SearchVector(
-            Value(instance.description), weight="B", config="english"
-        ),
+        SearchVector(Value(instance.title), weight="A", config="english"),
+        SearchVector(Value(instance.description), weight="B", config="english"),
     ]
     if instance.businessId:
         vector_components.append(
@@ -951,9 +954,7 @@ class Favorites(models.Model):
     class Meta:
         db_table = "favorites"
         unique_together = ("userId", "classId")
-        indexes = [
-            models.Index(fields=['userId', '-createdAt']) 
-        ]
+        indexes = [models.Index(fields=["userId", "-createdAt"])]
 
 
 class ClassOption(models.Model):
@@ -992,13 +993,13 @@ class ClassOption(models.Model):
     # Additional Info
     equipment = models.JSONField(default=list, blank=True)
     tags = models.JSONField(default=list, blank=True)
-    
+
     CANCELLATION_POLICY_CHOICES = [
         ("flexible", "Flexible (up to 1 hour before)"),
         ("24h", "24 Hours Notice"),
         ("48h", "48 Hours Notice"),
         ("72h", "72 Hours Notice"),
-        ("strict", "Strict (Non-refundable)")
+        ("strict", "Strict (Non-refundable)"),
     ]
     cancellationPolicy = models.CharField(
         max_length=30,
@@ -1008,7 +1009,7 @@ class ClassOption(models.Model):
     cancellationRefundPercentage = models.PositiveIntegerField(
         default=100,
         validators=[MinValueValidator(0), MaxValueValidator(100)],
-        help_text="Percentage of refund if cancellation policy conditions are met (0-100)."
+        help_text="Percentage of refund if cancellation policy conditions are met (0-100).",
     )
 
     createdAt = models.DateTimeField(auto_now_add=True)
@@ -1016,13 +1017,13 @@ class ClassOption(models.Model):
 
     # Property to access parent class title
     @property
-    def parent_class_title(self): 
+    def parent_class_title(self):
         return self.classId.title
 
     @property
-    def parent_class_description(self): 
+    def parent_class_description(self):
         return self.classId.description
-    
+
     def __str__(self):
         # Refer to the class's title for identification
         return f"Option for {self.classId.title} (ID: {self.optionId})"
@@ -1031,7 +1032,14 @@ class ClassOption(models.Model):
         db_table = "class_options"
         indexes = [models.Index(fields=["classId"])]
 
+
 class Schedule(models.Model):
+    name = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="An optional name for this schedule, e.g., 'Weekend Morning Session'.",
+    )
     option = models.ForeignKey(
         ClassOption, on_delete=models.CASCADE, related_name="schedules"
     )
@@ -1245,6 +1253,7 @@ class Schedule(models.Model):
         ordering = ["day", "time"]
         indexes = [
             models.Index(fields=["option", "day", "time"]),
+            models.Index(fields=["name"]),
         ]
 
 
@@ -1363,16 +1372,13 @@ class ScheduleInstance(models.Model):
 class Booking(models.Model):
     id = models.AutoField(primary_key=True)
     user_facing_reference = models.CharField(
-        max_length=20,
-        unique=True,
-        editable=False,
-        db_index=True,
-        null=True, 
-        blank=True 
+        max_length=20, unique=True, editable=False, db_index=True, null=True, blank=True
     )
     booking_group_id = models.UUIDField(null=True, blank=True)
     schedule_instance = models.ForeignKey(
-        "ScheduleInstance", on_delete=models.CASCADE, related_name="bookings" # Use string if defined later
+        "ScheduleInstance",
+        on_delete=models.CASCADE,
+        related_name="bookings",  # Use string if defined later
     )
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="bookings"
@@ -1427,14 +1433,16 @@ class Booking(models.Model):
         # Generate a unique reference, e.g., BKG-XXXXXX
         # Ensure it's unique before saving.
         while True:
-            prefix = "BKG-" # Or your preferred prefix
-            random_part = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+            prefix = "BKG-"  # Or your preferred prefix
+            random_part = "".join(
+                random.choices(string.ascii_uppercase + string.digits, k=6)
+            )
             reference = f"{prefix}{random_part}"
             if not Booking.objects.filter(user_facing_reference=reference).exists():
                 return reference
 
     def save(self, *args, **kwargs):
-        if not self.user_facing_reference and self.status == 'confirmed': 
+        if not self.user_facing_reference and self.status == "confirmed":
             # Generate reference only when booking is confirmed (e.g., by webhook)
             self.user_facing_reference = self._generate_user_facing_reference()
         super().save(*args, **kwargs)
@@ -1448,14 +1456,17 @@ class Booking(models.Model):
             models.Index(fields=["enrollment_type", "status"]),
             models.Index(fields=["status"]),
             models.Index(fields=["booking_group_id"]),
-            models.Index(fields=["user_facing_reference"]), # Index new field
+            models.Index(fields=["user_facing_reference"]),  # Index new field
         ]
         permissions = [
             ("cancel_any_booking", "Can cancel any user's booking (Admin)"),
             ("view_booking_analytics", "Can view aggregated booking analytics"),
             ("export_booking_data", "Can export booking data"),
             ("access_booking_admin", "Can access the Booking Administration section"),
-            ("view_own_booking_analytics", "Can view booking analytics for own business"),
+            (
+                "view_own_booking_analytics",
+                "Can view booking analytics for own business",
+            ),
             ("cancel_business_booking", "Can cancel bookings within own business"),
         ]
 
@@ -1473,10 +1484,10 @@ class Payment(models.Model):
     stripe_charge_id = models.CharField(max_length=255, null=True, blank=True)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     service_fee_amount = models.DecimalField(
-        max_digits=10, 
-        decimal_places=2, 
+        max_digits=10,
+        decimal_places=2,
         default=Decimal("0.00"),
-        help_text="The portion of the payment amount that is the platform's service fee."
+        help_text="The portion of the payment amount that is the platform's service fee.",
     )
     currency = models.CharField(max_length=3, default="USD")
 
@@ -1745,7 +1756,9 @@ class SupportTicket(models.Model):
     # Timestamps and management
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    first_responded_at = models.DateTimeField(null=True, blank=True, help_text="Timestamp of the first agent reply.")
+    first_responded_at = models.DateTimeField(
+        null=True, blank=True, help_text="Timestamp of the first agent reply."
+    )
     assigned_to = models.ForeignKey(
         CustomUser,
         on_delete=models.SET_NULL,
@@ -1781,7 +1794,12 @@ class NotificationCampaign(models.Model):
     """Notification campaign records"""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    celery_task_id = models.CharField(max_length=255, blank=True, null=True, help_text="ID of the master Celery task for sending this campaign.")
+    celery_task_id = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        help_text="ID of the master Celery task for sending this campaign.",
+    )
     title = models.CharField(max_length=255)
 
     NOTIFICATION_TYPES = [

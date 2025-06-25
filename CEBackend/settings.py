@@ -20,19 +20,32 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 USE_TZ = True
-TIME_ZONE = 'UTC'
-SITE_DOMAIN = os.environ.get('SITE_DOMAIN', 'classeasily.com')
+TIME_ZONE = "UTC"
+SITE_DOMAIN = os.environ.get("SITE_DOMAIN", "classeasily.com")
 
-RESEND_API_KEY = os.environ.get('RESEND_API_KEY', 're_R6FMGC6t_B2T88HHXmcRkmxuBtkPq7gdZ')
+RESEND_API_KEY = os.environ.get(
+    "RESEND_API_KEY", "re_R6FMGC6t_B2T88HHXmcRkmxuBtkPq7gdZ"
+)
 
 # Temporarily not implemented
-RESEND_WEBHOOK_SECRET = os.environ.get('RESEND_WEBHOOK_SECRET', 'your_super_secret_webhook_key')
-UNSUBSCRIBE_SECRET_KEY = os.environ.get('UNSUBSCRIBE_SECRET_KEY', 'another-super-secret-key-for-unsubscribe')
+RESEND_WEBHOOK_SECRET = os.environ.get(
+    "RESEND_WEBHOOK_SECRET", "your_super_secret_webhook_key"
+)
+UNSUBSCRIBE_SECRET_KEY = os.environ.get(
+    "UNSUBSCRIBE_SECRET_KEY", "another-super-secret-key-for-unsubscribe"
+)
 # Temporarily not implemented
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'django-insecure-1yfmf)77ngglvh_18m&(7ub5a$abwu!99$2lmx@)3dk4)!=m4l')
+SECRET_KEY = os.environ.get(
+    "DJANGO_SECRET_KEY",
+    "django-insecure-1yfmf)77ngglvh_18m&(7ub5a$abwu!99$2lmx@)3dk4)!=m4l",
+)
 
+GOOGLE_CLIENT_ID = (
+    "1065252482453-6e8md9bvegiroas8p08vqpenf7fuc9vd.apps.googleusercontent.com"
+)
+GOOGLE_CLIENT_SECRET = "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"
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = False
 
@@ -44,22 +57,26 @@ if not DEBUG:
     SECURE_HSTS_SECONDS = 31536000
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
-    
-    # --- ADD THIS LINE ---
-    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
     # The following should be your actual production domains
-    ALLOWED_HOSTS = ['classeasily.com', 'www.classeasily.com']
+    ALLOWED_HOSTS = ["classeasily.com", "www.classeasily.com"]
 else:
     # Development hosts
-    ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'classeasily.com', '3.142.223.49']
+    ALLOWED_HOSTS = ["localhost", "127.0.0.1", "classeasily.com", "3.142.223.49"]
 
 
-STRIPE_PUBLIC_KEY = 'pk_test_51Qn8JYFsNqYi8b0PAujbtEGNoTcLJTpaS2UefQxe5u4BquZyrIK48aRKbhHLRh45em0EFds7SNhlzys3sPxS5faR00Rj8lqQjg'
-STRIPE_SECRET_KEY = 'sk_test_51Qn8JYFsNqYi8b0P7fYDsXan82C6Q1CGWuwe9qHzaxnUf9lGW4G3cA0w2ks4svAnK9IivXKxpzOau6Kaj3N7Xx9Y00arIlzov1'
-STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET', 'whsec_634bff67902f39537aeae7b8349d2368d278d2f0200d679e919425abbaac02ba')
+STRIPE_PUBLIC_KEY = "pk_test_51Qn8JYFsNqYi8b0PAujbtEGNoTcLJTpaS2UefQxe5u4BquZyrIK48aRKbhHLRh45em0EFds7SNhlzys3sPxS5faR00Rj8lqQjg"
+STRIPE_SECRET_KEY = "sk_test_51Qn8JYFsNqYi8b0P7fYDsXan82C6Q1CGWuwe9qHzaxnUf9lGW4G3cA0w2ks4svAnK9IivXKxpzOau6Kaj3N7Xx9Y00arIlzov1"
+STRIPE_WEBHOOK_SECRET = os.environ.get(
+    "STRIPE_WEBHOOK_SECRET",
+    "whsec_634bff67902f39537aeae7b8349d2368d278d2f0200d679e919425abbaac02ba",
+)
 
-OPENROUTER_API_KEY = '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'
+OPENROUTER_API_KEY = (
+    "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"
+)
 AI_SYSTEM_PROMPT = """You are ClassEasily Support Assistant, the official AI support agent for ClassEasily, an education platform that connects students with classes and educational resources.
 
 CORE ROLE:
@@ -177,163 +194,166 @@ Be rather strict in your judgement.
 
 # Notification settings
 NOTIFICATION_SETTINGS = {
-    'default_from_email': 'noreply@classeasily.com',
-    'default_from_name': 'ClassEasily',
-    'reply_to': 'support@classeasily.com',
-    'tracking': {
-        'opens': True,
-        'clicks': True,
+    "default_from_email": "noreply@classeasily.com",
+    "default_from_name": "ClassEasily",
+    "reply_to": "support@classeasily.com",
+    "tracking": {
+        "opens": True,
+        "clicks": True,
     },
-    'max_batch_size': 1000,  # Maximum recipients in a single batch
-    'rate_limit': 100,  # Emails per minute
+    "max_batch_size": 1000,  # Maximum recipients in a single batch
+    "rate_limit": 100,  # Emails per minute
 }
 
 # SMS settings (if using SMS notifications)
 SMS_SETTINGS = {
-    'provider': 'twilio',  # or 'aws' for Amazon SNS
-    'twilio': {
-        'account_sid': os.environ.get('TWILIO_ACCOUNT_SID', ''),
-        'auth_token': os.environ.get('TWILIO_AUTH_TOKEN', ''),
-        'from_number': os.environ.get('TWILIO_FROM_NUMBER', '')
+    "provider": "twilio",  # or 'aws' for Amazon SNS
+    "twilio": {
+        "account_sid": os.environ.get("TWILIO_ACCOUNT_SID", ""),
+        "auth_token": os.environ.get("TWILIO_AUTH_TOKEN", ""),
+        "from_number": os.environ.get("TWILIO_FROM_NUMBER", ""),
     },
-    'aws': {
-        'region': os.environ.get('AWS_REGION', 'us-east-1'),
-        'sender_id': os.environ.get('AWS_SENDER_ID', 'YourCompany')
-    }
+    "aws": {
+        "region": os.environ.get("AWS_REGION", "us-east-1"),
+        "sender_id": os.environ.get("AWS_SENDER_ID", "YourCompany"),
+    },
 }
 
 INSTALLED_APPS = [
-    'admin_interface',
-    'colorfield',
-    'django.contrib.admin',
-    'django.contrib.auth',
-    'django.contrib.sites',
-    'django.contrib.contenttypes',
-    'django.contrib.sessions',
-    'django.contrib.messages',
-    'django.contrib.staticfiles',
-    'django.contrib.sitemaps',
-    'rest_framework_simplejwt',
-    'corsheaders',
-    'rest_framework',
-    'anymail',
-    'quickstart.apps.QuickstartConfig',
-    'storages',
-    'silk',
-    'channels',
-    'allauth',
-    'allauth.account',
-    'allauth.socialaccount',
-    'allauth.socialaccount.providers.google',
-    'allauth.socialaccount.providers.facebook',
-    'dj_rest_auth.registration',
-    'dj_rest_auth',
-    'rest_framework.authtoken',
-    'rest_auth',
-    'rest_framework_simplejwt.token_blacklist',
+    "admin_interface",
+    "colorfield",
+    "django.contrib.admin",
+    "django.contrib.auth",
+    "django.contrib.sites",  # Required for allauth
+    "django.contrib.contenttypes",
+    "django.contrib.sessions",
+    "django.contrib.messages",
+    "django.contrib.staticfiles",
+    "django.contrib.sitemaps",
+    "rest_framework_simplejwt",
+    "corsheaders",
+    "rest_framework",
+    "anymail",
+    "quickstart.apps.QuickstartConfig",
+    "storages",
+    "silk",
+    "channels",
+    # --- Allauth ---
+    "allauth",
+    "allauth.account",
+    "allauth.socialaccount",
+    "allauth.socialaccount.providers.google",
+    "allauth.socialaccount.providers.facebook",
+    # --- Dj-Rest-Auth ---
+    "dj_rest_auth.registration",
+    "dj_rest_auth",
+    "rest_framework.authtoken",
+    "rest_framework_simplejwt.token_blacklist",
 ]
-
 LOGGING = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'handlers': {
-        'console': {
-            'class': 'logging.StreamHandler',
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
         },
     },
-    'loggers': {
-        'django': {
-            'handlers': ['console'],
-            'level': 'INFO', # Keep Django general logs at INFO
+    "loggers": {
+        "django": {
+            "handlers": ["console"],
+            "level": "INFO",  # Keep Django general logs at INFO
         },
-        'quickstart': { # Assuming your app is 'quickstart'
-            'handlers': ['console'],
-            'level': 'DEBUG', # Set your app's logger to DEBUG
-            'propagate': False, # Optional: prevent double logging if root is also DEBUG
+        "quickstart": {  # Assuming your app is 'quickstart'
+            "handlers": ["console"],
+            "level": "DEBUG",  # Set your app's logger to DEBUG
+            "propagate": False,  # Optional: prevent double logging if root is also DEBUG
         },
-        'celery': { # For Celery's own logs
-            'handlers': ['console'],
-            'level': 'INFO', # Or DEBUG if you need Celery's verbose logs
+        "celery": {  # For Celery's own logs
+            "handlers": ["console"],
+            "level": "INFO",  # Or DEBUG if you need Celery's verbose logs
         },
-        '': {  # Root logger
-            'handlers': ['console'],
-            'level': 'INFO', # Set root to INFO or DEBUG as needed
+        "": {  # Root logger
+            "handlers": ["console"],
+            "level": "INFO",  # Set root to INFO or DEBUG as needed
         },
     },
 }
 
 REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
-        'rest_framework.authentication.TokenAuthentication',
-        'rest_framework.authentication.SessionAuthentication',
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "rest_framework.authentication.TokenAuthentication",
+        "rest_framework.authentication.SessionAuthentication",
     ],
     # --- Rate Limiting Configuration ---
-    'DEFAULT_THROTTLE_CLASSES': [
-        'rest_framework.throttling.AnonRateThrottle',
-        'rest_framework.throttling.UserRateThrottle'
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
     ],
-    'DEFAULT_THROTTLE_RATES': {
-        'anon': '20/minute',          # For anonymous users
-        'user': '100/minute',         # For authenticated users
-        'burst': '150/minute',        # A higher-rate scope for non-critical actions
-        'sensitive': '5/minute',      # A lower-rate scope for sensitive actions like login/register
-        'chat': '30/minute',          # Custom scope for chat to control API costs
-    }
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": "20/minute",  # For anonymous users
+        "user": "100/minute",  # For authenticated users
+        "burst": "150/minute",  # A higher-rate scope for non-critical actions
+        "sensitive": "5/minute",  # A lower-rate scope for sensitive actions like login/register
+        "chat": "30/minute",  # Custom scope for chat to control API costs
+    },
 }
-
 AUTHENTICATION_BACKENDS = [
-    'quickstart.backends.RolePermissionBackend',
-    'django.contrib.auth.backends.ModelBackend',
+    # Needed to login by username in Django admin, regardless of `allauth`
+    "django.contrib.auth.backends.ModelBackend",
+    # `allauth` specific authentication methods, such as login by e-mail
+    "allauth.account.auth_backends.AuthenticationBackend",
+    # Your custom backend for role-based permissions
+    "quickstart.backends.RolePermissionBackend",
 ]
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=2000),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
-    'ROTATE_REFRESH_TOKENS': True,
-    'BLACKLIST_AFTER_ROTATION': True,
-    'UPDATE_LAST_LOGIN': True,
-
-    'ALGORITHM': 'HS256',
-    'SIGNING_KEY': SECRET_KEY,
-    'VERIFYING_KEY': None,
-
-    'AUTH_COOKIE': 'my-app-auth',  # Cookie name for access token
-    'AUTH_COOKIE_REFRESH': 'my-refresh-token',  # Cookie name for refresh token
-    'AUTH_COOKIE_DOMAIN': None,    # Specify domain in production
-    'AUTH_COOKIE_SECURE': not DEBUG,  # Only send over HTTPS in production
-    'AUTH_COOKIE_HTTP_ONLY': True,  # Not accessible via JavaScript
-    'AUTH_COOKIE_PATH': '/',        # Cookie path
-    'AUTH_COOKIE_SAMESITE': 'Lax',  # Allows cross-site requests for development
-
-    'AUTH_HEADER_TYPES': ('Bearer',),
-    'USER_ID_FIELD': 'userId',
-    'USER_ID_CLAIM': 'user_id',
-    'USER_AUTHENTICATION_RULE': 'rest_framework_simplejwt.authentication.default_user_authentication_rule',
-
-    'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
-    'TOKEN_TYPE_CLAIM': 'token_type',
-    'TOKEN_USER_CLASS': 'rest_framework_simplejwt.models.TokenUser',
-
-    'JTI_CLAIM': 'jti',
-
-    'SLIDING_TOKEN_REFRESH_EXP_CLAIM': 'refresh_exp',
-    'SLIDING_TOKEN_LIFETIME': timedelta(minutes=1500),
-    'SLIDING_TOKEN_REFRESH_LIFETIME': timedelta(days=1),
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=2000),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
+    "UPDATE_LAST_LOGIN": True,
+    "ALGORITHM": "HS256",
+    "SIGNING_KEY": SECRET_KEY,
+    "VERIFYING_KEY": None,
+    "AUTH_COOKIE": "my-app-auth",  # Cookie name for access token
+    "AUTH_COOKIE_REFRESH": "my-refresh-token",  # Cookie name for refresh token
+    "AUTH_COOKIE_DOMAIN": None,  # Specify domain in production
+    "AUTH_COOKIE_SECURE": not DEBUG,  # Only send over HTTPS in production
+    "AUTH_COOKIE_HTTP_ONLY": True,  # Not accessible via JavaScript
+    "AUTH_COOKIE_PATH": "/",  # Cookie path
+    "AUTH_COOKIE_SAMESITE": "Lax",  # Allows cross-site requests for development
+    "AUTH_HEADER_TYPES": ("Bearer",),
+    "USER_ID_FIELD": "userId",
+    "USER_ID_CLAIM": "user_id",
+    "USER_AUTHENTICATION_RULE": "rest_framework_simplejwt.authentication.default_user_authentication_rule",
+    "AUTH_TOKEN_CLASSES": ("rest_framework_simplejwt.tokens.AccessToken",),
+    "TOKEN_TYPE_CLAIM": "token_type",
+    "TOKEN_USER_CLASS": "rest_framework_simplejwt.models.TokenUser",
+    "JTI_CLAIM": "jti",
+    "SLIDING_TOKEN_REFRESH_EXP_CLAIM": "refresh_exp",
+    "SLIDING_TOKEN_LIFETIME": timedelta(minutes=1500),
+    "SLIDING_TOKEN_REFRESH_LIFETIME": timedelta(days=1),
 }
 
 SESSION_COOKIE_SECURE = not DEBUG
 SESSION_COOKIE_HTTPONLY = True  # Prevent JavaScript access to cookies
-SESSION_COOKIE_SAMESITE = 'Lax'  # CSRF protection
+SESSION_COOKIE_SAMESITE = "Lax"  # CSRF protection
 
 CSRF_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_HTTPONLY = True
-CSRF_COOKIE_SAMESITE = 'Lax'
-CSRF_TRUSTED_ORIGINS = ['https://classeasily.com', 'http://localhost:5173', 'http://localhost:8000']
+CSRF_COOKIE_SAMESITE = "Lax"
+CSRF_TRUSTED_ORIGINS = [
+    "https://classeasily.com",
+    "http://localhost:5173",
+    "http://localhost:8000",
+]
 
-ACCOUNT_EMAIL_VERIFICATION = 'mandatory'
-EMAIL_BACKEND = 'anymail.backends.resend.EmailBackend'
-DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'noreply@classeasily.com') # Set a default sender
+ACCOUNT_EMAIL_VERIFICATION = "mandatory"
+EMAIL_BACKEND = "anymail.backends.resend.EmailBackend"
+DEFAULT_FROM_EMAIL = os.environ.get(
+    "DEFAULT_FROM_EMAIL", "noreply@classeasily.com"
+)  # Set a default sender
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
 
 ANYMAIL = {
@@ -347,14 +367,13 @@ ANYMAIL = {
 SITE_ID = 1
 
 ACCOUNT_EMAIL_REQUIRED = True
-ACCOUNT_AUTHENTICATION_METHOD = 'email'
+ACCOUNT_AUTHENTICATION_METHOD = "email"
 ACCOUNT_USERNAME_REQUIRED = False
-ACCOUNT_EMAIL_VERIFICATION = 'mandatory'
-AUTH_USER_MODEL = 'quickstart.CustomUser'
+AUTH_USER_MODEL = "quickstart.CustomUser"
 
-FRONTEND_BASE_URL = os.environ.get('FRONTEND_URL', 'http://localhost:5173')
-FRONTEND_EMAIL_VERIFICATION_PATH = '/verify-email/{key}/'
-FRONTEND_PASSWORD_RESET_CONFIRM_PATH = '/reset-password/{uid}/{token}/'
+FRONTEND_BASE_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+FRONTEND_EMAIL_VERIFICATION_PATH = "/verify-email/{key}/"
+FRONTEND_PASSWORD_RESET_CONFIRM_PATH = "/reset-password/{uid}/{token}/"
 
 # --- Celery Configuration ---
 if DEBUG:
@@ -367,90 +386,117 @@ if DEBUG:
     CELERY_REDIS_BACKEND_USE_SSL = None
     CELERY_BROKER_TRANSPORT_OPTIONS = {}
     CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {}
-    CELERY_CONTROL_EXCHANGE = 'celery.pidbox'
-    CELERY_EVENT_QUEUE_PREFIX = 'celeryev'
-    CELERY_TASK_DEFAULT_QUEUE = 'celery'
+    CELERY_CONTROL_EXCHANGE = "celery.pidbox"
+    CELERY_EVENT_QUEUE_PREFIX = "celeryev"
+    CELERY_TASK_DEFAULT_QUEUE = "celery"
 else:
     # For production (e.g., AWS ElastiCache with SSL)
-    print("---- DETECTED PRODUCTION MODE (DEBUG=False) - Using ElastiCache Redis Cluster settings ----")
+    print(
+        "---- DETECTED PRODUCTION MODE (DEBUG=False) - Using ElastiCache Redis Cluster settings ----"
+    )
     # Example production URLs - replace with your actual ElastiCache endpoint
-    ELASTICACHE_URL = 'rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379'
+    ELASTICACHE_URL = "rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379"
     CELERY_BROKER_URL = ELASTICACHE_URL
     CELERY_RESULT_BACKEND = ELASTICACHE_URL
 
-    CELERY_BROKER_USE_SSL = {'ssl_cert_reqs': ssl.CERT_NONE}
-    CELERY_REDIS_BACKEND_USE_SSL = {'ssl_cert_reqs': ssl.CERT_NONE}
-    CELERY_BROKER_TRANSPORT_OPTIONS = {'is_cluster': True}
-    CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {'is_cluster': True}
+    CELERY_BROKER_USE_SSL = {"ssl_cert_reqs": ssl.CERT_NONE}
+    CELERY_REDIS_BACKEND_USE_SSL = {"ssl_cert_reqs": ssl.CERT_NONE}
+    CELERY_BROKER_TRANSPORT_OPTIONS = {"is_cluster": True}
+    CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {"is_cluster": True}
 
     # Use namespaced queues for cluster mode
-    CELERY_CONTROL_EXCHANGE = '{celery}.pidbox'
-    CELERY_EVENT_QUEUE_PREFIX = '{celery}.eve'
-    CELERY_TASK_DEFAULT_QUEUE = '{celery}.tasks'
+    CELERY_CONTROL_EXCHANGE = "{celery}.pidbox"
+    CELERY_EVENT_QUEUE_PREFIX = "{celery}.eve"
+    CELERY_TASK_DEFAULT_QUEUE = "{celery}.tasks"
 
 
 # -- Common Celery Settings (apply to both local and prod) --
-CELERY_ACCEPT_CONTENT = ['json']
-CELERY_TASK_SERIALIZER = 'json'
-CELERY_RESULT_SERIALIZER = 'json'
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_SEND_SENT_EVENT = True
 
 REST_AUTH = {
-    'USE_JWT': True,
-    'JWT_AUTH_COOKIE': 'my-app-auth',  # Same as SIMPLE_JWT
-    'JWT_AUTH_REFRESH_COOKIE': 'my-refresh-token',  # Same as SIMPLE_JWT
-    'JWT_AUTH_SAMESITE': 'Lax',  # Match your SIMPLE_JWT setting
-    'OLD_PASSWORD_FIELD_ENABLED': True,
-    'PASSWORD_RESET_CONFIRM_SERIALIZER': 'dj_rest_auth.serializers.PasswordResetConfirmSerializer',
-    'PASSWORD_RESET_USE_SITES_DOMAIN': False,
-    'PASSWORD_RESET_CONFIRM_URL_PATH': FRONTEND_PASSWORD_RESET_CONFIRM_PATH
+    "USE_JWT": True,
+    "JWT_AUTH_HTTPONLY": False,
+    "JWT_AUTH_COOKIE": "my-app-auth",  # Same as SIMPLE_JWT
+    "JWT_AUTH_REFRESH_COOKIE": "my-refresh-token",  # Same as SIMPLE_JWT
+    "JWT_AUTH_SAMESITE": "Lax",  # Match your SIMPLE_JWT setting
+    "OLD_PASSWORD_FIELD_ENABLED": True,
+    "PASSWORD_RESET_CONFIRM_SERIALIZER": "dj_rest_auth.serializers.PasswordResetConfirmSerializer",
+    "PASSWORD_RESET_USE_SITES_DOMAIN": False,
+    "PASSWORD_RESET_CONFIRM_URL_PATH": FRONTEND_PASSWORD_RESET_CONFIRM_PATH,
+    "USER_DETAILS_SERIALIZER": "quickstart.serializers.CustomUserDetailsSerializer",
 }
 
 REST_AUTH_REGISTER_SERIALIZERS = {
-    'REGISTER_SERIALIZER': 'quickstart.serializers.CustomRegisterSerializer',
+    "REGISTER_SERIALIZER": "quickstart.serializers.CustomRegisterSerializer",
 }
 
 REST_AUTH_SERIALIZERS = {
-    'LOGIN_SERIALIZER': 'quickstart.serializers.CustomLoginSerializer',
-    'TOKEN_SERIALIZER': 'quickstart.serializers.CustomTokenSerializer',
-    'USER_DETAILS_SERIALIZER': 'quickstart.serializers.CustomUserDetailsSerializer',
+    "LOGIN_SERIALIZER": "quickstart.serializers.CustomLoginSerializer",
+    "USER_DETAILS_SERIALIZER": "quickstart.serializers.CustomUserDetailsSerializer",
 }
 
-ACCOUNT_EMAIL_CONFIRMATION_ANONYMOUS_REDIRECT_URL = '/'
-ACCOUNT_EMAIL_CONFIRMATION_AUTHENTICATED_REDIRECT_URL = '/'
+ACCOUNT_EMAIL_CONFIRMATION_ANONYMOUS_REDIRECT_URL = "/"
+ACCOUNT_EMAIL_CONFIRMATION_AUTHENTICATED_REDIRECT_URL = "/"
+
+# --- Social Account Settings ---
+SOCIALACCOUNT_ADAPTER = "quickstart.adapters.CustomSocialAccountAdapter"
+SOCIALACCOUNT_AUTO_SIGNUP = True
+SOCIALACCOUNT_EMAIL_VERIFICATION = (
+    "none"  # Google already verifies emails, providing a smoother UX
+)
+SOCIALACCOUNT_EMAIL_REQUIRED = True
+SOCIALACCOUNT_QUERY_EMAIL = True
 
 SOCIALACCOUNT_PROVIDERS = {
-    'google': {
-        'APP': {
-            'client_id': 'your-google-client-id',
-            'secret': 'your-google-client-secret',
-            'key': ''
+    "google": {
+        "APP": {
+            # IMPORTANT: Replace with your actual credentials from Google Cloud Console
+            "client_id": os.environ.get(
+                "GOOGLE_CLIENT_ID",
+                "1065252482453-6e8md9bvegiroas8p08vqpenf7fuc9vd.apps.googleusercontent.com",
+            ),
+            "secret": os.environ.get(
+                "GOOGLE_CLIENT_SECRET", "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"
+            ),
+            "key": "",
+        },
+        "SCOPE": [
+            "profile",
+            "email",
+        ],
+        "AUTH_PARAMS": {
+            "access_type": "online",
+        },
+        "VERIFIED_EMAIL": True,  # Allauth will only allow verified emails from Google
+    },
+    "facebook": {
+        "APP": {
+            "client_id": "your-facebook-app-id",
+            "secret": "your-facebook-app-secret",
+            "key": "",
         }
     },
-    'facebook': {
-        'APP': {
-            'client_id': 'your-facebook-app-id',
-            'secret': 'your-facebook-app-secret',
-            'key': ''
-        }
-    }
 }
 
+
 MIDDLEWARE = [
-    'django.middleware.security.SecurityMiddleware',
-    'corsheaders.middleware.CorsMiddleware', 
-    'django.contrib.sessions.middleware.SessionMiddleware',
-    'django.middleware.common.CommonMiddleware',
-    'django.middleware.csrf.CsrfViewMiddleware',
-    'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'django.contrib.messages.middleware.MessageMiddleware',
-    'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'allauth.account.middleware.AccountMiddleware',
-    'quickstart.middleware.JWTCookieMiddleware',
-    'silk.middleware.SilkyMiddleware',
-    'quickstart.monitoring.middleware.MetricsMiddleware',
+    "django.middleware.security.SecurityMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "allauth.account.middleware.AccountMiddleware",
+    "quickstart.middleware.JWTCookieMiddleware",
+    "silk.middleware.SilkyMiddleware",
+    "quickstart.monitoring.middleware.MetricsMiddleware",
 ]
 
 
@@ -459,7 +505,9 @@ if DEBUG:
     CHANNEL_LAYERS_HOSTS = ["redis://localhost:6379"]
     CACHES_LOCATION = "redis://127.0.0.1:6379"
 else:
-    CHANNEL_LAYERS_HOSTS = ["rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379"]
+    CHANNEL_LAYERS_HOSTS = [
+        "rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379"
+    ]
     CACHES_LOCATION = "rediss://clustercfg.classeasily-cache-redis.wwemzf.use2.cache.amazonaws.com:6379"
 
 CHANNEL_LAYERS = {
@@ -474,15 +522,21 @@ CACHES = {
         "LOCATION": CACHES_LOCATION,
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
-             # Add SSL options for production Redis if needed
-            **({'CONNECTION_POOL_KWARGS': {"ssl_cert_reqs": ssl.CERT_NONE}} if not DEBUG else {})
+            # Add SSL options for production Redis if needed
+            **(
+                {"CONNECTION_POOL_KWARGS": {"ssl_cert_reqs": ssl.CERT_NONE}}
+                if not DEBUG
+                else {}
+            ),
         },
-        "KEY_PREFIX": "classeasily"
+        "KEY_PREFIX": "classeasily",
     }
 }
 
 # Silk configuration
-SILKY_PYTHON_PROFILER_RESULT_PATH = os.path.join(BASE_DIR, 'quickstart/monitoring/profiler')
+SILKY_PYTHON_PROFILER_RESULT_PATH = os.path.join(
+    BASE_DIR, "quickstart/monitoring/profiler"
+)
 SILKY_PYTHON_PROFILER = False
 SILKY_PYTHON_PROFILER_BINARY = True
 SILKY_AUTHENTICATION = False  # Requires users to login
@@ -493,38 +547,38 @@ SILKY_MAX_RECORDED_REQUESTS = 10000
 SILKY_MAX_RECORDED_REQUESTS_CHECK_PERCENT = 10
 
 SILKY_IGNORE_PATHS = [
-    '/api/admin/metrics/',
+    "/api/admin/metrics/",
 ]
 
-ROOT_URLCONF = 'CEBackend.urls'
-ASGI_APPLICATION = 'CEBackend.asgi.application'
+ROOT_URLCONF = "CEBackend.urls"
+ASGI_APPLICATION = "CEBackend.asgi.application"
 
 TEMPLATES = [
     {
-        'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [os.path.join(BASE_DIR, 'templates')],  # Add this line
-        'APP_DIRS': True,
-        'OPTIONS': {
-            'context_processors': [
-                'django.template.context_processors.debug',
-                'django.template.context_processors.request',
-                'django.contrib.auth.context_processors.auth',
-                'django.contrib.messages.context_processors.messages',
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [os.path.join(BASE_DIR, "templates")],  # Add this line
+        "APP_DIRS": True,
+        "OPTIONS": {
+            "context_processors": [
+                "django.template.context_processors.debug",
+                "django.template.context_processors.request",
+                "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
             ],
         },
     },
 ]
 
 CORS_ALLOWED_ORIGINS = [
-    'http://localhost:5173',
-    'https://classeasily.com',
-    'http://localhost:8000',
+    "http://localhost:5173",
+    "https://classeasily.com",
+    "http://localhost:8000",
 ]
 
 CORS_ALLOW_CREDENTIALS = True
-CORS_EXPOSE_HEADERS = ['Content-Type', 'X-CSRFToken']
+CORS_EXPOSE_HEADERS = ["Content-Type", "X-CSRFToken"]
 
-WSGI_APPLICATION = 'CEBackend.wsgi.application'
+WSGI_APPLICATION = "CEBackend.wsgi.application"
 
 # Database
 # https://docs.djangoproject.com/en/4.1/ref/settings/#databases
@@ -540,36 +594,36 @@ DATABASES = {
     }
 }
 
-GOOGLE_MAPS_API_KEY = 'AIzaSyAwQpma98jxsA0Hbl1gKMrX-5WpVI7sdMQ'
-AWS_ACCESS_KEY_ID = 'AKIAWWFPKBRYUKKAUCTD'
-AWS_SECRET_ACCESS_KEY = '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'
-AWS_STORAGE_BUCKET_NAME = 'classeasily'
-AWS_S3_CUSTOM_DOMAIN = f'{AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com'
+GOOGLE_MAPS_API_KEY = "AIzaSyAwQpma98jxsA0Hbl1gKMrX-5WpVI7sdMQ"
+AWS_ACCESS_KEY_ID = "AKIAWWFPKBRYUKKAUCTD"
+AWS_SECRET_ACCESS_KEY = "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"
+AWS_STORAGE_BUCKET_NAME = "classeasily"
+AWS_S3_CUSTOM_DOMAIN = f"{AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com"
 AWS_S3_OBJECT_PARAMETERS = {
-    'CacheControl': 'max-age=86400',
+    "CacheControl": "max-age=86400",
 }
-AWS_DEFAULT_ACL = 'public-read'
-AWS_S3_SIGNATURE_VERSION = 's3v4'
-AWS_S3_ADDRESSING_STYLE = 'virtual'
+AWS_DEFAULT_ACL = "public-read"
+AWS_S3_SIGNATURE_VERSION = "s3v4"
+AWS_S3_ADDRESSING_STYLE = "virtual"
 
-DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
-STATICFILES_STORAGE = 'storages.backends.s3boto3.S3StaticStorage'
+DEFAULT_FILE_STORAGE = "storages.backends.s3boto3.S3Boto3Storage"
+STATICFILES_STORAGE = "storages.backends.s3boto3.S3StaticStorage"
 
 # Password validation
 # https://docs.djangoproject.com/en/4.1/ref/settings/#auth-password-validators
 
 AUTH_PASSWORD_VALIDATORS = [
     {
-        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
+        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
     },
     {
-        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
     },
     {
-        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
+        "NAME": "django.contrib.auth.password_validation.CommonPasswordValidator",
     },
     {
-        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
+        "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
     },
 ]
 
@@ -577,7 +631,7 @@ AUTH_PASSWORD_VALIDATORS = [
 # Internationalization
 # https://docs.djangoproject.com/en/4.1/topics/i18n/
 
-LANGUAGE_CODE = 'en-us'
+LANGUAGE_CODE = "en-us"
 
 USE_I18N = True
 
@@ -585,9 +639,9 @@ USE_I18N = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/4.1/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = "static/"
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.1/ref/settings/#default-auto-field
 
-DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"

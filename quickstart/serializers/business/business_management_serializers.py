@@ -333,6 +333,9 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
     classFormats = serializers.ListField(child=serializers.CharField(), read_only=True, required=False)
     skillLevels = serializers.ListField(child=serializers.CharField(), read_only=True, required=False)
     ageGroups = serializers.ListField(child=serializers.CharField(), read_only=True, required=False)
+    classCategoryName = serializers.CharField(source='classCategory.name', read_only=True, allow_null=True)
+    totalReviews = serializers.IntegerField(source='total_reviews_count', read_only=True)
+    average_rating = serializers.DecimalField(max_digits=3, decimal_places=1, read_only=True)
     
     # FIXED: Return the category's string 'key' instead of its ID for all read operations.
     classCategory = serializers.SlugRelatedField(
@@ -369,6 +372,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "smsNotifications",
             "liabilityWaiver",
             "classCategory",
+            "classCategoryName",
             "subcategories",
             "classFormats",
             "skillLevels",
@@ -380,6 +384,8 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "stripe_account_status",
             "createdAt",
             "updatedAt",
+            "average_rating",
+            "totalReviews",
         ]
         read_only_fields = (
             "businessId",
@@ -391,6 +397,9 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "createdAt",
             "updatedAt",
             "classCategory",
+            "classCategoryName",
+            "average_rating",
+            "totalReviews",
             "subcategories",
             "classFormats",
             "skillLevels",
@@ -769,8 +778,6 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
         instance.save()
         return instance
 
-
-# Keep BusinessStatsSerializer as is, or update if new fields affect stats directly
 class BusinessStatsSerializer(serializers.ModelSerializer):
     total_revenue = serializers.SerializerMethodField()
     total_students = serializers.SerializerMethodField()

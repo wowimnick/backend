@@ -17,6 +17,32 @@ def get_progress_cache_key(campaign_id):
     """Helper to get the standardized Redis cache key."""
     return f"campaign_progress_{campaign_id}"
 
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def send_transactional_email_task(self, subject, from_email, to_list, html_content, reply_to_list=None, attachments=None):
+    """
+    A dedicated task for sending simple, transactional emails.
+    """
+    try:
+        params = {
+            "from": from_email,
+            "to": to_list,
+            "subject": subject,
+            "html": html_content,
+            "reply_to": reply_to_list,
+            "attachments": attachments or [], # Ensure attachments is a list
+        }
+        # Filter out None values from the payload
+        params = {k: v for k, v in params.items() if v is not None}
+
+        email = resend.Emails.send(params)
+        logger.info(f"Transactional email sent to {to_list}. Resend ID: {email['id']}")
+        return {"status": "success", "to": to_list, "resend_id": email['id']}
+
+    except Exception as exc:
+        logger.error(f"Transactional email task FAILED for {to_list}. Error: {exc}", exc_info=True)
+        # Retry the task if it fails
+        raise self.retry(exc=exc)
+    
 @shared_task(bind=True)
 def send_campaign_task(self, campaign_id, template_variables):
     """

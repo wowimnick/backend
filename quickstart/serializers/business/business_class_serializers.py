@@ -51,7 +51,6 @@ class BusinessContactInfoSerializer(serializers.ModelSerializer):
 class ClassImageSerializer(serializers.ModelSerializer):
     """Serializer for managing class images (upload/delete)."""
 
-    # image = serializers.ImageField(required=True) # Already defined in model
     class Meta:
         model = ClassImage
         fields = ["imageId", "image", "createdAt"]
@@ -61,7 +60,6 @@ class ClassImageSerializer(serializers.ModelSerializer):
 class ScheduleInstanceSerializer(serializers.ModelSerializer):
     """Serializer for managing schedule instances (e.g., cancel, mark attendance)."""
 
-    # Add read-only fields calculated from annotations if needed
     current_bookings_count = serializers.IntegerField(read_only=True)
     available_spots = serializers.SerializerMethodField(read_only=True)
 
@@ -92,7 +90,6 @@ class ScheduleInstanceSerializer(serializers.ModelSerializer):
         ]
 
     def get_available_spots(self, obj):
-        # Calculation based on annotation or property
         current_bookings = getattr(obj, "current_bookings_count", 0)
         return obj.max_participants - current_bookings
 
@@ -102,14 +99,13 @@ class ScheduleSerializer(serializers.ModelSerializer):
 
     booked_participants = serializers.SerializerMethodField()
     total_revenue = serializers.SerializerMethodField()
-    has_confirmed_bookings = (
-        serializers.SerializerMethodField()
-    )  # For edit/delete disabling
+    has_confirmed_bookings = serializers.SerializerMethodField()
 
     class Meta:
         model = Schedule
         fields = [
             "id",
+            "name",
             "option",
             "day",
             "time",
@@ -120,9 +116,9 @@ class ScheduleSerializer(serializers.ModelSerializer):
             "end_date",
             "date",
             "allow_late_enrollment",
-            "booked_participants",  # Added
-            "total_revenue",  # Added
-            "has_confirmed_bookings",  # Added
+            "booked_participants",
+            "total_revenue",
+            "has_confirmed_bookings",
             "created_at",
             "updated_at",
         ]
@@ -137,15 +133,11 @@ class ScheduleSerializer(serializers.ModelSerializer):
         extra_kwargs = {"option": {"write_only": True}}
 
     def get_booked_participants(self, obj):
-        # Sum of participants from confirmed bookings for all instances of this schedule
-        # This sums across all instances of a recurring schedule.
-        # If you need it per-instance, that's better done on ScheduleInstanceSerializer
         return Booking.objects.filter(
             schedule_instance__schedule=obj, status="confirmed"
         ).aggregate(total_booked=Coalesce(Sum("participants"), 0))["total_booked"]
 
     def get_total_revenue(self, obj):
-        # Sum of amount_paid from confirmed & paid bookings for all instances of this schedule
         return Booking.objects.filter(
             schedule_instance__schedule=obj, status="confirmed", payment_status="paid"
         ).aggregate(total_revenue=Coalesce(Sum("amount_paid"), Decimal("0.00")))[
@@ -153,11 +145,6 @@ class ScheduleSerializer(serializers.ModelSerializer):
         ]
 
     def get_has_confirmed_bookings(self, obj):
-        # Checks if any instance of this schedule (past or future) has a confirmed booking.
-        # If a schedule instance is in the past but had a booking, we still might not want to delete the parent Schedule.
-        # However, for EDITING, we primarily care about future instances with bookings.
-        # For DELETE, we care about any instance with bookings.
-        # This flag will make it simple on the frontend to disable edit/delete if ANY confirmed booking exists for the schedule.
         return Booking.objects.filter(
             schedule_instance__schedule=obj, status="confirmed"
         ).exists()
@@ -175,9 +162,7 @@ class ScheduleSerializer(serializers.ModelSerializer):
         date_field = data.get("date")
         day = data.get("day")
 
-        # Prevent editing critical fields if there are confirmed bookings for any instance of this schedule
-        if self.instance and self.instance.pk:  # If updating an existing schedule
-            # Fields that, if changed, would fundamentally alter the schedule for existing bookers
+        if self.instance and self.instance.pk:
             critical_fields_being_changed = any(
                 data.get(field) is not None
                 and data.get(field) != getattr(self.instance, field)
@@ -221,7 +206,7 @@ class ScheduleSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     "Date is required for single sessions."
                 )
-            if date_field and not data.get("day"):  # If day wasn't sent, derive it
+            if date_field and not data.get("day"):
                 data["day"] = date_field.strftime("%a")
             if (
                 self.instance is None or self.instance.pk is None
@@ -235,8 +220,6 @@ class ScheduleSerializer(serializers.ModelSerializer):
                 {"duration": "Duration must be at least 15 minutes."}
             )
 
-        # Allow maxParticipants to be updated even if there are bookings,
-        # but it cannot be set lower than current confirmed bookings.
         new_max_participants = data.get("maxParticipants")
         if new_max_participants is not None:
             if new_max_participants < 1:
@@ -263,11 +246,7 @@ class ScheduleSerializer(serializers.ModelSerializer):
 
 
 class BulkScheduleCreateSerializer(serializers.Serializer):
-    """
-    Serializer to validate the parameters for bulk-creating schedules.
-    This is not a ModelSerializer, as it's for validating an action.
-    """
-
+    name = serializers.CharField(max_length=100, required=False, allow_blank=True)
     option = serializers.PrimaryKeyRelatedField(
         queryset=ClassOption.objects.all(),
         required=True,
@@ -282,16 +261,12 @@ class BulkScheduleCreateSerializer(serializers.Serializer):
         allow_empty=False,
         required=True,
     )
-
-    # We'll create schedules at specific times, not a time range with interval
-    # This is a simpler and more common use case. Users can submit multiple times if needed.
     times = serializers.ListField(
         child=serializers.TimeField(format="%H:%M"),
         allow_empty=False,
         required=True,
         help_text="A list of start times (HH:MM) to create for each selected day.",
     )
-
     duration = serializers.IntegerField(required=True, min_value=15)
     price = serializers.DecimalField(
         required=True, max_digits=10, decimal_places=2, min_value=Decimal("0.00")
@@ -299,45 +274,33 @@ class BulkScheduleCreateSerializer(serializers.Serializer):
     maxParticipants = serializers.IntegerField(required=True, min_value=1)
 
     def validate(self, data):
-        """Cross-field validation."""
-        # Check user permission on the option
         request = self.context.get("request")
         if not request:
             raise ValidationError("Request context is required for validation.")
-
         user = request.user
         option = data["option"]
-
-        # Ensure the user's business owns the class associated with this option
         business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
         if not business or option.classId.businessId != business:
             raise PermissionDenied(
                 "You do not have permission to create schedules for this class option."
             )
-
         if data["start_date"] > data["end_date"]:
             raise ValidationError(
                 {"end_date": "End date must be on or after start date."}
             )
-
         if data["start_date"] < timezone.now().date():
             raise ValidationError(
                 {"start_date": "Bulk creation cannot start in the past."}
             )
-
         return data
 
 
 class ManagedClassOptionSerializer(serializers.ModelSerializer):
-    """Serializer for managing class options by business users."""
-
-    schedules = ScheduleSerializer(many=True, read_only=True)
-    total_students = serializers.IntegerField(
-        read_only=True
-    )  # Assuming this is annotated in the queryset
-    active_schedules_count = serializers.IntegerField(
-        read_only=True
-    )  # Assuming this is annotated
+    """
+    Serializer for managing class options by business users.
+    MODIFIED: This no longer includes the 'schedules' field to keep the class list API response lean.
+    Schedules are now fetched on-demand from the BusinessScheduleViewSet.
+    """
 
     class Meta:
         model = ClassOption
@@ -353,18 +316,12 @@ class ManagedClassOptionSerializer(serializers.ModelSerializer):
             "price_type",
             "createdAt",
             "updatedAt",
-            "schedules",
-            "total_students",
-            "active_schedules_count",
         ]
         read_only_fields = [
             "optionId",
             "classId",
             "createdAt",
             "updatedAt",
-            "schedules",
-            "total_students",
-            "active_schedules_count",
         ]
         extra_kwargs = {
             "equipment": {"required": False},
@@ -388,21 +345,11 @@ class ManagedClassOptionSerializer(serializers.ModelSerializer):
             },
         }
 
-    def get_image_url(self, obj):
-        if obj.image and hasattr(obj.image, "url"):
-            try:
-                return obj.image.url
-            except ValueError:
-                return None
-        return None
-
 
 class ManagedClassSerializer(serializers.ModelSerializer):
     """Serializer for business users managing their classes."""
 
-    options = ManagedClassOptionSerializer(
-        many=True, read_only=True
-    )  # Use managed option serializer
+    options = ManagedClassOptionSerializer(many=True, read_only=True)
     images = ClassImageSerializer(many=True, read_only=True)
     business_name = serializers.CharField(
         source="businessId.businessName", read_only=True
@@ -419,53 +366,45 @@ class ManagedClassSerializer(serializers.ModelSerializer):
     subcategory_name = serializers.CharField(
         source="subcategory.name", read_only=True, allow_null=True
     )
-    # Add annotations if needed
     average_rating = serializers.FloatField(read_only=True)
     review_count = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = ClassesMain
-        fields = "__all__"  # Include all fields for management view
+        fields = "__all__"
         read_only_fields = [
             "classId",
-            "businessId",  # Set contextually
+            "businessId",
             "createdAt",
             "updatedAt",
             "options",
-            "images",  # Managed via separate actions/nested reads
+            "images",
             "business_name",
             "category_key",
-            "category_name",  # Read-only representations
+            "category_name",
             "subcategory_key",
             "subcategory_name",
             "average_rating",
-            "review_count",  # Read-only computed fields
+            "review_count",
         ]
 
 
 class ClassCreateSerializer(serializers.ModelSerializer):
     """Serializer specifically for creating new classes."""
 
-    # Use PrimaryKeyRelatedField for category/subcategory during creation for simplicity?
-    # Or keep using keys and resolve in the view/serializer.create
     category_key = serializers.CharField(write_only=True, required=True)
     subcategory_key = serializers.CharField(
         write_only=True, required=False, allow_blank=True
     )
 
-    # Handle images and options during creation in the view or serializer.create
-    # images = serializers.ListField(child=serializers.ImageField(), write_only=True, required=False)
-    # options = serializers.JSONField(write_only=True, required=True) # Expect JSON string for options
-
     class Meta:
         model = ClassesMain
-        # List fields needed for creation
         fields = [
             "title",
             "description",
             "features",
             "category_key",
-            "subcategory_key",  # Use keys for input
+            "subcategory_key",
             "location",
             "coordinates",
             "saltLocation",
@@ -473,9 +412,7 @@ class ClassCreateSerializer(serializers.ModelSerializer):
             "studentContactPhone",
             "adminContactEmail",
             "adminContactPhone",
-            # 'images', 'options' # Handled separately
         ]
-        # Exclude fields set automatically (businessId, status, timestamps) or read-only representations
 
     def validate_category_key(self, value):
         if not ClassCategory.objects.filter(key=value).exists():
@@ -499,8 +436,4 @@ class ClassCreateSerializer(serializers.ModelSerializer):
                         "subcategory_key": f"Subcategory '{subcategory_key}' not found in category '{category_key}'."
                     }
                 )
-        # Add other cross-field validations if needed
         return data
-
-    # Note: The actual creation logic involving images, options JSON parsing,
-    # and associating with the business happens in the BusinessClassViewSet.perform_create method.
