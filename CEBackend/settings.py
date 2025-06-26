@@ -341,7 +341,10 @@ SESSION_COOKIE_HTTPONLY = True  # Prevent JavaScript access to cookies
 SESSION_COOKIE_SAMESITE = "Lax"  # CSRF protection
 
 CSRF_COOKIE_SECURE = not DEBUG
-CSRF_COOKIE_HTTPONLY = True
+# --- MODIFIED: This MUST be False for the frontend to read the CSRF token ---
+# The frontend script needs to read this cookie's value to send it in the X-CSRFToken header.
+# Security is maintained by the browser's Same-Origin Policy.
+CSRF_COOKIE_HTTPONLY = False
 CSRF_COOKIE_SAMESITE = "Lax"
 CSRF_TRUSTED_ORIGINS = [
     "https://classeasily.com",

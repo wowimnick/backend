@@ -3,7 +3,7 @@ from .auth.auth_views import (
     CustomTokenRefreshView,
     LogoutView,
     UserUpdateView,
-    CustomRegisterView
+    CustomRegisterView,
 )
 
 from .business.business_management_views import (
@@ -29,6 +29,7 @@ from .business.business_class_views import (
     BusinessScheduleViewSet,
     BusinessScheduleInstanceViewSet,
     PublicCategoryViewSet,
+    AllCategoriesForBusinessViewSet,
 )
 
 from .webhooks.stripe_webhooks import stripe_connect_webhook
@@ -74,60 +75,50 @@ from .utils import (
 
 __all__ = [
     # Auth Views
-    'CustomTokenObtainPairView',
-    'CustomTokenRefreshView',
-    'LogoutView',
-    'UserUpdateView',
-    'CustomRegisterView',
-
+    "CustomTokenObtainPairView",
+    "CustomTokenRefreshView",
+    "LogoutView",
+    "UserUpdateView",
+    "CustomRegisterView",
     # Business Views
-    'BusinessDashboardViewSet',
-    'get_user_businesses',
-    'register_business',
-    'MyBusinessProfileView',
-    'PublicBusinessInfoViewSet',
-    'MyBusinessOverviewView',
-    'NotificationViewSet',
-
+    "BusinessDashboardViewSet",
+    "get_user_businesses",
+    "register_business",
+    "MyBusinessProfileView",
+    "PublicBusinessInfoViewSet",
+    "MyBusinessOverviewView",
+    "NotificationViewSet",
     # Stripe Connect Views
-    'StripeConnectView',
-    'stripe_connect_webhook',
-
+    "StripeConnectView",
+    "stripe_connect_webhook",
     # Class Views
-    'PublicClassViewSet',
-    'BusinessClassViewSet',
-    'BusinessClassOptionDetail',
-    'BusinessScheduleViewSet',
-    'BusinessScheduleInstanceViewSet',
-    'PublicScheduleViewSet',
-    'PublicCategoryViewSet',
-    
+    "PublicClassViewSet",
+    "BusinessClassViewSet",
+    "BusinessClassOptionDetail",
+    "BusinessScheduleViewSet",
+    "BusinessScheduleInstanceViewSet",
+    "PublicScheduleViewSet",
+    "PublicCategoryViewSet",
+    "AllCategoriesForBusinessViewSet",
     # Favorite Views
-    'MyFavoritesListView',
-
+    "MyFavoritesListView",
     # Student Views
-    'MyProfileView',
-    'BusinessStudentViewSet',
-
+    "MyProfileView",
+    "BusinessStudentViewSet",
     # Booking Views
-    'BusinessBookingViewSet',
-    'StudentBookingViewSet',
-
+    "BusinessBookingViewSet",
+    "StudentBookingViewSet",
     # Support Ticket Views
-    'UserSupportTicketViewSet',
-    'CreateSupportTicketView',
-
+    "UserSupportTicketViewSet",
+    "CreateSupportTicketView",
     # Revenue Analytics
-    'RevenueAnalyticsView',
-
+    "RevenueAnalyticsView",
     # Review Views
-    'ReviewSubmission',
-    'ClassReviews',
-    'BusinessReviewViewSet',
-
+    "ReviewSubmission",
+    "ClassReviews",
+    "BusinessReviewViewSet",
     # Chat Views
-    'ChatMessageView',
-
+    "ChatMessageView",
     # Utils
-    'haversine_distance',
+    "haversine_distance",
 ]

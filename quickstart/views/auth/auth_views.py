@@ -7,9 +7,16 @@ from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.throttling import ScopedRateThrottle
 from dj_rest_auth.registration.views import RegisterView
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import ensure_csrf_cookie
 from django.contrib.auth import get_user_model
 from django.conf import settings
 import logging
+
+# --- MODIFIED: Added imports for standard Django View and JsonResponse ---
+from django.views import View
+from django.http import JsonResponse
+
 
 from ...models import AuditLog
 
@@ -30,6 +37,20 @@ def get_client_ip(request):
     else:
         ip = request.META.get("REMOTE_ADDR")
     return ip
+
+
+# --- MODIFIED: Replaced DRF's APIView with Django's standard View ---
+class CSRFTokenView(View):
+    """
+    An empty, unauthenticated view that ensures the CSRF cookie is set on the client.
+    Using a standard Django View to avoid potential conflicts with DRF's APIView
+    for this simple purpose. The `ensure_csrf_cookie` decorator signals to
+    the middleware to set the cookie on the response.
+    """
+
+    @method_decorator(ensure_csrf_cookie)
+    def get(self, request, *args, **kwargs):
+        return JsonResponse({"detail": "CSRF cookie set."})
 
 
 class CustomTokenObtainPairView(TokenObtainPairView):

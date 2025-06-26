@@ -33,6 +33,10 @@ import json
 from django.utils import timezone
 from rest_framework.permissions import AllowAny
 
+from quickstart.serializers.admin.class_management.class_management_serializers import (
+    AdminClassCategorySerializer,
+)
+
 from ...models import (
     BusinessInfo,
     ClassCategory,
@@ -98,6 +102,32 @@ class PublicCategoryViewSet(viewsets.ReadOnlyModelViewSet):
                 )
             )
             .filter(active_class_count__gt=0)
+            .order_by("name")
+        )
+
+
+# --- NEW: ViewSet to provide ALL categories for business-side forms ---
+class AllCategoriesForBusinessViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Provides a complete, unpaginated list of all categories and their subcategories.
+    This is specifically for use in business-facing forms like registration or class creation,
+    where a full, unfiltered list is required for selection.
+    """
+
+    permission_classes = [IsAuthenticated]  # User must be logged in to access this
+    serializer_class = AdminClassCategorySerializer
+    pagination_class = None  # This is the key change to return all results
+
+    def get_queryset(self):
+        # We can reuse the same efficient query from the admin panel
+        subcat_queryset = ClassSubcategory.objects.annotate(
+            class_count=Count("classes_in_subcategory", distinct=True)
+        )
+        return (
+            ClassCategory.objects.annotate(
+                class_count=Count("classes_in_category", distinct=True)
+            )
+            .prefetch_related(Prefetch("subcategories", queryset=subcat_queryset))
             .order_by("name")
         )
 

@@ -7,11 +7,19 @@ from rest_framework import status
 from django.conf import settings
 import logging
 
+# --- MODIFIED: Import the necessary decorators ---
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
+
 logger = logging.getLogger(__name__)
 
 
 # This view is designed to be used with a token-based flow from the frontend.
 # E.g., @react-oauth/google sends an access_token.
+
+
+# --- MODIFIED: Apply the csrf_exempt decorator to the class ---
+@method_decorator(csrf_exempt, name="dispatch")
 class GoogleLogin(SocialLoginView):
     adapter_class = GoogleOAuth2Adapter
     client_class = OAuth2Client

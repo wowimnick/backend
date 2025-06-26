@@ -7,6 +7,7 @@ from rest_framework.routers import DefaultRouter
 from dj_rest_auth.registration.views import VerifyEmailView, ResendEmailVerificationView
 from dj_rest_auth.views import PasswordResetConfirmView
 
+from quickstart.views.auth.auth_views import CSRFTokenView
 from quickstart.views.auth.social_auth_views import GoogleLogin
 from quickstart.payments.booking_status_views import BookingStatusByPaymentIntentView
 
@@ -73,6 +74,7 @@ from quickstart.views import (
     StripeConnectView,
     stripe_connect_webhook,
     NotificationViewSet,
+    AllCategoriesForBusinessViewSet,
 )
 
 # =============================================================================
@@ -114,6 +116,11 @@ business_management_router.register(
 )
 business_management_router.register(
     r"notifications", NotificationViewSet, basename="notification"
+)
+business_management_router.register(
+    r"all-categories",
+    AllCategoriesForBusinessViewSet,
+    basename="all-categories-for-business",
 )
 
 # --- User Self-Service Router ---
@@ -265,6 +272,7 @@ urlpatterns = [
         ),
     ),
     path("login/", CustomTokenObtainPairView.as_view(), name="token_obtain_pair"),
+    path("csrf/", CSRFTokenView.as_view(), name="csrf_cookie"),
     path("token/refresh/", CustomTokenRefreshView.as_view(), name="token_refresh"),
     path("logout/", LogoutView.as_view(), name="logout"),
     # --- Standalone User Self-Service Views ---
