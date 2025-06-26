@@ -37,7 +37,13 @@ class PublicCategorySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ClassCategory
-        fields = ["name", "key", "subcategories"]
+        fields = [
+            "name",
+            "key",
+            "icon_name",
+            "color",
+            "subcategories",
+        ]
 
 
 class BusinessContactInfoSerializer(serializers.ModelSerializer):

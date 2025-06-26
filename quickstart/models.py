@@ -727,6 +727,12 @@ class ClassCategory(models.Model):
     name = models.CharField(max_length=100)
     key = models.CharField(max_length=100, unique=True)
     color = models.CharField(max_length=20, default="#3b82f6")
+    icon_name = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        help_text="Name of the Lucide React icon (e.g., 'Music', 'Palette'). See lucide.dev for names.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

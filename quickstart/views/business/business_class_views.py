@@ -31,6 +31,7 @@ from django.http import Http404
 import logging
 import json
 from django.utils import timezone
+from rest_framework.permissions import AllowAny
 
 from ...models import (
     BusinessInfo,
@@ -63,6 +64,7 @@ from ...utils.permissions import (
     IsVerifiedAndActiveBusinessOwnerOrManager,
 )
 
+
 logger = logging.getLogger(__name__)
 
 # --- Business ViewSet for Managing Classes ---
@@ -70,17 +72,34 @@ logger = logging.getLogger(__name__)
 
 class PublicCategoryViewSet(viewsets.ReadOnlyModelViewSet):
     """
-    Provides a list of class categories and their subcategories.
-    Accessible publicly or by authenticated users for populating forms.
+    Provides a list of public class categories that have active classes.
     """
 
-    permission_classes = [permissions.AllowAny]  # It's safe to make categories public
-    serializer_class = PublicCategorySerializer  # Use our new, simpler serializer
-    queryset = ClassCategory.objects.prefetch_related("subcategories").order_by("name")
+    permission_classes = [AllowAny]
+    serializer_class = PublicCategorySerializer
+    # Remove pagination to return all categories at once
+    pagination_class = None
 
-    def list(self, request, *args, **kwargs):
-        # Standard list action, queryset and serializer handle the rest
-        return super().list(request, *args, **kwargs)
+    def get_queryset(self):
+        """
+        Returns ClassCategory objects that have at least one associated 'active' class,
+        where the business is also active and verified.
+        """
+        active_class_filter = Q(
+            classes_in_category__status="active",
+            classes_in_category__businessId__isActive=True,
+            classes_in_category__businessId__verificationStatus="verified",
+        )
+
+        return (
+            ClassCategory.objects.annotate(
+                active_class_count=Count(
+                    "classes_in_category", filter=active_class_filter
+                )
+            )
+            .filter(active_class_count__gt=0)
+            .order_by("name")
+        )
 
 
 class BusinessClassViewSet(viewsets.ModelViewSet):

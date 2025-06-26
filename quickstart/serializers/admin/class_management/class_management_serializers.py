@@ -1,5 +1,9 @@
 from rest_framework import serializers
-from decimal import Decimal  # Ensure Decimal is imported
+from decimal import Decimal
+
+from quickstart.serializers.business.business_class_serializers import (
+    PublicSubcategorySerializer,
+)  # Ensure Decimal is imported
 
 from ....models import (
     ClassCategory,
@@ -350,12 +354,25 @@ class AdminClassCreateSerializer(serializers.ModelSerializer):
 
 # --- SubcategorySerializer ---
 class SubcategorySerializer(serializers.ModelSerializer):
-    # ADDED: class_count to know if it's in use
     class_count = serializers.IntegerField(read_only=True, default=0)
 
     class Meta:
         model = ClassSubcategory
         fields = ["id", "name", "key", "description", "class_count"]
+
+
+class PublicCategorySerializer(serializers.ModelSerializer):
+    subcategories = PublicSubcategorySerializer(many=True, read_only=True)
+
+    class Meta:
+        model = ClassCategory
+        fields = [
+            "name",
+            "key",
+            "icon_name",
+            "color",
+            "subcategories",
+        ]
 
 
 # --- AdminClassCategorySerializer ---
@@ -373,11 +390,12 @@ class AdminClassCategorySerializer(serializers.ModelSerializer):
             "name",
             "key",
             "color",
+            "icon_name",
             "created_at",
             "updated_at",
             "subcategories",
             "activeClasses",
-            "class_count",  # ADDED class_count here
+            "class_count",
         ]
         read_only_fields = [
             "id",
