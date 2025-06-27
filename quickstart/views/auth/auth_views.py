@@ -134,20 +134,19 @@ class CustomTokenRefreshView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
+        User = get_user_model()
+
         try:
             refresh = RefreshToken(refresh_token)
 
             # --- Get User and Permissions ---
             user_id = refresh.payload.get("user_id")
-            User = get_user_model()  # Moved import here or add globally
+            # The User variable is already defined and available
             try:
                 user = User.objects.select_related("role").get(userId=user_id)
-                user_serializer = CustomUserDetailsSerializer(
-                    user
-                )  # Serialize user with permissions
+                user_serializer = CustomUserDetailsSerializer(user)
                 user_data = user_serializer.data
             except User.DoesNotExist:
-                # Should not happen if token is valid, but handle defensively
                 logger.error(
                     f"User with ID {user_id} from valid refresh token not found."
                 )
