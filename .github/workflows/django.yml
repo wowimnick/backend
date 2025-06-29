@@ -16,19 +16,17 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: "3.10"
-          cache: "pip" # Cache pip dependencies to speed up subsequent runs
+          cache: "pip"
 
-      # --- NEW: Create .env.prod file from GitHub Secrets ---
-      # This is the core of the secure secret management strategy.
       - name: Create Production Environment File
         run: |
           echo "--- Creating .env.prod file from secrets ---"
-          # The DJANGO_ENV variable tells settings.py which mode we are in.
+          # This file will be loaded by settings.py when DJANGO_ENV=prod
+          # It will also be loaded by the systemd services via EnvironmentFile
           echo "DJANGO_ENV=prod" > .env.prod
-
-          # Append all other secrets. The '>>' is crucial.
           echo "DJANGO_SECRET_KEY=${{ secrets.DJANGO_SECRET_KEY }}" >> .env.prod
           echo "DEBUG=False" >> .env.prod
+          # ... (all other echo commands from the previous answer) ...
           echo "SITE_DOMAIN=${{ secrets.SITE_DOMAIN }}" >> .env.prod
           echo "FRONTEND_URL=${{ secrets.FRONTEND_URL }}" >> .env.prod
           echo "ALLOWED_HOSTS=${{ secrets.ALLOWED_HOSTS }}" >> .env.prod
@@ -44,143 +42,104 @@ jobs:
           echo "CELERY_RESULT_BACKEND=${{ secrets.CELERY_RESULT_BACKEND }}" >> .env.prod
           echo "RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}" >> .env.prod
           echo "DEFAULT_FROM_EMAIL=${{ secrets.DEFAULT_FROM_EMAIL }}" >> .env.prod
-          echo "RESEND_WEBHOOK_SECRET=${{ secrets.RESEND_WEBHOOK_SECRET }}" >> .env.prod
-          echo "UNSUBSCRIBE_SECRET_KEY=${{ secrets.UNSUBSCRIBE_SECRET_KEY }}" >> .env.prod
           echo "STRIPE_PUBLIC_KEY=${{ secrets.STRIPE_PUBLIC_KEY }}" >> .env.prod
           echo "STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}" >> .env.prod
           echo "STRIPE_WEBHOOK_SECRET=${{ secrets.STRIPE_WEBHOOK_SECRET }}" >> .env.prod
           echo "GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}" >> .env.prod
           echo "GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}" >> .env.prod
-          echo "FACEBOOK_APP_ID=${{ secrets.FACEBOOK_APP_ID }}" >> .env.prod
-          echo "FACEBOOK_APP_SECRET=${{ secrets.FACEBOOK_APP_SECRET }}" >> .env.prod
           echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}" >> .env.prod
           echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> .env.prod
           echo "AWS_STORAGE_BUCKET_NAME=${{ secrets.AWS_STORAGE_BUCKET_NAME }}" >> .env.prod
           echo "OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}" >> .env.prod
-          echo "GOOGLE_MAPS_API_KEY=${{ secrets.GOOGLE_MAPS_API_KEY }}" >> .env.prod
-          echo "TWILIO_ACCOUNT_SID=${{ secrets.TWILIO_ACCOUNT_SID }}" >> .env.prod
-          echo "TWILIO_AUTH_TOKEN=${{ secrets.TWILIO_AUTH_TOKEN }}" >> .env.prod
-          echo "TWILIO_FROM_NUMBER=${{ secrets.TWILIO_FROM_NUMBER }}" >> .env.prod
-          echo "AWS_REGION=${{ secrets.AWS_REGION }}" >> .env.prod
-          echo "AWS_SENDER_ID=${{ secrets.AWS_SENDER_ID }}" >> .env.prod
-
           echo "--- .env.prod file created successfully ---"
 
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          # Best practice: daphne and celery should be in your requirements.txt
           pip install -r requirements.txt
 
-      # --- MODIFIED: Ensure code is correct in the repo instead of patching it here ---
-      # This step is a "code smell". The fix should be in your actual codebase.
-      # If the fix is already in your `main` branch, you can remove this entire step.
-      - name: Verify AppConfig (and optionally fix)
-        run: |
-          echo "Verifying that the correct AppConfig is used..."
-          if grep -q "'quickstart'," CEBackend/settings.py; then
-            echo "ERROR: Found obsolete 'quickstart' string in INSTALLED_APPS. Please fix your settings.py to use 'quickstart.apps.QuickstartConfig'."
-            exit 1
-          fi
-          echo "AppConfig check passed."
-
+      # --- FIX: Set the environment for all Django commands ---
       - name: Run Django Checks
+        env:
+          DJANGO_ENV: prod
         run: python manage.py check
 
-      # --- NEW: Apply Database Migrations ---
       - name: Apply Database Migrations
+        env:
+          DJANGO_ENV: prod
         run: python manage.py migrate --noinput
 
-      # --- NEW: Collect Static Files ---
-      # This is crucial for serving static files from S3 in production.
       - name: Collect Static Files
+        env:
+          DJANGO_ENV: prod
         run: python manage.py collectstatic --noinput
 
       - name: Stop existing services
         run: |
-          echo "Stopping services..."
-          sudo systemctl stop gunicorn || true
           sudo systemctl stop django-asgi || true
           sudo systemctl stop celery-worker || true
-          sudo systemctl stop celery-beat || true # Also stop beat if you use it
 
-      # --- MODIFIED: Added EnvironmentFile directive to services ---
       - name: Create/Update systemd Service Files
         run: |
           PYTHON_PATH=$(which python)
           CURRENT_DIR=$(pwd)
 
-          echo "Creating ASGI service file..."
+          # The EnvironmentFile directive is the key for the long-running service
           sudo tee /etc/systemd/system/django-asgi.service > /dev/null << EOF
           [Unit]
-          Description=Django ASGI service with Daphne for CEBackend
+          Description=Django ASGI service for CEBackend
           After=network.target
-
           [Service]
           User=ubuntu
           Group=ubuntu
           WorkingDirectory=${CURRENT_DIR}
-          # CRUCIAL: Load the .env.prod file
           EnvironmentFile=${CURRENT_DIR}/.env.prod
           ExecStart=${PYTHON_PATH} -m daphne -b 0.0.0.0 -p 8000 CEBackend.asgi:application
           Restart=on-failure
-
           [Install]
           WantedBy=multi-user.target
           EOF
 
-          echo "Creating Celery Worker service file..."
           sudo tee /etc/systemd/system/celery-worker.service > /dev/null << EOF
           [Unit]
           Description=Celery Worker for CEBackend
           After=network.target redis.service
-
           [Service]
           User=ubuntu
           Group=ubuntu
           WorkingDirectory=${CURRENT_DIR}
-          # CRUCIAL: Load the .env.prod file
           EnvironmentFile=${CURRENT_DIR}/.env.prod
           ExecStart=${PYTHON_PATH} -m celery -A CEBackend worker --loglevel=INFO
           Restart=on-failure
-
           [Install]
           WantedBy=multi-user.target
           EOF
 
       - name: Reload systemd daemon and Restart Services
         run: |
-          echo "Reloading systemd and restarting services..."
           sudo systemctl daemon-reload
-
-          sudo systemctl enable django-asgi
-          sudo systemctl restart django-asgi
-
-          sudo systemctl enable celery-worker
-          sudo systemctl restart celery-worker
+          sudo systemctl enable django-asgi celery-worker
+          sudo systemctl restart django-asgi celery-worker
 
       - name: Verify Service Status
         run: |
-          echo "Waiting for services to initialize..."
-          sleep 10
-
-          echo "--- ASGI Service Status ---"
-          sudo systemctl status django-asgi --no-pager || true
-
-          echo "--- Celery Worker Status ---"
-          sudo systemctl status celery-worker --no-pager || true
-
-          # Health Check
+          sleep 10 # Give services a moment to start
+          echo "--- Verifying service statuses ---"
           if ! sudo systemctl is-active --quiet django-asgi; then
               echo "❌ ASGI Service failed to start."
               sudo journalctl -u django-asgi -n 50 --no-pager
               exit 1
           fi
-
           if ! sudo systemctl is-active --quiet celery-worker; then
               echo "❌ Celery Worker failed to start."
               sudo journalctl -u celery-worker -n 50 --no-pager
               exit 1
           fi
+          echo "✅ All services are active."
 
-          echo "✅ All services started successfully."
+      # --- NEW: Security Cleanup Step ---
+      - name: Clean up secrets file
+        if: always() # This step runs even if previous steps fail
+        run: |
+          echo "--- Removing secrets file for security ---"
+          rm .env.prod

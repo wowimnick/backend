@@ -82,8 +82,8 @@ CSRF_COOKIE_SAMESITE = "Lax"
 
 # --- API & Service Keys ---
 RESEND_API_KEY = os.environ["RESEND_API_KEY"]
-RESEND_WEBHOOK_SECRET = os.environ.get("RESEND_WEBHOOK_SECRET")
-UNSUBSCRIBE_SECRET_KEY = os.environ.get("UNSUBSCRIBE_SECRET_KEY")
+# RESEND_WEBHOOK_SECRET = os.environ.get("RESEND_WEBHOOK_SECRET")
+# UNSUBSCRIBE_SECRET_KEY = os.environ.get("UNSUBSCRIBE_SECRET_KEY")
 
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
 GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
@@ -571,18 +571,6 @@ NOTIFICATION_SETTINGS = {
     },
     "max_batch_size": 1000,
     "rate_limit": 100,
-}
-SMS_SETTINGS = {
-    "provider": "twilio",
-    "twilio": {
-        "account_sid": os.environ.get("TWILIO_ACCOUNT_SID", ""),
-        "auth_token": os.environ.get("TWILIO_AUTH_TOKEN", ""),
-        "from_number": os.environ.get("TWILIO_FROM_NUMBER", ""),
-    },
-    "aws": {
-        "region": os.environ.get("AWS_REGION", "us-east-1"),
-        "sender_id": os.environ.get("AWS_SENDER_ID", "YourCompany"),
-    },
 }
 
 # --- Silk (Performance Profiling) ---
