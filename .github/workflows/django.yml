@@ -20,36 +20,39 @@ jobs:
 
       - name: Create Production Environment File
         run: |
-          echo "--- Creating .env.prod file from secrets ---"
-          # This file will be loaded by settings.py when DJANGO_ENV=prod
-          # It will also be loaded by the systemd services via EnvironmentFile
-          echo "DJANGO_ENV=prod" > .env.prod
-          echo "DJANGO_SECRET_KEY='${{ secrets.DJANGO_SECRET_KEY }}'" >> .env.prod
-          echo "DEBUG=False" >> .env.prod
-          echo "SITE_DOMAIN=${{ secrets.SITE_DOMAIN }}" >> .env.prod
-          echo "FRONTEND_URL=${{ secrets.FRONTEND_URL }}" >> .env.prod
-          echo "ALLOWED_HOSTS=${{ secrets.ALLOWED_HOSTS }}" >> .env.prod
-          echo "CSRF_TRUSTED_ORIGINS=${{ secrets.CSRF_TRUSTED_ORIGINS }}" >> .env.prod
-          echo "DB_ENGINE=${{ secrets.DB_ENGINE }}" >> .env.prod
-          echo "DB_NAME=${{ secrets.DB_NAME }}" >> .env.prod
-          echo "DB_USER='${{ secrets.DB_USER }}'" >> .env.prod
-          echo "DB_PASSWORD='${{ secrets.DB_PASSWORD }}'" >> .env.prod
-          echo "DB_HOST='${{ secrets.DB_HOST }}'" >> .env.prod
-          echo "DB_PORT=${{ secrets.DB_PORT }}" >> .env.prod
-          echo "CACHE_URL=${{ secrets.CACHE_URL }}" >> .env.prod
-          echo "CELERY_BROKER_URL=${{ secrets.CELERY_BROKER_URL }}" >> .env.prod
-          echo "CELERY_RESULT_BACKEND=${{ secrets.CELERY_RESULT_BACKEND }}" >> .env.prod
-          echo "RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}" >> .env.prod
-          echo "DEFAULT_FROM_EMAIL=${{ secrets.DEFAULT_FROM_EMAIL }}" >> .env.prod
-          echo "STRIPE_PUBLIC_KEY=${{ secrets.STRIPE_PUBLIC_KEY }}" >> .env.prod
-          echo "STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}" >> .env.prod
-          echo "STRIPE_WEBHOOK_SECRET=${{ secrets.STRIPE_WEBHOOK_SECRET }}" >> .env.prod
-          echo "GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}" >> .env.prod
-          echo "GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}" >> .env.prod
-          echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}" >> .env.prod
-          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> .env.prod
-          echo "AWS_STORAGE_BUCKET_NAME=${{ secrets.AWS_STORAGE_BUCKET_NAME }}" >> .env.prod
-          echo "OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}" >> .env.prod
+          echo "--- Creating .env.prod file from secrets using a heredoc ---"
+          # Using a "here document" with a quoted delimiter ('EOF') is the safest way
+          # to write secrets to a file, as it prevents any shell expansion or
+          # interpretation of special characters within the block.
+          cat << 'EOF' > .env.prod
+          DJANGO_ENV=prod
+          DJANGO_SECRET_KEY='${{ secrets.DJANGO_SECRET_KEY }}'
+          DEBUG=False
+          SITE_DOMAIN=${{ secrets.SITE_DOMAIN }}
+          FRONTEND_URL=${{ secrets.FRONTEND_URL }}
+          ALLOWED_HOSTS=${{ secrets.ALLOWED_HOSTS }}
+          CSRF_TRUSTED_ORIGINS=${{ secrets.CSRF_TRUSTED_ORIGINS }}
+          DB_ENGINE=${{ secrets.DB_ENGINE }}
+          DB_NAME=${{ secrets.DB_NAME }}
+          DB_USER='${{ secrets.DB_USER }}'
+          DB_PASSWORD='${{ secrets.DB_PASSWORD }}'
+          DB_HOST='${{ secrets.DB_HOST }}'
+          DB_PORT=${{ secrets.DB_PORT }}
+          CACHE_URL=${{ secrets.CACHE_URL }}
+          CELERY_BROKER_URL=${{ secrets.CELERY_BROKER_URL }}
+          CELERY_RESULT_BACKEND=${{ secrets.CELERY_RESULT_BACKEND }}
+          RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
+          DEFAULT_FROM_EMAIL=${{ secrets.DEFAULT_FROM_EMAIL }}
+          STRIPE_PUBLIC_KEY=${{ secrets.STRIPE_PUBLIC_KEY }}
+          STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_WEBHOOK_SECRET=${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
+          AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_STORAGE_BUCKET_NAME=${{ secrets.AWS_STORAGE_BUCKET_NAME }}
+          OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
+          EOF
           echo "--- .env.prod file created successfully ---"
 
       - name: Install Dependencies
