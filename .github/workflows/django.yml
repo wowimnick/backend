@@ -52,15 +52,30 @@ jobs:
           echo "OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}" >> .env.prod
           echo "--- .env.prod file created successfully ---"
 
-      - name: DEBUG - Inspect Created Environment File
+      - name: Install psql and Attempt Direct DB Connection
         run: |
-          echo "--- START: DEBUG LOG of .env.prod ---"
-          echo "Contents of the generated .env.prod file:"
-          cat .env.prod
-          echo ""
-          echo "Inspecting DB_PASSWORD line specifically:"
-          grep 'DB_PASSWORD' .env.prod
-          echo "--- END: DEBUG LOG of .env.prod ---"
+          echo "--- Installing PostgreSQL client ---"
+          sudo apt-get update && sudo apt-get install -y postgresql-client
+
+          echo "--- Loading credentials from .env.prod file ---"
+          # Source the file to load variables into the shell environment
+          # The 'set -a' command exports them automatically.
+          set -a
+          source .env.prod
+          set +a
+
+          echo "--- Attempting to connect directly to the database with psql... ---"
+          echo "Host: $DB_HOST"
+          echo "Port: $DB_PORT"
+          echo "User: $DB_USER"
+          echo "Database: $DB_NAME"
+          # The PGPASSWORD environment variable is used by psql automatically.
+          # The -c "\q" command tells psql to connect, run the quit command, and exit.
+          # If the connection fails, it will return a non-zero exit code and fail the step.
+          PGPASSWORD=$DB_PASSWORD psql --host=$DB_HOST --port=$DB_PORT --username=$DB_USER --dbname=$DB_NAME -c "\q"
+
+          echo "--- ✅✅✅ DATABASE CONNECTION SUCCEEDED! ✅✅✅ ---"
+          echo "If you see this message, the credentials and network are correct."
 
       - name: Install Dependencies
         run: |
