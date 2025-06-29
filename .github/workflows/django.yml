@@ -24,18 +24,17 @@ jobs:
           # This file will be loaded by settings.py when DJANGO_ENV=prod
           # It will also be loaded by the systemd services via EnvironmentFile
           echo "DJANGO_ENV=prod" > .env.prod
-          echo "DJANGO_SECRET_KEY=${{ secrets.DJANGO_SECRET_KEY }}" >> .env.prod
+          echo "DJANGO_SECRET_KEY='${{ secrets.DJANGO_SECRET_KEY }}'" >> .env.prod
           echo "DEBUG=False" >> .env.prod
-          # ... (all other echo commands from the previous answer) ...
           echo "SITE_DOMAIN=${{ secrets.SITE_DOMAIN }}" >> .env.prod
           echo "FRONTEND_URL=${{ secrets.FRONTEND_URL }}" >> .env.prod
           echo "ALLOWED_HOSTS=${{ secrets.ALLOWED_HOSTS }}" >> .env.prod
           echo "CSRF_TRUSTED_ORIGINS=${{ secrets.CSRF_TRUSTED_ORIGINS }}" >> .env.prod
           echo "DB_ENGINE=${{ secrets.DB_ENGINE }}" >> .env.prod
           echo "DB_NAME=${{ secrets.DB_NAME }}" >> .env.prod
-          echo "DB_USER=${{ secrets.DB_USER }}" >> .env.prod
-          echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> .env.prod
-          echo "DB_HOST=${{ secrets.DB_HOST }}" >> .env.prod
+          echo "DB_USER='${{ secrets.DB_USER }}'" >> .env.prod
+          echo "DB_PASSWORD='${{ secrets.DB_PASSWORD }}'" >> .env.prod
+          echo "DB_HOST='${{ secrets.DB_HOST }}'" >> .env.prod
           echo "DB_PORT=${{ secrets.DB_PORT }}" >> .env.prod
           echo "CACHE_URL=${{ secrets.CACHE_URL }}" >> .env.prod
           echo "CELERY_BROKER_URL=${{ secrets.CELERY_BROKER_URL }}" >> .env.prod
