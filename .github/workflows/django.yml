@@ -52,22 +52,16 @@ jobs:
           echo "OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}" >> .env.prod
           echo "--- .env.prod file created successfully ---"
 
-      # --- DEBUGGING STEP: PRINT RAW, UNFILTERED SECRETS ---
-      - name: DEBUG - Print Raw Unfiltered .env.prod Contents
+      - name: DEBUG - Inspect Created Environment File
         run: |
-          echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-          echo "!!!             RAW, UNFILTERED .env.prod LOG              !!!"
-          echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+          echo "--- START: DEBUG LOG of .env.prod ---"
+          echo "Contents of the generated .env.prod file:"
+          cat .env.prod
+          echo ""
+          echo "Inspecting DB_PASSWORD line specifically:"
+          grep 'DB_PASSWORD' .env.prod
+          echo "--- END: DEBUG LOG of .env.prod ---"
 
-          # This command reads the file line by line and uses 'sed' to insert
-          # a zero-width space (U+200B) between every character. This
-          # breaks GitHub's secret masking, but will look normal in the log.
-          sed 's/./&\x20\x0B/g' .env.prod
-
-          echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-          echo "!!!                    END OF RAW LOG                      !!!"
-          echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-      # --- END DEBUGGING STEP --
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
