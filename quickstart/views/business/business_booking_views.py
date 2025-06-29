@@ -43,26 +43,26 @@ from rest_framework.exceptions import ValidationError, PermissionDenied, NotFoun
 from rest_framework.permissions import IsAuthenticated, BasePermission
 from rest_framework.pagination import PageNumberPagination
 
-from ...models import (
+from quickstart.models import (
     BusinessInfo,
     Booking,
     ScheduleInstance,
     CustomUser,
     ClassesMain,
 )  # Added ClassesMain
-from ...serializers.business.business_booking_serializers import (
+from quickstart.serializers.business.business_booking_serializers import (
     BusinessBookingListSerializer,
     BusinessBookingDetailSerializer,
 )
-from ...utils.permissions import CanManageOwnClasses
-from ...utils.email_utils import send_booking_cancelled_by_other_email
+from quickstart.utils.permissions import CanManageOwnClasses
+from quickstart.utils.email_utils import send_booking_cancelled_by_other_email
 import logging
 
 logger = logging.getLogger(__name__)
 
 
 # --- Permissions and Pagination (Assumed to be defined as before) ---
-class CanViewOwnBusinessBookings(BasePermission):  # ... (definition as before)
+class CanViewOwnBusinessBookings(BasePermission):
     message = "You do not have permission to view bookings for this business."
 
     def has_permission(self, request, view):
@@ -111,7 +111,7 @@ class CanManageOwnBusinessBookings(BasePermission):
             return False
 
 
-class BusinessBookingPagination(PageNumberPagination):  # ... (definition as before)
+class BusinessBookingPagination(PageNumberPagination):
     page_size = 10
     page_size_query_param = "page_size"
     max_page_size = 50
@@ -127,7 +127,7 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
         "user__first_name",
         "user__last_name",
         "schedule_instance__schedule__option__classId__title",
-        "schedule_instance__schedule__option__classId__title", # Corrected from option.title
+        "schedule_instance__schedule__option__classId__title",  # Corrected from option.title
         "id",
     ]
     ordering_fields = [
@@ -406,8 +406,12 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                 .annotate(
                     new_booking_transactions=Count("id"),
                     new_participant_spots=Coalesce(Sum("participants"), Value(0)),
-                    cancelled_booking_transactions=Count("id", filter=Q(status="cancelled")),
-                    cancelled_participant_spots=Coalesce(Sum("participants", filter=Q(status="cancelled")), Value(0)),
+                    cancelled_booking_transactions=Count(
+                        "id", filter=Q(status="cancelled")
+                    ),
+                    cancelled_participant_spots=Coalesce(
+                        Sum("participants", filter=Q(status="cancelled")), Value(0)
+                    ),
                 )
                 .order_by("date_local")
             )
@@ -477,21 +481,36 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                     total_booking_transactions=Count("id"),
                     total_participant_spots=Coalesce(Sum("participants"), Value(0)),
                     unique_bookers=Count("user", distinct=True),
-                    class_cancelled_spots=Coalesce(Sum("participants", filter=Q(status="cancelled")), Value(0)),
-                    total_revenue_for_class=Coalesce(Sum("amount_paid", filter=Q(payment_status="paid")), Value(Decimal("0.0"))),
+                    class_cancelled_spots=Coalesce(
+                        Sum("participants", filter=Q(status="cancelled")), Value(0)
+                    ),
+                    total_revenue_for_class=Coalesce(
+                        Sum("amount_paid", filter=Q(payment_status="paid")),
+                        Value(Decimal("0.0")),
+                    ),
                 )
                 .order_by("-total_participant_spots")
             )
             popular_classes = [
                 {
-                    "class_name": entry["schedule_instance__schedule__option__classId__title"],
+                    "class_name": entry[
+                        "schedule_instance__schedule__option__classId__title"
+                    ],
                     "total_booking_transactions": entry["total_booking_transactions"],
                     "total_participant_spots": entry["total_participant_spots"],
                     "unique_bookers": entry["unique_bookers"],
                     "total_revenue": float(entry["total_revenue_for_class"]),
                     "cancellation_rate_by_spots": round(
-                        (entry["class_cancelled_spots"] / entry["total_participant_spots"] * 100)
-                        if entry["total_participant_spots"] else 0, 1
+                        (
+                            (
+                                entry["class_cancelled_spots"]
+                                / entry["total_participant_spots"]
+                                * 100
+                            )
+                            if entry["total_participant_spots"]
+                            else 0
+                        ),
+                        1,
                     ),
                 }
                 for entry in popular_classes_data

@@ -1,187 +1,186 @@
-name: Fix Django App Config and Setup ASGI + Celery
+name: Deploy CEBackend to Production
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
   deploy:
     runs-on: self-hosted
-    steps:
-      - uses: actions/checkout@v4
 
-      - name: Set up Python
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: "3.10"
+          cache: "pip" # Cache pip dependencies to speed up subsequent runs
 
-      - name: Verify working directory
+      # --- NEW: Create .env.prod file from GitHub Secrets ---
+      # This is the core of the secure secret management strategy.
+      - name: Create Production Environment File
         run: |
-          echo "Current directory: $(pwd)"
-          ls -la
-          echo "CEBackend directory exists: $(test -d CEBackend && echo 'YES' || echo 'NO')"
-          echo "quickstart directory exists: $(test -d quickstart && echo 'YES' || echo 'NO')"
+          echo "--- Creating .env.prod file from secrets ---"
+          # The DJANGO_ENV variable tells settings.py which mode we are in.
+          echo "DJANGO_ENV=prod" > .env.prod
 
-      # Keep your Quickstart AppConfig fix if needed
-      - name: Fix QuickStart AppConfig
-        run: |
-          mkdir -p quickstart
-          cat > quickstart/apps.py << 'EOF'
-          from django.apps import AppConfig
-          import os
+          # Append all other secrets. The '>>' is crucial.
+          echo "DJANGO_SECRET_KEY=${{ secrets.DJANGO_SECRET_KEY }}" >> .env.prod
+          echo "DEBUG=False" >> .env.prod
+          echo "SITE_DOMAIN=${{ secrets.SITE_DOMAIN }}" >> .env.prod
+          echo "FRONTEND_URL=${{ secrets.FRONTEND_URL }}" >> .env.prod
+          echo "ALLOWED_HOSTS=${{ secrets.ALLOWED_HOSTS }}" >> .env.prod
+          echo "CSRF_TRUSTED_ORIGINS=${{ secrets.CSRF_TRUSTED_ORIGINS }}" >> .env.prod
+          echo "DB_ENGINE=${{ secrets.DB_ENGINE }}" >> .env.prod
+          echo "DB_NAME=${{ secrets.DB_NAME }}" >> .env.prod
+          echo "DB_USER=${{ secrets.DB_USER }}" >> .env.prod
+          echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> .env.prod
+          echo "DB_HOST=${{ secrets.DB_HOST }}" >> .env.prod
+          echo "DB_PORT=${{ secrets.DB_PORT }}" >> .env.prod
+          echo "CACHE_URL=${{ secrets.CACHE_URL }}" >> .env.prod
+          echo "CELERY_BROKER_URL=${{ secrets.CELERY_BROKER_URL }}" >> .env.prod
+          echo "CELERY_RESULT_BACKEND=${{ secrets.CELERY_RESULT_BACKEND }}" >> .env.prod
+          echo "RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}" >> .env.prod
+          echo "DEFAULT_FROM_EMAIL=${{ secrets.DEFAULT_FROM_EMAIL }}" >> .env.prod
+          echo "RESEND_WEBHOOK_SECRET=${{ secrets.RESEND_WEBHOOK_SECRET }}" >> .env.prod
+          echo "UNSUBSCRIBE_SECRET_KEY=${{ secrets.UNSUBSCRIBE_SECRET_KEY }}" >> .env.prod
+          echo "STRIPE_PUBLIC_KEY=${{ secrets.STRIPE_PUBLIC_KEY }}" >> .env.prod
+          echo "STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}" >> .env.prod
+          echo "STRIPE_WEBHOOK_SECRET=${{ secrets.STRIPE_WEBHOOK_SECRET }}" >> .env.prod
+          echo "GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}" >> .env.prod
+          echo "GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}" >> .env.prod
+          echo "FACEBOOK_APP_ID=${{ secrets.FACEBOOK_APP_ID }}" >> .env.prod
+          echo "FACEBOOK_APP_SECRET=${{ secrets.FACEBOOK_APP_SECRET }}" >> .env.prod
+          echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}" >> .env.prod
+          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> .env.prod
+          echo "AWS_STORAGE_BUCKET_NAME=${{ secrets.AWS_STORAGE_BUCKET_NAME }}" >> .env.prod
+          echo "OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}" >> .env.prod
+          echo "GOOGLE_MAPS_API_KEY=${{ secrets.GOOGLE_MAPS_API_KEY }}" >> .env.prod
+          echo "TWILIO_ACCOUNT_SID=${{ secrets.TWILIO_ACCOUNT_SID }}" >> .env.prod
+          echo "TWILIO_AUTH_TOKEN=${{ secrets.TWILIO_AUTH_TOKEN }}" >> .env.prod
+          echo "TWILIO_FROM_NUMBER=${{ secrets.TWILIO_FROM_NUMBER }}" >> .env.prod
+          echo "AWS_REGION=${{ secrets.AWS_REGION }}" >> .env.prod
+          echo "AWS_SENDER_ID=${{ secrets.AWS_SENDER_ID }}" >> .env.prod
 
-          class QuickstartConfig(AppConfig):
-              name = 'quickstart'
-              path = os.path.dirname(os.path.abspath(__file__))
-              default_auto_field = 'django.db.models.BigAutoField'
-          EOF
-          touch quickstart/__init__.py
-          # Ensure the sed command targets the correct file path relative to the checkout root
-          if [ -f CEBackend/settings.py ]; then
-            sed -i "s/'quickstart.apps.QuickstartConfig',/'quickstart.apps.QuickstartConfig',/g; s/'quickstart',/'quickstart.apps.QuickstartConfig',/g" CEBackend/settings.py
-            grep -A1 -B1 'QuickstartConfig' CEBackend/settings.py || echo "QuickstartConfig not found in settings.py after attempted fix"
-          else
-             echo "CEBackend/settings.py not found."
-             exit 1
-          fi
+          echo "--- .env.prod file created successfully ---"
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          # Ensure requirements include celery, redis, etc.
+          # Best practice: daphne and celery should be in your requirements.txt
           pip install -r requirements.txt
-          pip install daphne channels channels_redis celery[redis]
 
-      - name: Test Django setup directly with proper environment
+      # --- MODIFIED: Ensure code is correct in the repo instead of patching it here ---
+      # This step is a "code smell". The fix should be in your actual codebase.
+      # If the fix is already in your `main` branch, you can remove this entire step.
+      - name: Verify AppConfig (and optionally fix)
         run: |
-          python manage.py check
+          echo "Verifying that the correct AppConfig is used..."
+          if grep -q "'quickstart'," CEBackend/settings.py; then
+            echo "ERROR: Found obsolete 'quickstart' string in INSTALLED_APPS. Please fix your settings.py to use 'quickstart.apps.QuickstartConfig'."
+            exit 1
+          fi
+          echo "AppConfig check passed."
 
-          cat > test_django.py << 'EOF'
-          import os
-          import django
+      - name: Run Django Checks
+        run: python manage.py check
 
-          os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'CEBackend.settings')
-          django.setup()
+      # --- NEW: Apply Database Migrations ---
+      - name: Apply Database Migrations
+        run: python manage.py migrate --noinput
 
-          from django.apps import apps
-          print('Available apps:', [app.name for app in apps.get_app_configs()])
-          print('QuickstartConfig in apps:', 'quickstart.apps.QuickstartConfig' in [app.name for app in apps.get_app_configs()])
-
-          # Test ASGI import
-          try:
-              from CEBackend.asgi import application
-              print('ASGI application imported successfully')
-          except Exception as e:
-              print(f'ASGI import error: {e}')
-
-          # Test Celery app import
-          try:
-              from CEBackend.celery import app as celery_app
-              print('Celery app imported successfully')
-          except Exception as e:
-              print(f'Celery import error: {e}')
-          EOF
-
-          python test_django.py
+      # --- NEW: Collect Static Files ---
+      # This is crucial for serving static files from S3 in production.
+      - name: Collect Static Files
+        run: python manage.py collectstatic --noinput
 
       - name: Stop existing services
         run: |
+          echo "Stopping services..."
           sudo systemctl stop gunicorn || true
           sudo systemctl stop django-asgi || true
-          sudo systemctl stop celery-worker || true # Add stopping celery
+          sudo systemctl stop celery-worker || true
+          sudo systemctl stop celery-beat || true # Also stop beat if you use it
 
-      - name: Create ASGI service file
+      # --- MODIFIED: Added EnvironmentFile directive to services ---
+      - name: Create/Update systemd Service Files
         run: |
           PYTHON_PATH=$(which python)
           CURRENT_DIR=$(pwd)
 
-          sudo tee /etc/systemd/system/django-asgi.service << EOF
+          echo "Creating ASGI service file..."
+          sudo tee /etc/systemd/system/django-asgi.service > /dev/null << EOF
           [Unit]
-          Description=Django ASGI service with Daphne
+          Description=Django ASGI service with Daphne for CEBackend
           After=network.target
 
           [Service]
           User=ubuntu
           Group=ubuntu
           WorkingDirectory=${CURRENT_DIR}
-          Environment="PYTHONUNBUFFERED=1"
-          Environment="DJANGO_SETTINGS_MODULE=CEBackend.settings"
-          ExecStart=${PYTHON_PATH} -m daphne --verbosity 2 -b 127.0.0.1 -p 8000 CEBackend.asgi:application
-          StandardOutput=journal
-          StandardError=journal
+          # CRUCIAL: Load the .env.prod file
+          EnvironmentFile=${CURRENT_DIR}/.env.prod
+          ExecStart=${PYTHON_PATH} -m daphne -b 0.0.0.0 -p 8000 CEBackend.asgi:application
           Restart=on-failure
-          RestartSec=10s
 
           [Install]
           WantedBy=multi-user.target
           EOF
 
-      # --- NEW: Create Celery Worker service file ---
-      - name: Create Celery Worker service file
-        run: |
-          PYTHON_PATH=$(which python)
-          CURRENT_DIR=$(pwd)
-
-          sudo tee /etc/systemd/system/celery-worker.service << EOF
+          echo "Creating Celery Worker service file..."
+          sudo tee /etc/systemd/system/celery-worker.service > /dev/null << EOF
           [Unit]
           Description=Celery Worker for CEBackend
-          After=network.target redis.service # Depends on Redis
+          After=network.target redis.service
 
           [Service]
           User=ubuntu
           Group=ubuntu
           WorkingDirectory=${CURRENT_DIR}
-          Environment="PYTHONUNBUFFERED=1"
-          Environment="DJANGO_SETTINGS_MODULE=CEBackend.settings"
-          ExecStart=${PYTHON_PATH} -m celery -A CEBackend.celery worker --loglevel=DEBUG
-          StandardOutput=journal
-          StandardError=journal
+          # CRUCIAL: Load the .env.prod file
+          EnvironmentFile=${CURRENT_DIR}/.env.prod
+          ExecStart=${PYTHON_PATH} -m celery -A CEBackend worker --loglevel=INFO
           Restart=on-failure
-          RestartSec=10s
 
           [Install]
           WantedBy=multi-user.target
           EOF
-      # --- END NEW ---
 
-      - name: Reload systemd daemon
+      - name: Reload systemd daemon and Restart Services
         run: |
+          echo "Reloading systemd and restarting services..."
           sudo systemctl daemon-reload
 
-      - name: Start Django ASGI application
-        run: |
           sudo systemctl enable django-asgi
           sudo systemctl restart django-asgi
-          sleep 5 # Give it a moment to start/fail
-          sudo systemctl status django-asgi || true
-          sudo journalctl -xeu django-asgi --no-pager # Show recent logs regardless of status
 
-      # --- NEW: Start Celery Worker ---
-      - name: Start Celery Worker
-        run: |
           sudo systemctl enable celery-worker
           sudo systemctl restart celery-worker
-          sleep 5 # Give it a moment to start/fail
-          sudo systemctl status celery-worker || true
-          sudo journalctl -xeu celery-worker --no-pager # Show recent logs regardless of status
-      # --- END NEW ---
 
-      - name: Wait for ASGI application to start
+      - name: Verify Service Status
         run: |
-          for i in {1..6}
-          do
-            if nc -z 127.0.0.1 8000; then
-              echo "✅ ASGI Application is running on port 8000!"
-              break
-            fi
-            echo "Waiting for ASGI application to start... ($i/6)"
-            sleep 5
-          done
+          echo "Waiting for services to initialize..."
+          sleep 10
 
-          if nc -z 127.0.0.1 8000; then
-            echo "✅ ASGI Application check successful!"
-          else
-            echo "❌ ASGI Application failed to start or respond on 127.0.0.1:8000"
-            sudo journalctl -u django-asgi -n 50 --no-pager
-            exit 1
+          echo "--- ASGI Service Status ---"
+          sudo systemctl status django-asgi --no-pager || true
+
+          echo "--- Celery Worker Status ---"
+          sudo systemctl status celery-worker --no-pager || true
+
+          # Health Check
+          if ! sudo systemctl is-active --quiet django-asgi; then
+              echo "❌ ASGI Service failed to start."
+              sudo journalctl -u django-asgi -n 50 --no-pager
+              exit 1
           fi
+
+          if ! sudo systemctl is-active --quiet celery-worker; then
+              echo "❌ Celery Worker failed to start."
+              sudo journalctl -u celery-worker -n 50 --no-pager
+              exit 1
+          fi
+
+          echo "✅ All services started successfully."

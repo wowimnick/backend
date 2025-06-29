@@ -13,15 +13,15 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
 
 # Adjust import paths as needed
-from ...models import Booking, ScheduleInstance, Reviews, ClassImage
-from ...serializers import (
+from quickstart.models import Booking, ScheduleInstance, Reviews, ClassImage
+from quickstart.serializers import (
     BookingCreateSerializer,
     StudentBookingSerializer,
     StudentBookingDetailSerializer,  # <-- IMPORT THE NEW DEDICATED SERIALIZER
     BookingDetailSerializer,  # This is for admin use, we don't use it here.
 )
 
-from ...utils.email_utils import (
+from quickstart.utils.email_utils import (
     send_booking_cancellation_user_email,
     send_business_student_cancellation_email,
 )
@@ -165,7 +165,7 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
                 booking, context={"request": request}
             )
             return Response(response_serializer.data, status=status.HTTP_201_CREATED)
-        except (ValidationError, DjangoValidationError) as e:
+        except ValidationError as e:
             error_detail = e.detail if hasattr(e, "detail") else e.message_dict
             logger.warning(
                 f"Booking creation failed validation for user {request.user.email}. Error: {error_detail}"
@@ -187,51 +187,56 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
         Provides detailed, definitive information about the cancellation eligibility
         and policy for a specific booking. This is the single source of truth.
         """
-        booking = self.get_object() 
+        booking = self.get_object()
         if booking.status not in ["confirmed", "pending"]:
             return Response(
-                {"error": f"Cancellation info not applicable for a booking with status '{booking.status}'."},
-                status=status.HTTP_400_BAD_REQUEST
+                {
+                    "error": f"Cancellation info not applicable for a booking with status '{booking.status}'."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
             )
-        
+
         try:
             # Defensive checks (no changes needed here)
             schedule_instance = booking.schedule_instance
-            if not schedule_instance: raise AttributeError("Booking is missing a schedule instance.")
+            if not schedule_instance:
+                raise AttributeError("Booking is missing a schedule instance.")
             schedule = schedule_instance.schedule
-            if not schedule: raise AttributeError("Schedule instance is missing a schedule.")
+            if not schedule:
+                raise AttributeError("Schedule instance is missing a schedule.")
             class_option = schedule.option
-            if not class_option: raise AttributeError("Schedule is missing a class option.")
+            if not class_option:
+                raise AttributeError("Schedule is missing a class option.")
             class_main = class_option.classId
-            if not class_main: raise AttributeError("Class option is missing a parent class.")
+            if not class_main:
+                raise AttributeError("Class option is missing a parent class.")
             business = class_main.businessId
-            if not business: raise AttributeError("Class is missing a business.")
+            if not business:
+                raise AttributeError("Class is missing a business.")
             business_timezone_str = business.business_timezone
-            if not business_timezone_str: raise ValueError("Business is missing a timezone setting.")
-            
+            if not business_timezone_str:
+                raise ValueError("Business is missing a timezone setting.")
+
             policy_key = class_option.cancellationPolicy
             refund_percentage = class_option.cancellationRefundPercentage
-            
+
             business_tz = pytz.timezone(business_timezone_str)
-            
-            instance_datetime_naive = datetime.combine(schedule_instance.date, schedule_instance.time)
+
+            instance_datetime_naive = datetime.combine(
+                schedule_instance.date, schedule_instance.time
+            )
             instance_datetime_aware = business_tz.localize(instance_datetime_naive)
             now_aware_in_business_tz = timezone.now().astimezone(business_tz)
 
             can_cancel = instance_datetime_aware > now_aware_in_business_tz
             is_eligible_for_refund = False
-            
+
             cancellation_deadline_aware = None
             cancellation_deadline_utc = None
 
             # --- FIX: Implement the "Flexible = 1 hour" rule ---
             hours_notice_required = 0
-            policy_hours_map = {
-                "flexible": 1, 
-                "24h": 24, 
-                "48h": 48, 
-                "72h": 72
-            }
+            policy_hours_map = {"flexible": 1, "24h": 24, "48h": 48, "72h": 72}
             policy_description_map = {
                 "flexible": f"Full refund if cancelled at least 1 hour before the class starts. A {refund_percentage}% refund applies.",
                 "24h": f"Full refund if cancelled at least 24 hours before the class starts. A {refund_percentage}% refund applies.",
@@ -243,15 +248,21 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
             if policy_key in policy_hours_map:
                 hours_notice_required = policy_hours_map[policy_key]
 
-            policy_description = policy_description_map.get(policy_key, "Standard cancellation policy applies.")
+            policy_description = policy_description_map.get(
+                policy_key, "Standard cancellation policy applies."
+            )
 
             # Calculate deadline for any policy that has a time requirement
             if hours_notice_required > 0:
-                cancellation_deadline_aware = instance_datetime_aware - timedelta(hours=hours_notice_required)
-                cancellation_deadline_utc = cancellation_deadline_aware.astimezone(pytz.utc)
+                cancellation_deadline_aware = instance_datetime_aware - timedelta(
+                    hours=hours_notice_required
+                )
+                cancellation_deadline_utc = cancellation_deadline_aware.astimezone(
+                    pytz.utc
+                )
 
             # --- FIX: Unified and simplified refund eligibility logic ---
-            if can_cancel and policy_key != 'strict':
+            if can_cancel and policy_key != "strict":
                 # If there's a deadline, check against it.
                 if cancellation_deadline_aware:
                     if now_aware_in_business_tz <= cancellation_deadline_aware:
@@ -260,30 +271,57 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
                     # This case would be for a future policy type with no time limit, but it's safe to keep.
                     # As of now, 'strict' is the only one without a deadline check.
                     is_eligible_for_refund = True
-            
-            return Response({
-                "can_cancel": can_cancel,
-                "is_eligible_for_refund": is_eligible_for_refund,
-                "policy_key": policy_key,
-                "policy_description": policy_description,
-                "refund_percentage": refund_percentage,
-                "cancellation_deadline_utc": cancellation_deadline_utc.isoformat() if cancellation_deadline_utc else None,
-            })
+
+            return Response(
+                {
+                    "can_cancel": can_cancel,
+                    "is_eligible_for_refund": is_eligible_for_refund,
+                    "policy_key": policy_key,
+                    "policy_description": policy_description,
+                    "refund_percentage": refund_percentage,
+                    "cancellation_deadline_utc": (
+                        cancellation_deadline_utc.isoformat()
+                        if cancellation_deadline_utc
+                        else None
+                    ),
+                }
+            )
 
         # --- (Catch blocks remain the same) ---
         except AttributeError as e:
             logger.error(f"Data integrity error for booking {pk}: {e}", exc_info=True)
-            return Response({"error": "Cannot retrieve cancellation policy due to incomplete booking data."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {
+                    "error": "Cannot retrieve cancellation policy due to incomplete booking data."
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
         except ValueError as e:
-             logger.error(f"Configuration error for booking {pk}: {e}", exc_info=True)
-             return Response({"error": "Cannot retrieve cancellation policy due to a configuration error (e.g., missing timezone)."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            logger.error(f"Configuration error for booking {pk}: {e}", exc_info=True)
+            return Response(
+                {
+                    "error": "Cannot retrieve cancellation policy due to a configuration error (e.g., missing timezone)."
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
         except pytz.UnknownTimeZoneError:
-            logger.error(f"Unknown timezone for business during cancellation check for booking {pk}.")
-            return Response({"error": "System error: Could not verify business timezone."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            logger.error(
+                f"Unknown timezone for business during cancellation check for booking {pk}."
+            )
+            return Response(
+                {"error": "System error: Could not verify business timezone."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
         except Exception as e:
-            logger.error(f"Error generating cancellation info for booking {pk}: {e}", exc_info=True)
-            return Response({"error": "An internal server error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
+            logger.error(
+                f"Error generating cancellation info for booking {pk}: {e}",
+                exc_info=True,
+            )
+            return Response(
+                {"error": "An internal server error occurred."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
     @action(detail=True, methods=["post"], url_path="cancel")
     def student_cancel(self, request, pk=None):
         """Allows a student to cancel their own booking, respecting policy."""

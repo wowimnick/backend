@@ -10,7 +10,7 @@ from rest_framework.permissions import (
 )  # Added BasePermission
 from django.utils import timezone
 from django.db import transaction
-from django.db.models import Q, Sum, Count, DecimalField, IntegerField
+from django.db.models import Q, Sum, Count, DecimalField, IntegerField, Prefetch
 from django.db.models.functions import Coalesce
 from rest_framework.pagination import PageNumberPagination
 from datetime import timedelta
@@ -20,18 +20,18 @@ from django.http import HttpResponse
 import stripe
 from django.conf import settings
 
-from ....models import AuditLog, Booking, ScheduleInstance, Payment, CustomUser
+from quickstart.models import AuditLog, Booking, ScheduleInstance, Payment, CustomUser
 
-from ....serializers.admin.booking_management.payment_serializers import (
+from quickstart.serializers.admin.booking_management.payment_serializers import (
     AdminBookingListSerializer,
     AdminBookingPaymentSerializer,
 )
-from ....serializers import BookingDetailSerializer
+from quickstart.serializers import BookingDetailSerializer
 
-from ..user_management.user_admin_views import user_can_manage
+from quickstart.views.admin.user_management.user_admin_views import user_can_manage
 
 try:
-    from ....utils.email_utils import send_booking_cancelled_by_other_email
+    from quickstart.utils.email_utils import send_booking_cancelled_by_other_email
 except ImportError:
     logging.error("Could not import email utility functions in booking_views.py")
 
@@ -114,13 +114,21 @@ class AdminBookingViewSet(viewsets.ModelViewSet):
                 f"User {self.request.user.email} denied access to list bookings (missing view_booking perm)."
             )
             return Booking.objects.none()
+
+        # --- FIX: Optimized the queryset for performance ---
         queryset = (
             Booking.objects.select_related(
+                # Use select_related for all forward foreign key relationships.
+                # This turns many small queries into a single, larger, more efficient JOIN query.
                 "schedule_instance__schedule__option__classId__businessId",
-                "user",
-                "user__role",
+                "user__role",  # Also join user and their role
             )
-            .prefetch_related("payments")
+            .prefetch_related(
+                # Use prefetch_related for reverse relationships (like payments).
+                # This performs a separate lookup for all payments needed for the initial bookings,
+                # avoiding one query per booking.
+                Prefetch("payments", queryset=Payment.objects.order_by("-created_at"))
+            )
             .distinct()
         )
         # Filtering logic
@@ -195,25 +203,27 @@ class AdminBookingViewSet(viewsets.ModelViewSet):
         # 2. Check the booking's current status.
         if booking.status not in ["confirmed", "pending"]:
             return Response(
-                {"error": f'Booking with status "{booking.status}" cannot be cancelled.'},
+                {
+                    "error": f'Booking with status "{booking.status}" cannot be cancelled.'
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         reason = request.data.get("reason", "Cancelled by administrator")
-        
+
         try:
             with transaction.atomic():
                 booking.status = "cancelled"
                 booking.cancelled_at = timezone.now()
                 booking.cancellation_reason = reason
-                
+
                 update_fields = ["status", "cancelled_at", "cancellation_reason"]
 
                 # If the booking was paid, flag it for refund processing.
-                if booking.payment_status == 'paid':
-                    booking.payment_status = 'refund_pending'
-                    update_fields.append('payment_status')
-                
+                if booking.payment_status == "paid":
+                    booking.payment_status = "refund_pending"
+                    update_fields.append("payment_status")
+
                 booking.save(update_fields=update_fields)
 
                 # Send email notification after successful save.
@@ -223,18 +233,30 @@ class AdminBookingViewSet(viewsets.ModelViewSet):
                         booking=booking,
                         cancelled_by="an administrator",
                         reason=reason,
-                        contact_info=settings.NOTIFICATION_SETTINGS.get("reply_to", "support@classeasily.com"),
+                        contact_info=settings.NOTIFICATION_SETTINGS.get(
+                            "reply_to", "support@classeasily.com"
+                        ),
                     )
-                    logger.info(f"Cancellation email prepared for user {booking.user.email} for booking {booking.id}")
+                    logger.info(
+                        f"Cancellation email prepared for user {booking.user.email} for booking {booking.id}"
+                    )
                 except Exception as email_error:
-                    logger.error(f"Failed to send cancellation email for booking {booking.id}: {email_error}", exc_info=True)
+                    logger.error(
+                        f"Failed to send cancellation email for booking {booking.id}: {email_error}",
+                        exc_info=True,
+                    )
 
             log_details = f"Booking cancelled by admin {request.user.email}. Reason: {reason}. Refund must be processed separately if applicable."
-            self._log_booking_action(booking, "booking_cancel_admin", log_details, request)
+            self._log_booking_action(
+                booking, "booking_cancel_admin", log_details, request
+            )
 
         except Exception as e:
             logger.error(f"Error cancelling Booking {pk}: {str(e)}", exc_info=True)
-            return Response({"error": f"Failed to cancel booking. {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {"error": f"Failed to cancel booking. {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
         # Return the updated booking details with payment info attached
         return self.retrieve(request, pk=pk)

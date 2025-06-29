@@ -1,3 +1,5 @@
+# quickstart/serializers/auth_serializers.py
+
 from rest_framework import serializers
 from dj_rest_auth.registration.serializers import RegisterSerializer
 from dj_rest_auth.serializers import LoginSerializer as DefaultLoginSerializer
@@ -5,7 +7,10 @@ from django.contrib.auth import get_user_model
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from django.db.models import Exists, OuterRef, Q
 from django.core.files.uploadedfile import InMemoryUploadedFile
-from ...models import Role, ClassesMain, BusinessInfo
+from quickstart.models import Role, ClassesMain, BusinessInfo
+import logging
+
+logger = logging.getLogger(__name__)
 
 User = get_user_model()
 
@@ -167,6 +172,28 @@ class CustomRegisterSerializer(RegisterSerializer):
         required=False, allow_blank=True, max_length=50
     )
 
+    def validate(self, data):
+        """
+        Custom validation to robustly check for email uniqueness directly on the User model.
+        This prevents IntegrityError exceptions from bubbling up as 500 errors when test
+        factories or race conditions bypass allauth's default checks.
+        """
+        email = data.get("email", "").lower()
+        if email and User.objects.filter(email__iexact=email).exists():
+            # Raise a validation error that mimics the default 'unique' validator.
+            # This ensures the test assertion on `error.code` passes.
+            raise serializers.ValidationError(
+                {
+                    "email": serializers.ErrorDetail(
+                        "A user is already registered with this e-mail address.",
+                        code="unique",
+                    )
+                }
+            )
+        # It's good practice to call the parent's validate method if it exists,
+        # but RegisterSerializer does not have a top-level validate method to call.
+        return data
+
     def get_cleaned_data(self):
         data = super().get_cleaned_data()
         data.update(
@@ -204,21 +231,15 @@ class CustomRegisterSerializer(RegisterSerializer):
 
         if not user.role:
             try:
+                # Assign the default role upon registration
                 default_role, created = Role.objects.get_or_create(
-                    name="Student",
-                    defaults={
-                        "is_default": True,
-                        "is_system": False,
-                        "hierarchy_level": 10,
-                        "color": "#6c757d",
-                    },
+                    is_default=True,
+                    defaults={"name": "Student", "hierarchy_level": 10},
                 )
-                if created:
-                    print(f"INFO: Default role 'Student' created automatically.")
                 user.role = default_role
             except Exception as e:
-                print(
-                    f"ERROR: Could not assign default role 'Student' during registration for user {user.email}: {e}"
+                logger.error(
+                    f"Could not assign default role during registration for user {user.email}: {e}"
                 )
 
         user.save()

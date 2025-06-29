@@ -13,14 +13,13 @@ from django.contrib.auth import get_user_model
 from django.conf import settings
 import logging
 
-# --- MODIFIED: Added imports for standard Django View and JsonResponse ---
 from django.views import View
 from django.http import JsonResponse
 
+from quickstart.models import AuditLog
 
-from ...models import AuditLog
 
-from ...serializers import (
+from quickstart.serializers import (
     CustomTokenObtainPairSerializer,
     CustomUserDetailsSerializer,
     CustomRegisterSerializer,

@@ -117,11 +117,6 @@ business_management_router.register(
 business_management_router.register(
     r"notifications", NotificationViewSet, basename="notification"
 )
-business_management_router.register(
-    r"all-categories",
-    AllCategoriesForBusinessViewSet,
-    basename="all-categories-for-business",
-)
 
 # --- User Self-Service Router ---
 user_self_router = DefaultRouter()
@@ -169,7 +164,7 @@ urlpatterns = [
     path("admin/silk/", include("silk.urls", namespace="admin_silk")),
     path("admin/panel/", admin.site.urls),
     # --- Router Includes ---
-    path("admin/", include(admin_router.urls)),
+    path("platform-admin/", include(admin_router.urls)),
     path("business/", include(business_management_router.urls)),
     path("", include(public_router.urls)),
     path("", include(user_self_router.urls)),
@@ -183,6 +178,11 @@ urlpatterns = [
         "my-business/overview/",
         MyBusinessOverviewView.as_view(),
         name="my-business-overview",
+    ),
+    path(
+        "business/all-categories/",
+        AllCategoriesForBusinessViewSet.as_view({"get": "list"}),
+        name="all-categories-for-business",
     ),
     path(
         "business-stats/<int:pk>/",

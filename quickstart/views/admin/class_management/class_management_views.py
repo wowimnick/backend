@@ -30,7 +30,7 @@ from django.http import HttpResponse  # For CSV export
 import csv  # For CSV export
 import logging
 
-from ....models import (
+from quickstart.models import (
     ClassCategory,
     ClassSubcategory,
     ClassesMain,
@@ -43,7 +43,7 @@ from ....models import (
     BusinessInfo,
     VerificationRequest,  # Ensure BusinessInfo is imported if needed for hierarchy checks
 )
-from ....serializers.admin.class_management.class_management_serializers import (
+from quickstart.serializers.admin.class_management.class_management_serializers import (
     AdminClassSerializer,
     AdminClassDetailSerializer,
     # AdminClassCreateSerializer, # Keep if used, commented out if not needed in this file context

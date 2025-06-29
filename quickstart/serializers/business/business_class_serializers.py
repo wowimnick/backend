@@ -9,7 +9,7 @@ from django.utils import timezone
 import logging
 
 # Adjust import paths as needed
-from ...models import (
+from quickstart.models import (
     Booking,
     BusinessInfo,
     ClassCategory,
@@ -51,7 +51,13 @@ class BusinessContactInfoSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = BusinessInfo
-        fields = ["studentContactEmail", "studentContactPhone"]
+        fields = [
+            "studentContactEmail",
+            "studentContactPhone",
+            "businessAddress",
+            "latitude",
+            "longitude",
+        ]
 
 
 class ClassImageSerializer(serializers.ModelSerializer):
@@ -400,7 +406,7 @@ class ClassCreateSerializer(serializers.ModelSerializer):
 
     category_key = serializers.CharField(write_only=True, required=True)
     subcategory_key = serializers.CharField(
-        write_only=True, required=False, allow_blank=True
+        write_only=True, required=True, allow_blank=False
     )
 
     class Meta:

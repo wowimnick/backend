@@ -32,7 +32,7 @@ from rest_framework.exceptions import (
 from decimal import Decimal
 from rest_framework.pagination import PageNumberPagination
 
-from ...models import (
+from quickstart.models import (
     Booking,
     BusinessInfo,
     CustomUser,
@@ -41,7 +41,7 @@ from ...models import (
     ClassesMain,
     ClassOption,
 )  # Added missing
-from ...serializers.business.business_student_serializers import (
+from quickstart.serializers.business.business_student_serializers import (
     BusinessStudentProfileSerializer,
     BusinessStudentNoteSerializer,
     BookingHistorySerializer,

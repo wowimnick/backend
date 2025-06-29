@@ -34,7 +34,7 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 import pytz
 import logging
 
-from ...models import (
+from quickstart.models import (
     BusinessInfo,
     Booking,
     ClassOption,
@@ -47,7 +47,7 @@ from ...models import (
 )
 
 from .revenue_analytics_views import RevenueAnalyticsView
-from ...serializers import (
+from quickstart.serializers import (
     ManagedBusinessInfoSerializer,
     BusinessStatsSerializer,
     BusinessRegistrationSerializer,
@@ -55,7 +55,7 @@ from ...serializers import (
     colors,
 )
 
-from ...utils.permissions import (
+from quickstart.utils.permissions import (
     CanAccessBusinessDashboard,
     CanManageOwnBusinessProfile,
     CanDeleteOwnBusinessProfile,
@@ -163,7 +163,9 @@ class MyBusinessOverviewView(APIView):
         businesses = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user))
         count = businesses.count()
         if count == 0:
-            raise NotFound("No business profile associated with this user found.")
+            raise PermissionDenied(
+                "No business profile associated with this user found."
+            )
         elif count > 1:
             logger.error(
                 f"User {user.email} is associated with multiple businesses ({count}). Constraint violated."
@@ -177,15 +179,8 @@ class MyBusinessOverviewView(APIView):
         user = request.user
         try:
             business = self.get_business_for_user(user)
-        except (NotFound, PermissionDenied) as e:
-            return Response(
-                {"error": str(e)},
-                status=(
-                    status.HTTP_404_NOT_FOUND
-                    if isinstance(e, NotFound)
-                    else status.HTTP_403_FORBIDDEN
-                ),
-            )
+        except PermissionDenied as e:
+            return Response({"detail": str(e)}, status=status.HTTP_403_FORBIDDEN)
 
         pk = business.pk  # business primary key
         now_utc = timezone.now()

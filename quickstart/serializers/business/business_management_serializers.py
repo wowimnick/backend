@@ -9,7 +9,7 @@ import json
 import logging
 import pytz  # For timezone choices
 
-from ...models import (
+from quickstart.models import (
     BusinessInfo,
     ClassCategory,
     ClassesMain,
@@ -113,10 +113,10 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
     )
 
     classCategory = serializers.SlugRelatedField(
-        slug_field='key',
+        slug_field="key",
         queryset=ClassCategory.objects.all(),
         required=True,
-        help_text="The unique key of the primary category for this business (e.g., 'music', 'academic')."
+        help_text="The unique key of the primary category for this business (e.g., 'music', 'academic').",
     )
 
     subcategories = serializers.CharField(
@@ -149,8 +149,8 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
     founding_year = serializers.IntegerField(required=False, allow_null=True)
 
     phone_regex = RegexValidator(
-        regex=r'^\+?1?\d{9,15}$', 
-        message="Phone number must be entered in the format: '+999999999'. Up to 15 digits allowed."
+        regex=r"^\+?1?\d{9,15}$",
+        message="Phone number must be entered in the format: '+999999999'. Up to 15 digits allowed.",
     )
     studentContactPhone = serializers.CharField(validators=[phone_regex], required=True)
 
@@ -158,22 +158,48 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
         model = BusinessInfo
         fields = [
             # Step 0: Business Info
-            "businessName", "businessType", "businessDescription", "businessImage",
-            "openingTime", "closingTime", "liabilityWaiver", "website",
-            "business_timezone", "social_media_links", "tags_keywords", "founding_year",
+            "businessName",
+            "businessType",
+            "businessDescription",
+            "businessImage",
+            "openingTime",
+            "closingTime",
+            "liabilityWaiver",
+            "website",
+            "business_timezone",
+            "social_media_links",
+            "tags_keywords",
+            "founding_year",
             # Step 1: Contact Details
-            "studentContactPhone", "studentContactEmail", "preferredContact", "contact_privacy",
+            "studentContactPhone",
+            "studentContactEmail",
+            "preferredContact",
+            "contact_privacy",
             # Step 2: Location
-            "businessAddress", "businessCity", "businessState", "businessZipCode",
-            "latitude", "longitude", "showExactLocation",
+            "businessAddress",
+            "businessCity",
+            "businessState",
+            "businessZipCode",
+            "latitude",
+            "longitude",
+            "showExactLocation",
             # Step 3: Class Types & Agreements
-            "classCategory", "subcategories", "classFormats", "skillLevels",
-            "ageGroups", "termsAccepted", "privacyAccepted",
+            "classCategory",
+            "subcategories",
+            "classFormats",
+            "skillLevels",
+            "ageGroups",
+            "termsAccepted",
+            "privacyAccepted",
         ]
         extra_kwargs = {
             "businessName": {"required": True},
             "businessType": {"required": True},
-            "businessDescription": {"required": True, "min_length": 250, "max_length": 750},
+            "businessDescription": {
+                "required": True,
+                "min_length": 250,
+                "max_length": 750,
+            },
             "openingTime": {"required": True},
             "closingTime": {"required": True},
             "liabilityWaiver": {"required": True},
@@ -194,23 +220,28 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
 
     def validate_website(self, value):
         if value:
-            if not all(c in string.ascii_letters + string.digits + '-._~:/?#[]@!$&\'()*+,;=' for c in value.replace('https://', '').replace('http://', '')):
-                 raise DRFValidationError("Website URL contains invalid characters.")
+            if not all(
+                c in string.ascii_letters + string.digits + "-._~:/?#[]@!$&'()*+,;="
+                for c in value.replace("https://", "").replace("http://", "")
+            ):
+                raise DRFValidationError("Website URL contains invalid characters.")
             validator = URLValidator()
             try:
                 validator(value)
             except DjangoValidationError:
                 raise DRFValidationError("Invalid URL format for website.")
         return value
-        
+
     def validate_studentContactPhone(self, value):
-        cleaned_number = ''.join(filter(str.isdigit, value))
-        if value.startswith('+'):
-            cleaned_number = '+' + cleaned_number
-        
-        phone_regex = r'^\+?[1-9]\d{1,14}$'
+        cleaned_number = "".join(filter(str.isdigit, value))
+        if value.startswith("+"):
+            cleaned_number = "+" + cleaned_number
+
+        phone_regex = r"^\+?[1-9]\d{1,14}$"
         if not re.match(phone_regex, cleaned_number):
-            raise DRFValidationError("Please enter a valid phone number, including country code if applicable.")
+            raise DRFValidationError(
+                "Please enter a valid phone number, including country code if applicable."
+            )
         return cleaned_number
 
     def validate_founding_year(self, value):
@@ -227,7 +258,9 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
             try:
                 validate_email(data["studentContactEmail"])
             except DjangoValidationError:
-                raise DRFValidationError({"studentContactEmail": "Invalid email address"})
+                raise DRFValidationError(
+                    {"studentContactEmail": "Invalid email address"}
+                )
 
         if data.get("openingTime") and data.get("closingTime"):
             if data["openingTime"] >= data["closingTime"]:
@@ -236,27 +269,43 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
                 )
 
         if not data.get("termsAccepted"):
-            raise DRFValidationError({"termsAccepted": "You must accept the Terms of Service"})
+            raise DRFValidationError(
+                {"termsAccepted": "You must accept the Terms of Service"}
+            )
         if not data.get("privacyAccepted"):
-            raise DRFValidationError({"privacyAccepted": "You must accept the Privacy Policy"})
-        
+            raise DRFValidationError(
+                {"privacyAccepted": "You must accept the Privacy Policy"}
+            )
+
         liability_waiver = data.get("liabilityWaiver")
         if isinstance(liability_waiver, str):
             data["liabilityWaiver"] = liability_waiver.lower() == "true"
         elif not isinstance(liability_waiver, bool):
-            raise DRFValidationError({"liabilityWaiver": "Invalid value for liability waiver."})
+            raise DRFValidationError(
+                {"liabilityWaiver": "Invalid value for liability waiver."}
+            )
         if not data.get("liabilityWaiver"):
-            raise DRFValidationError({"liabilityWaiver": "You must agree to the liability waiver."})
+            raise DRFValidationError(
+                {"liabilityWaiver": "You must agree to the liability waiver."}
+            )
 
         latitude = data.get("latitude")
         longitude = data.get("longitude")
-        if (latitude is not None and longitude is None) or (longitude is not None and latitude is None):
-            raise DRFValidationError("Both latitude and longitude must be provided together, or neither.")
+        if (latitude is not None and longitude is None) or (
+            longitude is not None and latitude is None
+        ):
+            raise DRFValidationError(
+                "Both latitude and longitude must be provided together, or neither."
+            )
         data["showExactLocation"] = latitude is not None and longitude is not None
 
         json_string_fields = {
-            "subcategories": list, "classFormats": list, "skillLevels": list,
-            "ageGroups": list, "tags_keywords": list, "social_media_links": dict,
+            "subcategories": list,
+            "classFormats": list,
+            "skillLevels": list,
+            "ageGroups": list,
+            "tags_keywords": list,
+            "social_media_links": dict,
         }
         for field, expected_type in json_string_fields.items():
             field_value = data.get(field)
@@ -264,10 +313,16 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
                 try:
                     parsed_value = json.loads(field_value)
                     if not isinstance(parsed_value, expected_type):
-                        raise DRFValidationError({field: f"Invalid format. Expected a {expected_type.__name__}."})
+                        raise DRFValidationError(
+                            {
+                                field: f"Invalid format. Expected a {expected_type.__name__}."
+                            }
+                        )
                     data[field] = parsed_value
                 except json.JSONDecodeError:
-                    raise DRFValidationError({field: f"Invalid JSON format for {field}."})
+                    raise DRFValidationError(
+                        {field: f"Invalid JSON format for {field}."}
+                    )
             elif field in data and not field_value:
                 data[field] = expected_type()
 
@@ -277,7 +332,7 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         user = self.context["request"].user
-        
+
         # Pop list/dict fields to handle them separately
         subcategories_data = validated_data.pop("subcategories", [])
         classformats_data = validated_data.pop("classFormats", [])
@@ -299,7 +354,7 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
             social_media_links=social_media_data,
             **validated_data,
         )
-        
+
         VerificationRequest.objects.create(
             user=user, business=business, status="pending"
         )
@@ -307,40 +362,74 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
         BUSINESS_OWNER_ROLE_NAME = "Business Owner"
         try:
             target_role = Role.objects.get(name=BUSINESS_OWNER_ROLE_NAME)
-            if user.role is None or target_role.hierarchy_level > user.role.hierarchy_level:
+            if (
+                user.role is None
+                or target_role.hierarchy_level > user.role.hierarchy_level
+            ):
                 user.role = target_role
                 user.save(update_fields=["role"])
                 logger.info(f"User {user.email} assigned role '{target_role.name}'.")
         except Role.DoesNotExist:
-            logger.warning(f"Role '{BUSINESS_OWNER_ROLE_NAME}' not found. Cannot assign to user {user.email}.")
+            logger.warning(
+                f"Role '{BUSINESS_OWNER_ROLE_NAME}' not found. Cannot assign to user {user.email}."
+            )
         except Exception as e:
-            logger.error(f"Error assigning role to {user.email}: {str(e)}", exc_info=True)
+            logger.error(
+                f"Error assigning role to {user.email}: {str(e)}", exc_info=True
+            )
 
         return business
+
 
 class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
     owner_email = serializers.EmailField(source="owner.email", read_only=True)
     managers_emails = serializers.SerializerMethodField(read_only=True)
-    businessImage = serializers.ImageField(required=False, allow_null=True, use_url=True)
+    businessImage = serializers.ImageField(
+        required=False, allow_null=True, use_url=True
+    )
     website = serializers.URLField(required=False, allow_blank=True, allow_null=True)
-    business_timezone = serializers.ChoiceField(choices=COMMON_TIMEZONE_CHOICES_SERIALIZER, required=False, allow_blank=True)
+    business_timezone = serializers.ChoiceField(
+        choices=COMMON_TIMEZONE_CHOICES_SERIALIZER, required=False, allow_blank=True
+    )
     social_media_links = serializers.JSONField(required=False, allow_null=True)
     tags_keywords = serializers.JSONField(required=False, allow_null=True)
     founding_year = serializers.IntegerField(required=False, allow_null=True)
-    latitude = serializers.DecimalField(max_digits=10, decimal_places=8, required=False, allow_null=True)
-    longitude = serializers.DecimalField(max_digits=11, decimal_places=8, required=False, allow_null=True)
-    subcategories = serializers.ListField(child=serializers.CharField(), read_only=True, required=False)
-    classFormats = serializers.ListField(child=serializers.CharField(), read_only=True, required=False)
-    skillLevels = serializers.ListField(child=serializers.CharField(), read_only=True, required=False)
-    ageGroups = serializers.ListField(child=serializers.CharField(), read_only=True, required=False)
-    classCategoryName = serializers.CharField(source='classCategory.name', read_only=True, allow_null=True)
-    totalReviews = serializers.IntegerField(source='total_reviews_count', read_only=True)
-    average_rating = serializers.DecimalField(max_digits=3, decimal_places=1, read_only=True)
-    
-    # FIXED: Return the category's string 'key' instead of its ID for all read operations.
+    latitude = serializers.DecimalField(
+        max_digits=10, decimal_places=8, required=False, allow_null=True
+    )
+    longitude = serializers.DecimalField(
+        max_digits=11, decimal_places=8, required=False, allow_null=True
+    )
+    classCategoryName = serializers.CharField(
+        source="classCategory.name", read_only=True, allow_null=True
+    )
+    totalReviews = serializers.IntegerField(
+        source="total_reviews_count", read_only=True
+    )
+    average_rating = serializers.DecimalField(
+        max_digits=3, decimal_places=1, read_only=True
+    )
+
+    # Allow writing to classCategory and subcategories
     classCategory = serializers.SlugRelatedField(
-        slug_field='key',
-        read_only=True
+        slug_field="key",
+        queryset=ClassCategory.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    subcategories = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+    )
+
+    classFormats = serializers.ListField(
+        child=serializers.CharField(), read_only=True, required=False
+    )
+    skillLevels = serializers.ListField(
+        child=serializers.CharField(), read_only=True, required=False
+    )
+    ageGroups = serializers.ListField(
+        child=serializers.CharField(), read_only=True, required=False
     )
 
     class Meta:
@@ -396,16 +485,13 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "stripe_account_status",
             "createdAt",
             "updatedAt",
-            "classCategory",
-            "classCategoryName",
+            "classCategoryName",  # Keep this read-only, it's derived
             "average_rating",
             "totalReviews",
-            "subcategories",
-            "classFormats",
+            "classFormats",  # These are not being edited in this scope
             "skillLevels",
             "ageGroups",
         )
-        # `extra_kwargs` define defaults and requirements for fields included in `fields`
         extra_kwargs = {
             "businessName": {"required": False},
             "businessType": {"required": False},
@@ -418,7 +504,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
                 "required": False,
                 "allow_blank": True,
                 "allow_null": True,
-            },  # Allow null if sent as blank
+            },
             "social_media_links": {"required": False, "allow_null": True},
             "tags_keywords": {"required": False, "allow_null": True},
             "founding_year": {"required": False, "allow_null": True},
@@ -567,9 +653,11 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
                 elif current_value is None and self.fields[field].allow_null:
                     processed_data[field] = None
 
+        # FIXED: Add 'subcategories' to the list of fields to be parsed from JSON strings.
         json_fields_config = {
             "social_media_links": dict,
             "tags_keywords": list,
+            "subcategories": list,
         }
 
         for field_name, expected_type in json_fields_config.items():
@@ -777,6 +865,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
 
         instance.save()
         return instance
+
 
 class BusinessStatsSerializer(serializers.ModelSerializer):
     total_revenue = serializers.SerializerMethodField()

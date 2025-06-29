@@ -1,15 +1,47 @@
+# quickstart/views/public/public_class_views.py
+
 import math
+from django.http import Http404
+from django.shortcuts import get_object_or_404
 from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.pagination import PageNumberPagination
 from django.db.models import (
-    Q, Avg, Count, Min, Max, Value, F, Subquery, OuterRef, DecimalField,
-    IntegerField, Sum, Case, When, ExpressionWrapper, FloatField, Func, Prefetch
+    Q,
+    Avg,
+    Count,
+    Min,
+    Max,
+    Value,
+    F,
+    Subquery,
+    OuterRef,
+    DecimalField,
+    IntegerField,
+    Sum,
+    Case,
+    When,
+    ExpressionWrapper,
+    FloatField,
+    Func,
+    Prefetch,
 )
 from django.db.models.functions import (
-    Coalesce, Power, Log, Now, Extract, Sin, Cos, Radians, Cast,
-    StrIndex, Substr, Length
+    Coalesce,
+    Power,
+    Log,
+    Now,
+    Extract,
+    Sin,
+    Cos,
+    Radians,
+    Cast,
+    StrIndex,
+    Substr,
+    Length,
+    ATan2,  # FIX: Import ATan2
 )
 from django.contrib.postgres.search import SearchVector, SearchQuery, SearchRank
 from django.utils import timezone
@@ -23,7 +55,7 @@ from datetime import (
     date as datetime_date,
 )
 
-from ...models import (
+from quickstart.models import (
     ClassesMain,
     ClassOption,
     Reviews,
@@ -31,7 +63,7 @@ from ...models import (
     Schedule,
     ScheduleInstance,
 )
-from ...serializers import (
+from quickstart.serializers import (
     PublicClassSerializer,
     ScheduleSerializer,
 )
@@ -70,19 +102,42 @@ def geocode_location_text_backend(location_text):
         if data and data.get("features") and len(data["features"]) > 0:
             feature = data["features"][0]
             lon, lat = feature["geometry"]["coordinates"]
-            return float(lat), float(lon) # Only need lat/lon here now
+            return float(lat), float(lon)  # Only need lat/lon here now
     except requests.RequestException as e:
         logger.error(f"Backend geocoding HTTP error for '{location_text}': {e}")
     except (KeyError, IndexError, ValueError) as e:
         logger.error(f"Error parsing geocoding response for '{location_text}': {e}")
     return None
 
-class Acos(Func):
-    function = 'ACOS'
+
+class StandardResultsSetPagination(PageNumberPagination):
+    page_size = 12
+    page_size_query_param = "page_size"
+    max_page_size = 48
+
 
 class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
-    permission_classes = [AllowAny]
+    """
+    Provides a public list and detail view for active, verified classes.
+    """
+
     serializer_class = PublicClassSerializer
+    permission_classes = [AllowAny]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = [
+        "title",
+        "description",
+        "category__name",
+        "subcategory__name",
+        "businessId__businessName",
+    ]
+    ordering_fields = [
+        "createdAt",
+        "average_rating",
+        "total_reviews",
+    ]  # Fields users can sort by
+
+    ordering = ["-createdAt"]
 
     AVERAGE_RATING_SUBQUERY = Subquery(
         Reviews.objects.filter(classId=OuterRef("pk"), status="approved")
@@ -131,8 +186,14 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 Prefetch(
                     "options__schedules",
                     queryset=Schedule.objects.filter(
-                        Q(option__booking_type="Full Course", end_date__gte=timezone.now().date()) |
-                        Q(option__booking_type="Single Session", date__gte=timezone.now().date())
+                        Q(
+                            option__booking_type="Full Course",
+                            end_date__gte=timezone.now().date(),
+                        )
+                        | Q(
+                            option__booking_type="Single Session",
+                            date__gte=timezone.now().date(),
+                        )
                     ),
                 ),
             )
@@ -143,10 +204,12 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             )
             .annotate(
                 # Annotate base metrics here for reusability
-                average_rating=Coalesce(self.AVERAGE_RATING_SUBQUERY, Value(Decimal("0.0"))),
+                average_rating=Coalesce(
+                    self.AVERAGE_RATING_SUBQUERY, Value(Decimal("0.0"))
+                ),
                 review_count=Coalesce(self.REVIEW_COUNT_SUBQUERY, Value(0)),
                 min_price=Coalesce(self.MIN_PRICE_SUBQUERY, None),
-                image_count=Count('images', distinct=True) # NEW: For quality score
+                image_count=Count("images", distinct=True),  # NEW: For quality score
             )
             .distinct()
         )
@@ -190,14 +253,16 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             req_lng_str = request.query_params.get("lng")
             req_radius_km_str = request.query_params.get("radius")
             location_search_text = request.query_params.get("location_search")
-            
+
             # --- Location Processing ---
             search_lat, search_lng = None, None
             if req_lat_str and req_lng_str:
                 try:
                     search_lat, search_lng = float(req_lat_str), float(req_lng_str)
                 except (ValueError, TypeError):
-                    logger.warning(f"Invalid geo params: lat='{req_lat_str}', lng='{req_lng_str}'")
+                    logger.warning(
+                        f"Invalid geo params: lat='{req_lat_str}', lng='{req_lng_str}'"
+                    )
             elif location_search_text:
                 geocoded_result = geocode_location_text_backend(location_search_text)
                 if geocoded_result:
@@ -213,13 +278,14 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 queryset = queryset.filter(category__key=category_key)
                 if subcategory_key:
                     queryset = queryset.filter(subcategory__key=subcategory_key)
-            
+
             # --- Price Filter ---
             price_max_str = request.query_params.get("price_max")
             if price_max_str:
                 try:
                     queryset = queryset.filter(
-                        Q(min_price__lte=Decimal(price_max_str)) | Q(min_price__isnull=True)
+                        Q(min_price__lte=Decimal(price_max_str))
+                        | Q(min_price__isnull=True)
                     )
                 except InvalidOperation:
                     logger.warning(f"Invalid price_max: {price_max_str}")
@@ -227,31 +293,61 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             # --- Date and Availability Filters ---
             req_date_str = request.query_params.get("date")
             req_participants_str = request.query_params.get("participants")
-            
-            instance_filters = Q(options__schedules__instances__status="scheduled")
-            if req_date_str:
-                try:
-                    target_date = datetime.strptime(req_date_str, "%Y-%m-%d").date()
-                    instance_filters &= Q(options__schedules__instances__date=target_date)
-                except ValueError:
-                    instance_filters &= Q(options__schedules__instances__date__gte=timezone.now().date())
-            else:
-                instance_filters &= Q(options__schedules__instances__date__gte=timezone.now().date())
-            
-            if req_participants_str and req_participants_str.isdigit() and int(req_participants_str) > 0:
-                instance_filters &= Q(options__schedules__instances__max_participants__gte=int(req_participants_str))
-                
-            queryset = queryset.filter(instance_filters).distinct()
+
+            # Only apply instance/availability filters if date or participant counts are specified.
+            # This prevents classes without schedules from being filtered out in a general search.
+            if req_date_str or (
+                req_participants_str and req_participants_str.isdigit()
+            ):
+                instance_filters = Q(options__schedules__instances__status="scheduled")
+                if req_date_str:
+                    try:
+                        target_date = datetime.strptime(req_date_str, "%Y-%m-%d").date()
+                        instance_filters &= Q(
+                            options__schedules__instances__date=target_date
+                        )
+                    except ValueError:
+                        # Fallback for invalid date format
+                        instance_filters &= Q(
+                            options__schedules__instances__date__gte=timezone.now().date()
+                        )
+                else:
+                    # This runs if only participants is specified, which implies future dates
+                    instance_filters &= Q(
+                        options__schedules__instances__date__gte=timezone.now().date()
+                    )
+
+                if (
+                    req_participants_str
+                    and req_participants_str.isdigit()
+                    and int(req_participants_str) > 0
+                ):
+                    instance_filters &= Q(
+                        options__schedules__instances__max_participants__gte=int(
+                            req_participants_str
+                        )
+                    )
+
+                queryset = queryset.filter(instance_filters).distinct()
 
             # --- Haversine Distance Calculation (Parsing String in DB) ---
             if search_lat is not None and search_lng is not None:
                 # Exclude rows with invalid coordinate formats to prevent DB errors
-                queryset = queryset.exclude(Q(coordinates__isnull=True) | Q(coordinates__exact='') | ~Q(coordinates__contains=','))
+                queryset = queryset.exclude(
+                    Q(coordinates__isnull=True)
+                    | Q(coordinates__exact="")
+                    | ~Q(coordinates__contains=",")
+                )
 
                 # Use database functions to split the string and cast to float
-                comma_pos = StrIndex(F('coordinates'), Value(','))
-                db_lat = Cast(Substr(F('coordinates'), 1, comma_pos - 1), output_field=FloatField())
-                db_lng = Cast(Substr(F('coordinates'), comma_pos + 1), output_field=FloatField())
+                comma_pos = StrIndex(F("coordinates"), Value(","))
+                db_lat = Cast(
+                    Substr(F("coordinates"), 1, comma_pos - 1),
+                    output_field=FloatField(),
+                )
+                db_lng = Cast(
+                    Substr(F("coordinates"), comma_pos + 1), output_field=FloatField()
+                )
 
                 lat_r = Radians(db_lat)
                 lng_r = Radians(db_lng)
@@ -260,54 +356,79 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
 
                 d_lng = lng_r - search_lng_r
                 d_lat = lat_r - search_lat_r
-                a = (Power(Sin(d_lat / 2), 2) + Cos(search_lat_r) * Cos(lat_r) * Power(Sin(d_lng / 2), 2))
-                c = 2 * Acos(Power(a, 0.5))
+                a = Power(Sin(d_lat / 2), 2) + Cos(search_lat_r) * Cos(lat_r) * Power(
+                    Sin(d_lng / 2), 2
+                )
+                # FIX: Use the correct ATan2 formula instead of the incorrect Acos one.
+                c = 2 * ATan2(Power(a, 0.5), Power(1 - a, 0.5))
                 distance_expr = ExpressionWrapper(6371 * c, output_field=FloatField())
-                
+
                 queryset = queryset.annotate(distance=distance_expr)
-                
-                if req_radius_km_str and req_radius_km_str.replace('.', '', 1).isdigit() and float(req_radius_km_str) > 0:
-                    queryset = queryset.filter(distance__lte=float(req_radius_km_str))
+
+                # Apply a search radius filter. Use the provided radius, or fall back to the default.
+                search_radius_km = DEFAULT_SEARCH_RADIUS_KM  # Apply the default
+                if (
+                    req_radius_km_str
+                    and req_radius_km_str.replace(".", "", 1).isdigit()
+                    and float(req_radius_km_str) > 0
+                ):
+                    search_radius_km = float(
+                        req_radius_km_str
+                    )  # Override with user value if provided
+
+                queryset = queryset.filter(distance__lte=search_radius_km)
 
             # --- Relevance Score Calculation (DB Level) ---
             # Get days since creation (epoch seconds / seconds in a day)
-            days_old = Extract(Now() - F('createdAt'), 'epoch') / Value(86400.0)
+            days_old = Extract(Now() - F("createdAt"), "epoch") / Value(86400.0)
 
             # Quality Score (0-1): Combination of description length and image count
             quality_score = ExpressionWrapper(
                 (
-                    (Log(10, Length('description') + 1) / Log(10, Value(QUALITY_SCORE_MAX_DESCRIPTION_LEN + 1))) +
-                    (Log(10, F('image_count') + 1) / Log(10, Value(QUALITY_SCORE_MAX_IMAGES + 1)))
-                ) / 2.0,
-                output_field=FloatField()
-            )
-            
-            rating_score = ExpressionWrapper(
-                F('average_rating') / Value(5.0),
-                output_field=FloatField()
-            )
-            
-            review_count_score = ExpressionWrapper(
-                Log(10, F('review_count') + 1) / Log(10, Value(REVIEW_COUNT_FOR_MAX_SCORE + 1)),
-                output_field=FloatField()
-            )
-            
-            newness_score = ExpressionWrapper(
-                Power(2, -days_old / Value(RECENCY_HALFLIFE_DAYS)),
-                output_field=FloatField()
+                    (
+                        Log(10, Length("description") + 1)
+                        / Log(10, Value(QUALITY_SCORE_MAX_DESCRIPTION_LEN + 1))
+                    )
+                    + (
+                        Log(10, F("image_count") + 1)
+                        / Log(10, Value(QUALITY_SCORE_MAX_IMAGES + 1))
+                    )
+                )
+                / 2.0,
+                output_field=FloatField(),
             )
 
-            featured_multiplier = Case(When(businessId__featured=True, then=Value(W_FEATURED)), default=Value(1.0), output_field=FloatField())
+            rating_score = ExpressionWrapper(
+                F("average_rating") / Value(5.0), output_field=FloatField()
+            )
+
+            review_count_score = ExpressionWrapper(
+                Log(10, F("review_count") + 1)
+                / Log(10, Value(REVIEW_COUNT_FOR_MAX_SCORE + 1)),
+                output_field=FloatField(),
+            )
+
+            newness_score = ExpressionWrapper(
+                Power(2, -days_old / Value(RECENCY_HALFLIFE_DAYS)),
+                output_field=FloatField(),
+            )
+
+            featured_multiplier = Case(
+                When(businessId__featured=True, then=Value(W_FEATURED)),
+                default=Value(1.0),
+                output_field=FloatField(),
+            )
 
             # Combine all weighted scores into a final relevance score
             relevance_score = ExpressionWrapper(
                 (
-                    (Value(W_QUALITY) * quality_score) +
-                    (Value(W_RATING) * rating_score) +
-                    (Value(W_REVIEW_COUNT) * review_count_score) +
-                    (Value(W_NEWNESS) * newness_score)
-                ) * featured_multiplier,
-                output_field=FloatField()
+                    (Value(W_QUALITY) * quality_score)
+                    + (Value(W_RATING) * rating_score)
+                    + (Value(W_REVIEW_COUNT) * review_count_score)
+                    + (Value(W_NEWNESS) * newness_score)
+                )
+                * featured_multiplier,
+                output_field=FloatField(),
             )
 
             queryset = queryset.annotate(relevance_score=relevance_score)
@@ -315,27 +436,31 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             # --- Sorting (DB Level) ---
             sort_by = request.query_params.get("sort_by", "relevance")
             if sort_by == "relevance":
-                queryset = queryset.order_by('-relevance_score', '-createdAt')
+                queryset = queryset.order_by("-relevance_score", "-createdAt")
             elif sort_by == "distance" and search_lat is not None:
                 # Ensure classes without coordinates are last
-                queryset = queryset.order_by(F('distance').asc(nulls_last=True))
+                queryset = queryset.order_by(F("distance").asc(nulls_last=True))
             elif sort_by == "price_asc":
-                queryset = queryset.order_by(F('min_price').asc(nulls_last=True))
+                queryset = queryset.order_by(F("min_price").asc(nulls_last=True))
             elif sort_by == "price_desc":
-                queryset = queryset.order_by(F('min_price').desc(nulls_first=True))
+                queryset = queryset.order_by(F("min_price").desc(nulls_first=True))
             elif sort_by == "rating":
-                queryset = queryset.order_by('-average_rating', '-review_count')
+                queryset = queryset.order_by("-average_rating", "-review_count")
             elif sort_by == "newest":
-                queryset = queryset.order_by('-createdAt')
+                queryset = queryset.order_by("-createdAt")
 
             # --- Pagination & Serialization ---
             page = self.paginate_queryset(queryset)
             if page is not None:
-                serializer = self.get_serializer(page, many=True, context={'request': request})
+                serializer = self.get_serializer(
+                    page, many=True, context={"request": request}
+                )
                 return self.get_paginated_response(serializer.data)
 
             # Fallback if pagination is not used for some reason
-            serializer = self.get_serializer(queryset, many=True, context={'request': request})
+            serializer = self.get_serializer(
+                queryset, many=True, context={"request": request}
+            )
             return Response({"results": serializer.data})
 
         except Exception as e:
@@ -345,112 +470,116 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+
 class PublicScheduleViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [AllowAny]
     serializer_class = ScheduleSerializer
-    queryset = Schedule.objects.filter(  
+    queryset = Schedule.objects.filter(
         option__classId__status="active",
         option__classId__businessId__isActive=True,
         option__classId__businessId__verificationStatus="verified",
     ).select_related("option", "option__classId", "option__classId__businessId")
 
     @action(detail=False, methods=["get"], url_path="availability")
-    def availability(self, request):
+    def availability(self, request, *args, **kwargs):
+        """
+        Calculates available spots for a given class option over a date range.
+        Input query params: `option_id`, `start_date`, `end_date` (YYYY-MM-DD).
+        Output: A dictionary keyed by date string, with a list of available slots.
+        Example:
+        {
+          "2024-08-15": [
+            {"time": "10:00:00", "available_spots": 8, "instance_id": 123, "price": "25.00"},
+            {"time": "14:00:00", "available_spots": 5, "instance_id": 124, "price": "25.00"}
+          ],
+          "2024-08-16": [
+            {"time": "10:00:00", "available_spots": 10, "instance_id": 125, "price": "25.00"}
+          ]
+        }
+        """
         option_id_str = request.query_params.get("option_id")
         start_date_str = request.query_params.get("start_date")
         end_date_str = request.query_params.get("end_date")
 
-        if not (option_id_str and option_id_str.isdigit()):
+        if not all([option_id_str, start_date_str, end_date_str]):
             return Response(
-                {"error": "Valid 'option_id' is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if not (start_date_str and end_date_str):
-            return Response(
-                {"error": "'start_date' and 'end_date' are required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        option_id = int(option_id_str)
-        try:
-            start_date_obj = timezone.datetime.strptime(
-                start_date_str, "%Y-%m-%d"
-            ).date()
-            end_date_obj = timezone.datetime.strptime(end_date_str, "%Y-%m-%d").date()
-            if start_date_obj > end_date_obj:
-                return Response(
-                    {"error": "Start date cannot be after end date."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-        except ValueError:
-            return Response(
-                {"error": "Invalid date format. Use YYYY-MM-DD."},
+                {"error": "'option_id', 'start_date', and 'end_date' are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         try:
-            ClassOption.objects.select_related("classId__businessId").get(
-                optionId=option_id,
+            option_id = int(option_id_str)
+            start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+            end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            return Response(
+                {"error": "Invalid option_id or date format. Use YYYY-MM-DD."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # FIX: Added permission check to ensure the option belongs to a publicly visible class.
+        # This prevents users from querying the availability of classes that are inactive,
+        # suspended, or part of an unverified/inactive business.
+        try:
+            option = get_object_or_404(
+                ClassOption.objects.select_related("classId__businessId"),
+                pk=option_id,
+                # These are the same criteria used to filter public class listings.
                 classId__status="active",
                 classId__businessId__isActive=True,
                 classId__businessId__verificationStatus="verified",
             )
-        except ClassOption.DoesNotExist:
+        except Http404:
+            # Return a 404 to hide the existence of the inactive/unverified class option.
             return Response(
-                {"error": "Requested class option not found or is not available."},
+                {"error": "Class option not found or is not available."},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        try:
-            instances = (
-                ScheduleInstance.objects.filter(
-                    schedule__option_id=option_id,
-                    date__range=(start_date_obj, end_date_obj),
-                    status="scheduled",
-                )
-                .annotate(
-                    current_bookings_count=Coalesce(
-                        Sum(
-                            "bookings__participants",
-                            filter=Q(bookings__status="confirmed"),
-                        ),
-                        0,
-                        output_field=IntegerField(),
-                    )
-                )
-                .select_related("schedule")
-                .order_by("date", "time")
+        # Fetch all relevant instances and their confirmed bookings in one go
+        instances_in_range = (
+            ScheduleInstance.objects.filter(
+                schedule__option_id=option_id,
+                date__range=[start_date, end_date],
+                status="scheduled",
             )
-
-            availability_data = {}
-            for instance in instances:
-                date_key = instance.date.isoformat()
-                if date_key not in availability_data:
-                    availability_data[date_key] = []
-
-                available_spots = (
-                    instance.max_participants - instance.current_bookings_count
+            .annotate(
+                # Sum the participants of confirmed bookings for each instance
+                confirmed_participants=Coalesce(
+                    Subquery(
+                        Booking.objects.filter(
+                            schedule_instance=OuterRef("pk"), status="confirmed"
+                        )
+                        .values("schedule_instance")
+                        .annotate(total_pax=Sum("participants"))
+                        .values("total_pax")
+                    ),
+                    0,
+                    output_field=IntegerField(),
                 )
-                if available_spots > 0:
-                    availability_data[date_key].append(
-                        {
-                            "instance_id": instance.pk,
-                            "time": instance.time.strftime("%H:%M"),
-                            "duration": instance.duration,
-                            "available_spots": available_spots,
-                            "price": str(instance.price),
-                        }
-                    )
-                if date_key in availability_data and not availability_data[date_key]:
-                    del availability_data[date_key]
+            )
+            .order_by("date", "time")
+        )
 
-            return Response(availability_data, status=status.HTTP_200_OK)
-        except Exception as e:
-            logger.error(
-                f"Error fetching availability for option {option_id}: {e}",
-                exc_info=True,
+        # Group available instances by date
+        availability_by_date = {}
+        for instance in instances_in_range:
+            available_spots = (
+                instance.max_participants - instance.confirmed_participants
             )
-            return Response(
-                {"error": "An error occurred while fetching availability."},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+            if available_spots > 0:
+                date_str = instance.date.isoformat()
+                if date_str not in availability_by_date:
+                    availability_by_date[date_str] = []
+
+                availability_by_date[date_str].append(
+                    {
+                        "time": instance.time.strftime("%H:%M:%S"),
+                        "available_spots": available_spots,
+                        "instance_id": instance.id,
+                        "price": str(instance.price),
+                        "duration": instance.duration,
+                    }
+                )
+
+        return Response(availability_by_date)

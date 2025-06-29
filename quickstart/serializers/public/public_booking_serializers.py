@@ -9,7 +9,7 @@ from rest_framework.exceptions import ValidationError as DRFValidationError  # U
 from django.db import transaction
 
 # Adjust import path as needed
-from ...models import (
+from quickstart.models import (
     Booking,
     ClassImage,
     Schedule,

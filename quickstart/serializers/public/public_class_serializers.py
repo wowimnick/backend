@@ -1,6 +1,11 @@
-# quickstart/serializers/public_class_serializers.py
 from rest_framework import serializers
-from ...models import ClassesMain, ClassImage, ClassOption, Schedule, ClassCategory
+from quickstart.models import (
+    ClassesMain,
+    ClassImage,
+    ClassOption,
+    Schedule,
+    ClassCategory,
+)
 from django.utils import timezone
 import logging
 from random import uniform  # For coordinate salting if needed here
@@ -114,12 +119,19 @@ class PublicClassSerializer(serializers.ModelSerializer):
     business_timezone = serializers.CharField(
         source="businessId.business_timezone", read_only=True
     )
+    # FIX: Add business_name from the related Business model.
+    # The `source` points to the `businessName` field on the `Business` model,
+    # and it will be serialized as `business_name` in the JSON response.
+    business_name = serializers.CharField(
+        source="businessId.businessName", read_only=True, allow_null=True
+    )
 
     class Meta:
         model = ClassesMain
         fields = [
             "classId",
             "businessId",
+            "business_name",  # FIX: Added business_name to the list of fields.
             "title",
             "description",
             "features",

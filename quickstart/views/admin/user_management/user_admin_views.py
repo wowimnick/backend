@@ -12,7 +12,7 @@ from django.db.models import Count, Q
 from django.utils import timezone
 import logging
 
-from ....models import AuditLog, Role, Booking  # Import Role
+from quickstart.models import AuditLog, Role, Booking  # Import Role
 from quickstart.serializers.admin.user_management.admin_serializers import (
     AdminUserListSerializer,
     AdminUserDetailSerializer,
@@ -120,7 +120,6 @@ class UserAdminViewSet(viewsets.ModelViewSet):
     ordering = ["-createdAt"]
 
     def get_queryset(self):
-        # Add select_related('role') and prefetch_related for owned businesses
         queryset = (
             User.objects.select_related("role")
             .prefetch_related("owned_businesses")

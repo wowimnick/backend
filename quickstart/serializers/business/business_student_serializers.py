@@ -1,6 +1,12 @@
 from decimal import Decimal
 from rest_framework import serializers
-from ...models import Booking, BusinessInfo, CustomUser, StudentNote, ScheduleInstance
+from quickstart.models import (
+    Booking,
+    BusinessInfo,
+    CustomUser,
+    StudentNote,
+    ScheduleInstance,
+)
 
 
 class BusinessStudentNoteSerializer(serializers.ModelSerializer):
@@ -63,7 +69,6 @@ class BookingHistorySerializer(serializers.ModelSerializer):
             "status",
         ]
 
-
     def get_attendance_status_display(self, obj):
         if obj.status == "cancelled":
             return "Cancelled"
@@ -79,9 +84,7 @@ class BusinessStudentProfileSerializer(serializers.ModelSerializer):
     total_classes_taken = serializers.IntegerField(
         source="completed_bookings_count", read_only=True, default=0
     )
-    is_active = serializers.BooleanField(
-        source="is_active_student", read_only=True
-    )
+    is_active = serializers.BooleanField(source="is_active_student", read_only=True)
     avatar_url = serializers.SerializerMethodField()
 
     last_booking_date_this_business = serializers.DateField(
@@ -116,7 +119,7 @@ class BusinessStudentProfileSerializer(serializers.ModelSerializer):
             "createdAt",
             "last_booking_date_this_business",
             "total_spent_this_business",
-            "booking_history", # Updated
+            "booking_history",  # Updated
         ]
         read_only_fields = fields
 

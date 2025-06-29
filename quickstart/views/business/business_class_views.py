@@ -37,7 +37,7 @@ from quickstart.serializers.admin.class_management.class_management_serializers 
     AdminClassCategorySerializer,
 )
 
-from ...models import (
+from quickstart.models import (
     BusinessInfo,
     ClassCategory,
     ClassSubcategory,
@@ -50,7 +50,7 @@ from ...models import (
     Reviews,
 )
 
-from ...serializers import (
+from quickstart.serializers import (
     ManagedClassSerializer,
     ClassCreateSerializer,
     ClassImageSerializer,
@@ -63,7 +63,7 @@ from ...serializers import (
     BusinessContactInfoSerializer,
 )
 
-from ...utils.permissions import (
+from quickstart.utils.permissions import (
     CanManageOwnClasses,
     IsVerifiedAndActiveBusinessOwnerOrManager,
 )
@@ -81,8 +81,6 @@ class PublicCategoryViewSet(viewsets.ReadOnlyModelViewSet):
 
     permission_classes = [AllowAny]
     serializer_class = PublicCategorySerializer
-    # Remove pagination to return all categories at once
-    pagination_class = None
 
     def get_queryset(self):
         """
@@ -224,28 +222,25 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         """Associate the new class with the user's business and handle images/options."""
         user = self.request.user
-        # Re-fetch business in case something changed or for explicit context
         business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
         if not business:
-            # This should be caught earlier by permissions, but double-check.
             raise PermissionDenied(
                 "You must be associated with a business to create a class."
             )
 
-        # Extract category/subcategory keys from validated data
         category_key = serializer.validated_data.pop("category_key")
+        # FIX: Handle the subcategory key more gracefully.
         subcategory_key = serializer.validated_data.pop("subcategory_key", None)
 
         try:
             category = ClassCategory.objects.get(key=category_key)
             subcategory = None
+            # Only attempt to get a subcategory if a non-blank key was provided.
             if subcategory_key:
                 subcategory = ClassSubcategory.objects.get(
                     category=category, key=subcategory_key
                 )
 
-            # Create the class instance using remaining validated data
-            # Set status to 'active' or 'inactive' based on business policy/default? Defaulting to active.
             instance = serializer.save(
                 businessId=business,
                 category=category,
@@ -255,8 +250,6 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
             logger.info(
                 f"Class '{instance.title}' (ID: {instance.classId}) created for business '{business.businessName}' by user {user.email}"
             )
-
-            # --- Handle Images and Options AFTER instance is saved ---
             self._process_images_and_options(instance)
 
         except ClassCategory.DoesNotExist:
@@ -274,7 +267,6 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                 f"Error during perform_create for class by {user.email}: {e}",
                 exc_info=True,
             )
-            # Reraise a generic validation error or handle specific exceptions
             raise DRFValidationError("An error occurred during class creation.")
 
     def _process_images_and_options(self, class_instance):
@@ -787,7 +779,11 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
 
 class BusinessClassOptionDetail(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = ManagedClassOptionSerializer
-    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+    permission_classes = [
+        IsAuthenticated,
+        CanManageOwnClasses,
+        IsVerifiedAndActiveBusinessOwnerOrManager,
+    ]
     lookup_url_kwarg = "option_id"
     lookup_field = "optionId"  # Match model field
 
@@ -828,7 +824,11 @@ class BusinessClassOptionDetail(generics.RetrieveUpdateDestroyAPIView):
 
 class BusinessScheduleViewSet(viewsets.ModelViewSet):
     serializer_class = ScheduleSerializer
-    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+    permission_classes = [
+        IsAuthenticated,
+        CanManageOwnClasses,
+        IsVerifiedAndActiveBusinessOwnerOrManager,
+    ]
 
     def get_queryset(self):
         user = self.request.user
@@ -870,8 +870,30 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
                 "Cannot create schedule for an option not belonging to your business."
             )
 
-        instance = serializer.save()
-        logger.info(f"Schedule created for Option ID {option.optionId} by {user.email}")
+        # The serializer now only saves the Schedule, not the instance.
+        schedule = serializer.save()
+
+        # FIX: Explicitly create the ScheduleInstance(s) for the new Schedule.
+        if schedule.option.booking_type == "Full Course":
+            # This method on the model generates all instances for a course.
+            schedule.generate_course_instances()
+            logger.info(
+                f"Course Schedule and its instances created for Option ID {option.optionId} by {user.email}"
+            )
+        elif schedule.date:
+            # For single sessions, create one instance.
+            ScheduleInstance.objects.create(
+                schedule=schedule,
+                date=schedule.date,
+                time=schedule.time,
+                duration=schedule.duration,
+                price=schedule.price,
+                max_participants=schedule.maxParticipants,
+                status="scheduled",
+            )
+            logger.info(
+                f"Single Session Schedule and its instance created for Option ID {option.optionId} by {user.email}"
+            )
 
     @action(detail=False, methods=["post"], url_path="bulk-create")
     def bulk_create(self, request, *args, **kwargs):
@@ -1013,7 +1035,11 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
 
 class BusinessScheduleInstanceViewSet(viewsets.ModelViewSet):
     serializer_class = ScheduleInstanceSerializer
-    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+    permission_classes = [
+        IsAuthenticated,
+        CanManageOwnClasses,
+        IsVerifiedAndActiveBusinessOwnerOrManager,
+    ]
     http_method_names = ["get", "post", "patch", "head", "options"]  # No PUT/DELETE
 
     def get_queryset(self):

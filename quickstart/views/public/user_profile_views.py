@@ -2,18 +2,21 @@ from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from ...serializers import MyProfileSerializer 
+from quickstart.serializers import MyProfileSerializer
 
 import logging
+
 logger = logging.getLogger(__name__)
+
 
 class MyProfileView(generics.RetrieveAPIView):
     """
     API endpoint for an authenticated user to retrieve their OWN profile details.
     Read-only view. Updates are handled by UserUpdateView.
     """
+
     serializer_class = MyProfileSerializer
-    permission_classes = [IsAuthenticated] # Must be logged in
+    permission_classes = [IsAuthenticated]  # Must be logged in
 
     def get_object(self):
         """
