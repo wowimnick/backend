@@ -56,23 +56,28 @@ jobs:
           script: |
             # Create or overwrite the environment file with secrets from GitHub
             cat << EOF > /home/ec2-user/.env.staging
+            # --- Core & Security ---
             DJANGO_SECRET_KEY=${{ secrets.DJANGO_SECRET_KEY }}
             DEBUG=True
-            ALLOWED_HOSTS=${{ secrets.STAGING_EC2_HOST }},localhost
             SITE_DOMAIN=${{ secrets.STAGING_EC2_HOST }}
+            ALLOWED_HOSTS=${{ secrets.STAGING_EC2_HOST }},localhost
+            CSRF_TRUSTED_ORIGINS=${{ secrets.CSRF_TRUSTED_ORIGINS }}
 
-            # --- Database ---
-            DB_ENGINE=django.db.backends.postgresql
+            # --- Database (RDS) ---
+            DB_ENGINE=${{ secrets.DB_ENGINE }}
             DB_NAME=${{ secrets.DB_NAME }}
             DB_USER=${{ secrets.DB_USER }}
             DB_PASSWORD=${{ secrets.DB_PASSWORD }}
             DB_HOST=${{ secrets.DB_HOST }}
             DB_PORT=${{ secrets.DB_PORT }}
 
-            # --- Cache/Celery ---
+            # --- Cache & Celery (ElastiCache for Redis) ---
             CACHE_URL=${{ secrets.CACHE_URL }}
             CELERY_BROKER_URL=${{ secrets.CELERY_BROKER_URL }}
             CELERY_RESULT_BACKEND=${{ secrets.CELERY_RESULT_BACKEND }}
+
+            # --- Static Files (S3) ---
+            AWS_STORAGE_BUCKET_NAME=${{ secrets.AWS_STORAGE_BUCKET_NAME }}
 
             # --- API & Service Keys ---
             RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
@@ -83,10 +88,12 @@ jobs:
             STRIPE_WEBHOOK_SECRET=${{ secrets.STRIPE_WEBHOOK_SECRET }}
             OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
 
-            # --- Other Settings ---
+            # --- Email & Frontend ---
             FRONTEND_URL=${{ secrets.FRONTEND_URL }}
             DEFAULT_FROM_EMAIL=${{ secrets.DEFAULT_FROM_EMAIL }}
-            # ... add any other secrets you need from GitHub here
+
+            # Note: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are not set here
+            # because the application will get them from the EC2 instance's IAM Role.
             EOF
 
             # Login to ECR on the EC2 instance
@@ -100,6 +107,5 @@ jobs:
             docker rm web worker || true
 
             # Start new containers with the new image.
-            # The --env-file flag now points to the file we just created.
             docker run -d --rm --env-file /home/ec2-user/.env.staging -p 80:8000 --name web ${{ steps.build-image.outputs.image }} gunicorn CEBackend.asgi:application -w 2 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
             docker run -d --rm --env-file /home/ec2-user/.env.staging --name worker ${{ steps.build-image.outputs.image }} celery -A CEBackend.celery worker -l info
