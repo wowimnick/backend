@@ -76,10 +76,16 @@ jobs:
           DJANGO_ENV: prod
         run: python manage.py collectstatic --noinput --clear
 
-      - name: Stop existing services
+      - name: Force Stop Existing Services and Free Port 8000
         run: |
+          echo "--- Stopping systemd services ---"
           sudo systemctl stop django-asgi || true
           sudo systemctl stop celery-worker || true
+
+          echo "--- Forcefully killing any process on port 8000 to prevent 'Address already in use' errors ---"
+          # This is a safety net. The '|| true' ensures the workflow doesn't fail
+          # if nothing is running on the port, which is the normal, expected case.
+          sudo kill -9 $(sudo lsof -t -i:8000) || true
 
       - name: Create/Update systemd Service Files
         run: |
