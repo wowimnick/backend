@@ -57,43 +57,40 @@ jobs:
             # Create or overwrite the environment file with secrets from GitHub
             cat << EOF > /home/ec2-user/.env.staging
             # --- Core & Security ---
-            DJANGO_SECRET_KEY=${{ secrets.DJANGO_SECRET_KEY }}
+            DJANGO_SECRET_KEY='${{ secrets.DJANGO_SECRET_KEY }}'
             DEBUG=True
             SITE_DOMAIN=${{ secrets.STAGING_EC2_HOST }}
             ALLOWED_HOSTS=${{ secrets.STAGING_EC2_HOST }},localhost
-            CSRF_TRUSTED_ORIGINS=${{ secrets.CSRF_TRUSTED_ORIGINS }}
+            CSRF_TRUSTED_ORIGINS='${{ secrets.CSRF_TRUSTED_ORIGINS }}'
 
             # --- Database (RDS) ---
-            DB_ENGINE=${{ secrets.DB_ENGINE }}
-            DB_NAME=${{ secrets.DB_NAME }}
-            DB_USER=${{ secrets.DB_USER }}
-            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
-            DB_HOST=${{ secrets.DB_HOST }}
-            DB_PORT=${{ secrets.DB_PORT }}
+            DB_ENGINE='${{ secrets.DB_ENGINE }}'
+            DB_NAME='${{ secrets.DB_NAME }}'
+            DB_USER='${{ secrets.DB_USER }}'
+            DB_PASSWORD='${{ secrets.DB_PASSWORD }}'
+            DB_HOST='${{ secrets.DB_HOST }}'
+            DB_PORT='${{ secrets.DB_PORT }}'
 
             # --- Cache & Celery (ElastiCache for Redis) ---
-            CACHE_URL=${{ secrets.CACHE_URL }}
-            CELERY_BROKER_URL=${{ secrets.CELERY_BROKER_URL }}
-            CELERY_RESULT_BACKEND=${{ secrets.CELERY_RESULT_BACKEND }}
+            CACHE_URL='${{ secrets.CACHE_URL }}'
+            CELERY_BROKER_URL='${{ secrets.CELERY_BROKER_URL }}'
+            CELERY_RESULT_BACKEND='${{ secrets.CELERY_RESULT_BACKEND }}'
 
             # --- Static Files (S3) ---
-            AWS_STORAGE_BUCKET_NAME=${{ secrets.AWS_STORAGE_BUCKET_NAME }}
+            AWS_STORAGE_BUCKET_NAME='${{ secrets.AWS_STORAGE_BUCKET_NAME }}'
 
             # --- API & Service Keys ---
-            RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
-            GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
-            GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
-            STRIPE_PUBLIC_KEY=${{ secrets.STRIPE_PUBLIC_KEY }}
-            STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}
-            STRIPE_WEBHOOK_SECRET=${{ secrets.STRIPE_WEBHOOK_SECRET }}
-            OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
+            RESEND_API_KEY='${{ secrets.RESEND_API_KEY }}'
+            GOOGLE_CLIENT_ID='${{ secrets.GOOGLE_CLIENT_ID }}'
+            GOOGLE_CLIENT_SECRET='${{ secrets.GOOGLE_CLIENT_SECRET }}'
+            STRIPE_PUBLIC_KEY='${{ secrets.STRIPE_PUBLIC_KEY }}'
+            STRIPE_SECRET_KEY='${{ secrets.STRIPE_SECRET_KEY }}'
+            STRIPE_WEBHOOK_SECRET='${{ secrets.STRIPE_WEBHOOK_SECRET }}'
+            OPENROUTER_API_KEY='${{ secrets.OPENROUTER_API_KEY }}'
 
             # --- Email & Frontend ---
-            FRONTEND_URL=${{ secrets.FRONTEND_URL }}
-            DEFAULT_FROM_EMAIL=${{ secrets.DEFAULT_FROM_EMAIL }}
-
-            # Note: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are not set here
-            # because the application will get them from the EC2 instance's IAM Role.
+            FRONTEND_URL='${{ secrets.FRONTEND_URL }}'
+            DEFAULT_FROM_EMAIL='${{ secrets.DEFAULT_FROM_EMAIL }}'
             EOF
 
             # Login to ECR on the EC2 instance
