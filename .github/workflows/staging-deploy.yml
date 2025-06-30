@@ -1,0 +1,105 @@
+name: Deploy Staging to EC2
+
+on:
+  push:
+    branches:
+      - main # This workflow runs when you push to the 'main' branch
+
+# Environment variables available to all jobs
+env:
+  AWS_REGION: us-east-2 # <-- IMPORTANT: Change to your AWS region
+  ECR_REPOSITORY: classeasily-backend-staging # <-- Your ECR repository name
+
+# Permissions needed for OIDC connection
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-deploy:
+    name: Build and Deploy to Staging
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }} # Use the unique commit SHA as the image tag
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      # ==========================================================
+      # ==      UPDATED DEPLOYMENT STEP - NO MANUAL SETUP       ==
+      # ==========================================================
+      - name: Deploy to EC2 instance
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.STAGING_EC2_HOST }}
+          username: ${{ secrets.STAGING_EC2_USERNAME }}
+          key: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          script: |
+            # Create or overwrite the environment file with secrets from GitHub
+            cat << EOF > /home/ec2-user/.env.staging
+            DJANGO_SECRET_KEY=${{ secrets.DJANGO_SECRET_KEY }}
+            DEBUG=True
+            ALLOWED_HOSTS=${{ secrets.STAGING_EC2_HOST }},localhost
+            SITE_DOMAIN=${{ secrets.STAGING_EC2_HOST }}
+
+            # --- Database ---
+            DB_ENGINE=django.db.backends.postgresql
+            DB_NAME=${{ secrets.DB_NAME }}
+            DB_USER=${{ secrets.DB_USER }}
+            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+            DB_HOST=${{ secrets.DB_HOST }}
+            DB_PORT=${{ secrets.DB_PORT }}
+
+            # --- Cache/Celery ---
+            CACHE_URL=${{ secrets.CACHE_URL }}
+            CELERY_BROKER_URL=${{ secrets.CELERY_BROKER_URL }}
+            CELERY_RESULT_BACKEND=${{ secrets.CELERY_RESULT_BACKEND }}
+
+            # --- API & Service Keys ---
+            RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
+            GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
+            GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
+            STRIPE_PUBLIC_KEY=${{ secrets.STRIPE_PUBLIC_KEY }}
+            STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}
+            STRIPE_WEBHOOK_SECRET=${{ secrets.STRIPE_WEBHOOK_SECRET }}
+            OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
+
+            # --- Other Settings ---
+            FRONTEND_URL=${{ secrets.FRONTEND_URL }}
+            DEFAULT_FROM_EMAIL=${{ secrets.DEFAULT_FROM_EMAIL }}
+            # ... add any other secrets you need from GitHub here
+            EOF
+
+            # Login to ECR on the EC2 instance
+            aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}
+
+            # Pull the new image from ECR
+            docker pull ${{ steps.build-image.outputs.image }}
+
+            # Stop and remove the old containers if they are running
+            docker stop web worker || true
+            docker rm web worker || true
+
+            # Start new containers with the new image.
+            # The --env-file flag now points to the file we just created.
+            docker run -d --rm --env-file /home/ec2-user/.env.staging -p 80:8000 --name web ${{ steps.build-image.outputs.image }} gunicorn CEBackend.asgi:application -w 2 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
+            docker run -d --rm --env-file /home/ec2-user/.env.staging --name worker ${{ steps.build-image.outputs.image }} celery -A CEBackend.celery worker -l info
