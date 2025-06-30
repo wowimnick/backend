@@ -1,21 +1,22 @@
 #!/bin/bash
 
-# This script runs after the application has been deployed and the environment
-# variables are available. It is the reliable way to run database migrations.
+# This script runs after the application is deployed, ensuring environment variables are available.
+set -e # Exit immediately if a command fails
 
-# The 'set -e' command ensures that the script will exit immediately if a command fails.
-set -e
-
-# We use the 'leader_only' helper provided by Elastic Beanstalk to ensure
-# that this script only runs on one instance in an environment.
-# This is critical for preventing multiple instances from trying to run
-# migrations at the same time.
+# The 'leader_only' helper ensures these commands run on only one instance.
 if /opt/elasticbeanstalk/bin/leader_only; then
-  echo "--- I am the leader, running migrations ---"
-  # Activate the virtual environment
+  echo "--- I am the leader, running post-deployment commands ---"
+  
+  # Activate the virtual environment.
+  # The path is consistent on Amazon Linux 2023 platforms.
   source /var/app/venv/staging-LQM1lest/bin/activate
-  # Run the migrate command
+  
+  echo "--- Running database migrations ---"
   python manage.py migrate --noinput
+  
+  echo "--- Collecting static files ---"
+  python manage.py collectstatic --noinput
+  
 else
-  echo "--- I am not the leader, skipping migrations ---"
+  echo "--- I am not the leader, skipping post-deployment commands ---"
 fi
