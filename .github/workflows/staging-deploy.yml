@@ -57,29 +57,29 @@ jobs:
             # Create or overwrite the environment file with secrets from GitHub
             cat << EOF > /home/ec2-user/.env.staging
             # --- Core & Security ---
-            DJANGO_SECRET_KEY='${{ secrets.DJANGO_SECRET_KEY }}'
+            DJANGO_SECRET_KEY='${{ secrets.DJANGO_SECRET_KEY }}' # Secret keys can have special chars, keep quotes
             DEBUG=True
             SITE_DOMAIN=${{ secrets.STAGING_EC2_HOST }}
             ALLOWED_HOSTS=${{ secrets.STAGING_EC2_HOST }},localhost
-            CSRF_TRUSTED_ORIGINS='${{ secrets.CSRF_TRUSTED_ORIGINS }}'
+            CSRF_TRUSTED_ORIGINS=${{ secrets.CSRF_TRUSTED_ORIGINS }}
 
             # --- Database (RDS) ---
-            DB_ENGINE='${{ secrets.DB_ENGINE }}'
-            DB_NAME='${{ secrets.DB_NAME }}'
-            DB_USER='${{ secrets.DB_USER }}'
-            DB_PASSWORD='${{ secrets.DB_PASSWORD }}'
-            DB_HOST='${{ secrets.DB_HOST }}'
-            DB_PORT='${{ secrets.DB_PORT }}'
+            DB_ENGINE=${{ secrets.DB_ENGINE }} # <-- REMOVED QUOTES
+            DB_NAME=${{ secrets.DB_NAME }} # <-- REMOVED QUOTES
+            DB_USER=${{ secrets.DB_USER }} # <-- REMOVED QUOTES
+            DB_PASSWORD='${{ secrets.DB_PASSWORD }}' # <-- KEEP QUOTES HERE
+            DB_HOST=${{ secrets.DB_HOST }} # <-- REMOVED QUOTES
+            DB_PORT=${{ secrets.DB_PORT }} # <-- REMOVED QUOTES
 
             # --- Cache & Celery (ElastiCache for Redis) ---
-            CACHE_URL='${{ secrets.CACHE_URL }}'
-            CELERY_BROKER_URL='${{ secrets.CELERY_BROKER_URL }}'
-            CELERY_RESULT_BACKEND='${{ secrets.CELERY_RESULT_BACKEND }}'
+            CACHE_URL='${{ secrets.CACHE_URL }}' # URLs can have special chars, keep quotes
+            CELERY_BROKER_URL='${{ secrets.CELERY_BROKER_URL }}' # URLs can have special chars, keep quotes
+            CELERY_RESULT_BACKEND='${{ secrets.CELERY_RESULT_BACKEND }}' # URLs can have special chars, keep quotes
 
             # --- Static Files (S3) ---
-            AWS_STORAGE_BUCKET_NAME='${{ secrets.AWS_STORAGE_BUCKET_NAME }}'
+            AWS_STORAGE_BUCKET_NAME=${{ secrets.AWS_STORAGE_BUCKET_NAME }} # <-- REMOVED QUOTES
 
-            # --- API & Service Keys ---
+            # --- API & Service Keys (Keep quotes for safety) ---
             RESEND_API_KEY='${{ secrets.RESEND_API_KEY }}'
             GOOGLE_CLIENT_ID='${{ secrets.GOOGLE_CLIENT_ID }}'
             GOOGLE_CLIENT_SECRET='${{ secrets.GOOGLE_CLIENT_SECRET }}'
@@ -89,8 +89,8 @@ jobs:
             OPENROUTER_API_KEY='${{ secrets.OPENROUTER_API_KEY }}'
 
             # --- Email & Frontend ---
-            FRONTEND_URL='${{ secrets.FRONTEND_URL }}'
-            DEFAULT_FROM_EMAIL='${{ secrets.DEFAULT_FROM_EMAIL }}'
+            FRONTEND_URL=${{ secrets.FRONTEND_URL }} # <-- REMOVED QUOTES
+            DEFAULT_FROM_EMAIL=${{ secrets.DEFAULT_FROM_EMAIL }} # <-- REMOVED QUOTES
             EOF
 
             # Login to ECR on the EC2 instance
