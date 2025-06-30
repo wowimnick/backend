@@ -6,9 +6,8 @@ set -e
 echo "--- Running Django migrations ---"
 python manage.py migrate --no-input
 
-echo "--- Collecting static files to S3 ---"
-# This will upload static files to your S3 bucket as configured in settings.py
-python manage.py collectstatic --no-input --clear
-
-# Execute the command passed to this script (e.g., gunicorn or celery)
+# The "$@" means "execute the command that was passed to this script".
+# This allows us to use the same image for the web server and celery worker
+# by passing different commands (e.g., gunicorn vs. celery).
+echo "--- Starting application command ---"
 exec "$@"
