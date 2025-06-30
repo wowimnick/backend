@@ -325,7 +325,7 @@ DATABASES = {
         "ENGINE": "django.db.backends.postgresql",
         "NAME": "CEDB",
         "USER": "postgres",
-        "PASSWORD": "A>a*kU>)78P?)|k4Ae?|ramjpU",
+        "PASSWORD": "A>a*kU>)78P?$R)|k4Ae?|ramjpU",
         "HOST": "classeasily-staging-db.czutdql9jx70.us-east-2.rds.amazonaws.com",
         "PORT": "5432",
     }
