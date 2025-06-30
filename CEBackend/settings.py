@@ -61,7 +61,12 @@ if not DEBUG:
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
     # The following should be your actual production domains
-    ALLOWED_HOSTS = ["classeasily.com", "www.classeasily.com", ".elasticbeanstalk.com"]
+    ALLOWED_HOSTS = [
+        "classeasily.com",
+        "www.classeasily.com",
+        ".elasticbeanstalk.com",
+        "172.31.3.92",
+    ]
 else:
     # Development hosts
     ALLOWED_HOSTS = ["localhost", "127.0.0.1", "classeasily.com", "3.142.223.49"]
