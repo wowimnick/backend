@@ -65,7 +65,8 @@ if not DEBUG:
         "classeasily.com",
         "www.classeasily.com",
         ".elasticbeanstalk.com",
-        "172.31.3.92",
+        "localhost",
+        "127.0.0.1",
     ]
 else:
     # Development hosts
@@ -416,9 +417,8 @@ if DEBUG:
 else:
     # For production (e.g., AWS ElastiCache with SSL)
     print(
-        "---- DETECTED PRODUCTION MODE (DEBUG=False) - Using ElastiCache Redis Cluster settings ----"
+        "---- DETECTED PRODUCTION MODE (DEBUG=False) - Using ElastiCache Redis settings ----"
     )
-    # Example production URLs - replace with your actual ElastiCache endpoint
     ELASTICACHE_URL = (
         "rediss://classeasily-cache-wwemzf.serverless.use2.cache.amazonaws.com:6379"
     )
@@ -427,13 +427,15 @@ else:
 
     CELERY_BROKER_USE_SSL = {"ssl_cert_reqs": ssl.CERT_NONE}
     CELERY_REDIS_BACKEND_USE_SSL = {"ssl_cert_reqs": ssl.CERT_NONE}
-    CELERY_BROKER_TRANSPORT_OPTIONS = {"is_cluster": True}
-    CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {"is_cluster": True}
 
-    # Use namespaced queues for cluster mode
-    CELERY_CONTROL_EXCHANGE = "{celery}.pidbox"
-    CELERY_EVENT_QUEUE_PREFIX = "{celery}.eve"
-    CELERY_TASK_DEFAULT_QUEUE = "{celery}.tasks"
+    # --- REMOVE THESE CLUSTER SETTINGS ---
+    # CELERY_BROKER_TRANSPORT_OPTIONS = {"is_cluster": True}
+    # CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {"is_cluster": True}
+
+    # --- REMOVE THESE CLUSTER QUEUE SETTINGS ---
+    # CELERY_CONTROL_EXCHANGE = "{celery}.pidbox"
+    # CELERY_EVENT_QUEUE_PREFIX = "{celery}.eve"
+    # CELERY_TASK_DEFAULT_QUEUE = "{celery}.tasks"
 
 
 # -- Common Celery Settings (apply to both local and prod) --
