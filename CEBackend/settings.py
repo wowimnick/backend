@@ -66,6 +66,22 @@ else:
     # Development hosts
     ALLOWED_HOSTS = ["localhost", "127.0.0.1", "classeasily.com", "3.142.223.49"]
 
+import requests
+
+EC2_PRIVATE_IP = None
+try:
+    # Use a short timeout to prevent hanging during local development
+    response = requests.get(
+        "http://169.254.169.254/latest/meta-data/local-ipv4", timeout=0.1
+    )
+    if response.status_code == 200:
+        EC2_PRIVATE_IP = response.text
+        if EC2_PRIVATE_IP and EC2_PRIVATE_IP not in ALLOWED_HOSTS:
+            ALLOWED_HOSTS.append(EC2_PRIVATE_IP)
+except requests.exceptions.RequestException:
+    # This is expected to fail on local machines, which is fine.
+    print("Could not get EC2 private IP. This is expected on local dev.")
+    pass
 
 STRIPE_PUBLIC_KEY = "pk_test_51Qn8JYFsNqYi8b0PAujbtEGNoTcLJTpaS2UefQxe5u4BquZyrIK48aRKbhHLRh45em0EFds7SNhlzys3sPxS5faR00Rj8lqQjg"
 STRIPE_SECRET_KEY = "sk_test_51Qn8JYFsNqYi8b0P7fYDsXan82C6Q1CGWuwe9qHzaxnUf9lGW4G3cA0w2ks4svAnK9IivXKxpzOau6Kaj3N7Xx9Y00arIlzov1"
