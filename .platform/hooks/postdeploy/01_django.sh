@@ -7,7 +7,7 @@ set -e # Exit immediately if a command exits with a non-zero status.
 
 # Use the leader_only helper to ensure commands run only on one instance
 # in a multi-instance environment. This is crucial for migrations.
-if /opt/elasticbeanstalk/bin/leader_only; then
+if /usr/bin/leader_only; then
   echo "--- I am the leader, running database migrations ---"
   
   # NO NEED TO SOURCE A VIRTUALENV ON AL2023.
