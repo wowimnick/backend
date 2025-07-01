@@ -182,6 +182,14 @@ CELERY_RESULT_BACKEND = os.environ.get(
     "CELERY_RESULT_BACKEND", "redis://localhost:6379/2"
 )
 
+CELERY_BROKER_TRANSPORT_OPTIONS = {
+    # The hash tag "{celery}" ensures all keys go to the same slot.
+    "global_keyprefix": "{celery}:",
+    # Makes fanout (broadcast) operations cluster-safe.
+    "fanout_prefix": True,
+    "fanout_patterns": False,
+}
+
 # This setting is CRITICAL for ElastiCache Serverless to prevent CROSSSLOT errors by disabling worker discovery.
 CELERY_WORKER_ENABLE_REMOTE_CONTROL = False
 
