@@ -126,7 +126,7 @@ jobs:
 
             # Start the new celery worker container
             echo "--- Starting new worker container ($WORKER_CONTAINER_NAME)... ---"
-            docker run -d --rm --env-file /home/ec2-user/.env.staging --name $WORKER_CONTAINER_NAME $IMAGE_NAME celery -A CEBackend.celery worker -l info
+            docker run -d --rm --env-file /home/ec2-user/.env.staging --name $WORKER_CONTAINER_NAME $IMAGE_NAME celery -A CEBackend.celery worker -l info --without-mingle --without-gossip
 
             # --- NEW LOGGING SECTION ---
 
