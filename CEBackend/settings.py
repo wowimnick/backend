@@ -406,18 +406,19 @@ CACHES = {
 CELERY_BROKER_URL = os.environ["CELERY_BROKER_URL"]
 CELERY_RESULT_BACKEND = os.environ["CELERY_RESULT_BACKEND"]
 
-# Configure SSL and cluster options based on the broker URL scheme
 if CELERY_BROKER_URL.startswith("rediss://"):
-    # Production settings for AWS ElastiCache with SSL/TLS
+    # Settings for a secure, non-cluster Redis connection (like ElastiCache Serverless)
     CELERY_BROKER_USE_SSL = {"ssl_cert_reqs": ssl.CERT_NONE}
     CELERY_REDIS_BACKEND_USE_SSL = {"ssl_cert_reqs": ssl.CERT_NONE}
-    CELERY_BROKER_TRANSPORT_OPTIONS = {"is_cluster": True}
-    CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {"is_cluster": True}
-    CELERY_CONTROL_EXCHANGE = "{celery}.pidbox"
-    CELERY_EVENT_QUEUE_PREFIX = "{celery}.eve"
-    CELERY_TASK_DEFAULT_QUEUE = "{celery}.tasks"
+    # Treat it as a single endpoint, NOT a cluster.
+    CELERY_BROKER_TRANSPORT_OPTIONS = {}
+    CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {}
+    # Use standard, non-clustered queue names.
+    CELERY_CONTROL_EXCHANGE = "celery.pidbox"
+    CELERY_EVENT_QUEUE_PREFIX = "celeryev"
+    CELERY_TASK_DEFAULT_QUEUE = "celery"
 else:
-    # Local development settings (no SSL)
+    # Local development settings (no SSL, no cluster)
     CELERY_BROKER_USE_SSL = None
     CELERY_REDIS_BACKEND_USE_SSL = None
     CELERY_BROKER_TRANSPORT_OPTIONS = {}
