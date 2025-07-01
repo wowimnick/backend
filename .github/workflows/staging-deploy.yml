@@ -56,7 +56,11 @@ jobs:
           script: |
             # This comment is outside the EOF block, so it's fine.
             # The following block creates the .env.staging file on the server.
-            cat << EOF > /home/ec2-user/.env.staging
+
+            HOST_ENV_FILE="/home/ec2-user/.env.staging"
+            CONTAINER_ENV_FILE="/home/django/app/.env.staging"
+
+            cat << EOF > $HOST_ENV_FILE
             # --- Core & Security ---
             DJANGO_ENV=staging
             DJANGO_SECRET_KEY='${{ secrets.DJANGO_SECRET_KEY }}'
@@ -117,13 +121,21 @@ jobs:
             docker container prune -f
 
             # Start the new web container with the new image
-            echo "--- Starting new web container ($WEB_CONTAINER_NAME)... ---"
-            docker run -d --rm --env-file /home/ec2-user/.env.staging -p 80:8000 --name $WEB_CONTAINER_NAME $IMAGE_NAME gunicorn CEBackend.asgi:application -w 2 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
+            echo "--- Starting new web container ($NEW_WEB_CONTAINER_NAME)... ---"
+            docker run -d --rm \
+              -v $HOST_ENV_FILE:$CONTAINER_ENV_FILE:ro \
+              -p 80:8000 \
+              --name $NEW_WEB_CONTAINER_NAME \
+              $IMAGE_NAME \
+              gunicorn CEBackend.asgi:application -w 2 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
 
             # Start the new celery worker container
-            echo "--- Starting new worker container ($WORKER_CONTAINER_NAME)... ---"
-            docker run -d --rm --env-file /home/ec2-user/.env.staging --name $WORKER_CONTAINER_NAME $IMAGE_NAME celery -A CEBackend.celery worker -l info
-
+            echo "--- Starting new worker container ($NEW_WORKER_CONTAINER_NAME)... ---"
+            docker run -d --rm \
+              -v $HOST_ENV_FILE:$CONTAINER_ENV_FILE:ro \
+              --name $NEW_WORKER_CONTAINER_NAME \
+              $IMAGE_NAME \
+              celery -A CEBackend.celery worker -l info
             # --- NEW LOGGING SECTION ---
 
             # Give the containers a moment to initialize and start logging.
