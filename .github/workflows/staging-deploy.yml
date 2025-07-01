@@ -58,10 +58,12 @@ jobs:
             # The following block creates the .env.staging file on the server.
 
             cat << EOF > /home/ec2-user/.env.staging
-            # --- Core & Security ---
+            # --- Meta ---
             IS_DOCKER=true
             DJANGO_ENV=staging
-            DJANGO_SECRET_KEY='${{ secrets.DJANGO_SECRET_KEY }}'
+
+            # --- Core & Security ---
+            DJANGO_SECRET_KEY=${{ secrets.DJANGO_SECRET_KEY }}
             DEBUG=False
             SITE_DOMAIN=${{ secrets.STAGING_EC2_HOST }}
             ALLOWED_HOSTS=${{ secrets.STAGING_EC2_HOST }},localhost
@@ -71,26 +73,26 @@ jobs:
             DB_ENGINE=${{ secrets.DB_ENGINE }}
             DB_NAME=${{ secrets.DB_NAME }}
             DB_USER=${{ secrets.DB_USER }}
-            DB_PASSWORD='${{ secrets.DB_PASSWORD }}'
+            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
             DB_HOST=${{ secrets.DB_HOST }}
             DB_PORT=${{ secrets.DB_PORT }}
 
             # --- Cache & Celery (ElastiCache for Redis) ---
-            CACHE_URL='${{ secrets.CACHE_URL }}'
-            CELERY_BROKER_URL='${{ secrets.CELERY_BROKER_URL }}'
-            CELERY_RESULT_BACKEND='${{ secrets.CELERY_RESULT_BACKEND }}'
+            CACHE_URL=${{ secrets.CACHE_URL }}
+            CELERY_BROKER_URL=${{ secrets.CELERY_BROKER_URL }}
+            CELERY_RESULT_BACKEND=${{ secrets.CELERY_RESULT_BACKEND }}
 
             # --- Static Files (S3) ---
             AWS_STORAGE_BUCKET_NAME=${{ secrets.AWS_STORAGE_BUCKET_NAME }}
 
             # --- API & Service Keys ---
-            RESEND_API_KEY='${{ secrets.RESEND_API_KEY }}'
-            GOOGLE_CLIENT_ID='${{ secrets.GOOGLE_CLIENT_ID }}'
-            GOOGLE_CLIENT_SECRET='${{ secrets.GOOGLE_CLIENT_SECRET }}'
-            STRIPE_PUBLIC_KEY='${{ secrets.STRIPE_PUBLIC_KEY }}'
-            STRIPE_SECRET_KEY='${{ secrets.STRIPE_SECRET_KEY }}'
-            STRIPE_WEBHOOK_SECRET='${{ secrets.STRIPE_WEBHOOK_SECRET }}'
-            OPENROUTER_API_KEY='${{ secrets.OPENROUTER_API_KEY }}'
+            RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
+            GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
+            GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
+            STRIPE_PUBLIC_KEY=${{ secrets.STRIPE_PUBLIC_KEY }}
+            STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}
+            STRIPE_WEBHOOK_SECRET=${{ secrets.STRIPE_WEBHOOK_SECRET }}
+            OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
 
             # --- Email & Frontend ---
             FRONTEND_URL=${{ secrets.FRONTEND_URL }}
