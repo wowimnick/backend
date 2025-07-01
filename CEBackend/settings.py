@@ -427,6 +427,7 @@ else:
     CELERY_EVENT_QUEUE_PREFIX = "celeryev"
     CELERY_TASK_DEFAULT_QUEUE = "celery"
 
+CELERY_WORKER_ENABLE_REMOTE_CONTROL = False
 # Common Celery settings
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
