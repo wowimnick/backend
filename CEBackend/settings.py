@@ -370,7 +370,7 @@ STATIC_URL = f"https://{AWS_S3_CUSTOM_DOMAIN}/static/"
 
 
 # --- Caching & Channels (Redis) ---
-CACHE_URL = os.environ["CACHE_URL"]
+CACHE_URL = "rediss://classeasily-cache-wwemzf.serverless.use2.cache.amazonaws.com:6379"
 
 CHANNEL_LAYERS = {
     "default": {
