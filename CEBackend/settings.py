@@ -57,7 +57,8 @@ AUTH_USER_MODEL = "quickstart.CustomUser"
 ALLOWED_HOSTS = os.environ.get(
     "ALLOWED_HOSTS",
     "localhost",
-    "127.0.0.1,ec2-52-14-199-226.us-east-2.compute.amazonaws.com",
+    "127.0.0.1",
+    "ec2-52-14-199-226.us-east-2.compute.amazonaws.com",
 ).split(",")
 CSRF_TRUSTED_ORIGINS = os.environ.get(
     "CSRF_TRUSTED_ORIGINS", "http://localhost:5173"
