@@ -57,7 +57,7 @@ jobs:
             # This comment is outside the EOF block, so it's fine.
             # The following block creates the .env.staging file on the server.
 
-            cat << EOF > /home/ec2-user/.env.staging
+            cat << 'EOF' > /home/ec2-user/.env.staging
             # --- Meta ---
             IS_DOCKER=true
             DJANGO_ENV=staging
