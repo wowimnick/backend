@@ -95,13 +95,47 @@ jobs:
             DEFAULT_FROM_EMAIL=${{ secrets.DEFAULT_FROM_EMAIL }}
             EOF
 
-            # --- The rest of the script continues below ---
-            aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}
+            # --- ROBUST DEPLOYMENT LOGIC ---
 
-            docker pull ${{ steps.build-image.outputs.image }}
+            IMAGE_NAME=${{ steps.build-image.outputs.image }}
+            WEB_CONTAINER_NAME="web"
+            WORKER_CONTAINER_NAME="worker"
 
-            docker stop web worker || true
-            docker rm web worker || true
+            # Stop and remove the old worker container if it exists
+            docker stop $WORKER_CONTAINER_NAME || true
+            docker rm $WORKER_CONTAINER_NAME || true
 
-            docker run -d --rm --env-file /home/ec2-user/.env.staging -p 80:8000 --name web ${{ steps.build-image.outputs.image }} gunicorn CEBackend.asgi:application -w 2 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
-            docker run -d --rm --env-file /home/ec2-user/.env.staging --name worker ${{ steps.build-image.outputs.image }} celery -A CEBackend.celery worker -l info
+            # Find and stop the container currently running on port 80, if any
+            OLD_WEB_CONTAINER_ID=$(docker ps -q --filter "publish=80")
+            if [ -n "$OLD_WEB_CONTAINER_ID" ]; then
+                echo "--- Found old web container $OLD_WEB_CONTAINER_ID on port 80. Stopping it. ---"
+                docker stop $OLD_WEB_CONTAINER_ID
+            fi
+
+            # Clean up any stopped containers to prevent conflicts
+            echo "--- Pruning stopped containers... ---"
+            docker container prune -f
+
+            # Start the new web container with the new image
+            echo "--- Starting new web container ($WEB_CONTAINER_NAME)... ---"
+            docker run -d --rm --env-file /home/ec2-user/.env.staging -p 80:8000 --name $WEB_CONTAINER_NAME $IMAGE_NAME gunicorn CEBackend.asgi:application -w 2 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
+
+            # Start the new celery worker container
+            echo "--- Starting new worker container ($WORKER_CONTAINER_NAME)... ---"
+            docker run -d --rm --env-file /home/ec2-user/.env.staging --name $WORKER_CONTAINER_NAME $IMAGE_NAME celery -A CEBackend.celery worker -l info
+
+            # --- NEW LOGGING SECTION ---
+
+            # Give the containers a moment to initialize and start logging.
+            echo "--- Waiting 5 seconds for containers to boot... ---"
+            sleep 5
+
+            echo "--- ✅ Deployment containers started. Tailing logs for 15 seconds... ---"
+
+            # Use `docker logs --follow` with a timeout to stream logs for a short period.
+            # The `&` runs the commands in the background. The `wait` command waits for them to finish.
+            timeout 15s docker logs --follow $WEB_CONTAINER_NAME &
+            timeout 15s docker logs --follow $WORKER_CONTAINER_NAME &
+            wait
+
+            echo "--- ✅ Log streaming complete. Deployment script finished. ---"
