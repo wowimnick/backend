@@ -18,26 +18,24 @@ from dotenv import load_dotenv
 from pathlib import Path
 from datetime import timedelta
 
-# --- Environment Variable Loading ---
-# Determine which .env file to load. Default to 'local' if DJANGO_ENV is not set.
-# To use production settings, set the environment variable: export DJANGO_ENV=prod
-env_type = os.environ.get("DJANGO_ENV", "local")
-env_file = f".env.{env_type}"
+IS_DOCKER = os.environ.get("IS_DOCKER") == "true"
 
-# Load the environment file.
-# The `find_dotenv` function can be used to locate the file in parent directories.
-# For simplicity, we assume it's in the same directory as this settings.py file's parent.
-BASE_DIR = Path(__file__).resolve().parent.parent
-dotenv_path = BASE_DIR / env_file
+if not IS_DOCKER:
+    env_type = os.environ.get("DJANGO_ENV", "local")
+    env_file = f".env.{env_type}"
+    dotenv_path = Path(__file__).resolve().parent.parent / env_file
 
-if dotenv_path.exists():
-    print(f"--- Loading environment variables from {dotenv_path} ---")
-    load_dotenv(dotenv_path=dotenv_path)
+    if dotenv_path.exists():
+        print(f"--- LOCAL: Loading environment variables from {dotenv_path} ---")
+        from dotenv import load_dotenv
+
+        load_dotenv(dotenv_path=dotenv_path)
+    else:
+        print(
+            f"--- WARNING: .env file not found at {dotenv_path}. Relying on system environment variables. ---"
+        )
 else:
-    print(
-        f"--- WARNING: Environment file not found at {dotenv_path}. Using system environment variables. ---"
-    )
-    load_dotenv()  # Load from system environment if file is missing
+    print("--- DOCKER: Relying on environment variables passed to container. ---")
 
 
 # --- Core Settings ---
@@ -377,7 +375,7 @@ STATIC_URL = f"https://{AWS_S3_CUSTOM_DOMAIN}/static/"
 
 
 # --- Caching & Channels (Redis) ---
-CACHE_URL = "rediss://classeasily-cache-wwemzf.serverless.use2.cache.amazonaws.com:6379"
+CACHE_URL = os.environ.get("CACHE_URL", "redis://localhost:6379/0")
 
 CHANNEL_LAYERS = {
     "default": {
