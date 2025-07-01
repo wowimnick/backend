@@ -144,7 +144,7 @@ DATABASES = {
         "ENGINE": os.environ.get("DB_ENGINE", "django.db.backends.postgresql"),
         "NAME": os.environ.get("DB_NAME", "CEDB"),
         "USER": os.environ.get("DB_USER", "postgres"),
-        "PASSWORD": os.environ.get("DB_PASSWORD", "password"),
+        "PASSWORD": os.environ.get("DB_PASSWORD", "A>a*kU>)78P?$R)|k4Ae?|ramjpU"),
         "HOST": os.environ.get("DB_HOST", "localhost"),
         "PORT": os.environ.get("DB_PORT", "5432"),
     }
