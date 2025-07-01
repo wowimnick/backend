@@ -116,16 +116,23 @@ jobs:
                 docker stop $OLD_WEB_CONTAINER_ID
             fi
 
+            # --- CLEANUP SECTION ---
             # Clean up any stopped containers to prevent conflicts
             echo "--- Pruning stopped containers... ---"
             docker container prune -f
 
+            # CRITICAL: Clean up old, unused images to save disk space
+            echo "--- Pruning unused Docker images... ---"
+            docker image prune -a -f
+
+            # --- START NEW CONTAINERS ---
             # Start the new web container with the new image
             echo "--- Starting new web container ($WEB_CONTAINER_NAME)... ---"
             docker run -d --rm --env-file /home/ec2-user/.env.staging -p 80:8000 --name $WEB_CONTAINER_NAME $IMAGE_NAME gunicorn CEBackend.asgi:application -w 2 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
 
             # Start the new celery worker container
             echo "--- Starting new worker container ($WORKER_CONTAINER_NAME)... ---"
+            # ADDED --without-mingle and --without-gossip to make it compatible with ElastiCache Serverless
             docker run -d --rm --env-file /home/ec2-user/.env.staging --name $WORKER_CONTAINER_NAME $IMAGE_NAME celery -A CEBackend.celery worker -l info --without-mingle --without-gossip
 
             # --- NEW LOGGING SECTION ---
