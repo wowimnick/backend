@@ -58,8 +58,9 @@ jobs:
             # The following block creates the .env.staging file on the server.
             cat << EOF > /home/ec2-user/.env.staging
             # --- Core & Security ---
+            DJANGO_ENV=staging
             DJANGO_SECRET_KEY='${{ secrets.DJANGO_SECRET_KEY }}'
-            DEBUG=True
+            DEBUG=False
             SITE_DOMAIN=${{ secrets.STAGING_EC2_HOST }}
             ALLOWED_HOSTS=${{ secrets.STAGING_EC2_HOST }},localhost
             CSRF_TRUSTED_ORIGINS=${{ secrets.CSRF_TRUSTED_ORIGINS }}

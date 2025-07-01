@@ -59,15 +59,23 @@ CSRF_TRUSTED_ORIGINS = os.environ.get(
     "CSRF_TRUSTED_ORIGINS", "http://localhost:5173"
 ).split(",")
 
-if not DEBUG:
-    SECURE_SSL_REDIRECT = True
+# NEW LOGIC: Apply secure settings if DEBUG is False OR if we are in a deployed environment like 'staging'
+IS_DEPLOYED_ENV = os.environ.get("DJANGO_ENV") in ["staging", "prod"]
+
+if not DEBUG or IS_DEPLOYED_ENV:
+    # These settings are now active for staging and prod
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SECURE_SSL_REDIRECT = (
+        True  # Be careful with this if you don't have a redirect handler in front
+    )
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
+    # The HSTS settings below are good practice for prod, fine for staging
     SECURE_HSTS_SECONDS = 31536000
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
-    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 else:
+    # Local development settings
     SESSION_COOKIE_SECURE = False
     CSRF_COOKIE_SECURE = False
 
@@ -75,7 +83,6 @@ else:
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
 # This MUST be False for the frontend to read the CSRF token.
-# Security is maintained by the browser's Same-Origin Policy.
 CSRF_COOKIE_HTTPONLY = False
 CSRF_COOKIE_SAMESITE = "Lax"
 
@@ -462,7 +469,7 @@ SIMPLE_JWT = {
     "AUTH_COOKIE": "my-app-auth",
     "AUTH_COOKIE_REFRESH": "my-refresh-token",
     "AUTH_COOKIE_DOMAIN": None,
-    "AUTH_COOKIE_SECURE": not DEBUG,
+    "AUTH_COOKIE_SECURE": not DEBUG or IS_DEPLOYED_ENV,
     "AUTH_COOKIE_HTTP_ONLY": True,
     "AUTH_COOKIE_PATH": "/",
     "AUTH_COOKIE_SAMESITE": "Lax",
