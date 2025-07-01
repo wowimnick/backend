@@ -102,28 +102,31 @@ jobs:
             # --- ROBUST DEPLOYMENT LOGIC ---
 
             IMAGE_NAME=${{ steps.build-image.outputs.image }}
-            WEB_CONTAINER_NAME="web"
-            WORKER_CONTAINER_NAME="worker"
+            NEW_WEB_CONTAINER_NAME="web"
+            NEW_WORKER_CONTAINER_NAME="worker"
 
-            # Stop and remove the old worker container if it exists
-            docker stop $WORKER_CONTAINER_NAME || true
-            docker rm $WORKER_CONTAINER_NAME || true
-
-            # Find and stop the container currently running on port 80, if any
+            # Find and stop any old web container on port 80, regardless of name
             OLD_WEB_CONTAINER_ID=$(docker ps -q --filter "publish=80")
             if [ -n "$OLD_WEB_CONTAINER_ID" ]; then
-                echo "--- Found old web container $OLD_WEB_CONTAINER_ID on port 80. Stopping it. ---"
+                echo "--- Found old web container(s) $OLD_WEB_CONTAINER_ID on port 80. Stopping... ---"
                 docker stop $OLD_WEB_CONTAINER_ID
             fi
 
-            # Clean up any stopped containers to prevent conflicts
+            # Find and stop any old worker container whose name contains "worker"
+            OLD_WORKER_CONTAINER_ID=$(docker ps -q --filter "name=worker")
+            if [ -n "$OLD_WORKER_CONTAINER_ID" ]; then
+                echo "--- Found old worker container(s) $OLD_WORKER_CONTAINER_ID. Stopping... ---"
+                docker stop $OLD_WORKER_CONTAINER_ID
+            fi
+
+            # Clean up all stopped containers
             echo "--- Pruning stopped containers... ---"
             docker container prune -f
 
             # Start the new web container with the new image
             echo "--- Starting new web container ($NEW_WEB_CONTAINER_NAME)... ---"
             docker run -d --rm \
-              -v $HOST_ENV_FILE:$CONTAINER_ENV_FILE:ro \
+              -v /home/ec2-user/.env.staging:/home/django/app/.env.staging:ro \
               -p 80:8000 \
               --name $NEW_WEB_CONTAINER_NAME \
               $IMAGE_NAME \
@@ -132,11 +135,10 @@ jobs:
             # Start the new celery worker container
             echo "--- Starting new worker container ($NEW_WORKER_CONTAINER_NAME)... ---"
             docker run -d --rm \
-              -v $HOST_ENV_FILE:$CONTAINER_ENV_FILE:ro \
+              -v /home/ec2-user/.env.staging:/home/django/app/.env.staging:ro \
               --name $NEW_WORKER_CONTAINER_NAME \
               $IMAGE_NAME \
               celery -A CEBackend.celery worker -l info
-            # --- NEW LOGGING SECTION ---
 
             # Give the containers a moment to initialize and start logging.
             echo "--- Waiting 5 seconds for containers to boot... ---"
