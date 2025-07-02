@@ -14,7 +14,7 @@ class PrivateMediaStorage(S3Boto3Storage):
     with a default expiration time.
     """
 
-    location = "media"  # A sub-folder in your S3 bucket for media files
+    location = ""  # Store files at the root of your S3 bucket
     default_acl = "private"  # Ensures all uploaded files are private
     file_overwrite = False  # Prevents accidentally overwriting files with the same name
     custom_domain = False  # We want the direct S3 URL for pre-signing
