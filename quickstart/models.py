@@ -293,9 +293,7 @@ class CustomUser(AbstractUser):
     state = models.CharField(max_length=100)
     address = models.CharField(max_length=255)
     zipCode = models.CharField(max_length=100)
-    avatar = models.ImageField(
-        upload_to="avatars/", storage=S3Boto3Storage(), null=True, blank=True
-    )
+    avatar = models.ImageField(upload_to="avatars/", null=True, blank=True)
     createdAt = models.DateTimeField(auto_now_add=True)
     role = models.ForeignKey(
         "Role", on_delete=models.SET_NULL, null=True, blank=True
@@ -456,7 +454,7 @@ class BusinessInfo(models.Model):
     )
     businessDescription = models.TextField(max_length=500)
     businessImage = models.ImageField(
-        upload_to="business_images/", storage=S3Boto3Storage(), blank=True, null=True
+        upload_to="business_images/", blank=True, null=True
     )
     featured = models.BooleanField(default=False)
     isActive = models.BooleanField(default=False)
@@ -541,7 +539,6 @@ class BusinessInfo(models.Model):
     # --- Verification & Agreements ---
     verificationDocument = models.FileField(
         upload_to="verification_documents/",
-        storage=S3Boto3Storage(),
         blank=True,
         null=True,
     )
@@ -713,7 +710,7 @@ class ClassImage(models.Model):
     classId = models.ForeignKey(
         "ClassesMain", related_name="images", on_delete=models.CASCADE
     )
-    image = models.ImageField(upload_to="class_images/", storage=S3Boto3Storage())
+    image = models.ImageField(upload_to="class_images/")
     isCover = models.BooleanField(default=False)
     createdAt = models.DateTimeField(auto_now_add=True)
 
@@ -1578,9 +1575,7 @@ class Reviews(models.Model):
         validators=[MinValueValidator(1), MaxValueValidator(5)]
     )
     comment = models.TextField()
-    image = models.ImageField(
-        upload_to="review_images/", storage=S3Boto3Storage(), null=True, blank=True
-    )
+    image = models.ImageField(upload_to="review_images/", null=True, blank=True)
     status = models.CharField(
         max_length=20,
         choices=[
@@ -1889,9 +1884,7 @@ class NotificationAttachment(models.Model):
         NotificationCampaign, on_delete=models.CASCADE, related_name="attachments"
     )
     name = models.CharField(max_length=255)
-    file = models.FileField(
-        upload_to="notification_attachments/", storage=S3Boto3Storage()
-    )
+    file = models.FileField(upload_to="notification_attachments/")
     content_type = models.CharField(max_length=100)
     size = models.IntegerField()
     created_at = models.DateTimeField(auto_now_add=True)
