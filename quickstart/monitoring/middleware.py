@@ -1,4 +1,4 @@
-# quickstart/monitoring/middleware.py
+# quickstart/monitoring/middleware.py (CORRECTED VERSION)
 
 import time
 import traceback
