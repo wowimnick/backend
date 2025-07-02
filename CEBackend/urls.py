@@ -15,9 +15,11 @@ sitemaps = {
 urlpatterns = [
     # 1. Admin Interface (at the root)
     path("classeasily-control-panel/", admin.site.urls),
-    path("", include("CEBackend.health_urls")),
+    # 2. API Routes (all prefixed with 'api/')j
+    # This will include all the URLs from your quickstart/urls.py file.
     path("api/", include("quickstart.urls")),
     # 3. Sitemap URL (at the root)
+    # This is the corrected placement. It's now outside the 'api/' prefix.
     path(
         "sitemap.xml",
         sitemap,
