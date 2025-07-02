@@ -54,10 +54,12 @@ jobs:
           username: ${{ secrets.STAGING_EC2_USERNAME }}
           key: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
           script: |
-            INSTANCE_PRIVATE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
+            TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
 
-            # Step 2: Combine the GitHub secret and the fetched IP into a new variable.
-            # This is still happening on the remote EC2 server.
+            # Step 2: Use the session token to securely fetch the instance's private IP.
+            INSTANCE_PRIVATE_IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/local-ipv4)
+
+            # Step 3: Combine the GitHub secret and the fetched IP into a new variable.
             COMBINED_ALLOWED_HOSTS="${{ secrets.ALLOWED_HOSTS }},${INSTANCE_PRIVATE_IP}"
 
             # This comment is outside the EOF block, so it's fine.
