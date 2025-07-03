@@ -123,7 +123,7 @@ INSTALLED_APPS = [
 # --- Middleware ---
 # The order is critical for security and functionality.
 MIDDLEWARE = [
-    "core.middleware.HealthCheckMiddleware",
+    "quickstart.middleware.HealthCheckMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
