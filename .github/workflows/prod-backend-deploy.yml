@@ -49,13 +49,20 @@ jobs:
       - name: Download existing task definition
         run: |
           aws ecs describe-task-definition --task-definition ${{ env.ECS_TASK_DEFINITION }} --query taskDefinition > task-definition.json
+      - name: Show task definition JSON
+        run: |
+          echo "--- Contents of task-definition.json ---"
+          cat task-definition.json
+          echo "------------------------------------"
 
       - name: Fill in new image ID in task definition
         id: task-def
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
           task-definition: task-definition.json
-          container-name: web,worker # Update both web and worker containers
+          container-name: |
+            web
+            worker
           image: ${{ steps.build-image.outputs.image }}
 
       - name: Deploy Amazon ECS task definition
