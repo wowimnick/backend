@@ -55,24 +55,36 @@ jobs:
           cat task-definition.json
           echo "------------------------------------"
 
-      - name: Fill in new image ID in task definition
-        id: task-def
-        uses: aws-actions/amazon-ecs-render-task-definition@v1
-        with:
-          task-definition: task-definition.json
-          container-name: |
-            web
-            worker
-          image: ${{ steps.build-image.outputs.image }}
-
-      - name: Deploy Amazon ECS task definition
-        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
-        with:
-          task-definition: ${{ steps.task-def.outputs.task-definition }}
-          service: ${{ env.ECS_SERVICE_WEB }}
-          cluster: ${{ env.ECS_CLUSTER }}
-          wait-for-service-stability: true # IMPORTANT: Waits for deployment to be stable
-
-      - name: Update Worker Service
+      - name: Inject new image URI into task definition JSON
+        id: task-def-json
         run: |
-          aws ecs update-service --cluster ${{ env.ECS_CLUSTER }} --service ${{ env.ECS_SERVICE_WORKER }} --task-definition ${{ steps.task-def.outputs.task-definition-arn }} --force-new-deployment
+          # Use jq to update the 'image' field for both the 'web' and 'worker' containers.
+          # Then, remove read-only fields that the register-task-definition API call rejects.
+          jq --arg IMAGE_URI "${{ steps.build-image.outputs.image }}" '
+          .containerDefinitions[0].image = $IMAGE_URI | 
+          .containerDefinitions[1].image = $IMAGE_URI | 
+          del(.taskDefinitionArn) | 
+          del(.revision) | 
+          del(.status) | 
+          del(.requiresAttributes) | 
+          del(.compatibilities) | 
+          del(.registeredAt) | 
+          del(.registeredBy) |
+          del(.enableFaultInjection)
+          ' task-definition.json > new-task-definition.json
+
+          # Set the path of the new file as an output for the next step.
+          echo "task_definition_path=new-task-definition.json" >> $GITHUB_OUTPUT
+
+      - name: Deploy new task definition to ECS
+        id: ecs-deploy
+        run: |
+          aws ecs register-task-definition --cli-input-json file://${{ steps.task-def-json.outputs.task_definition_path }}
+          aws ecs update-service --cluster ${{ env.ECS_CLUSTER }} --service ${{ env.ECS_SERVICE_WEB }} --task-definition ${{ env.ECS_TASK_DEFINITION }} --force-new-deployment
+          aws ecs update-service --cluster ${{ env.ECS_CLUSTER }} --service ${{ env.ECS_SERVICE_WORKER }} --task-definition ${{ env.ECS_TASK_DEFINITION }} --force-new-deployment
+
+      # The aws-actions/amazon-ecs-deploy-task-definition action is no longer needed.
+      # You can add a wait command here if you need it.
+      - name: Wait for service stability
+        run: |
+          aws ecs wait services-stable --cluster ${{ env.ECS_CLUSTER }} --services ${{ env.ECS_SERVICE_WEB }}
