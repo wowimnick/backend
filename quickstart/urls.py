@@ -164,7 +164,7 @@ urlpatterns = [
     path("admin/silk/", include("silk.urls", namespace="admin_silk")),
     path("admin/panel/", admin.site.urls),
     # --- Router Includes ---
-    path("platform-admin/", include(admin_router.urls)),
+    path("admin/", include(admin_router.urls)),
     path("business/", include(business_management_router.urls)),
     path("", include(public_router.urls)),
     path("", include(user_self_router.urls)),
