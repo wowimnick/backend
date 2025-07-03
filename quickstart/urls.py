@@ -7,6 +7,7 @@ from rest_framework.routers import DefaultRouter
 from dj_rest_auth.registration.views import VerifyEmailView, ResendEmailVerificationView
 from dj_rest_auth.views import PasswordResetConfirmView
 
+from quickstart.views.healthcheck import health_check
 from quickstart.views.auth.auth_views import CSRFTokenView
 from quickstart.views.auth.social_auth_views import GoogleLogin
 from quickstart.payments.booking_status_views import BookingStatusByPaymentIntentView
@@ -301,4 +302,5 @@ urlpatterns = [
         CreatePaymentIntentView.as_view(),
         name="create-payment-intent",
     ),
+    path("health-check/", health_check, name="health-check"),
 ]
