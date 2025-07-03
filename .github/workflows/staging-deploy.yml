@@ -54,8 +54,15 @@ jobs:
           username: ${{ secrets.STAGING_EC2_USERNAME }}
           key: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
           script: |
-            # This comment is outside the EOF block, so it's fine.
-            # The following block creates the .env.staging file on the server.
+            # --- 1. AUTHENTICATE DOCKER ON THE EC2 INSTANCE ---
+            echo "--- Authenticating Docker with ECR... ---"
+            aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+
+            # --- 2. CREATE THE ENVIRONMENT FILE DYNAMICALLY ---
+            echo "--- Creating .env.staging file... ---"
+            TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+            INSTANCE_PRIVATE_IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/local-ipv4)
+
 
             cat << 'EOF' > /home/ec2-user/.env.staging
             # --- Meta ---
@@ -100,68 +107,40 @@ jobs:
             DEFAULT_FROM_EMAIL=${{ secrets.DEFAULT_FROM_EMAIL }}
             EOF
 
-            # Step 2: Now, run commands on the remote EC2 instance to get the IP
-            # and dynamically replace the ALLOWED_HOSTS line.
-            TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
-            INSTANCE_PRIVATE_IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/local-ipv4)
 
-            # Use `sed` to find the line starting with "ALLOWED_HOSTS=" and replace it entirely.
-            # This is the most robust way to do an in-place update of a specific key.
+            # Use `sed` to dynamically replace the ALLOWED_HOSTS line with the fetched private IP.
             sed -i "s/^ALLOWED_HOSTS=.*/ALLOWED_HOSTS=${{ secrets.ALLOWED_HOSTS }},$INSTANCE_PRIVATE_IP/" /home/ec2-user/.env.staging
 
-            # --- DEBUGGING STEP (Optional, but recommended for one run) ---
-            echo "--- Verifying final contents of .env.staging ---"
-            cat /home/ec2-user/.env.staging
-            echo "------------------------------------------------"
-
-            # --- ROBUST DEPLOYMENT LOGIC ---
-
+            # --- 3. PULL THE NEW IMAGE ---
             IMAGE_NAME=${{ steps.build-image.outputs.image }}
+            echo "--- Pulling new image: $IMAGE_NAME ---"
+            docker pull $IMAGE_NAME
+
+            # --- 4. STOP AND REMOVE OLD CONTAINERS ---
+            echo "--- Stopping and removing old containers... ---"
             WEB_CONTAINER_NAME="web"
             WORKER_CONTAINER_NAME="worker"
 
-            # Stop and remove the old worker container if it exists
-            docker stop $WORKER_CONTAINER_NAME || true
-            docker rm $WORKER_CONTAINER_NAME || true
-
-            # Find and stop the container currently running on port 80, if any
             OLD_WEB_CONTAINER_ID=$(docker ps -q --filter "publish=80")
-            if [ -n "$OLD_WEB_CONTAINER_ID" ]; then
-                echo "--- Found old web container $OLD_WEB_CONTAINER_ID on port 80. Stopping it. ---"
-                docker stop $OLD_WEB_CONTAINER_ID
-            fi
+            if [ -n "$OLD_WEB_CONTAINER_ID" ]; then docker stop $OLD_WEB_CONTAINER_ID; fi
 
-            # --- CLEANUP SECTION ---
-            # Clean up any stopped containers to prevent conflicts
-            echo "--- Pruning stopped containers... ---"
+            OLD_WORKER_CONTAINER_ID=$(docker ps -q --filter "name=worker")
+            if [ -n "$OLD_WORKER_CONTAINER_ID" ]; then docker stop $OLD_WORKER_CONTAINER_ID; fi
+
+            echo "--- Pruning stopped containers and unused images... ---"
             docker container prune -f
-
-            # CRITICAL: Clean up old, unused images to save disk space
-            echo "--- Pruning unused Docker images... ---"
             docker image prune -a -f
 
-            # --- START NEW CONTAINERS ---
-            # Start the new web container with the new image
-            echo "--- Starting new web container ($WEB_CONTAINER_NAME)... ---"
+            # --- 5. START NEW CONTAINERS ---
+            echo "--- Starting new containers... ---"
             docker run -d --rm --env-file /home/ec2-user/.env.staging -p 80:8000 --name $WEB_CONTAINER_NAME $IMAGE_NAME gunicorn CEBackend.asgi:application -w 2 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
+            docker run -d --rm --env-file /home/ec2-user/.env.staging --name $WORKER_CONTAINER_NAME $IMAGE_NAME celery -A CEBackend.celery worker -l info
 
-            # Start the new celery worker container
-            echo "--- Starting new worker container ($WORKER_CONTAINER_NAME)... ---"
-            # ADDED --without-mingle and --without-gossip to make it compatible with ElastiCache Serverless
-            docker run -d --rm --env-file /home/ec2-user/.env.staging --name $WORKER_CONTAINER_NAME $IMAGE_NAME celery -A CEBackend.celery worker -l info --without-mingle --without-gossip
-
-            # --- NEW LOGGING SECTION ---
-
-            # Give the containers a moment to initialize and start logging.
-            echo "--- Waiting 5 seconds for containers to boot... ---"
+            # --- 6. VIEW LOGS ---
+            echo "--- Waiting for containers to boot... ---"
             sleep 5
-
-            echo "--- ✅ Deployment containers started. Tailing logs for 15 seconds... ---"
-
-            # Use `docker logs --follow` with a timeout to stream logs for a short period.
-            # The `&` runs the commands in the background. The `wait` command waits for them to finish.
+            echo "--- Tailing logs for 15 seconds... ---"
             timeout 15s docker logs --follow $WEB_CONTAINER_NAME &
             timeout 15s docker logs --follow $WORKER_CONTAINER_NAME &
             wait
-
-            echo "--- ✅ Log streaming complete. Deployment script finished. ---"
+            echo "--- Deployment script finished. ---"
