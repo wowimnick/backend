@@ -54,15 +54,8 @@ jobs:
           username: ${{ secrets.STAGING_EC2_USERNAME }}
           key: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
           script: |
-            # --- 1. AUTHENTICATE DOCKER ON THE EC2 INSTANCE ---
-            echo "--- Authenticating Docker with ECR... ---"
-            aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
-
-            # --- 2. CREATE THE ENVIRONMENT FILE DYNAMICALLY ---
-            echo "--- Creating .env.staging file... ---"
-            TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
-            INSTANCE_PRIVATE_IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/local-ipv4)
-
+            # This comment is outside the EOF block, so it's fine.
+            # The following block creates the .env.staging file on the server.
 
             cat << 'EOF' > /home/ec2-user/.env.staging
             # --- Meta ---
@@ -107,40 +100,66 @@ jobs:
             DEFAULT_FROM_EMAIL=${{ secrets.DEFAULT_FROM_EMAIL }}
             EOF
 
+            # Step 2: Now, run commands on the remote EC2 instance to get the IP
+            # and dynamically replace the ALLOWED_HOSTS line.
+            TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+            INSTANCE_PRIVATE_IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/local-ipv4)
 
-            # Use `sed` to dynamically replace the ALLOWED_HOSTS line with the fetched private IP.
+            # Use `sed` to find the line starting with "ALLOWED_HOSTS=" and replace it entirely.
+            # This is the most robust way to do an in-place update of a specific key.
             sed -i "s/^ALLOWED_HOSTS=.*/ALLOWED_HOSTS=${{ secrets.ALLOWED_HOSTS }},$INSTANCE_PRIVATE_IP/" /home/ec2-user/.env.staging
 
-            # --- 3. PULL THE NEW IMAGE ---
+                 # --- DEPLOYMENT LOGIC ---
             IMAGE_NAME=${{ steps.build-image.outputs.image }}
+            WEB_CONTAINER_NAME="web"
+            WORKER_CONTAINER_NAME="worker"
+            ECR_REGISTRY=${{ steps.login-ecr.outputs.registry }}
+
+            # 1. LOGIN TO ECR (CRITICAL FIX)
+            # Authenticate the EC2 instance with Amazon ECR.
+            # This requires the EC2 instance to have an IAM Role with ECR pull permissions.
+            echo "--- Logging into Amazon ECR... ---"
+            aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin $ECR_REGISTRY
+
+            # 2. PULL THE NEW IMAGE FIRST (CRITICAL FIX)
+            # Pull the new image before stopping the old container.
+            # If this fails, the script will exit and the old container will keep running.
             echo "--- Pulling new image: $IMAGE_NAME ---"
             docker pull $IMAGE_NAME
 
-            # --- 4. STOP AND REMOVE OLD CONTAINERS ---
-            echo "--- Stopping and removing old containers... ---"
-            WEB_CONTAINER_NAME="web"
-            WORKER_CONTAINER_NAME="worker"
+            # 3. STOP AND REMOVE OLD CONTAINERS
+            # Stop the old worker container if it exists
+            echo "--- Stopping old worker container... ---"
+            docker stop $WORKER_CONTAINER_NAME || true
+            docker rm $WORKER_CONTAINER_NAME || true
 
+            # Find and stop the old web container
             OLD_WEB_CONTAINER_ID=$(docker ps -q --filter "publish=80")
-            if [ -n "$OLD_WEB_CONTAINER_ID" ]; then docker stop $OLD_WEB_CONTAINER_ID; fi
+            if [ -n "$OLD_WEB_CONTAINER_ID" ]; then
+                echo "--- Stopping old web container $OLD_WEB_CONTAINER_ID... ---"
+                docker stop $OLD_WEB_CONTAINER_ID
+                docker rm $OLD_WEB_CONTAINER_ID
+            fi
 
-            OLD_WORKER_CONTAINER_ID=$(docker ps -q --filter "name=worker")
-            if [ -n "$OLD_WORKER_CONTAINER_ID" ]; then docker stop $OLD_WORKER_CONTAINER_ID; fi
-
-            echo "--- Pruning stopped containers and unused images... ---"
-            docker container prune -f
-            docker image prune -a -f
-
-            # --- 5. START NEW CONTAINERS ---
-            echo "--- Starting new containers... ---"
+            # 4. START NEW CONTAINERS
+            # Start the new containers with the image we just pulled.
+            echo "--- Starting new web container... ---"
             docker run -d --rm --env-file /home/ec2-user/.env.staging -p 80:8000 --name $WEB_CONTAINER_NAME $IMAGE_NAME gunicorn CEBackend.asgi:application -w 2 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
-            docker run -d --rm --env-file /home/ec2-user/.env.staging --name $WORKER_CONTAINER_NAME $IMAGE_NAME celery -A CEBackend.celery worker -l info
 
-            # --- 6. VIEW LOGS ---
-            echo "--- Waiting for containers to boot... ---"
+            echo "--- Starting new worker container... ---"
+            docker run -d --rm --env-file /home/ec2-user/.env.staging --name $WORKER_CONTAINER_NAME $IMAGE_NAME celery -A CEBackend.celery worker -l info --without-mingle --without-gossip
+
+            # 5. VERIFY AND LOG
+            echo "--- Waiting 5 seconds for containers to boot... ---"
             sleep 5
-            echo "--- Tailing logs for 15 seconds... ---"
+            echo "--- ✅ Deployment containers started. Tailing logs for 15 seconds... ---"
             timeout 15s docker logs --follow $WEB_CONTAINER_NAME &
             timeout 15s docker logs --follow $WORKER_CONTAINER_NAME &
             wait
-            echo "--- Deployment script finished. ---"
+
+            # 6. CLEANUP (MOVED TO THE END - SAFER)
+            # Now that the new containers are running, we can safely clean up old images.
+            echo "--- Pruning unused Docker images... ---"
+            docker image prune -a -f
+
+            echo "--- ✅ Deployment script finished successfully. ---"
