@@ -181,6 +181,7 @@ CACHES = {
 
 
 # --- Celery Configuration for ElastiCache Serverless ---
+# --- Celery Configuration for ElastiCache Serverless ---
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/1")
 
 # Don't use environment variable for result backend - force database usage
@@ -238,6 +239,14 @@ CELERY_TASK_SEND_SENT_EVENT = True
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 CELERY_BROKER_CONNECTION_RETRY = True
 CELERY_BROKER_CONNECTION_MAX_RETRIES = 10
+
+# Alternative approach: Use SQS if Redis continues to have issues
+# CELERY_BROKER_URL = 'sqs://'
+# CELERY_BROKER_TRANSPORT_OPTIONS = {
+#     'region': 'us-east-2',
+#     'visibility_timeout': 300,
+#     'polling_interval': 1,
+# }
 
 
 # --- Authentication Backends ---
