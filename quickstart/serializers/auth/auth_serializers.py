@@ -26,23 +26,15 @@ class CustomPasswordResetSerializer(PasswordResetSerializer):
     """
 
     def get_email_context(self, user):
-        """
-        Builds the email context dictionary.
-        """
-        # Get the default context from the parent class. This will include
-        # the generated 'uid' and 'token'.
         context = super().get_email_context(user)
-
-        # Build the full URL using the frontend base and the path format,
-        # and format it with the uid/token from the context.
         reset_url = (
             f"{settings.FRONTEND_BASE_URL}"
             f"{settings.FRONTEND_PASSWORD_RESET_CONFIRM_PATH}".format(**context)
         )
-
-        # Add the complete, formatted URL to the context dictionary.
-        # The email template will now have access to {{ password_reset_url }}.
         context["password_reset_url"] = reset_url
+
+        # Add this for debugging
+        print(f"Password reset URL: {reset_url}")
 
         return context
 
