@@ -54,22 +54,8 @@ jobs:
           username: ${{ secrets.STAGING_EC2_USERNAME }}
           key: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
           script: |
-            # Exit on error, print commands and their arguments
-            set -eux
-
-            # === START DIAGNOSTICS ===
-            echo "--- Verifying AWS CLI installation ---"
-            aws --version
-
-            echo "--- Verifying attached IAM Role identity ---"
-            # This command will fail the script if the role isn't working.
-            aws sts get-caller-identity
-
-            echo "--- Verifying network connectivity to ECR ---"
-            # nc is a more script-friendly alternative to telnet
-            nc -zv api.ecr.${{ env.AWS_REGION }}.amazonaws.com 443
-            echo "--- Diagnostics Complete. Role and Networking are OK. ---"
-            # === END DIAGNOSTICS ===
+            # This comment is outside the EOF block, so it's fine.
+            # The following block creates the .env.staging file on the server.
 
             cat << 'EOF' > /home/ec2-user/.env.staging
             # --- Meta ---
@@ -134,8 +120,8 @@ jobs:
             # Authenticate the EC2 instance with Amazon ECR.
             # This requires the EC2 instance to have an IAM Role with ECR pull permissions.
             echo "--- Logging into Amazon ECR... ---"
-            aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}
-            echo "--- ECR Login Successful ---"
+            aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin $ECR_REGISTRY
+
             # 2. PULL THE NEW IMAGE FIRST (CRITICAL FIX)
             # Pull the new image before stopping the old container.
             # If this fails, the script will exit and the old container will keep running.
