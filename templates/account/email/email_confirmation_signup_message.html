@@ -168,13 +168,6 @@
       background-color: #f3f4f6;
     "
   >
-    {# **** Construct the frontend URL directly **** #} {# Adjust this base URL
-    if your frontend runs elsewhere #} {% with
-    frontend_base_url="http://localhost:5173"
-    verification_path_start="/verify-email/" verification_path_end="/" %} {%
-    with url_part_1=frontend_base_url|add:verification_path_start %} {% with
-    final_frontend_url=url_part_1|add:key|add:verification_path_end %}
-
     <!-- Outlook Container -->
     <!--[if mso | IE]>
     <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="600" align="center" style="width:600px;">
@@ -250,13 +243,14 @@
                     style="padding: 16px 0; text-align: center"
                   >
                     <!--[if mso]>
-                                    <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="{{ final_frontend_url }}" style="height:48px; v-text-anchor:middle; width:200px;" arcsize="25%" strokecolor="#ff385c" fillcolor="#ff385c">
+                                    <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="{{ activate_url }}" style="height:48px; v-text-anchor:middle; width:200px;" arcsize="25%" strokecolor="#ff385c" fillcolor="#ff385c">
                                         <w:anchorlock/>
                                         <center style="color:#ffffff; font-family:sans-serif; font-size:16px; font-weight:bold;">
                                     <![endif]-->
-                    {# **** Use the constructed frontend URL **** #}
+                    {# **** CHANGE: Use the dynamic 'activate_url' variable from
+                    allauth **** #}
                     <a
-                      href="{{ final_frontend_url }}"
+                      href="{{ activate_url }}"
                       target="_blank"
                       class="button"
                       style="
@@ -287,13 +281,13 @@
                 {% trans "If you cannot click the button, please copy and paste
                 the following URL into your web browser:" %}
               </p>
-              {# **** Use the constructed frontend URL **** #}
+              {# **** CHANGE: Use the dynamic 'activate_url' variable **** #}
               <p style="word-break: break-all; font-size: 14px">
                 <a
-                  href="{{ final_frontend_url }}"
+                  href="{{ activate_url }}"
                   target="_blank"
                   style="color: #ff385c; text-decoration: underline"
-                  >{{ final_frontend_url }}</a
+                  >{{ activate_url }}</a
                 >
               </p>
               <p>
@@ -351,8 +345,5 @@
       </tr>
     </table>
     <![endif]-->
-
-    {% endwith %} {# final_frontend_url #} {% endwith %} {# url_part_1 #} {%
-    endwith %} {# frontend_base_url etc. #}
   </body>
 </html>
