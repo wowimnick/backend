@@ -182,9 +182,9 @@ CACHES = {
 
 # --- Celery Configuration for ElastiCache Serverless ---
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/1")
-CELERY_RESULT_BACKEND = os.environ.get(
-    "CELERY_RESULT_BACKEND", "redis://localhost:6379/2"
-)
+
+# Don't use environment variable for result backend - force database usage
+# CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://localhost:6379/2")
 
 # CRITICAL: ElastiCache Serverless compatibility settings
 CELERY_BROKER_TRANSPORT_OPTIONS = {
@@ -214,11 +214,17 @@ CELERY_RESULT_EXPIRES = 3600  # Expire results after 1 hour
 CELERY_RESULT_PERSISTENT = False  # Don't persist results
 
 # Most important: Use database for results to avoid Redis compatibility issues
-CELERY_RESULT_BACKEND = f"db+postgresql://{os.environ.get('DB_USER')}:{os.environ.get('DB_PASSWORD')}@{os.environ.get('DB_HOST')}:{os.environ.get('DB_PORT')}/{os.environ.get('DB_NAME')}"
+# Force database result backend - don't use Redis environment variable
+CELERY_RESULT_BACKEND = f"db+postgresql://{os.environ.get('DB_USER', 'postgres')}:{os.environ.get('DB_PASSWORD')}@{os.environ.get('DB_HOST', 'localhost')}:{os.environ.get('DB_PORT', '5432')}/{os.environ.get('DB_NAME', 'CEDB')}"
 
 # Enable SSL for secure Redis connections ('rediss://')
 if CELERY_BROKER_URL.startswith("rediss://"):
     CELERY_BROKER_USE_SSL = {"ssl_cert_reqs": ssl.CERT_NONE}
+
+# If using Redis for results, also configure SSL for result backend
+# But we're using database, so this is commented out
+# if CELERY_RESULT_BACKEND and CELERY_RESULT_BACKEND.startswith("rediss://"):
+#     CELERY_REDIS_BACKEND_USE_SSL = {"ssl_cert_reqs": ssl.CERT_NONE}
 
 # Common Celery settings
 CELERY_ACCEPT_CONTENT = ["json"]
