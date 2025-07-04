@@ -197,17 +197,14 @@ CELERY_BROKER_TRANSPORT_OPTIONS = {
     # IMPORTANT: Set to 0 to disable visibility timeout and avoid WATCH commands
     "visibility_timeout": 0,
     # Let Redis use its native acknowledgment capabilities
-    # Disable unacked message restoration (uses WATCH command)
-    "unacked_key": None,
-    # Use basic Redis operations only
     "sep": ":",
     "priority_steps": [0, 3, 6, 9],
 }
 
-# Disable features that use unsupported Redis commands
-CELERY_TASK_ACKS_LATE = False  # Disable late acknowledgments
-CELERY_TASK_REJECT_ON_WORKER_LOST = False  # Disable task rejection on worker loss
-CELERY_WORKER_PREFETCH_MULTIPLIER = 1  # Reduce prefetch to minimize unacked messages
+# CRITICAL: Disable QoS (Quality of Service) to avoid WATCH commands
+CELERY_TASK_ACKS_LATE = False
+CELERY_TASK_REJECT_ON_WORKER_LOST = False
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 
 # This setting is CRITICAL for ElastiCache Serverless to prevent CROSSSLOT errors
 CELERY_WORKER_ENABLE_REMOTE_CONTROL = False
@@ -216,13 +213,12 @@ CELERY_WORKER_ENABLE_REMOTE_CONTROL = False
 CELERY_RESULT_EXPIRES = 3600  # Expire results after 1 hour
 CELERY_RESULT_PERSISTENT = False  # Don't persist results
 
-# Alternative: Use database for results instead of Redis (more compatible)
-# CELERY_RESULT_BACKEND = 'db+postgresql://user:pass@localhost/dbname'
+# Most important: Use database for results to avoid Redis compatibility issues
+CELERY_RESULT_BACKEND = f"db+postgresql://{os.environ.get('DB_USER')}:{os.environ.get('DB_PASSWORD')}@{os.environ.get('DB_HOST')}:{os.environ.get('DB_PORT')}/{os.environ.get('DB_NAME')}"
 
 # Enable SSL for secure Redis connections ('rediss://')
 if CELERY_BROKER_URL.startswith("rediss://"):
     CELERY_BROKER_USE_SSL = {"ssl_cert_reqs": ssl.CERT_NONE}
-    CELERY_REDIS_BACKEND_USE_SSL = {"ssl_cert_reqs": ssl.CERT_NONE}
 
 # Common Celery settings
 CELERY_ACCEPT_CONTENT = ["json"]
