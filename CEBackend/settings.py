@@ -180,52 +180,28 @@ CACHES = {
 }
 
 
-# --- Celery Configuration for ElastiCache Serverless ---
-# --- Celery Configuration for ElastiCache Serverless ---
+# --- Celery Configuration ---
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/1")
+CELERY_RESULT_BACKEND = os.environ.get(
+    "CELERY_RESULT_BACKEND", "redis://localhost:6379/2"
+)
 
-# Don't use environment variable for result backend - force database usage
-# CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://localhost:6379/2")
-
-# CRITICAL: ElastiCache Serverless compatibility settings
 CELERY_BROKER_TRANSPORT_OPTIONS = {
     # The hash tag "{celery}" ensures all keys go to the same slot.
     "global_keyprefix": "{celery}:",
     # Makes fanout (broadcast) operations cluster-safe.
     "fanout_prefix": True,
-    # Use PSUBSCRIBE for cluster-aware broadcast/fanout messages
-    "fanout_patterns": True,
-    # IMPORTANT: Set to 0 to disable visibility timeout and avoid WATCH commands
-    "visibility_timeout": 0,
-    # Let Redis use its native acknowledgment capabilities
-    "sep": ":",
-    "priority_steps": [0, 3, 6, 9],
+    "fanout_patterns": False,
+    "visibility_timeout": 3600,
 }
 
-# CRITICAL: Disable QoS (Quality of Service) to avoid WATCH commands
-CELERY_TASK_ACKS_LATE = False
-CELERY_TASK_REJECT_ON_WORKER_LOST = False
-CELERY_WORKER_PREFETCH_MULTIPLIER = 1
-
-# This setting is CRITICAL for ElastiCache Serverless to prevent CROSSSLOT errors
+# This setting is CRITICAL for ElastiCache Serverless to prevent CROSSSLOT errors by disabling worker discovery.
 CELERY_WORKER_ENABLE_REMOTE_CONTROL = False
-
-# Disable result persistence features that might use unsupported commands
-CELERY_RESULT_EXPIRES = 3600  # Expire results after 1 hour
-CELERY_RESULT_PERSISTENT = False  # Don't persist results
-
-# Most important: Use database for results to avoid Redis compatibility issues
-# Force database result backend - don't use Redis environment variable
-CELERY_RESULT_BACKEND = f"db+postgresql://{os.environ.get('DB_USER', 'postgres')}:{os.environ.get('DB_PASSWORD')}@{os.environ.get('DB_HOST', 'localhost')}:{os.environ.get('DB_PORT', '5432')}/{os.environ.get('DB_NAME', 'CEDB')}"
 
 # Enable SSL for secure Redis connections ('rediss://')
 if CELERY_BROKER_URL.startswith("rediss://"):
     CELERY_BROKER_USE_SSL = {"ssl_cert_reqs": ssl.CERT_NONE}
-
-# If using Redis for results, also configure SSL for result backend
-# But we're using database, so this is commented out
-# if CELERY_RESULT_BACKEND and CELERY_RESULT_BACKEND.startswith("rediss://"):
-#     CELERY_REDIS_BACKEND_USE_SSL = {"ssl_cert_reqs": ssl.CERT_NONE}
+    CELERY_REDIS_BACKEND_USE_SSL = {"ssl_cert_reqs": ssl.CERT_NONE}
 
 # Common Celery settings
 CELERY_ACCEPT_CONTENT = ["json"]
@@ -234,19 +210,6 @@ CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_SEND_SENT_EVENT = True
-
-# Additional settings for ElastiCache Serverless compatibility
-CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
-CELERY_BROKER_CONNECTION_RETRY = True
-CELERY_BROKER_CONNECTION_MAX_RETRIES = 10
-
-# Alternative approach: Use SQS if Redis continues to have issues
-# CELERY_BROKER_URL = 'sqs://'
-# CELERY_BROKER_TRANSPORT_OPTIONS = {
-#     'region': 'us-east-2',
-#     'visibility_timeout': 300,
-#     'polling_interval': 1,
-# }
 
 
 # --- Authentication Backends ---
