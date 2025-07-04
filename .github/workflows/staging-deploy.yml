@@ -54,6 +54,7 @@ jobs:
           username: ${{ secrets.STAGING_EC2_USERNAME }}
           key: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
           script: |
+            set -e
             # This comment is outside the EOF block, so it's fine.
             # The following block creates the .env.staging file on the server.
 
