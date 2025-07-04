@@ -8,7 +8,7 @@ on:
 env:
   AWS_REGION: us-east-2
   # Use a dedicated production repository
-  ECR_REPOSITORY: classeasily-backend-prod
+  ECR_REPOSITORY: classeasily-backend-staging
   ECS_CLUSTER: classeasily-prod-cluster
   ECS_SERVICE_WEB: classeasily-prod-web-service
   ECS_SERVICE_WORKER: classeasily-prod-worker-service
