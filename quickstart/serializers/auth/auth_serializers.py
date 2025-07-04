@@ -19,22 +19,32 @@ User = get_user_model()
 
 class CustomPasswordResetSerializer(PasswordResetSerializer):
     """
-    Custom serializer for password reset to build the full frontend URL.
+    Custom serializer for password reset.
+
+    This serializer overrides get_email_context to build the full frontend URL
+    for the password reset link and inject it into the email template's context.
     """
 
-    def get_email_options(self):
-        # This method is used by dj-rest-auth to get template context
-        opts = super().get_email_options()
+    def get_email_context(self, user):
+        """
+        Builds the email context dictionary.
+        """
+        # Get the default context from the parent class. This will include
+        # the generated 'uid' and 'token'.
+        context = super().get_email_context(user)
 
-        # The default provides a relative path. We override it to provide
-        # the full frontend URL. The context dict expects 'password_reset_url'.
-        opts["extra_email_context"]["password_reset_url"] = (
+        # Build the full URL using the frontend base and the path format,
+        # and format it with the uid/token from the context.
+        reset_url = (
             f"{settings.FRONTEND_BASE_URL}"
-            f"{settings.FRONTEND_PASSWORD_RESET_CONFIRM_PATH}".format(
-                **opts["extra_email_context"]
-            )
+            f"{settings.FRONTEND_PASSWORD_RESET_CONFIRM_PATH}".format(**context)
         )
-        return opts
+
+        # Add the complete, formatted URL to the context dictionary.
+        # The email template will now have access to {{ password_reset_url }}.
+        context["password_reset_url"] = reset_url
+
+        return context
 
 
 class CustomLoginSerializer(DefaultLoginSerializer):
