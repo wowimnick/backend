@@ -3,6 +3,7 @@
 from allauth.account.adapter import DefaultAccountAdapter
 from allauth.socialaccount.adapter import DefaultSocialAccountAdapter
 from allauth.account.utils import user_field
+from django.conf import settings
 from django.contrib.auth import get_user_model  # <-- IMPORT THIS
 import logging
 
@@ -11,6 +12,20 @@ logger = logging.getLogger(__name__)
 
 # THIS IS THE NEW PART
 class CustomAccountAdapter(DefaultAccountAdapter):
+    def get_email_confirmation_url(self, request, emailconfirmation):
+        """
+        Constructs the email confirmation (activation) URL.
+        """
+        # Use the base URL from settings
+        base_url = settings.FRONTEND_BASE_URL
+        # Use the path from settings, which already includes the {key} placeholder
+        path = settings.FRONTEND_EMAIL_VERIFICATION_PATH.format(
+            key=emailconfirmation.key
+        )
+
+        # Combine them for the full URL
+        return f"{base_url}{path}"
+
     def send_account_already_exists_mail(self, email):
         """
         This method is called when a user tries to sign up with an email

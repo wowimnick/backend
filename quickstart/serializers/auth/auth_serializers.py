@@ -1,5 +1,6 @@
 # quickstart/serializers/auth_serializers.py
 
+from django.conf import settings
 from rest_framework import serializers
 from dj_rest_auth.registration.serializers import RegisterSerializer
 from dj_rest_auth.serializers import LoginSerializer as DefaultLoginSerializer
@@ -7,12 +8,33 @@ from django.contrib.auth import get_user_model
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from django.db.models import Exists, OuterRef, Q
 from django.core.files.uploadedfile import InMemoryUploadedFile
+from dj_rest_auth.serializers import PasswordResetSerializer
 from quickstart.models import Role, ClassesMain, BusinessInfo
 import logging
 
 logger = logging.getLogger(__name__)
 
 User = get_user_model()
+
+
+class CustomPasswordResetSerializer(PasswordResetSerializer):
+    """
+    Custom serializer for password reset to build the full frontend URL.
+    """
+
+    def get_email_options(self):
+        # This method is used by dj-rest-auth to get template context
+        opts = super().get_email_options()
+
+        # The default provides a relative path. We override it to provide
+        # the full frontend URL. The context dict expects 'password_reset_url'.
+        opts["extra_email_context"]["password_reset_url"] = (
+            f"{settings.FRONTEND_BASE_URL}"
+            f"{settings.FRONTEND_PASSWORD_RESET_CONFIRM_PATH}".format(
+                **opts["extra_email_context"]
+            )
+        )
+        return opts
 
 
 class CustomLoginSerializer(DefaultLoginSerializer):

@@ -251,7 +251,6 @@ SIMPLE_JWT = {
     "VERIFYING_KEY": None,
     "AUTH_COOKIE": "my-app-auth",
     "AUTH_COOKIE_REFRESH": "my-refresh-token",
-    "AUTH_COOKIE_DOMAIN": None,
     "AUTH_COOKIE_SECURE": IS_DEPLOYED_ENV,
     "AUTH_COOKIE_HTTP_ONLY": True,
     "AUTH_COOKIE_PATH": "/",
@@ -272,6 +271,7 @@ REST_AUTH = {
     "JWT_AUTH_REFRESH_COOKIE": "my-refresh-token",
     "JWT_AUTH_SAMESITE": "Lax",
     "OLD_PASSWORD_FIELD_ENABLED": True,
+    "PASSWORD_RESET_SERIALIZER": "quickstart.serializers.CustomPasswordResetSerializer",
     "PASSWORD_RESET_CONFIRM_SERIALIZER": "dj_rest_auth.serializers.PasswordResetConfirmSerializer",
     "PASSWORD_RESET_USE_SITES_DOMAIN": False,
     "PASSWORD_RESET_CONFIRM_URL_PATH": FRONTEND_PASSWORD_RESET_CONFIRM_PATH,
@@ -296,6 +296,7 @@ EMAIL_BACKEND = "anymail.backends.resend.EmailBackend"
 DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "noreply@classeasily.com")
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
 ANYMAIL = {"RESEND_API_KEY": RESEND_API_KEY}
+ACCOUNT_ADAPTER = "quickstart.adapters.CustomAccountAdapter"
 SOCIALACCOUNT_ADAPTER = "quickstart.adapters.CustomSocialAccountAdapter"
 SOCIALACCOUNT_AUTO_SIGNUP = True
 SOCIALACCOUNT_EMAIL_VERIFICATION = "none"  # Google already verifies emails
