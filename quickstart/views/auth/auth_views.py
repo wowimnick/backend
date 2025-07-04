@@ -7,6 +7,7 @@ from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.throttling import ScopedRateThrottle
 from dj_rest_auth.registration.views import RegisterView
+from dj_rest_auth.views import PasswordResetView as DefaultPasswordResetView
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.contrib.auth import get_user_model
@@ -36,6 +37,61 @@ def get_client_ip(request):
     else:
         ip = request.META.get("REMOTE_ADDR")
     return ip
+
+
+class CustomPasswordResetView(DefaultPasswordResetView):
+    """
+    A custom view to intercept the password reset request for debugging.
+    """
+
+    def post(self, request, *args, **kwargs):
+        logger.info("--- DEBUG: CustomPasswordResetView POST method initiated. ---")
+
+        serializer_class = self.get_serializer_class()
+        logger.info(
+            f"--- DEBUG: Serializer class to be used: {serializer_class.__name__}"
+        )
+
+        serializer = self.get_serializer(data=request.data)
+
+        logger.info(
+            f"--- DEBUG: Attempting to validate serializer with data: {request.data}"
+        )
+        try:
+            serializer.is_valid(raise_exception=True)
+            logger.info("--- DEBUG: Serializer validation PASSED. ---")
+        except Exception as e:
+            logger.error(
+                f"--- DEBUG: Serializer validation FAILED. Error: {e}", exc_info=True
+            )
+            # Re-raise or return response as parent would
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        logger.info(
+            "--- DEBUG: Calling serializer.save() to trigger email sending. ---"
+        )
+        try:
+            serializer.save()
+            logger.info("--- DEBUG: serializer.save() completed without error. ---")
+        except Exception as e:
+            logger.error(
+                f"--- DEBUG: An exception occurred during serializer.save(). Error: {e}",
+                exc_info=True,
+            )
+            # You might want to return a generic error response here
+            return Response(
+                {"detail": "An error occurred while processing your request."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # If we get here, the parent logic should have worked.
+        logger.info(
+            "--- DEBUG: Password reset process seems successful. Returning 200 OK. ---"
+        )
+        return Response(
+            {"detail": "Password reset e-mail has been sent."},
+            status=status.HTTP_200_OK,
+        )
 
 
 # --- MODIFIED: Replaced DRF's APIView with Django's standard View ---

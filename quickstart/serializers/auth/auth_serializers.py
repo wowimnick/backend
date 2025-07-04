@@ -19,13 +19,30 @@ User = get_user_model()
 
 class CustomPasswordResetSerializer(PasswordResetSerializer):
     """
-    Custom serializer for password reset.
-
-    This serializer overrides get_email_context to build the full frontend URL
-    for the password reset link and inject it into the email template's context.
+    Custom serializer for password reset with added logging for debugging.
     """
 
+    # --- ADD THIS SAVE METHOD FOR DEBUGGING ---
+    def save(self, **kwargs):
+        logger.info(
+            "--- DEBUG: CustomPasswordResetSerializer SAVE method initiated. ---"
+        )
+        try:
+            # Let the parent class do its work, which includes calling get_email_context
+            super().save(**kwargs)
+            logger.info("--- DEBUG: super().save() in serializer completed. ---")
+        except Exception as e:
+            logger.error(
+                f"--- DEBUG: Error in CustomPasswordResetSerializer super().save(). Error: {e}",
+                exc_info=True,
+            )
+            # Re-raise the exception to not hide the error
+            raise
+
     def get_email_context(self, user):
+        logger.info(
+            "--- DEBUG: CustomPasswordResetSerializer GET_EMAIL_CONTEXT initiated. ---"
+        )
         context = super().get_email_context(user)
         reset_url = (
             f"{settings.FRONTEND_BASE_URL}"
@@ -33,8 +50,8 @@ class CustomPasswordResetSerializer(PasswordResetSerializer):
         )
         context["password_reset_url"] = reset_url
 
-        # Add this for debugging
-        print(f"Password reset URL: {reset_url}")
+        # This log is the one we want to see
+        logger.info(f"--- DEBUG: Password reset URL generated: {reset_url}")
 
         return context
 

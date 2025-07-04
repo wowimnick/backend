@@ -8,7 +8,7 @@ from dj_rest_auth.registration.views import VerifyEmailView, ResendEmailVerifica
 from dj_rest_auth.views import PasswordResetConfirmView
 
 from quickstart.views.healthcheck import health_check
-from quickstart.views.auth.auth_views import CSRFTokenView
+from quickstart.views.auth.auth_views import CSRFTokenView, CustomPasswordResetView
 from quickstart.views.auth.social_auth_views import GoogleLogin
 from quickstart.payments.booking_status_views import BookingStatusByPaymentIntentView
 
@@ -276,6 +276,11 @@ urlpatterns = [
     path("csrf/", CSRFTokenView.as_view(), name="csrf_cookie"),
     path("token/refresh/", CustomTokenRefreshView.as_view(), name="token_refresh"),
     path("logout/", LogoutView.as_view(), name="logout"),
+    path(
+        "api/auth/password/reset/",
+        CustomPasswordResetView.as_view(),
+        name="rest_password_reset",
+    ),
     # --- Standalone User Self-Service Views ---
     path("user/update/", UserUpdateView.as_view(), name="user-update"),
     path("user/profile/", MyProfileView.as_view(), name="my-profile"),
