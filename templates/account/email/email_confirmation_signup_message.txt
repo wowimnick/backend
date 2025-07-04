@@ -1,12 +1,11 @@
 {% load i18n %}{% autoescape off %}
-{% blocktrans %}Hello from ClassEasily,{% endblocktrans %}
+{% blocktrans with site_name=current_site.name %}Hello from {{ site_name }}!{% endblocktrans %}
 
-{% blocktrans %}Welcome to ClassEasily! To complete your registration and activate your account, please confirm your email address by visiting the following link:{% endblocktrans %}
+{% blocktrans with site_name=current_site.name %}You're receiving this e-mail because you have signed up for an account at {{ site_name }}.{% endblocktrans %}
 
+{% trans "To confirm this is you, please click the link below:" %}
 {{ activate_url }}
 
-{% blocktrans %}If you did not sign up for an account on ClassEasily, you can safely ignore this email.{% endblocktrans %}
-
 {% trans "Thanks," %}
-{% trans "The ClassEasily Team" %}
+{% blocktrans with site_name=current_site.name %}The {{ site_name }} team{% endblocktrans %}
 {% endautoescape %}
