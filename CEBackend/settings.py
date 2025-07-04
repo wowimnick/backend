@@ -180,23 +180,44 @@ CACHES = {
 }
 
 
-# --- Celery Configuration ---
+# --- Celery Configuration for ElastiCache Serverless ---
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/1")
 CELERY_RESULT_BACKEND = os.environ.get(
     "CELERY_RESULT_BACKEND", "redis://localhost:6379/2"
 )
 
+# CRITICAL: ElastiCache Serverless compatibility settings
 CELERY_BROKER_TRANSPORT_OPTIONS = {
     # The hash tag "{celery}" ensures all keys go to the same slot.
     "global_keyprefix": "{celery}:",
     # Makes fanout (broadcast) operations cluster-safe.
     "fanout_prefix": True,
-    "fanout_patterns": False,
+    # Use PSUBSCRIBE for cluster-aware broadcast/fanout messages
+    "fanout_patterns": True,
+    # IMPORTANT: Set to 0 to disable visibility timeout and avoid WATCH commands
     "visibility_timeout": 0,
+    # Let Redis use its native acknowledgment capabilities
+    # Disable unacked message restoration (uses WATCH command)
+    "unacked_key": None,
+    # Use basic Redis operations only
+    "sep": ":",
+    "priority_steps": [0, 3, 6, 9],
 }
 
-# This setting is CRITICAL for ElastiCache Serverless to prevent CROSSSLOT errors by disabling worker discovery.
+# Disable features that use unsupported Redis commands
+CELERY_TASK_ACKS_LATE = False  # Disable late acknowledgments
+CELERY_TASK_REJECT_ON_WORKER_LOST = False  # Disable task rejection on worker loss
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1  # Reduce prefetch to minimize unacked messages
+
+# This setting is CRITICAL for ElastiCache Serverless to prevent CROSSSLOT errors
 CELERY_WORKER_ENABLE_REMOTE_CONTROL = False
+
+# Disable result persistence features that might use unsupported commands
+CELERY_RESULT_EXPIRES = 3600  # Expire results after 1 hour
+CELERY_RESULT_PERSISTENT = False  # Don't persist results
+
+# Alternative: Use database for results instead of Redis (more compatible)
+# CELERY_RESULT_BACKEND = 'db+postgresql://user:pass@localhost/dbname'
 
 # Enable SSL for secure Redis connections ('rediss://')
 if CELERY_BROKER_URL.startswith("rediss://"):
@@ -210,6 +231,11 @@ CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_SEND_SENT_EVENT = True
+
+# Additional settings for ElastiCache Serverless compatibility
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+CELERY_BROKER_CONNECTION_RETRY = True
+CELERY_BROKER_CONNECTION_MAX_RETRIES = 10
 
 
 # --- Authentication Backends ---
