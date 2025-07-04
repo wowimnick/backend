@@ -265,26 +265,25 @@ FRONTEND_EMAIL_VERIFICATION_PATH = "/verify-email/{key}/"
 FRONTEND_PASSWORD_RESET_CONFIRM_PATH = "/reset-password/{uid}/{token}/"
 
 REST_AUTH = {
+    # Core settings
     "USE_JWT": True,
-    "JWT_AUTH_HTTPONLY": False,  # This must be False for dj-rest-auth's cookie flow
+    "JWT_AUTH_HTTPONLY": False,  # Required by dj-rest-auth's default views when USE_JWT=True to return tokens in the response body. Your custom views handle cookies separately.
+    "OLD_PASSWORD_FIELD_ENABLED": True,
+    "PASSWORD_RESET_USE_SITES_DOMAIN": False,
+    # Cookie names used by dj-rest-auth's built-in views (e.g., for social login if not using custom views)
     "JWT_AUTH_COOKIE": "my-app-auth",
     "JWT_AUTH_REFRESH_COOKIE": "my-refresh-token",
     "JWT_AUTH_SAMESITE": "Lax",
-    "OLD_PASSWORD_FIELD_ENABLED": True,
-    "PASSWORD_RESET_SERIALIZER": "quickstart.serializers.CustomPasswordResetSerializer",
-    "PASSWORD_RESET_CONFIRM_SERIALIZER": "dj_rest_auth.serializers.PasswordResetConfirmSerializer",
-    "PASSWORD_RESET_USE_SITES_DOMAIN": False,
-    "PASSWORD_RESET_CONFIRM_URL_PATH": FRONTEND_PASSWORD_RESET_CONFIRM_PATH,
-    "USER_DETAILS_SERIALIZER": "quickstart.serializers.CustomUserDetailsSerializer",
+    # CONSOLIDATED SERIALIZERS
+    # This is the key change. All serializers are now in one place.
+    "SERIALIZERS": {
+        "LOGIN_SERIALIZER": "quickstart.serializers.CustomLoginSerializer",
+        "REGISTER_SERIALIZER": "quickstart.serializers.CustomRegisterSerializer",
+        "PASSWORD_RESET_SERIALIZER": "quickstart.serializers.CustomPasswordResetSerializer",
+        "PASSWORD_RESET_CONFIRM_SERIALIZER": "dj_rest_auth.serializers.PasswordResetConfirmSerializer",
+        "USER_DETAILS_SERIALIZER": "quickstart.serializers.CustomUserDetailsSerializer",
+    },
 }
-REST_AUTH_REGISTER_SERIALIZERS = {
-    "REGISTER_SERIALIZER": "quickstart.serializers.CustomRegisterSerializer"
-}
-REST_AUTH_SERIALIZERS = {
-    "LOGIN_SERIALIZER": "quickstart.serializers.CustomLoginSerializer"
-}
-
-
 # --- Allauth & Email ---
 ACCOUNT_EMAIL_VERIFICATION = "mandatory"
 ACCOUNT_EMAIL_REQUIRED = True
