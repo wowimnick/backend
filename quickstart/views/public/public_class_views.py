@@ -123,6 +123,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
 
     serializer_class = PublicClassSerializer
     permission_classes = [AllowAny]
+    pagination_class = StandardResultsSetPagination
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = [
         "title",
@@ -135,9 +136,10 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         "createdAt",
         "average_rating",
         "total_reviews",
-    ]  # Fields users can sort by
+        "relevance_score",  # Add for potential user sorting
+    ]
 
-    ordering = ["-createdAt"]
+    ordering = ["-createdAt"]  # Default ordering for actions other than list
 
     AVERAGE_RATING_SUBQUERY = Subquery(
         Reviews.objects.filter(classId=OuterRef("pk"), status="approved")
@@ -213,6 +215,80 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             )
             .distinct()
         )
+
+    def list(self, request, *args, **kwargs):
+        """
+        Overrides the default list action to provide relevance-sorted classes
+        for the homepage or general browsing.
+        """
+        queryset = self.get_queryset()
+
+        # --- Relevance Score Calculation ---
+        days_old = Extract(Now() - F("createdAt"), "epoch") / Value(86400.0)
+
+        quality_score = ExpressionWrapper(
+            (
+                (
+                    Log(10, Length("description") + 1)
+                    / Log(10, Value(QUALITY_SCORE_MAX_DESCRIPTION_LEN + 1))
+                )
+                + (
+                    Log(10, F("image_count") + 1)
+                    / Log(10, Value(QUALITY_SCORE_MAX_IMAGES + 1))
+                )
+            )
+            / 2.0,
+            output_field=FloatField(),
+        )
+
+        rating_score = ExpressionWrapper(
+            F("average_rating") / Value(5.0), output_field=FloatField()
+        )
+
+        review_count_score = ExpressionWrapper(
+            Log(10, F("review_count") + 1)
+            / Log(10, Value(REVIEW_COUNT_FOR_MAX_SCORE + 1)),
+            output_field=FloatField(),
+        )
+
+        newness_score = ExpressionWrapper(
+            Power(2, -days_old / Value(RECENCY_HALFLIFE_DAYS)),
+            output_field=FloatField(),
+        )
+
+        featured_multiplier = Case(
+            When(businessId__featured=True, then=Value(W_FEATURED)),
+            default=Value(1.0),
+            output_field=FloatField(),
+        )
+
+        relevance_score = ExpressionWrapper(
+            (
+                (Value(W_QUALITY) * quality_score)
+                + (Value(W_RATING) * rating_score)
+                + (Value(W_REVIEW_COUNT) * review_count_score)
+                + (Value(W_NEWNESS) * newness_score)
+            )
+            * featured_multiplier,
+            output_field=FloatField(),
+        )
+
+        queryset = queryset.annotate(relevance_score=relevance_score)
+
+        # Order by the calculated relevance score for a better user experience
+        queryset = queryset.order_by("-relevance_score", "-createdAt")
+
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(
+                page, many=True, context={"request": request}
+            )
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(
+            queryset, many=True, context={"request": request}
+        )
+        return Response(serializer.data)
 
     @action(
         detail=True,
