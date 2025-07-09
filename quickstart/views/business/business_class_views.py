@@ -140,7 +140,6 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
     permission_classes = [
         IsAuthenticated,
         CanManageOwnClasses,
-        IsVerifiedAndActiveBusinessOwnerOrManager,
     ]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
@@ -228,19 +227,26 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                 "You must be associated with a business to create a class."
             )
 
+        # ADDED: Ensure the business account is active, even if not yet verified.
+        # This prevents users with deactivated or suspended business accounts from creating new content.
+        if not business.isActive:
+            raise PermissionDenied(
+                "Your business account is currently inactive. Please contact support to create new classes."
+            )
+
         category_key = serializer.validated_data.pop("category_key")
-        # FIX: Handle the subcategory key more gracefully.
         subcategory_key = serializer.validated_data.pop("subcategory_key", None)
 
         try:
             category = ClassCategory.objects.get(key=category_key)
             subcategory = None
-            # Only attempt to get a subcategory if a non-blank key was provided.
             if subcategory_key:
                 subcategory = ClassSubcategory.objects.get(
                     category=category, key=subcategory_key
                 )
 
+            # A new class is set to 'active' by default, but its public visibility
+            # is controlled by the parent business's verification status.
             instance = serializer.save(
                 businessId=business,
                 category=category,

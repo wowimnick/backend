@@ -112,16 +112,6 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
         max_digits=11, decimal_places=8, required=False, allow_null=True
     )
 
-    classCategory = serializers.SlugRelatedField(
-        slug_field="key",
-        queryset=ClassCategory.objects.all(),
-        required=True,
-        help_text="The unique key of the primary category for this business (e.g., 'music', 'academic').",
-    )
-
-    subcategories = serializers.CharField(
-        write_only=True, required=False, allow_blank=True
-    )
     classFormats = serializers.CharField(
         write_only=True, required=False, allow_blank=True
     )
@@ -184,8 +174,6 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
             "longitude",
             "showExactLocation",
             # Step 3: Class Types & Agreements
-            "classCategory",
-            "subcategories",
             "classFormats",
             "skillLevels",
             "ageGroups",
@@ -300,7 +288,6 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
         data["showExactLocation"] = latitude is not None and longitude is not None
 
         json_string_fields = {
-            "subcategories": list,
             "classFormats": list,
             "skillLevels": list,
             "ageGroups": list,
@@ -326,7 +313,6 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
             elif field in data and not field_value:
                 data[field] = expected_type()
 
-        # FIXED: This is where isActive should be set.
         data["isActive"] = False
         return data
 
@@ -334,19 +320,15 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
         user = self.context["request"].user
 
         # Pop list/dict fields to handle them separately
-        subcategories_data = validated_data.pop("subcategories", [])
         classformats_data = validated_data.pop("classFormats", [])
         skilllevels_data = validated_data.pop("skillLevels", [])
         agegroups_data = validated_data.pop("ageGroups", [])
         tags_keywords_data = validated_data.pop("tags_keywords", [])
         social_media_data = validated_data.pop("social_media_links", {})
 
-        # FIXED: Removed the redundant `isActive=False` keyword argument.
-        # It's already in `validated_data` from the `validate` method.
         business = BusinessInfo.objects.create(
             owner=user,
             verificationStatus="pending",
-            subcategories=subcategories_data,
             classFormats=classformats_data,
             skillLevels=skilllevels_data,
             ageGroups=agegroups_data,
@@ -400,26 +382,11 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
     longitude = serializers.DecimalField(
         max_digits=11, decimal_places=8, required=False, allow_null=True
     )
-    classCategoryName = serializers.CharField(
-        source="classCategory.name", read_only=True, allow_null=True
-    )
     totalReviews = serializers.IntegerField(
         source="total_reviews_count", read_only=True
     )
     average_rating = serializers.DecimalField(
         max_digits=3, decimal_places=1, read_only=True
-    )
-
-    # Allow writing to classCategory and subcategories
-    classCategory = serializers.SlugRelatedField(
-        slug_field="key",
-        queryset=ClassCategory.objects.all(),
-        required=False,
-        allow_null=True,
-    )
-    subcategories = serializers.ListField(
-        child=serializers.CharField(),
-        required=False,
     )
 
     classFormats = serializers.ListField(
@@ -460,9 +427,6 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "reminderNotification",
             "smsNotifications",
             "liabilityWaiver",
-            "classCategory",
-            "classCategoryName",
-            "subcategories",
             "classFormats",
             "skillLevels",
             "ageGroups",
@@ -485,10 +449,9 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "stripe_account_status",
             "createdAt",
             "updatedAt",
-            "classCategoryName",  # Keep this read-only, it's derived
             "average_rating",
             "totalReviews",
-            "classFormats",  # These are not being edited in this scope
+            "classFormats",
             "skillLevels",
             "ageGroups",
         )
@@ -653,11 +616,9 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
                 elif current_value is None and self.fields[field].allow_null:
                     processed_data[field] = None
 
-        # FIXED: Add 'subcategories' to the list of fields to be parsed from JSON strings.
         json_fields_config = {
             "social_media_links": dict,
             "tags_keywords": list,
-            "subcategories": list,
         }
 
         for field_name, expected_type in json_fields_config.items():
