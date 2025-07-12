@@ -32,6 +32,7 @@ import logging
 
 from quickstart.models import (
     ClassCategory,
+    ClassImage,
     ClassSubcategory,
     ClassesMain,
     ClassOption,
@@ -169,7 +170,10 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                     ),
                     "options__schedules__instances",
                     "reviews",
-                    "images",
+                    Prefetch(
+                        "images",
+                        queryset=ClassImage.objects.order_by("-isCover", "createdAt"),
+                    ),
                 )
                 .distinct()
             )

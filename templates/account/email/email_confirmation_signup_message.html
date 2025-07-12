@@ -1,12 +1,10 @@
-{# templates/allauth/account/email/email_confirmation_signup_message.html #} {%
-extends "emails/base_email.html" %} {% load i18n %} {# Set the email title for
-the base template #} {% block title %}{% trans "Confirm Your Email Address" %}{%
-endblock %} {# Define the main content of the email #} {% block content %}
+{% extends "emails/base_email.html" %} {% load i18n %} {% block title %}{% trans
+"Confirm Your Email Address" %}{% endblock title %} {% block content %}
 <h1>{% trans "Confirm Your Email Address" %}</h1>
 <p>
-  {% trans "Welcome to ClassEasily! To complete your registration and activate
-  your account, please confirm your email address by clicking the button below."
-  %}
+  {% blocktrans %} Welcome to ClassEasily! To complete your registration and
+  activate your account, please confirm your email address by clicking the
+  button below. {% endblocktrans %}
 </p>
 
 <!-- Button -->
@@ -27,8 +25,8 @@ endblock %} {# Define the main content of the email #} {% block content %}
 </table>
 
 <p>
-  {% trans "If you cannot click the button, please copy and paste the following
-  URL into your web browser:" %}
+  {% blocktrans %} If you cannot click the button, please copy and paste the
+  following URL into your web browser: {% endblocktrans %}
 </p>
 <p style="word-break: break-all; font-size: 14px">
   <a
@@ -39,13 +37,12 @@ endblock %} {# Define the main content of the email #} {% block content %}
   >
 </p>
 <p>
-  {% trans "If you did not sign up for an account on ClassEasily, you can safely
-  ignore this email." %}
+  {% blocktrans %} If you did not sign up for an account on ClassEasily, you can
+  safely ignore this email. {% endblocktrans %}
 </p>
 <p>{% trans "Thanks," %}<br />{% trans "The ClassEasily Team" %}</p>
-{% endblock %} {# Define the footer recipient line #} {% block footer_recipient
-%} {% if user.email %}
+{% endblock content %} {% block footer_recipient %} {% if user and user.email %}
 <p>
   {% blocktrans %}This email was sent to {{ user.email }}.{% endblocktrans %}
 </p>
-{% endif %} {% endblock %}
+{% endif %} {% endblock footer_recipient %}

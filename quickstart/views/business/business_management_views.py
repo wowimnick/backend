@@ -74,7 +74,6 @@ def register_business(request):
     """
     Handles the creation of a new BusinessInfo instance by an authenticated user.
     """
-    # FIX: Check if the user already owns a business before proceeding.
     if BusinessInfo.objects.filter(owner=request.user).exists():
         return Response(
             {
@@ -83,7 +82,6 @@ def register_business(request):
             status=status.HTTP_409_CONFLICT,
         )
 
-    # Set the scope for the ScopedRateThrottle on the request object
     request.throttle_scope = "sensitive"
 
     try:
@@ -94,7 +92,6 @@ def register_business(request):
             logger.warning(
                 f"Business registration validation failed for user {request.user.email}. Errors: {serializer.errors}"
             )
-            # CHANGED: Return the structured error object from the serializer
             return Response(
                 {"error": serializer.errors}, status=status.HTTP_400_BAD_REQUEST
             )
@@ -103,17 +100,38 @@ def register_business(request):
         logger.info(
             f"Business '{business.businessName}' (ID: {business.businessId}) registered by user {request.user.email}."
         )
+
+        updated_user = request.user
+        user_data = {
+            "userId": updated_user.userId,
+            "email": updated_user.email,
+            "first_name": updated_user.first_name,
+            "last_name": updated_user.last_name,
+            "avatar_url": updated_user.avatar.url if updated_user.avatar else None,
+            "has_business": True,
+            "role": (
+                {
+                    "name": updated_user.role.name,
+                    "color": updated_user.role.color,
+                    "hierarchy_level": updated_user.role.hierarchy_level,
+                }
+                if updated_user.role
+                else None
+            ),
+            "permissions": list(updated_user.get_all_permissions()),
+        }
+
         return Response(
             {
-                "success": True,  # Use boolean for success
+                "success": True,
                 "message": "Business registration submitted successfully!",
                 "businessId": business.businessId,
+                "user": user_data,  # Return the updated user object
             },
             status=status.HTTP_201_CREATED,
         )
 
     except DRFValidationError as e:
-        # This can catch validation errors raised outside the .is_valid() call, e.g., in .save()
         logger.warning(
             f"Business registration validation error for user {request.user.email}. Errors: {e.detail}"
         )
@@ -445,12 +463,14 @@ class MyBusinessOverviewView(APIView):
                 display_datetime_str = f"{naive_schedule_datetime.strftime('%b %d')}, {naive_schedule_datetime.strftime('%I:%M %p').lstrip('0') if naive_schedule_datetime.strftime('%I').startswith('0') else naive_schedule_datetime.strftime('%I:%M %p')}"
                 upcoming_classes_data.append(
                     {
+                        "schedule_instance_id": inst.id,
                         "name": inst.schedule.option.classId.title,
                         "time": display_datetime_str,
                         "current_occupancy": inst.current_participant_spots,
                         "max_occupancy": inst.max_participants,
                     }
                 )
+
         except Exception as e:
             logger.error(
                 f"Error getting upcoming classes (Business {pk}): {e}", exc_info=True

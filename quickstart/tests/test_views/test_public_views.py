@@ -247,9 +247,22 @@ class PublicClassViewSetTest(APITestCase):
         url = reverse("public-class-list")
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        # The list view is not paginated, it returns a raw list.
-        self.assertEqual(len(response.data), 1)
-        self.assertEqual(response.data[0]["title"], "Active Yoga Class")
+
+        # FIX: The API response is paginated, so the data is a dictionary.
+        # We need to access the list of results from the 'results' key.
+        self.assertIn("results", response.data)
+        self.assertIsInstance(
+            response.data["results"],
+            list,
+            "The 'results' key in the response should contain a list.",
+        )
+
+        # Extract titles from the list of class dictionaries
+        class_titles = [c["title"] for c in response.data["results"]]
+
+        self.assertIn(self.active_class.title, class_titles)
+        self.assertNotIn(self.inactive_class.title, class_titles)
+        self.assertNotIn(self.unverified_biz_class.title, class_titles)
 
     def test_is_favorited_field_for_authenticated_user(self):
         """

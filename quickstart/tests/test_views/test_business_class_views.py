@@ -14,11 +14,11 @@ from quickstart.models import ClassesMain, ClassOption, BusinessInfo, Role
 from quickstart.tests.factories import (
     UserFactory,
     BusinessInfoFactory,
-    ClassCategoryFactory,
     ClassesMainFactory,
     ClassOptionFactory,
     ScheduleFactory,
     RoleFactory,
+    ClassCategoryFactory,
     ClassSubcategoryFactory,
 )
 
@@ -47,14 +47,14 @@ class BusinessClassManagementTests(APITestCase):
 
         self.owner.role = business_role
         self.owner.save()
+        self.owner.user_permissions.add(*business_role.permissions.all())
 
-        self.category = ClassCategoryFactory(key="arts", name="Arts")
-        # FIX: Create a subcategory to be used in tests.
+        self.business = BusinessInfoFactory(owner=self.owner)
+
+        # FIX: Create specific categories needed for the tests.
+        self.category = ClassCategoryFactory(name="Arts", key="arts")
         self.subcategory = ClassSubcategoryFactory(
-            category=self.category, key="pottery-making", name="Pottery Making"
-        )
-        self.business = BusinessInfoFactory(
-            owner=self.owner, classCategory=self.category
+            category=self.category, name="Pottery Making", key="pottery-making"
         )
 
         self.own_class = ClassesMainFactory(

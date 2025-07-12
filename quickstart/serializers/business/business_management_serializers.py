@@ -58,6 +58,7 @@ class RevenueTrendItemSerializer(serializers.Serializer):
 
 
 class UpcomingClassSerializer(serializers.Serializer):
+    schedule_instance_id = serializers.IntegerField(required=False)
     name = serializers.CharField()
     time = serializers.CharField()
     current_occupancy = serializers.IntegerField()
@@ -138,11 +139,7 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
     )
     founding_year = serializers.IntegerField(required=False, allow_null=True)
 
-    phone_regex = RegexValidator(
-        regex=r"^\+?1?\d{9,15}$",
-        message="Phone number must be entered in the format: '+999999999'. Up to 15 digits allowed.",
-    )
-    studentContactPhone = serializers.CharField(validators=[phone_regex], required=True)
+    studentContactPhone = serializers.CharField(required=True)
 
     class Meta:
         model = BusinessInfo

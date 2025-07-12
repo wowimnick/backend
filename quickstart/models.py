@@ -1230,6 +1230,8 @@ class Schedule(models.Model):
         else:  # Single Session
             if not self.date:
                 raise ValidationError({"date": "Date is required for single sessions"})
+            if self.date and not self.day:
+                self.day = self.date.strftime("%a")
 
     class Meta:
         db_table = "schedules"

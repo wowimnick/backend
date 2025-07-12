@@ -681,6 +681,52 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                 avg_occupancy_data["avg_occupancy_percentage"] or 0.0
             )
 
+            # --- NEW: Upcoming Classes (Next 7 days) ---
+            today_local = timezone.now().astimezone(business_pytz).date()
+            seven_days_later = today_local + timedelta(days=7)
+
+            upcoming_instances_qs = (
+                ScheduleInstance.objects.filter(
+                    schedule__option__classId__businessId=business,
+                    date__gte=today_local,
+                    date__lt=seven_days_later,
+                    status="scheduled",
+                )
+                .select_related("schedule__option__classId")
+                .annotate(
+                    current_occupancy=Coalesce(
+                        Sum(
+                            "bookings__participants",
+                            filter=Q(bookings__status="confirmed"),
+                        ),
+                        0,
+                        output_field=IntegerField(),
+                    )
+                )
+                .order_by("date", "time")[:5]
+            )
+
+            upcoming_classes_data = []
+            for inst in upcoming_instances_qs:
+                start_time_obj = inst.time
+                end_time_obj = (
+                    datetime.combine(datetime_date.min, start_time_obj)
+                    + timedelta(minutes=inst.duration)
+                ).time()
+                time_str = f"{start_time_obj.strftime('%-I:%M %p')} - {end_time_obj.strftime('%-I:%M %p')}"
+                date_str = inst.date.strftime("%a, %b %d")
+
+                upcoming_classes_data.append(
+                    {
+                        "schedule_instance_id": inst.id,
+                        "class_id": inst.schedule.option.classId.classId,
+                        "name": inst.schedule.option.classId.title,
+                        "time": f"{date_str}, {time_str}",
+                        "current_occupancy": inst.current_occupancy,
+                        "max_occupancy": inst.max_participants,
+                    }
+                )
+
             response_data = {
                 "business_id": business.businessId,
                 "business_name": business.businessName,
@@ -720,6 +766,7 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                     "time_distribution": time_distribution_local,  # Modified for local hour
                     "booking_types": booking_types,
                 },
+                "upcoming_classes": upcoming_classes_data,  # ADDED THIS LINE
             }
             return Response(response_data)
 

@@ -41,6 +41,7 @@ USE_TZ = True
 TIME_ZONE = "UTC"
 SITE_DOMAIN = os.environ.get("SITE_DOMAIN", "localhost:8000")
 SITE_ID = 1
+SITE_NAME = "ClassEasily"
 AUTH_USER_MODEL = "quickstart.CustomUser"
 ROOT_URLCONF = "CEBackend.urls"
 WSGI_APPLICATION = "CEBackend.wsgi.application"
@@ -262,19 +263,14 @@ SIMPLE_JWT = {
 
 FRONTEND_BASE_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
 FRONTEND_EMAIL_VERIFICATION_PATH = "/verify-email/{key}/"
-FRONTEND_PASSWORD_RESET_CONFIRM_PATH = "/reset-password/{uid}/{token}/"
-
+FRONTEND_PASSWORD_RESET_CONFIRM_PATH = "/reset-password/{uid}/{token}"
 REST_AUTH = {
     "USE_JWT": True,
-    "JWT_AUTH_HTTPONLY": False,  # This must be False for dj-rest-auth's cookie flow
+    "JWT_AUTH_HTTPONLY": False,
     "JWT_AUTH_COOKIE": "my-app-auth",
     "JWT_AUTH_REFRESH_COOKIE": "my-refresh-token",
     "JWT_AUTH_SAMESITE": "Lax",
     "OLD_PASSWORD_FIELD_ENABLED": True,
-    "PASSWORD_RESET_SERIALIZER": "quickstart.serializers.CustomPasswordResetSerializer",
-    "PASSWORD_RESET_CONFIRM_SERIALIZER": "dj_rest_auth.serializers.PasswordResetConfirmSerializer",
-    "PASSWORD_RESET_USE_SITES_DOMAIN": False,
-    "PASSWORD_RESET_CONFIRM_URL_PATH": FRONTEND_PASSWORD_RESET_CONFIRM_PATH,
     "USER_DETAILS_SERIALIZER": "quickstart.serializers.CustomUserDetailsSerializer",
 }
 REST_AUTH_REGISTER_SERIALIZERS = {

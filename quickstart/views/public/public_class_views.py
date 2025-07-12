@@ -56,6 +56,7 @@ from datetime import (
 )
 
 from quickstart.models import (
+    ClassImage,
     ClassesMain,
     ClassOption,
     Reviews,
@@ -184,7 +185,12 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         return (
             ClassesMain.objects.select_related("businessId", "category", "subcategory")
             .prefetch_related(
-                "images",
+                # FIX: Use a Prefetch object to explicitly order the images.
+                # This ensures the cover photo (isCover=True) is always first.
+                Prefetch(
+                    "images",
+                    queryset=ClassImage.objects.order_by("-isCover", "createdAt"),
+                ),
                 Prefetch(
                     "options__schedules",
                     queryset=Schedule.objects.filter(
