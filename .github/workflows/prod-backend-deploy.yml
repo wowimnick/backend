@@ -1,0 +1,100 @@
+name: Deploy Backend to Production
+
+on:
+  push:
+    branches:
+      - prod # Triggers ONLY on push to the 'prod' branch
+
+env:
+  AWS_REGION: us-east-2
+  # Use a dedicated production repository
+  ECR_REPOSITORY: classeasily-backend-staging
+  ECS_CLUSTER: classeasily-prod-cluster
+  ECS_SERVICE_WEB: classeasily-prod-web-service
+  ECS_SERVICE_WORKER: classeasily-prod-worker-service
+  # Define the two separate task definition families
+  ECS_TASK_DEFINITION_WEB: classeasily-prod-backend-web-task
+  ECS_TASK_DEFINITION_WORKER: classeasily-prod-backend-task-worker
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: Build and Deploy to Fargate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      # --- Deploy Web Service ---
+      - name: 1. Download WEB Task Definition
+        run: |
+          aws ecs describe-task-definition --task-definition ${{ env.ECS_TASK_DEFINITION_WEB }} --query taskDefinition > task-definition-web.json
+
+      - name: 2. Fill in new WEB Task Definition
+        id: task-def-web
+        run: |
+          jq --arg IMAGE_URI "${{ steps.build-image.outputs.image }}" '
+          .containerDefinitions[0].image = $IMAGE_URI | 
+          del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)
+          ' task-definition-web.json > new-task-definition-web.json
+          echo "task_definition_path=new-task-definition-web.json" >> $GITHUB_OUTPUT
+
+      - name: 3. Deploy WEB Task Definition
+        id: deploy-web
+        run: |
+          NEW_TASK_INFO=$(aws ecs register-task-definition --cli-input-json file://${{ steps.task-def-web.outputs.task_definition_path }})
+          NEW_REVISION_ARN=$(echo $NEW_TASK_INFO | jq -r .taskDefinition.taskDefinitionArn)
+          aws ecs update-service --cluster ${{ env.ECS_CLUSTER }} --service ${{ env.ECS_SERVICE_WEB }} --task-definition "${NEW_REVISION_ARN}" --force-new-deployment
+
+      # --- Deploy Worker Service ---
+      - name: 4. Download WORKER Task Definition
+        run: |
+          aws ecs describe-task-definition --task-definition ${{ env.ECS_TASK_DEFINITION_WORKER }} --query taskDefinition > task-definition-worker.json
+
+      - name: 5. Fill in new WORKER Task Definition
+        id: task-def-worker
+        run: |
+          jq --arg IMAGE_URI "${{ steps.build-image.outputs.image }}" '
+          .containerDefinitions[0].image = $IMAGE_URI | 
+          del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)
+          ' task-definition-worker.json > new-task-definition-worker.json
+          echo "task_definition_path=new-task-definition-worker.json" >> $GITHUB_OUTPUT
+
+      - name: 6. Deploy WORKER Task Definition
+        id: deploy-worker
+        run: |
+          NEW_TASK_INFO=$(aws ecs register-task-definition --cli-input-json file://${{ steps.task-def-worker.outputs.task_definition_path }})
+          NEW_REVISION_ARN=$(echo $NEW_TASK_INFO | jq -r .taskDefinition.taskDefinitionArn)
+          aws ecs update-service --cluster ${{ env.ECS_CLUSTER }} --service ${{ env.ECS_SERVICE_WORKER }} --task-definition "${NEW_REVISION_ARN}" --force-new-deployment
+
+      - name: Wait for services to stabilize
+        run: |
+          echo "Waiting for web service to stabilize..."
+          aws ecs wait services-stable --cluster ${{ env.ECS_CLUSTER }} --services ${{ env.ECS_SERVICE_WEB }}
+          echo "Waiting for worker service to stabilize..."
+          aws ecs wait services-stable --cluster ${{ env.ECS_CLUSTER }} --services ${{ env.ECS_SERVICE_WORKER }}
+          echo "All services are stable."

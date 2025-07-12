@@ -193,6 +193,8 @@ CELERY_BROKER_TRANSPORT_OPTIONS = {
     # Makes fanout (broadcast) operations cluster-safe.
     "fanout_prefix": True,
     "fanout_patterns": False,
+    "visibility_timeout": 3600,
+    "ack_emulation": False,
 }
 
 # This setting is CRITICAL for ElastiCache Serverless to prevent CROSSSLOT errors by disabling worker discovery.
