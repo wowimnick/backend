@@ -79,7 +79,6 @@ class BusinessInfoFactory(DjangoModelFactory):
     businessZipCode = factory.Faker("zipcode")
     openingTime = time(9, 0)
     closingTime = time(17, 0)
-    classCategory = factory.SubFactory(ClassCategoryFactory)
     termsAccepted = True
     privacyAccepted = True
     verificationStatus = "verified"
@@ -97,10 +96,10 @@ class ClassesMainFactory(DjangoModelFactory):
     businessId = factory.SubFactory(BusinessInfoFactory)
     title = factory.Faker("catch_phrase")
     description = factory.Faker("text", max_nb_chars=500)
-    category = factory.LazyAttribute(lambda o: o.businessId.classCategory)
+    category = factory.SubFactory(ClassCategoryFactory)
     subcategory = factory.SubFactory(
         ClassSubcategoryFactory, category=factory.SelfAttribute("..category")
-    )  # Added subcategory
+    )
     status = "active"
     location = "Test Location"
     coordinates = "45.0000,-75.0000"

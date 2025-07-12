@@ -33,10 +33,11 @@ class PublicBusinessInfoSerializer(serializers.ModelSerializer):
         source="total_reviews_count", read_only=True
     )
 
-    # Create a new read-only field that gets the name from the related category object.
-    classCategoryName = serializers.CharField(
-        source="classCategory.name", read_only=True, allow_null=True
-    )
+    # FIX: This field was based on a non-existent `classCategory` field on the BusinessInfo model.
+    # It has been removed to prevent errors. A business's categories are determined by the classes it offers.
+    # classCategoryName = serializers.CharField(
+    #     source="classCategory.name", read_only=True, allow_null=True
+    # )
 
     class Meta:
         model = BusinessInfo
@@ -55,7 +56,7 @@ class PublicBusinessInfoSerializer(serializers.ModelSerializer):
             "studentContactEmail",
             "businessCity",
             "businessState",
-            "classCategoryName",
+            # "classCategoryName", # FIX: Removed this field from the output.
             "totalReviews",
             "average_rating",
             "featured",

@@ -150,10 +150,8 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         """Return queryset with annotations for admin views using Subqueries"""
-        # Use select_related to efficiently fetch category data in one query
-        queryset = BusinessInfo.objects.select_related(
-            "owner", "owner__role", "classCategory"
-        ).all()
+        # FIX: Removed 'classCategory' from select_related as it no longer exists on BusinessInfo.
+        queryset = BusinessInfo.objects.select_related("owner", "owner__role").all()
 
         classes_subquery = Subquery(
             ClassesMain.objects.filter(businessId=OuterRef("pk"))
@@ -231,8 +229,8 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
         featured = self.request.query_params.get("featured", None)
 
         if category:
-            # Filter by the category's string 'key'
-            queryset = queryset.filter(classCategory__key=category)
+            # FIX: Filter by the category of the business's classes, and get distinct businesses.
+            queryset = queryset.filter(classes__category__key=category).distinct()
         if status_param:
             queryset = queryset.filter(status=status_param)
         if featured is not None:
@@ -434,22 +432,18 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
             "total"
         ]
 
-        # FIXED: This is the critical change.
-        # Instead of grouping by the ID, we group by the related model's fields.
+        # FIX: Rewrote the query to correctly count distinct businesses per category.
         category_distribution_qs = (
-            BusinessInfo.objects.filter(classCategory__isnull=False)
-            .values("classCategory__key", "classCategory__name", "classCategory__color")
-            .annotate(count=Count("pk"))
+            ClassCategory.objects.annotate(
+                count=Count("classes_in_category__businessId", distinct=True)
+            )
+            .filter(count__gt=0)
+            .values("name", "count", "color")
             .order_by("-count")
         )
 
-        # The loop now works with strings directly.
         category_distribution = [
-            {
-                "name": item["classCategory__name"],
-                "value": item["count"],
-                "color": item["classCategory__color"],
-            }
+            {"name": item["name"], "value": item["count"], "color": item["color"]}
             for item in category_distribution_qs
         ]
 
@@ -527,11 +521,11 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
         response = HttpResponse(content_type="text/csv")
         response["Content-Disposition"] = 'attachment; filename="businesses_export.csv"'
         writer = csv.writer(response)
+        # FIX: Removed the "Category" header as a business can have multiple categories.
         headers = [
             "Business ID",
             "Business Name",
             "Type",
-            "Category",
             "City",
             "State",
             "Status",
@@ -546,12 +540,11 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
         ]
         writer.writerow(headers)
 
-        # FIXED: Source the category key directly in the values_list
+        # FIX: Removed "classCategory__key" from values_list.
         business_data = queryset.values_list(
             "businessId",
             "businessName",
             "businessType",
-            "classCategory__key",
             "businessCity",
             "businessState",
             "status",
@@ -565,14 +558,15 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
             "owner__email",
         )
         for business in business_data:
+            # Adjust indices due to removed category column
             row = list(business)
             # Format boolean for 'Featured'
-            row[7] = "Yes" if business[7] else "No"
+            row[6] = "Yes" if business[6] else "No"
             # Format numbers
-            row[8] = round(business[8] or 0, 1)
-            row[12] = float(business[12] or 0)
+            row[7] = round(business[7] or 0, 1)
+            row[11] = float(business[11] or 0)
             # Format datetime
-            row[13] = business[13].strftime("%Y-%m-%d %H:%M:%S") if business[13] else ""
+            row[12] = business[12].strftime("%Y-%m-%d %H:%M:%S") if business[12] else ""
             writer.writerow(row)
         return response
 
@@ -811,11 +805,6 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
                 province_code = self.get_province_code(province_name)
                 region = self.get_region_for_province(province_name)
 
-                # Debug print
-                print(
-                    f"Processing {city}, {province_name}: avg_lat={centroid_lat}, avg_lon={centroid_lon}, count={count_val}, revenue={revenue_val}, classes={classes_count_val}"
-                )
-
                 result_data.append(
                     {
                         "city": city,
@@ -839,7 +828,6 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
         limit = 50
         result_data = result_data[:limit]
 
-        print(f"Geographical data prepared: {len(result_data)} cities.")
         return Response(result_data)
 
     @action(detail=False, methods=["post"])

@@ -1,13 +1,59 @@
 # quickstart/serializers/auth_serializers.py
 
+from django.conf import settings
 from rest_framework import serializers
 from dj_rest_auth.registration.serializers import RegisterSerializer
+
+# --- MODIFIED: Removed unused ResetPasswordForm import ---
+from dj_rest_auth.serializers import LoginSerializer as DefaultLoginSerializer
+from django.contrib.auth import get_user_model
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from django.db.models import Exists, OuterRef, Q
+from allauth.account.adapter import get_adapter
+from django.core.files.uploadedfile import InMemoryUploadedFile
+from allauth.account.utils import (  # <--- ADD THIS IMPORT
+    filter_users_by_email,
+    get_next_redirect_url,
+    passthrough_next_redirect_url,
+)
+
+# --- MODIFIED: Removed unused PasswordResetSerializer import ---
+from django.utils.http import urlsafe_base64_encode
+from django.utils.encoding import force_bytes
+from django.contrib.sites.shortcuts import get_current_site
+from quickstart.models import Role, ClassesMain, BusinessInfo
+from django.contrib.auth.tokens import default_token_generator
+import logging
+
+logger = logging.getLogger(__name__)
+
+User = get_user_model()
+
+
+from django.conf import settings
+from rest_framework import serializers
+from dj_rest_auth.registration.serializers import RegisterSerializer
+from allauth.account.forms import ResetPasswordForm
 from dj_rest_auth.serializers import LoginSerializer as DefaultLoginSerializer
 from django.contrib.auth import get_user_model
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from django.db.models import Exists, OuterRef, Q
 from django.core.files.uploadedfile import InMemoryUploadedFile
+
+# --- MODIFIED: Removed unused PasswordResetSerializer import ---
+
+# --- DIAGNOSTIC IMPORTS ---
+from dj_rest_auth.serializers import (
+    PasswordResetConfirmSerializer as DefaultPasswordResetConfirmSerializer,
+)
+from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
+from django.utils.encoding import force_bytes, force_str
+from django.core.exceptions import ObjectDoesNotExist
+
+# --- END DIAGNOSTIC IMPORTS ---
+from django.contrib.sites.shortcuts import get_current_site
 from quickstart.models import Role, ClassesMain, BusinessInfo
+from django.contrib.auth.tokens import default_token_generator
 import logging
 
 logger = logging.getLogger(__name__)
@@ -34,7 +80,6 @@ class RoleNestedSerializer(serializers.ModelSerializer):
 
 class CustomUserDetailsSerializer(serializers.ModelSerializer):
     avatar_url = serializers.SerializerMethodField()
-    # Allow avatar to be null on input to signal removal
     avatar = serializers.ImageField(write_only=True, required=False, allow_null=True)
     role = RoleNestedSerializer(read_only=True, allow_null=True)
     favorited_ids = serializers.PrimaryKeyRelatedField(
@@ -59,10 +104,10 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
             "state",
             "address",
             "zipCode",
-            "avatar",  # Keep this write_only field
-            "avatar_url",  # Read-only derived field
+            "avatar",
+            "avatar_url",
             "role",
-            "user_timezone",  # ADDED user_timezone
+            "user_timezone",
             "favorited_ids",
             "permissions",
             "has_business",
@@ -77,20 +122,13 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
             "permissions",
             "has_business",
         )
-        # Prevent accidental updates to sensitive fields during PATCH
-        extra_kwargs = {
-            "email": {"read_only": True},
-            "username": {"read_only": True},
-        }
+        extra_kwargs = {"email": {"read_only": True}, "username": {"read_only": True}}
 
     def get_avatar_url(self, obj):
         if obj.avatar and hasattr(obj.avatar, "url"):
             try:
                 return obj.avatar.url
             except ValueError:
-                return None
-            except Exception as e:
-                print(f"Error getting avatar URL for user {obj.pk}: {e}")
                 return None
         return None
 
@@ -100,42 +138,22 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
         return list(user.get_all_permissions())
 
     def get_has_business(self, user):
-        """Checks if the user owns or manages any active BusinessInfo."""
         if not user or not user.is_authenticated:
             return False
-        if BusinessInfo is None:
-            print(
-                "Warning: BusinessInfo model not available in get_has_business."
-            )  # Use logger
-            return False
-        # Use Exists for efficiency
-        return BusinessInfo.objects.filter(
-            Q(owner=user) | Q(managers=user),
-        ).exists()
+        return BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).exists()
 
     def update(self, instance, validated_data):
         avatar_file = validated_data.pop("avatar", "NOT_PROVIDED")
-
-        # Update other fields first
         instance = super().update(instance, validated_data)
-
-        try:
-            if avatar_file is None:
-                if instance.avatar:
-                    instance.avatar.delete(save=False)  # Delete file from S3
-                    instance.avatar = None
-                    instance.save(update_fields=["avatar"])
-            elif isinstance(
-                avatar_file, InMemoryUploadedFile
-            ):  # Check if it's a new file
-                if instance.avatar:
-                    instance.avatar.delete(save=False)  # Delete old file first
-                instance.avatar = avatar_file
-                instance.save(update_fields=["avatar"])
-
-        except Exception as e:
-            print(f"ERROR: Could not process avatar update for user {instance.pk}: {e}")
-
+        if avatar_file is None:
+            if instance.avatar:
+                instance.avatar.delete(save=False)
+                instance.avatar = None
+        elif isinstance(avatar_file, InMemoryUploadedFile):
+            if instance.avatar:
+                instance.avatar.delete(save=False)
+            instance.avatar = avatar_file
+        instance.save()
         return instance
 
 
@@ -144,8 +162,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
 
     @classmethod
     def get_token(cls, user):
-        token = super().get_token(user)
-        return token
+        return super().get_token(user)
 
     def validate(self, attrs):
         data = super().validate(attrs)
@@ -244,3 +261,50 @@ class CustomRegisterSerializer(RegisterSerializer):
 
         user.save()
         return user
+
+
+class CustomAllAuthPasswordResetForm(ResetPasswordForm):
+    """
+    Custom password reset form that correctly orchestrates URL generation
+    through the custom adapter.
+    """
+
+    # --- THIS IS THE MISSING METHOD. ADD IT. ---
+    def get_users(self, email):
+        """
+        This is a direct copy of the method from allauth.account.forms.ResetPasswordForm.
+        It's required for the form's save() method to function correctly.
+        """
+        return filter_users_by_email(email, is_active=True)
+
+    def save(self, request, **kwargs):
+        current_site = get_current_site(request)
+        email = self.cleaned_data["email"]
+        token_generator = kwargs.get("token_generator", default_token_generator)
+
+        # Get all active users with this email address
+        users = self.get_users(email)
+
+        for user in users:
+            # Create the token
+            temp_key = token_generator.make_token(user)
+
+            # Explicitly call our custom adapter to get the frontend-specific URL
+            adapter = get_adapter(request)
+            password_reset_url = adapter.get_password_reset_url(request, user, temp_key)
+            logger.info(
+                f"Correctly generated password reset URL via adapter: {password_reset_url}"
+            )
+
+            # Prepare the context for the email template
+            context = {
+                "current_site": current_site,
+                "user": user,
+                "password_reset_url": password_reset_url,
+                "request": request,
+            }
+
+            # Use the adapter to send the email
+            adapter.send_mail("account/email/password_reset_key", email, context)
+
+        return self.cleaned_data["email"]

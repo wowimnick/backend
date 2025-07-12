@@ -61,6 +61,7 @@ from quickstart.serializers import (
     PublicCategorySerializer,
     PublicSubcategorySerializer,
     BusinessContactInfoSerializer,
+    ScheduleGroupActionSerializer,
 )
 
 from quickstart.utils.permissions import (
@@ -140,7 +141,6 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
     permission_classes = [
         IsAuthenticated,
         CanManageOwnClasses,
-        IsVerifiedAndActiveBusinessOwnerOrManager,
     ]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
@@ -196,15 +196,15 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
             )
             return ClassesMain.objects.none()
 
-        # MODIFIED: Removed prefetching of schedules to make this query much lighter.
-        # Schedules will now be fetched on-demand by the frontend when needed.
         return (
             ClassesMain.objects.filter(businessId=business)
             .exclude(status="suspended")
             .select_related("businessId", "category", "subcategory")
             .prefetch_related(
-                "images",
-                # Prefetch options, but NOT their schedules. This is the key change.
+                Prefetch(
+                    "images",
+                    queryset=ClassImage.objects.order_by("-isCover", "createdAt"),
+                ),
                 Prefetch(
                     "options",
                     queryset=ClassOption.objects.order_by("optionId"),
@@ -228,19 +228,26 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                 "You must be associated with a business to create a class."
             )
 
+        # ADDED: Ensure the business account is active, even if not yet verified.
+        # This prevents users with deactivated or suspended business accounts from creating new content.
+        if not business.isActive:
+            raise PermissionDenied(
+                "Your business account is currently inactive. Please contact support to create new classes."
+            )
+
         category_key = serializer.validated_data.pop("category_key")
-        # FIX: Handle the subcategory key more gracefully.
         subcategory_key = serializer.validated_data.pop("subcategory_key", None)
 
         try:
             category = ClassCategory.objects.get(key=category_key)
             subcategory = None
-            # Only attempt to get a subcategory if a non-blank key was provided.
             if subcategory_key:
                 subcategory = ClassSubcategory.objects.get(
                     category=category, key=subcategory_key
                 )
 
+            # A new class is set to 'active' by default, but its public visibility
+            # is controlled by the parent business's verification status.
             instance = serializer.save(
                 businessId=business,
                 category=category,
@@ -400,22 +407,19 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
         instance = serializer.instance  # Get instance before saving serializer
         user = self.request.user
         request_data = self.request.data  # Get raw request data
+        request_files = self.request.FILES
 
         # --- Handle status changes carefully ---
         new_status = serializer.validated_data.get("status")
         if new_status == "suspended":
             if instance.status != "suspended":
                 raise PermissionDenied("You do not have permission to suspend a class.")
-            # Allow saving if status is already suspended (no change needed)
             serializer.validated_data.pop("status", None)
 
-        # --- Start Transaction ---
         with transaction.atomic():
-            # --- Prepare category/subcategory for update (THE FIX) ---
             update_kwargs = {}
             category_key = request_data.get("category_key")
 
-            # Check if category_key was provided in the request
             if category_key is not None:
                 try:
                     new_category = ClassCategory.objects.get(key=category_key)
@@ -424,7 +428,6 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                         f"Preparing to update category for class {instance.pk} to '{new_category.name}'."
                     )
 
-                    # When category changes, subcategory MUST be re-evaluated.
                     subcategory_key = request_data.get("subcategory_key")
                     if subcategory_key:
                         new_subcategory = ClassSubcategory.objects.get(
@@ -435,12 +438,10 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                             f"Preparing to update subcategory for class {instance.pk} to '{new_subcategory.name}'."
                         )
                     else:
-                        # If a new category is set but no subcategory is provided, clear the subcategory.
                         update_kwargs["subcategory"] = None
                         logger.info(
                             f"Clearing subcategory for class {instance.pk} due to category change."
                         )
-
                 except ClassCategory.DoesNotExist:
                     raise DRFValidationError(
                         {
@@ -454,17 +455,11 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                         }
                     )
 
-            # Save the main class instance first with allowed changes from the serializer
-            # and the manually prepared category/subcategory changes.
             updated_instance = serializer.save(**update_kwargs)
             logger.info(
                 f"Class '{updated_instance.title}' (ID: {updated_instance.pk}) base fields updated by user {user.email}"
             )
 
-            # --- Process Image Updates ---
-            request_files = self.request.FILES
-
-            # 1. Delete images marked for deletion
             try:
                 delete_ids_json = request_data.get("delete_image_ids", "[]")
                 delete_ids = json.loads(delete_ids_json)
@@ -485,102 +480,90 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                         logger.info(
                             f"Deleted {deleted_count} images for class {instance.pk} based on request."
                         )
-            except json.JSONDecodeError:
-                logger.warning(
-                    f"Invalid JSON for delete_image_ids for class {instance.pk}"
-                )
-            except Exception as e:
+            except (json.JSONDecodeError, Exception) as e:
                 logger.error(
-                    f"Error deleting images for class {instance.pk}: {e}", exc_info=True
+                    f"Error processing image deletions for class {instance.pk}: {e}",
+                    exc_info=True,
                 )
 
-            # 2. Add new images
+            # --- REFACTORED AND FIXED IMAGE/COVER HANDLING ---
             new_image_files = request_files.getlist("images")
-            newly_created_images = []
-            if new_image_files:
-                img_objects = [
-                    ClassImage(classId=instance, image=f) for f in new_image_files
-                ]
-                newly_created_images = ClassImage.objects.bulk_create(img_objects)
-                logger.info(
-                    f"Added {len(newly_created_images)} new images for class {instance.pk}."
-                )
+            cover_image_id_str = request_data.get("cover_image_id")
+            cover_image_filename = request_data.get("cover_image_filename")
 
-            # 3. Set Cover Image
-            cover_image_id = request_data.get("cover_image_id")
-            cover_image_filename = request_data.get(
-                "cover_image_filename"
-            )  # For newly uploaded cover
+            # First, unset all current covers for atomicity
+            ClassImage.objects.filter(classId=instance, isCover=True).update(
+                isCover=False
+            )
 
-            new_cover_set = False
-            if cover_image_filename:
-                # Find the newly uploaded image by filename
-                found_new_cover = False
-                for img_instance in newly_created_images:
-                    if img_instance.image.name.endswith(
-                        cover_image_filename
-                    ):  # Basic check
-                        ClassImage.objects.filter(classId=instance).update(
-                            isCover=False
-                        )
-                        img_instance.isCover = True
-                        img_instance.save(update_fields=["isCover"])
-                        logger.info(
-                            f"Set newly uploaded image '{cover_image_filename}' as cover for class {instance.pk}"
-                        )
-                        new_cover_set = True
-                        found_new_cover = True
+            # 1. Handle new cover image if it was uploaded
+            new_cover_image_file = None
+            if cover_image_filename and new_image_files:
+                for i, f in enumerate(new_image_files):
+                    if f.name == cover_image_filename:
+                        new_cover_image_file = new_image_files.pop(i)
                         break
-                if not found_new_cover:
-                    logger.warning(
-                        f"Could not find newly uploaded image with filename '{cover_image_filename}' to set as cover for class {instance.pk}"
+
+                if new_cover_image_file:
+                    ClassImage.objects.create(
+                        classId=instance, image=new_cover_image_file, isCover=True
+                    )
+                    logger.info(
+                        f"Created new cover image '{new_cover_image_file.name}' for class {instance.pk}"
                     )
 
-            elif cover_image_id and not new_cover_set:
+            # 2. Bulk create the rest of the new images
+            if new_image_files:
+                img_objects = [
+                    ClassImage(classId=instance, image=f, isCover=False)
+                    for f in new_image_files
+                ]
+                ClassImage.objects.bulk_create(img_objects)
+                logger.info(
+                    f"Bulk-added {len(img_objects)} new non-cover images for class {instance.pk}"
+                )
+
+            # 3. Set existing image as cover if specified and new one wasn't
+            if cover_image_id_str and not new_cover_image_file:
                 try:
-                    cover_image_id_int = int(cover_image_id)
-                    if ClassImage.objects.filter(
-                        classId=instance, imageId=cover_image_id_int
-                    ).exists():
-                        ClassImage.objects.filter(classId=instance).exclude(
-                            imageId=cover_image_id_int
-                        ).update(isCover=False)
-                        ClassImage.objects.filter(
-                            classId=instance, imageId=cover_image_id_int
-                        ).update(isCover=True)
+                    cover_image_id = int(cover_image_id_str)
+                    updated_count = ClassImage.objects.filter(
+                        classId=instance, imageId=cover_image_id
+                    ).update(isCover=True)
+                    if updated_count:
                         logger.info(
-                            f"Set existing image ID {cover_image_id_int} as cover for class {instance.pk}"
+                            f"Set existing image ID {cover_image_id} as cover for class {instance.pk}"
                         )
-                        new_cover_set = True
                     else:
                         logger.warning(
-                            f"Requested cover image ID {cover_image_id} not found or doesn't belong to class {instance.pk}"
+                            f"Requested cover image ID {cover_image_id} not found for class {instance.pk}"
                         )
                 except (ValueError, TypeError):
-                    logger.warning(f"Invalid cover_image_id format: {cover_image_id}")
+                    logger.warning(
+                        f"Invalid cover_image_id format: {cover_image_id_str}"
+                    )
 
-            if not new_cover_set:
-                remaining_images = ClassImage.objects.filter(classId=instance)
-                if (
-                    remaining_images.exists()
-                    and not remaining_images.filter(isCover=True).exists()
-                ):
-                    first_image = remaining_images.first()
+            # 4. Final fallback: If no cover exists, set the first available image as cover
+            remaining_images = ClassImage.objects.filter(classId=instance)
+            if (
+                remaining_images.exists()
+                and not remaining_images.filter(isCover=True).exists()
+            ):
+                first_image = remaining_images.order_by("createdAt").first()
+                if first_image:
                     first_image.isCover = True
                     first_image.save(update_fields=["isCover"])
                     logger.info(
-                        f"Set image ID {first_image.imageId} as default cover for class {instance.pk} as no specific cover was set/found."
+                        f"Set image ID {first_image.imageId} as default cover for class {instance.pk}"
                     )
+            # --- END OF REFACTORED IMAGE HANDLING ---
 
-            # --- Process Option Updates (Assuming single option model) ---
             options_json_string = request_data.get("options")
             if options_json_string:
                 try:
                     options_data = json.loads(options_json_string)
                     if isinstance(options_data, list) and len(options_data) > 0:
-                        option_dict = options_data[
-                            0
-                        ]  # Get the first (only) option data
+                        option_dict = options_data[0]
                         option_id = option_dict.get("optionId")
                         option_instance = None
                         if option_id:
@@ -604,26 +587,12 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                                 partial=True,
                                 context=serializer.context,
                             )
-                            if option_serializer.is_valid():
-                                # ClassOption no longer has an image field.
-                                # All direct image handling for ClassOption is removed.
+                            if option_serializer.is_valid(raise_exception=True):
                                 option_instance = option_serializer.save()
                                 logger.info(
                                     f"Updated option ID {option_instance.optionId} for class {instance.pk}"
                                 )
-                            else:
-                                logger.error(
-                                    f"Option data validation failed for option {option_id}: {option_serializer.errors}"
-                                )
-                                raise DRFValidationError(
-                                    {
-                                        "options": f"Validation failed for option {option_id}: {option_serializer.errors}"
-                                    }
-                                )
                         else:
-                            logger.warning(
-                                f"Could not find existing option to update for class {instance.pk} based on provided data: {option_dict}. Ensure optionId is correct."
-                            )
                             if option_id:
                                 raise DRFValidationError(
                                     {
@@ -631,18 +600,15 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                                     }
                                 )
 
-                except json.JSONDecodeError:
-                    logger.error(
-                        f"Invalid JSON in 'options' field during update for class {instance.pk}."
-                    )
-                    raise DRFValidationError(
-                        {"options": "Invalid JSON format for options data."}
-                    )
-                except DRFValidationError:  # Re-raise validation errors from serializer
-                    raise
-                except Exception as e:
+                except (json.JSONDecodeError, DRFValidationError) as e:
                     logger.error(
                         f"Error processing options update for class {instance.pk}: {e}",
+                        exc_info=True,
+                    )
+                    raise  # Re-raise the caught validation or JSON error
+                except Exception as e:
+                    logger.error(
+                        f"Unexpected error processing options update for class {instance.pk}: {e}",
                         exc_info=True,
                     )
                     raise DRFValidationError(
@@ -1002,6 +968,57 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+    @action(detail=False, methods=["post"], url_path="group-delete")
+    def group_delete(self, request, *args, **kwargs):
+        """
+        Deletes a whole group of schedules identified by name and option_id.
+        Fails if any schedule in the group has confirmed bookings.
+        """
+        user = request.user
+        business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
+        if not business:
+            raise PermissionDenied("User is not associated with any business.")
+
+        serializer = ScheduleGroupActionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        option = serializer.validated_data["option_id"]
+        group_name = serializer.validated_data["name"]
+
+        # Security check: ensure the option belongs to the user's business
+        if option.classId.businessId != business:
+            raise PermissionDenied(
+                "You do not have permission to access this class option."
+            )
+
+        schedules_to_delete = Schedule.objects.filter(option=option, name=group_name)
+
+        if not schedules_to_delete.exists():
+            return Response(
+                {"detail": "No schedules found for this group."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Critical check: do not allow deletion if any schedule has confirmed bookings.
+        if Booking.objects.filter(
+            schedule_instance__schedule__in=schedules_to_delete, status="confirmed"
+        ).exists():
+            raise PermissionDenied(
+                "Cannot delete group: one or more schedules have confirmed bookings."
+            )
+
+        deleted_count, _ = schedules_to_delete.delete()
+
+        logger.info(
+            f"User {user.email} deleted schedule group '{group_name}' ({deleted_count} schedules) for option {option.pk}."
+        )
+
+        return Response(
+            {
+                "message": f"Successfully deleted {deleted_count} schedules in group '{group_name}'."
+            },
+            status=status.HTTP_200_OK,
+        )
+
     def perform_update(self, serializer):
         instance = self.get_object()
         serializer.validated_data.pop("option", None)
@@ -1035,12 +1052,37 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
 
 class BusinessScheduleInstanceViewSet(viewsets.ModelViewSet):
     serializer_class = ScheduleInstanceSerializer
+    # MODIFICATION 1: Remove the strict permission from the default list.
+    # It will be applied conditionally for modification actions via get_permissions.
     permission_classes = [
         IsAuthenticated,
         CanManageOwnClasses,
-        IsVerifiedAndActiveBusinessOwnerOrManager,
+        # IsVerifiedAndActiveBusinessOwnerOrManager, <-- REMOVED FROM HERE
     ]
     http_method_names = ["get", "post", "patch", "head", "options"]  # No PUT/DELETE
+
+    # MODIFICATION 2: Add get_permissions to apply stricter rules only for modification actions.
+    def get_permissions(self):
+        """
+        Instantiates and returns the list of permissions that this view requires.
+        - For read-only actions (list, retrieve), the user only needs to be the owner/manager.
+        - For modification actions (e.g., update, cancel), the user's business must also be
+          active and verified.
+        """
+        # The 'cancel' action is a custom POST, and 'partial_update' is PATCH.
+        if self.action in ["partial_update", "cancel"]:
+            # Apply stricter permissions for actions that modify data.
+            return [
+                perm()
+                for perm in [
+                    IsAuthenticated,
+                    CanManageOwnClasses,
+                    IsVerifiedAndActiveBusinessOwnerOrManager,
+                ]
+            ]
+
+        # For other actions (like 'retrieve' or 'list'), use the default less-strict permissions.
+        return [perm() for perm in self.permission_classes]
 
     def get_queryset(self):
         user = self.request.user

@@ -1,12 +1,15 @@
+import binascii
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.throttling import ScopedRateThrottle
 from dj_rest_auth.registration.views import RegisterView
+
+# --- MODIFIED: Removed import of DefaultPasswordResetView ---
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.contrib.auth import get_user_model
@@ -16,6 +19,17 @@ import logging
 from django.views import View
 from django.http import JsonResponse
 
+# --- REQUIRED IMPORTS FOR THE FIX ---
+from django.utils.http import urlsafe_base64_decode
+from django.utils.encoding import force_str
+from django.contrib.auth.tokens import default_token_generator
+
+# --- MODIFIED: Import allauth's form directly ---
+from allauth.account.forms import ResetPasswordForm, SetPasswordForm
+
+# --- END REQUIRED IMPORTS ---
+
+from quickstart.serializers.auth.auth_serializers import CustomAllAuthPasswordResetForm
 from quickstart.models import AuditLog
 
 
@@ -36,6 +50,41 @@ def get_client_ip(request):
     else:
         ip = request.META.get("REMOTE_ADDR")
     return ip
+
+
+class CustomPasswordResetView(APIView):
+    """
+    This view now uses our `CustomAllAuthPasswordResetForm`, which correctly
+    delegates URL generation to our custom adapter, ensuring the link sent
+    in the email points to the frontend with the correct path and parameters.
+    """
+
+    permission_classes = [AllowAny]
+    throttle_scope = "sensitive"
+
+    def post(self, request, *args, **kwargs):
+        # --- MODIFIED: Use our custom form ---
+        form = CustomAllAuthPasswordResetForm(request.data)
+
+        if form.is_valid():
+            # Our custom form's save method now handles everything correctly.
+            form.save(request)
+            logger.info(
+                f"Password reset email initiated for: {request.data.get('email')}"
+            )
+            return Response(
+                {"detail": "Password reset e-mail has been sent."},
+                status=status.HTTP_200_OK,
+            )
+        else:
+            # Pass form errors back to the frontend for display.
+            logger.warning(
+                f"Password reset failed for {request.data.get('email')}: {form.errors.as_json()}"
+            )
+            # It's better to return the specific errors from the form.
+            return Response(
+                form.errors.get_json_data(), status=status.HTTP_400_BAD_REQUEST
+            )
 
 
 # --- MODIFIED: Replaced DRF's APIView with Django's standard View ---
@@ -67,17 +116,13 @@ class CustomTokenObtainPairView(TokenObtainPairView):
             logger.warning(
                 f"Failed login attempt for user: {request.data.get('email')}"
             )
-            # You could add a 'failed_login' audit log here if desired
-            # AuditLog.objects.create(...)
             error_detail = e.args[0] if e.args else "Invalid credentials."
             return Response(
                 {"detail": error_detail}, status=status.HTTP_401_UNAUTHORIZED
             )
 
-        # --- LOGIN IS SUCCESSFUL AT THIS POINT ---
-
         validated_data = serializer.validated_data
-        user = serializer.user  # The serializer conveniently gives us the user object
+        user = serializer.user
 
         try:
             AuditLog.objects.create(
@@ -90,18 +135,15 @@ class CustomTokenObtainPairView(TokenObtainPairView):
             )
             logger.info(f"Successful login audited for user: {user.email}")
         except Exception as audit_error:
-            # Log the error but don't fail the login process
             logger.error(
                 f"Failed to create login audit log for user {user.email}: {audit_error}"
             )
 
-        # --- 2. ASSEMBLE RESPONSE PAYLOAD ---
         response_data = {
             "user": validated_data["user"],
         }
         response = Response(response_data, status=status.HTTP_200_OK)
 
-        # --- 3. SET COOKIES ---
         response.set_cookie(
             settings.SIMPLE_JWT["AUTH_COOKIE"],
             validated_data["access"],
@@ -110,7 +152,6 @@ class CustomTokenObtainPairView(TokenObtainPairView):
             samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],
             secure=settings.SIMPLE_JWT["AUTH_COOKIE_SECURE"],
         )
-
         response.set_cookie(
             settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"],
             validated_data["refresh"],
@@ -119,7 +160,6 @@ class CustomTokenObtainPairView(TokenObtainPairView):
             samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],
             secure=settings.SIMPLE_JWT["AUTH_COOKIE_SECURE"],
         )
-
         return response
 
 
@@ -134,13 +174,9 @@ class CustomTokenRefreshView(APIView):
             )
 
         User = get_user_model()
-
         try:
             refresh = RefreshToken(refresh_token)
-
-            # --- Get User and Permissions ---
             user_id = refresh.payload.get("user_id")
-            # The User variable is already defined and available
             try:
                 user = User.objects.select_related("role").get(userId=user_id)
                 user_serializer = CustomUserDetailsSerializer(user)
@@ -150,7 +186,6 @@ class CustomTokenRefreshView(APIView):
                     f"User with ID {user_id} from valid refresh token not found."
                 )
                 raise TokenError("User not found.")
-            # ----------------------------
 
             data = {"access": str(refresh.access_token), "user": user_data}
 
@@ -184,12 +219,9 @@ class CustomTokenRefreshView(APIView):
                         refresh.blacklist()
                     except AttributeError:
                         pass
-
             return response
-
         except (TokenError, AttributeError, User.DoesNotExist) as e:
             logger.error(f"Token Refresh Error: {e}")
-            # Ensure cookies are cleared on refresh failure as well
             response = Response(
                 {"detail": "Token refresh failed or user not found."},
                 status=status.HTTP_401_UNAUTHORIZED,
@@ -203,22 +235,12 @@ class UserUpdateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def patch(self, request):
-        print(
-            f"UserUpdateView: Authenticated user: {request.user.email if request.user.is_authenticated else 'Anonymous'}"
-        )  # Debug log
-        print("Received data:", request.data)
-
         serializer = CustomUserDetailsSerializer(
-            request.user,  # This should now be the authenticated user instance
-            data=request.data,
-            partial=True,
-            context={"request": request},  # Good practice to pass request context
+            request.user, data=request.data, partial=True, context={"request": request}
         )
         if serializer.is_valid():
-            print("Valid data:", serializer.validated_data)
             serializer.save()
             return Response(serializer.data)
-        print("Serializer errors:", serializer.errors)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -228,25 +250,17 @@ class LogoutView(APIView):
             refresh_token = request.COOKIES.get(
                 settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"]
             )
-
             response = Response(status=status.HTTP_205_RESET_CONTENT)
-
-            # Always delete cookies, even if token processing fails
             response.delete_cookie(settings.SIMPLE_JWT["AUTH_COOKIE"])
             response.delete_cookie(settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"])
-            # Also delete the CSRF token to ensure a clean state for the next session.
             response.delete_cookie(settings.CSRF_COOKIE_NAME)
-
-            # Optional: Attempt to blacklist token if present
             if refresh_token:
                 try:
                     token = RefreshToken(refresh_token)
                     token.blacklist()
                 except Exception as token_error:
                     logger.warning(f"Token blacklist failed: {token_error}")
-
             return response
-
         except Exception as e:
             logger.error(f"Logout error: {e}")
             response = Response(
@@ -306,3 +320,85 @@ class CustomRegisterView(RegisterView):
                 {"detail": "An internal error occurred during registration."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+class CustomPasswordResetConfirmView(APIView):
+    """
+    Handles the final step of the password reset process using the RAW user ID.
+    NO MORE ENCODING. NO MORE DECODING.
+    """
+
+    permission_classes = [AllowAny]
+    throttle_scope = "sensitive"
+
+    def post(self, request, *args, **kwargs):
+        logger.info("=" * 80)
+        logger.info("!!! [PWD-RESET-CONFIRM-RAW] DIAGNOSTIC VALIDATION STARTED !!!")
+
+        uid = request.data.get("uid")
+        token = request.data.get("token")
+        User = get_user_model()
+
+        logger.info(f"!!! [PWD-RESET-CONFIRM-RAW] Raw payload received: {request.data}")
+        logger.info(f"!!! [PWD-RESET-CONFIRM-RAW] STEP 1: Processing RAW UID: '{uid}'")
+        logger.info(f"!!! [PWD-RESET-CONFIRM-RAW] STEP 1: Processing Token: '{token}'")
+
+        # 1. Find user directly with the raw UID (pk)
+        try:
+            user = User.objects.get(pk=uid)
+            logger.info(
+                f"!!! [PWD-RESET-CONFIRM-RAW] SUCCESS: User lookup successful. Found user: {user.email} (ID: {user.pk})"
+            )
+        except (User.DoesNotExist, ValueError, TypeError):
+            logger.error(
+                f"!!! [PWD-RESET-CONFIRM-RAW] FATAL: USER LOOKUP FAILED. No user found with PK: '{uid}'"
+            )
+            return Response(
+                {"uid": ["Invalid value"]}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 2. Check if the token is valid for the user
+        if not default_token_generator.check_token(user, token):
+            logger.error(
+                f"!!! [PWD-RESET-CONFIRM-RAW] FATAL: TOKEN CHECK FAILED for user {user.email}. The token is invalid or has expired."
+            )
+            return Response(
+                {"token": ["Invalid token"]}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        logger.info(
+            f"!!! [PWD-RESET-CONFIRM-RAW] SUCCESS: Token is valid for user {user.email}."
+        )
+
+        # 3. Use allauth's SetPasswordForm for validation and saving
+        # THE FIX: The error log clearly shows the form expects 'password1' and 'password2'.
+        # We must therefore map the incoming 'new_password1' and 'new_password2' from the request
+        # to the keys the form is expecting to satisfy its validation.
+        form = SetPasswordForm(
+            data={
+                "password1": request.data.get("new_password1"),
+                "password2": request.data.get("new_password2"),
+            },
+            user=user,
+        )
+
+        if form.is_valid():
+            # Because the form's field names appear to be 'password1'/'password2' (based on the error log),
+            # the default form.save() method (which might look for 'new_password1') could fail.
+            # We will set the password manually using the cleaned data to ensure it works.
+            user.set_password(form.cleaned_data["password1"])
+            user.save()
+            logger.info(
+                f"!!! [PWD-RESET-CONFIRM-RAW] SUCCESS: Password successfully reset for user: {user.email}"
+            )
+            logger.info("=" * 80)
+            return Response(
+                {"detail": "Password has been reset with the new password."},
+                status=status.HTTP_200_OK,
+            )
+        else:
+            logger.error(
+                f"!!! [PWD-RESET-CONFIRM-RAW] FATAL: Form invalid for user {user.email}. Errors: {form.errors.as_json()}"
+            )
+            logger.info("=" * 80)
+            return Response(form.errors, status=status.HTTP_400_BAD_REQUEST)

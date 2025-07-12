@@ -41,7 +41,8 @@ class PublicBusinessInfoViewSet(viewsets.ReadOnlyModelViewSet):
         "businessDescription",
         "businessCity",
         "businessState",
-        "classCategory__name",  # Search by category name
+        # FIX: Removed "classCategory__name" because the BusinessInfo model has no 'classCategory' field.
+        # Searching by class category should be done through the class search endpoint.
     ]
     ordering_fields = [
         "businessName",
@@ -60,7 +61,9 @@ class PublicBusinessInfoViewSet(viewsets.ReadOnlyModelViewSet):
         Applies the default ordering.
         """
         logger.debug("Fetching public business info queryset (active & verified)")
-        queryset = BusinessInfo.objects.select_related("classCategory").filter(
+        # FIX: Removed .select_related("classCategory") because the 'classCategory' field does not exist on the BusinessInfo model.
+        # This was the direct cause of the FieldError crash.
+        queryset = BusinessInfo.objects.filter(
             isActive=True, verificationStatus="verified"
         )
         return queryset

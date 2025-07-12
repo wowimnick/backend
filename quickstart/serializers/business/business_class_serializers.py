@@ -46,6 +46,15 @@ class PublicCategorySerializer(serializers.ModelSerializer):
         ]
 
 
+class ScheduleGroupActionSerializer(serializers.Serializer):
+    """Validates the base requirement for a group action: option_id and name."""
+
+    option_id = serializers.PrimaryKeyRelatedField(
+        queryset=ClassOption.objects.all(), required=True
+    )
+    name = serializers.CharField(max_length=100, required=True, allow_blank=False)
+
+
 class BusinessContactInfoSerializer(serializers.ModelSerializer):
     """Serializer for exposing business contact details for pre-filling forms."""
 
@@ -74,6 +83,19 @@ class ScheduleInstanceSerializer(serializers.ModelSerializer):
 
     current_bookings_count = serializers.IntegerField(read_only=True)
     available_spots = serializers.SerializerMethodField(read_only=True)
+    # --- NEW FIELDS ---
+    class_name = serializers.CharField(
+        source="schedule.option.classId.title", read_only=True
+    )
+    class_id = serializers.IntegerField(
+        source="schedule.option.classId.classId", read_only=True
+    )
+    booking_type = serializers.CharField(
+        source="schedule.option.booking_type", read_only=True
+    )
+    schedule_name = serializers.CharField(
+        source="schedule.name", read_only=True, allow_null=True
+    )
 
     class Meta:
         model = ScheduleInstance
@@ -91,6 +113,11 @@ class ScheduleInstanceSerializer(serializers.ModelSerializer):
             "available_spots",
             "created_at",
             "updated_at",
+            # --- NEW FIELDS ---
+            "class_name",
+            "class_id",
+            "booking_type",
+            "schedule_name",
         ]
         read_only_fields = [
             "id",
@@ -99,6 +126,11 @@ class ScheduleInstanceSerializer(serializers.ModelSerializer):
             "updated_at",
             "current_bookings_count",
             "available_spots",
+            # --- NEW FIELDS ---
+            "class_name",
+            "class_id",
+            "booking_type",
+            "schedule_name",
         ]
 
     def get_available_spots(self, obj):

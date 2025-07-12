@@ -11,7 +11,6 @@ from quickstart.models import BusinessInfo
 from quickstart.tests.factories import (
     UserFactory,
     BusinessInfoFactory,
-    ClassCategoryFactory,
     RoleFactory,
 )
 
@@ -48,8 +47,6 @@ class BusinessManagementTests(APITestCase):
         self.user.save()
         self.user.user_permissions.add(*self.business_owner_role.permissions.all())
 
-        self.category = ClassCategoryFactory(key="fitness")
-
         # Base data for a valid registration
         self.valid_data = {
             "businessName": "Test Fitness Studio",
@@ -67,8 +64,6 @@ class BusinessManagementTests(APITestCase):
             "businessCity": "Fitville",
             "businessState": "CA",
             "businessZipCode": "90210",
-            "classCategory": "fitness",
-            "subcategories": json.dumps(["yoga", "pilates"]),
             "termsAccepted": True,
             "privacyAccepted": True,
         }

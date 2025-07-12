@@ -523,15 +523,6 @@ class BusinessInfo(models.Model):
     liabilityWaiver = models.BooleanField(default=False)
 
     # --- Class/Category Information ---
-    classCategory = models.ForeignKey(
-        "ClassCategory",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=False,  # Still required in forms
-        related_name="businesses_in_category",
-        help_text="The primary category that defines the business.",
-    )
-    subcategories = models.JSONField(default=list, blank=True)
     classFormats = models.JSONField(default=list, blank=True)
     skillLevels = models.JSONField(default=list, blank=True)
     ageGroups = models.JSONField(default=list, blank=True)
@@ -617,7 +608,6 @@ class BusinessInfo(models.Model):
         verbose_name_plural = "Business Information"
         indexes = [
             models.Index(fields=["businessType"]),
-            models.Index(fields=["classCategory"]),
             models.Index(fields=["isActive"]),
             models.Index(fields=["featured"]),
             models.Index(fields=["verificationStatus"]),
@@ -1240,6 +1230,8 @@ class Schedule(models.Model):
         else:  # Single Session
             if not self.date:
                 raise ValidationError({"date": "Date is required for single sessions"})
+            if self.date and not self.day:
+                self.day = self.date.strftime("%a")
 
     class Meta:
         db_table = "schedules"
