@@ -48,8 +48,13 @@ class AdminClassReviewManagementTests(APITestCase):
         self.admin_user = UserFactory(role=self.admin_role)
         self.admin_user.user_permissions.add(*self.admin_role.permissions.all())
 
-        self.klass1 = ClassesMainFactory(title="Active Class", status="active")
-        self.klass2 = ClassesMainFactory(title="Inactive Class", status="inactive")
+        self.category = ClassCategoryFactory()
+        self.klass1 = ClassesMainFactory(
+            title="Active Class", status="active", category=self.category
+        )
+        self.klass2 = ClassesMainFactory(
+            title="Inactive Class", status="inactive", category=self.category
+        )
         self.review1 = ReviewFactory(classId=self.klass1, status="approved")
         self.review2 = ReviewFactory(classId=self.klass2, status="under_review")
 
@@ -143,9 +148,9 @@ class AdminClassReviewManagementTests(APITestCase):
         )
         data = {"new_id": new_category.pk}
 
-        response = self.client.post(url, data, format="json")
+        response = self.client.post(url, data)
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
         self.klass1.refresh_from_db()
         self.assertEqual(self.klass1.category, new_category)
         self.assertIsNone(

@@ -13,6 +13,7 @@ from quickstart.tests.factories import (
     ClassesMainFactory,
     BookingFactory,
     RoleFactory,
+    ClassCategoryFactory,
 )
 
 
@@ -52,7 +53,10 @@ class BusinessStudentManagementTests(APITestCase):
 
         # Create Business and Class structure
         self.business = BusinessInfoFactory(owner=self.owner)
-        self.klass = ClassesMainFactory(businessId=self.business)
+        self.category = ClassCategoryFactory()
+        self.klass = ClassesMainFactory(
+            businessId=self.business, category=self.category
+        )
 
         # Create bookings to establish a student-business relationship
         BookingFactory(
@@ -65,7 +69,8 @@ class BusinessStudentManagementTests(APITestCase):
         )
 
         # Create a booking with a different business
-        other_business_klass = ClassesMainFactory()
+        other_category = ClassCategoryFactory()
+        other_business_klass = ClassesMainFactory(category=other_category)
         BookingFactory(
             user=self.unrelated_user,
             schedule_instance__schedule__option__classId=other_business_klass,
