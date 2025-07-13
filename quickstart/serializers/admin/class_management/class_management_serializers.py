@@ -392,6 +392,7 @@ class AdminClassCategorySerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             "id",
+            "key",
             "created_at",
             "updated_at",
             "subcategories",
