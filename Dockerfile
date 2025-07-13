@@ -1,5 +1,5 @@
 # Use a specific, stable Python version
-FROM python:3.10-slim-buster
+FROM python:3.10-slim
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1
