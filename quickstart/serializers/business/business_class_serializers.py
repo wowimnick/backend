@@ -47,6 +47,7 @@ class PublicCategorySerializer(serializers.ModelSerializer):
             "key",
             "description",
             "image",
+            "icon_name",
         ]
 
 
