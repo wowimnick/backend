@@ -423,7 +423,6 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "cancellationNotification",
             "reminderNotification",
             "smsNotifications",
-            "liabilityWaiver",
             "classFormats",
             "skillLevels",
             "ageGroups",
@@ -478,7 +477,6 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
                 "allow_blank": True,
                 "allow_null": True,
             },
-            "liabilityWaiver": {"required": False},
             "showExactLocation": {"required": False},
             "newBookingNotification": {"required": False},
             "cancellationNotification": {"required": False},
@@ -592,7 +590,6 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
 
         # Handle boolean string fields from FormData
         boolean_fields = [
-            "liabilityWaiver",
             "showExactLocation",
             "newBookingNotification",
             "cancellationNotification",

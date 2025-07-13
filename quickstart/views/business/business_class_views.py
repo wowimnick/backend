@@ -228,13 +228,6 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                 "You must be associated with a business to create a class."
             )
 
-        # ADDED: Ensure the business account is active, even if not yet verified.
-        # This prevents users with deactivated or suspended business accounts from creating new content.
-        if not business.isActive:
-            raise PermissionDenied(
-                "Your business account is currently inactive. Please contact support to create new classes."
-            )
-
         category_key = serializer.validated_data.pop("category_key")
         subcategory_key = serializer.validated_data.pop("subcategory_key", None)
 
@@ -741,6 +734,50 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
 
 
 # --- Views for related models (Options, Schedules, Instances, Breaks) ---
+
+
+class BusinessClassOptionDetail(generics.RetrieveUpdateDestroyAPIView):
+    serializer_class = ManagedClassOptionSerializer
+    permission_classes = [
+        IsAuthenticated,
+        CanManageOwnClasses,
+    ]
+    lookup_url_kwarg = "option_id"
+    lookup_field = "optionId"  # Match model field
+
+    def get_queryset(self):
+        user = self.request.user
+        class_pk = self.kwargs.get("pk")
+        business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
+        if not business:
+            return ClassOption.objects.none()
+        # Ensure the class_pk belongs to the business as well
+        return ClassOption.objects.filter(
+            classId_id=class_pk, classId__businessId=business
+        )
+
+    def get_object(self):
+        queryset = self.filter_queryset(self.get_queryset())
+        lookup_url_kwarg = self.lookup_url_kwarg or self.lookup_field
+        # Use the correct field for lookup based on lookup_field
+        filter_kwargs = {self.lookup_field: self.kwargs[lookup_url_kwarg]}
+        obj = get_object_or_404(queryset, **filter_kwargs)
+        # Permission check is implicitly handled by get_queryset filtering by business
+        # self.check_object_permissions(self.request, obj.classId) # Not strictly needed if queryset is correct
+        return obj
+
+    def perform_update(self, serializer):
+        serializer.validated_data.pop("classId", None)  # Don't change parent class
+        instance = serializer.save()
+        logger.info(
+            f"ClassOption ID {instance.optionId} updated by {self.request.user.email}"
+        )
+
+    def perform_destroy(self, instance):
+        option_id = instance.optionId
+        instance.schedules.update(is_active=False)
+        instance.delete()
+        logger.info(f"ClassOption ID {option_id} deleted by {self.request.user.email}")
 
 
 class BusinessClassOptionDetail(generics.RetrieveUpdateDestroyAPIView):
