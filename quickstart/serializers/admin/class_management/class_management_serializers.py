@@ -1,9 +1,5 @@
 from rest_framework import serializers
-from decimal import Decimal
-
-from quickstart.serializers.business.business_class_serializers import (
-    PublicSubcategorySerializer,
-)  # Ensure Decimal is imported
+from decimal import Decimal  # Ensure Decimal is imported
 
 from ....models import (
     ClassCategory,
@@ -361,27 +357,21 @@ class SubcategorySerializer(serializers.ModelSerializer):
         fields = ["id", "name", "key", "description", "class_count"]
 
 
-class PublicCategorySerializer(serializers.ModelSerializer):
-    subcategories = PublicSubcategorySerializer(many=True, read_only=True)
-
-    class Meta:
-        model = ClassCategory
-        fields = [
-            "name",
-            "key",
-            "icon_name",
-            "color",
-            "subcategories",
-        ]
-
-
 # --- AdminClassCategorySerializer ---
 class AdminClassCategorySerializer(serializers.ModelSerializer):
+    """
+    Handles serialization for the admin category management view.
+    MODIFIED to correctly handle all form fields including image uploads
+    and to provide all necessary data for form prepopulation.
+    """
+
     subcategories = SubcategorySerializer(many=True, read_only=True)
     activeClasses = serializers.IntegerField(
         read_only=True, default=0, source="active_classes"
     )
     class_count = serializers.IntegerField(read_only=True, default=0)
+
+    image = serializers.ImageField(use_url=True, required=False, allow_null=True)
 
     class Meta:
         model = ClassCategory
@@ -389,6 +379,9 @@ class AdminClassCategorySerializer(serializers.ModelSerializer):
             "id",
             "name",
             "key",
+            "description",
+            "is_featured",
+            "image",
             "color",
             "icon_name",
             "created_at",
@@ -401,6 +394,7 @@ class AdminClassCategorySerializer(serializers.ModelSerializer):
             "id",
             "created_at",
             "updated_at",
+            "subcategories",
             "activeClasses",
             "class_count",
         ]

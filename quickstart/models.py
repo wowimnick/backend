@@ -712,7 +712,23 @@ class ClassCategory(models.Model):
     """Class category model"""
 
     name = models.CharField(max_length=100)
-    key = models.CharField(max_length=100, unique=True)
+    key = models.SlugField(
+        max_length=120,
+        unique=True,
+        help_text="URL-friendly identifier. Auto-generates from name if not provided.",
+    )
+    description = models.TextField(
+        blank=True, help_text="A short, catchy description for the homepage card."
+    )
+    image = models.ImageField(
+        upload_to="category_images/",
+        blank=True,
+        null=True,
+        help_text="Image displayed on the homepage category card.",
+    )
+    is_featured = models.BooleanField(
+        default=False, db_index=True, help_text="Show this category on the homepage."
+    )
     color = models.CharField(max_length=20, default="#3b82f6")
     icon_name = models.CharField(
         max_length=50,
@@ -726,11 +742,17 @@ class ClassCategory(models.Model):
     def __str__(self):
         return self.name
 
+    def save(self, *args, **kwargs):
+        if not self.key:
+            from django.utils.text import slugify
+
+            self.key = slugify(self.name)
+        super().save(*args, **kwargs)
+
     class Meta:
         db_table = "class_categories"
         verbose_name_plural = "Class Categories"
         permissions = [
-            # --- Platform Admin Permissions (Keep these) ---
             ("view_category_stats", "Can view category statistics"),
             ("access_category_admin", "Can access the Category Administration section"),
         ]
