@@ -4,6 +4,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated, BasePermission
+from rest_framework.parsers import MultiPartParser, FormParser
 from django.db import transaction
 from django.db.models import (
     Q,
@@ -629,6 +630,7 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "put", "patch", "delete", "head", "options"]
     filter_backends = [filters.SearchFilter]
     search_fields = ["name", "key"]
+    parser_classes = [MultiPartParser, FormParser]
 
     def get_queryset(self):
         # Using get_queryset to handle annotations centrally

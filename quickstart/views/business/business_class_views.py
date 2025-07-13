@@ -77,7 +77,8 @@ logger = logging.getLogger(__name__)
 
 class PublicCategoryViewSet(viewsets.ReadOnlyModelViewSet):
     """
-    Provides a list of public class categories that have active classes.
+    Provides a list of public, featured class categories that have active classes.
+    This endpoint is used to dynamically populate the homepage.
     """
 
     permission_classes = [AllowAny]
@@ -85,22 +86,24 @@ class PublicCategoryViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         """
-        Returns ClassCategory objects that have at least one associated 'active' class,
-        where the business is also active and verified.
+        Returns ClassCategory objects that are featured (is_featured=True) and
+        have at least one associated 'active' class, where the business is also
+        active and verified.
         """
-        active_class_filter = Q(
+        live_class_filter = Q(
             classes_in_category__status="active",
             classes_in_category__businessId__isActive=True,
             classes_in_category__businessId__verificationStatus="verified",
         )
 
         return (
-            ClassCategory.objects.annotate(
-                active_class_count=Count(
-                    "classes_in_category", filter=active_class_filter
+            ClassCategory.objects.filter(is_featured=True)
+            .annotate(
+                live_class_count=Count(
+                    "classes_in_category", filter=live_class_filter, distinct=True
                 )
             )
-            .filter(active_class_count__gt=0)
+            .filter(live_class_count__gt=0)
             .order_by("name")
         )
 
@@ -226,13 +229,6 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
         if not business:
             raise PermissionDenied(
                 "You must be associated with a business to create a class."
-            )
-
-        # ADDED: Ensure the business account is active, even if not yet verified.
-        # This prevents users with deactivated or suspended business accounts from creating new content.
-        if not business.isActive:
-            raise PermissionDenied(
-                "Your business account is currently inactive. Please contact support to create new classes."
             )
 
         category_key = serializer.validated_data.pop("category_key")
@@ -748,7 +744,6 @@ class BusinessClassOptionDetail(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = [
         IsAuthenticated,
         CanManageOwnClasses,
-        IsVerifiedAndActiveBusinessOwnerOrManager,
     ]
     lookup_url_kwarg = "option_id"
     lookup_field = "optionId"  # Match model field
@@ -793,7 +788,6 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
     permission_classes = [
         IsAuthenticated,
         CanManageOwnClasses,
-        IsVerifiedAndActiveBusinessOwnerOrManager,
     ]
 
     def get_queryset(self):
@@ -1052,37 +1046,11 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
 
 class BusinessScheduleInstanceViewSet(viewsets.ModelViewSet):
     serializer_class = ScheduleInstanceSerializer
-    # MODIFICATION 1: Remove the strict permission from the default list.
-    # It will be applied conditionally for modification actions via get_permissions.
     permission_classes = [
         IsAuthenticated,
         CanManageOwnClasses,
-        # IsVerifiedAndActiveBusinessOwnerOrManager, <-- REMOVED FROM HERE
     ]
     http_method_names = ["get", "post", "patch", "head", "options"]  # No PUT/DELETE
-
-    # MODIFICATION 2: Add get_permissions to apply stricter rules only for modification actions.
-    def get_permissions(self):
-        """
-        Instantiates and returns the list of permissions that this view requires.
-        - For read-only actions (list, retrieve), the user only needs to be the owner/manager.
-        - For modification actions (e.g., update, cancel), the user's business must also be
-          active and verified.
-        """
-        # The 'cancel' action is a custom POST, and 'partial_update' is PATCH.
-        if self.action in ["partial_update", "cancel"]:
-            # Apply stricter permissions for actions that modify data.
-            return [
-                perm()
-                for perm in [
-                    IsAuthenticated,
-                    CanManageOwnClasses,
-                    IsVerifiedAndActiveBusinessOwnerOrManager,
-                ]
-            ]
-
-        # For other actions (like 'retrieve' or 'list'), use the default less-strict permissions.
-        return [perm() for perm in self.permission_classes]
 
     def get_queryset(self):
         user = self.request.user

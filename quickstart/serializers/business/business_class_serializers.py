@@ -29,20 +29,25 @@ logger = logging.getLogger(__name__)
 class PublicSubcategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = ClassSubcategory
-        fields = ["name", "key"]  # Frontend needs name for display, key for submission
+        fields = ["name", "key"]  # This remains 'key' as per the models provided
 
 
 class PublicCategorySerializer(serializers.ModelSerializer):
-    subcategories = PublicSubcategorySerializer(many=True, read_only=True)
+    """
+    MODIFIED: This serializer is now tailored for the public homepage.
+    It provides the necessary fields for the dynamic category cards.
+    """
+
+    image = serializers.ImageField(read_only=True, use_url=True)
 
     class Meta:
         model = ClassCategory
         fields = [
             "name",
             "key",
+            "description",
+            "image",
             "icon_name",
-            "color",
-            "subcategories",
         ]
 
 
@@ -415,7 +420,35 @@ class ManagedClassSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ClassesMain
-        fields = "__all__"
+        # MODIFIED: Replaced __all__ with an explicit list to use new field name
+        fields = [
+            "classId",
+            "businessId",
+            "title",
+            "description",
+            "features",
+            "category",
+            "subcategory",
+            "status",
+            "location",
+            "coordinates",
+            "saltLocation",
+            "studentContactEmail",
+            "studentContactPhone",
+            "adminContactEmail",
+            "adminContactPhone",
+            "createdAt",
+            "updatedAt",
+            "options",
+            "images",
+            "business_name",
+            "category_key",
+            "category_name",
+            "subcategory_key",
+            "subcategory_name",
+            "average_rating",
+            "review_count",
+        ]
         read_only_fields = [
             "classId",
             "businessId",
@@ -443,6 +476,7 @@ class ClassCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ClassesMain
+        # MODIFIED: Updated field list to use category_key
         fields = [
             "title",
             "description",
@@ -458,12 +492,14 @@ class ClassCreateSerializer(serializers.ModelSerializer):
             "adminContactPhone",
         ]
 
+    # MODIFIED: Renamed and updated validation logic for key
     def validate_category_key(self, value):
         if not ClassCategory.objects.filter(key=value).exists():
             raise serializers.ValidationError(f"Category with key '{value}' not found.")
         return value
 
     def validate(self, data):
+        # MODIFIED: Use category_key in validation
         category_key = data.get("category_key")
         subcategory_key = data.get("subcategory_key")
 
@@ -477,7 +513,7 @@ class ClassCreateSerializer(serializers.ModelSerializer):
             ):
                 raise serializers.ValidationError(
                     {
-                        "subcategory_key": f"Subcategory '{subcategory_key}' not found in category '{category_key}'."
+                        "subcategory_key": f"Subcategory '{subcategory_key}' not found in category '{category.name}'."
                     }
                 )
         return data

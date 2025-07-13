@@ -18,6 +18,7 @@ from quickstart.tests.factories import (
     ClassOptionFactory,
     ScheduleInstanceFactory,
     BookingFactory,
+    ClassCategoryFactory,
 )
 from quickstart.models import BusinessInfo, Favorites
 
@@ -226,18 +227,22 @@ class PublicClassViewSetTest(APITestCase):
 
     def setUp(self):
         self.user = UserFactory()
+        self.category = ClassCategoryFactory()
         self.active_class = ClassesMainFactory(
             title="Active Yoga Class",
             description="A class for testing.",
             coordinates="45.4215,-75.6972",  # Ottawa, ON
+            category=self.category,
         )
         ReviewFactory.create_batch(5, classId=self.active_class, rating=5)
 
         self.inactive_class = ClassesMainFactory(
-            title="Inactive Class", status="inactive"
+            title="Inactive Class", status="inactive", category=self.category
         )
         self.unverified_biz_class = ClassesMainFactory(
-            title="Unverified Business Class", businessId__verificationStatus="pending"
+            title="Unverified Business Class",
+            businessId__verificationStatus="pending",
+            category=self.category,
         )
 
     def test_list_only_active_and_verified_classes(self):
@@ -327,7 +332,9 @@ class PublicClassViewSetTest(APITestCase):
 
         # Create a class far away that should be excluded by radius
         ClassesMainFactory(
-            title="Far Away Class", coordinates="34.0522,-118.2437"
+            title="Far Away Class",
+            coordinates="34.0522,-118.2437",
+            category=self.category,
         )  # Los Angeles
 
         url = reverse("public-class-search")
@@ -350,8 +357,8 @@ class PublicClassViewSetTest(APITestCase):
         mock_geocode.return_value = None  # Simulate geocoding failure
 
         # Create multiple classes
-        ClassesMainFactory(title="Class A")
-        ClassesMainFactory(title="Class B")
+        ClassesMainFactory(title="Class A", category=self.category)
+        ClassesMainFactory(title="Class B", category=self.category)
 
         url = reverse("public-class-search")
         query_params = {"location_search": "asdfghjkl", "radius": "50"}
@@ -420,7 +427,8 @@ class PublicScheduleViewSetTest(APITestCase):
         self.day_after = self.tomorrow + timedelta(days=1)
 
         # Create a class and option to test against
-        self.klass = ClassesMainFactory()
+        self.category = ClassCategoryFactory()
+        self.klass = ClassesMainFactory(category=self.category)
         self.option = ClassOptionFactory(classId=self.klass)
 
         # Create several instances for this option

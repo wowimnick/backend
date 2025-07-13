@@ -22,6 +22,7 @@ from quickstart.tests.factories import (
     ScheduleInstanceFactory,
     RoleFactory,
     BookingFactory,
+    ClassCategoryFactory,
 )
 
 
@@ -68,7 +69,10 @@ class BookingFlowTests(APITestCase):
 
         # Create business and class structure
         self.business = BusinessInfoFactory(owner=self.owner)
-        self.klass = ClassesMainFactory(businessId=self.business)
+        self.category = ClassCategoryFactory()
+        self.klass = ClassesMainFactory(
+            businessId=self.business, category=self.category
+        )
         self.option = ClassOptionFactory(
             classId=self.klass, cancellationPolicy="24h"
         )  # 24-hour policy
@@ -403,7 +407,10 @@ class PaymentFlowTests(APITestCase):
         self.student.user_permissions.add(*student_role.permissions.all())
 
         self.business = BusinessInfoFactory()
-        self.klass = ClassesMainFactory(businessId=self.business)
+        self.category = ClassCategoryFactory()
+        self.klass = ClassesMainFactory(
+            businessId=self.business, category=self.category
+        )
         self.option = ClassOptionFactory(classId=self.klass)
         self.instance = ScheduleInstanceFactory(
             schedule__option=self.option,

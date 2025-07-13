@@ -19,6 +19,7 @@ from quickstart.tests.factories import (
     BookingFactory,
     ReviewFactory,
     RoleFactory,
+    ClassCategoryFactory,
 )
 
 
@@ -59,7 +60,10 @@ class ReviewManagementTests(APITestCase):
 
         # Create Business and Class structure
         self.business = BusinessInfoFactory(owner=self.owner)
-        self.klass = ClassesMainFactory(businessId=self.business)
+        self.category = ClassCategoryFactory()
+        self.klass = ClassesMainFactory(
+            businessId=self.business, category=self.category
+        )
 
         # Create a COMPLETED booking, which is eligible for review
         self.completed_booking = BookingFactory(
