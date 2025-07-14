@@ -85,6 +85,7 @@ jobs:
             # --- Static Files (S3) ---
             AWS_STORAGE_BUCKET_NAME=${{ secrets.AWS_STORAGE_BUCKET_NAME }}
             AWS_S3_REGION_NAME=${{ secrets.AWS_S3_REGION_NAME }}
+            CLOUDFRONT_DOMAIN=${{ secrets.CLOUDFRONT_DOMAIN }}
 
             # --- API & Service Keys ---
             RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
