@@ -15,6 +15,7 @@ from pathlib import Path
 # For local development without Docker, we load a .env file.
 # The DJANGO_ENV variable controls which file is loaded locally.
 IS_DOCKER = os.environ.get("IS_DOCKER") == "true"
+CLOUDFRONT_DOMAIN = os.environ.get("CLOUDFRONT_DOMAIN")
 
 if not IS_DOCKER:
     env_type = os.environ.get("DJANGO_ENV", "local")

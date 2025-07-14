@@ -700,7 +700,7 @@ class ClassImage(models.Model):
     classId = models.ForeignKey(
         "ClassesMain", related_name="images", on_delete=models.CASCADE
     )
-    image = models.ImageField(upload_to="class_images/")
+    image = models.ImageField(upload_to="originals/class_images/")
     isCover = models.BooleanField(default=False)
     createdAt = models.DateTimeField(auto_now_add=True)
 

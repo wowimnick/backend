@@ -1,3 +1,5 @@
+import os
+from django.conf import settings
 from rest_framework import serializers
 from quickstart.models import (
     ClassesMain,
@@ -14,11 +16,72 @@ logger = logging.getLogger(__name__)
 
 
 class PublicClassImageSerializer(serializers.ModelSerializer):
-    """Serializer for publicly displaying class images."""
+    """
+    Serializer for publicly displaying class images, now with optimized versions.
+    """
+
+    # This correctly uses your PrivateMediaStorage to generate a pre-signed URL for the original.
+    # NO CHANGE NEEDED HERE.
+    original_url = serializers.ImageField(source="image", read_only=True)
+
+    # These methods will now build the correct CloudFront URLs.
+    thumbnail_url = serializers.SerializerMethodField()
+    medium_url = serializers.SerializerMethodField()
+    large_url = serializers.SerializerMethodField()
 
     class Meta:
         model = ClassImage
-        fields = ["imageId", "image"]  # Only show ID and image URL
+        fields = [
+            "imageId",
+            "original_url",
+            "thumbnail_url",
+            "medium_url",
+            "large_url",
+        ]
+        read_only_fields = fields
+
+    def _get_resized_url(self, obj, size_name):
+        """
+        Constructs a public, cacheable CloudFront URL for a resized image.
+        """
+        # Ensure the CLOUDFRONT_DOMAIN is set in your settings.py
+        if not getattr(settings, "CLOUDFRONT_DOMAIN", None):
+            logger.warning("CLOUDFRONT_DOMAIN is not configured in settings.py")
+            return None
+
+        # obj.image.name provides the raw file path in S3 (e.g., "originals/class_images/photo.png")
+        # This is the correct way to get the path without the pre-signed signature.
+        if obj.image and obj.image.name:
+            original_path = obj.image.name
+
+            # Your Lambda only processes files from 'originals/', so this is a safe check.
+            if not original_path.startswith("originals/"):
+                return None  # Or handle as an error
+
+            # 1. Create the new path structure for the public, resized image.
+            # e.g., 'originals/class_images/photo.png' -> 'public/thumb/class_images/photo.png'
+            resized_path = original_path.replace(
+                "originals/", f"public/{size_name}/", 1
+            )
+
+            # 2. Change the file extension to .jpeg, as per your Lambda's output.
+            base_path, _ = os.path.splitext(resized_path)
+            final_path = base_path + ".jpeg"
+
+            # 3. Construct the full URL using your CloudFront domain.
+            # e.g., "https://d123abc.cloudfront.net/public/thumb/class_images/photo.jpeg"
+            return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
+
+        return None
+
+    def get_thumbnail_url(self, obj):
+        return self._get_resized_url(obj, "thumb")
+
+    def get_medium_url(self, obj):
+        return self._get_resized_url(obj, "medium")
+
+    def get_large_url(self, obj):
+        return self._get_resized_url(obj, "large")
 
 
 class PublicScheduleSerializer(serializers.ModelSerializer):
