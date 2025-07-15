@@ -109,7 +109,7 @@ jobs:
 
             # Use `sed` to find the line starting with "ALLOWED_HOSTS=" and replace it entirely.
             # This is the most robust way to do an in-place update of a specific key.
-            sed -i "s/^ALLOWED_HOSTS=.*/ALLOWED_HOSTS=${{ secrets.ALLOWED_HOSTS }},$INSTANCE_PRIVATE_IP,$INSTANCE_PUBLIC_IP/" /home/ec2-user/.env.staging
+            sed -i "s/^ALLOWED_HOSTS=.*/ALLOWED_HOSTS=${{ secrets.ALLOWED_HOSTS }},$INSTANCE_PRIVATE_IP,$INSTANCE_PUBLIC_IP,localhost/" /home/ec2-user/.env.staging
 
                  # --- DEPLOYMENT LOGIC ---
             IMAGE_NAME=${{ steps.build-image.outputs.image }}
