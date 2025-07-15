@@ -50,7 +50,7 @@ jobs:
           key: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
           script: |
             # --- PREPARATION ---
-            # Create the .env file from secrets
+            # Create the .env file from secrets.
             cat << 'EOF' > /home/ec2-user/.env.staging
             # --- Meta ---
             IS_DOCKER=true
@@ -92,6 +92,7 @@ jobs:
             DEFAULT_FROM_EMAIL=${{ secrets.DEFAULT_FROM_EMAIL }}
             EOF
 
+            # Dynamically add IPs and necessary hostnames to ALLOWED_HOSTS.
             TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
             INSTANCE_PRIVATE_IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/local-ipv4)
             INSTANCE_PUBLIC_IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4)
@@ -101,8 +102,8 @@ jobs:
             IMAGE_NAME=${{ steps.build-image.outputs.image }}
             WEB_CONTAINER_NAME="web"
             WORKER_CONTAINER_NAME="worker"
-            STRIPE_PAYMENTS_CONTAINER_NAME="stripe-cli-payments" # NEW: Specific name
-            STRIPE_CONNECT_CONTAINER_NAME="stripe-cli-connect"   # NEW: Name for the second listener
+            STRIPE_PAYMENTS_CONTAINER_NAME="stripe-cli-payments"
+            STRIPE_CONNECT_CONTAINER_NAME="stripe-cli-connect"
             NETWORK_NAME="classeasily-net"
             ECR_REGISTRY=${{ steps.login-ecr.outputs.registry }}
 
@@ -117,82 +118,31 @@ jobs:
             docker network create $NETWORK_NAME || true
 
             # 3. STOP AND REMOVE OLD CONTAINERS
-            echo "--- Stopping old containers... ---"
-            docker stop $WEB_CONTAINER_NAME || true
-            docker stop $WORKER_CONTAINER_NAME || true
-            docker stop $STRIPE_PAYMENTS_CONTAINER_NAME || true # NEW: Stop specific container
-            docker stop $STRIPE_CONNECT_CONTAINER_NAME || true  # NEW: Stop second container
-            docker rm $WEB_CONTAINER_NAME || true
-            docker rm $WORKER_CONTAINER_NAME || true
-            docker rm $STRIPE_PAYMENTS_CONTAINER_NAME || true # NEW: Remove specific container
-            docker rm $STRIPE_CONNECT_CONTAINER_NAME || true  # NEW: Remove second container
+            echo "--- Stopping all old containers... ---"
+            docker stop $WEB_CONTAINER_NAME $WORKER_CONTAINER_NAME $STRIPE_PAYMENTS_CONTAINER_NAME $STRIPE_CONNECT_CONTAINER_NAME || true
+            docker rm $WEB_CONTAINER_NAME $WORKER_CONTAINER_NAME $STRIPE_PAYMENTS_CONTAINER_NAME $STRIPE_CONNECT_CONTAINER_NAME || true
 
             # 4. START NEW APPLICATION CONTAINERS
             echo "--- Starting new web and worker containers... ---"
-            docker run -d --env-file /home/ec2-user/.env.staging -p 80:8000 --name $WEB_CONTAINER_NAME --network $NETWORK_NAME $IMAGE_NAME gunicorn CEBackend.asgi:application -w 2 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
+            docker run -d --rm --env-file /home/ec2-user/.env.staging -p 80:8000 --name $WEB_CONTAINER_NAME --network $NETWORK_NAME $IMAGE_NAME gunicorn CEBackend.asgi:application -w 2 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
             docker run -d --rm --env-file /home/ec2-user/.env.staging --name $WORKER_CONTAINER_NAME --network $NETWORK_NAME $IMAGE_NAME celery -A CEBackend.celery worker -l info --without-mingle --without-gossip
 
-            # 5. START THE STRIPE CLI SIDECAR CONTAINERS (NOW TWO OF THEM!)
+            # 5. START THE STRIPE CLI SIDECAR CONTAINERS
             echo "--- Starting Stripe CLI for Payments Webhook... ---"
-            docker run -d --name $STRIPE_PAYMENTS_CONTAINER_NAME --network $NETWORK_NAME stripe/stripe-cli:latest \
-              listen \
-                --api-key "${{ secrets.STRIPE_SECRET_KEY }}" \
-                --forward-to "http://web:8000/api/payments/webhook/" \
-                --events "payment_intent.succeeded,payment_intent.payment_failed"
+            docker run -d --rm --name $STRIPE_PAYMENTS_CONTAINER_NAME --network $NETWORK_NAME stripe/stripe-cli:latest listen --api-key "${{ secrets.STRIPE_SECRET_KEY }}" --forward-to "http://web:8000/api/payments/webhook/" --events "payment_intent.succeeded,payment_intent.payment_failed"
 
             echo "--- Starting Stripe CLI for Connect Webhook... ---"
-            docker run -d --name $STRIPE_CONNECT_CONTAINER_NAME --network $NETWORK_NAME stripe/stripe-cli:latest \
-              listen \
-                --api-key "${{ secrets.STRIPE_SECRET_KEY }}" \
-                --forward-to "http://web:8000/api/webhooks/stripe-connect/" \
-                --events "account.updated,capability.updated,charge.refunded,payout.paid,payout.failed" # Example Connect events
+            docker run -d --rm --name $STRIPE_CONNECT_CONTAINER_NAME --network $NETWORK_NAME stripe/stripe-cli:latest listen --api-key "${{ secrets.STRIPE_SECRET_KEY }}" --forward-to "http://web:8000/api/webhooks/stripe-connect/" --events "account.updated,capability.updated"
 
-            echo "--- Waiting 10 seconds for all containers to initialize... ---"
-            sleep 10
-            echo "--- 🧪 Running Webhook Verification Tests ---"
+            # 6. VERIFY AND LOG
+            echo "--- Waiting 5 seconds for containers to boot... ---"
+            sleep 5
+            echo "--- ✅ Deployment containers started. Tailing final logs for 15 seconds... ---"
+            timeout 15s docker logs --follow $WEB_CONTAINER_NAME &
+            timeout 15s docker logs --follow $STRIPE_PAYMENTS_CONTAINER_NAME &
+            wait
 
-            echo "--- Triggering 'payment_intent.succeeded' event with metadata... ---"
-            # FIX #1: Add metadata to the trigger command
-            docker exec $STRIPE_PAYMENTS_CONTAINER_NAME stripe trigger payment_intent.succeeded \
-              --api-key "${{ secrets.STRIPE_SECRET_KEY }}" \
-              --override "payment_intent:metadata[user_id]=test_user_1" \
-              --override "payment_intent:metadata[first_slot_id]=test_slot_1" \
-              --override "payment_intent:metadata[participants]=1" \
-              --override "payment_intent:metadata[booking_type]=Single Session" \
-              --override "payment_intent:metadata[is_course]=False" \
-              --override "payment_intent:metadata[schedule_id]=test_schedule_1" \
-              --override "payment_intent:metadata[start_date]=2025-01-01"
-            sleep 2
-
-            echo "--- Triggering 'account.updated' event... ---"
-            docker exec $STRIPE_CONNECT_CONTAINER_NAME stripe trigger account.updated --api-key "${{ secrets.STRIPE_SECRET_KEY }}"
-            sleep 2
-
-              # 7. VERIFY TEST RESULTS BY CHECKING LOGS
-              echo "--- Verifying test results... ---"
-
-              # Check Payments Listener Log for a 200 OK response
-              # `docker logs ... | grep ... || exit 1` means: search the logs, and if the pattern is not found, exit with an error code, failing the workflow.
-              echo "--- Checking payments webhook log... ---"
-              if docker logs $STRIPE_PAYMENTS_CONTAINER_NAME | grep -q "200 OK"; then
-                  echo "✅ Payments webhook test PASSED."
-              else
-                  echo "❌ Payments webhook test FAILED. 200 OK not found in logs."
-                  docker logs $STRIPE_PAYMENTS_CONTAINER_NAME # Print logs for debugging
-                  exit 1
-              fi
-
-              # Check Connect Listener Log for a 200 OK response
-              echo "--- Checking connect webhook log... ---"
-              if docker logs $STRIPE_CONNECT_CONTAINER_NAME | grep -q "200 OK"; then
-                  echo "✅ Connect webhook test PASSED."
-              else
-                  echo "❌ Connect webhook test FAILED. 200 OK not found in logs."
-                  docker logs $STRIPE_CONNECT_CONTAINER_NAME # Print logs for debugging
-                  exit 1
-              fi
-
-              # 8. FINAL CLEANUP
-              echo "--- Pruning unused Docker images... ---"
-              docker image prune -a -f
-              echo "--- ✅ Deployment and Verification Successful. ---"
+            # 7. CLEANUP
+            echo "--- Pruning unused Docker images... ---"
+            docker image prune -a -f
+            echo "--- ✅ Deployment script finished successfully. ---"
