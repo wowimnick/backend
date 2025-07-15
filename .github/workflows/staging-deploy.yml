@@ -147,17 +147,47 @@ jobs:
                 --forward-to "http://web:8000/api/webhooks/stripe-connect/" \
                 --events "account.updated,capability.updated,charge.refunded,payout.paid,payout.failed" # Example Connect events
 
-            # 6. VERIFY AND LOG
-            echo "--- Waiting 5 seconds for containers to boot... ---"
-            sleep 5
-            echo "--- ✅ Deployment containers started. Tailing logs for 15 seconds... ---"
-            timeout 15s docker logs --follow $WEB_CONTAINER_NAME &
-            timeout 15s docker logs --follow $WORKER_CONTAINER_NAME &
-            timeout 15s docker logs --follow $STRIPE_PAYMENTS_CONTAINER_NAME & # Log first listener
-            timeout 15s docker logs --follow $STRIPE_CONNECT_CONTAINER_NAME & # Log second listener
-            wait
+              echo "--- Waiting 10 seconds for all containers to initialize... ---"
+              sleep 10
 
-            # 7. CLEANUP
-            echo "--- Pruning unused Docker images... ---"
-            docker image prune -a -f
-            echo "--- ✅ Deployment script finished successfully. ---"
+              # 6. RUN POST-DEPLOYMENT WEBHOOK TESTS
+              echo "--- 🧪 Running Webhook Verification Tests ---"
+
+              # Test 1: Trigger a payment event
+              echo "--- Triggering 'payment_intent.succeeded' event... ---"
+              docker exec $STRIPE_PAYMENTS_CONTAINER_NAME stripe trigger payment_intent.succeeded
+              sleep 2 # Give a moment for logs to appear
+
+              # Test 2: Trigger a connect event
+              echo "--- Triggering 'account.updated' event... ---"
+              docker exec $STRIPE_CONNECT_CONTAINER_NAME stripe trigger account.updated
+              sleep 2
+
+              # 7. VERIFY TEST RESULTS BY CHECKING LOGS
+              echo "--- Verifying test results... ---"
+
+              # Check Payments Listener Log for a 200 OK response
+              # `docker logs ... | grep ... || exit 1` means: search the logs, and if the pattern is not found, exit with an error code, failing the workflow.
+              echo "--- Checking payments webhook log... ---"
+              if docker logs $STRIPE_PAYMENTS_CONTAINER_NAME | grep -q "200 OK"; then
+                  echo "✅ Payments webhook test PASSED."
+              else
+                  echo "❌ Payments webhook test FAILED. 200 OK not found in logs."
+                  docker logs $STRIPE_PAYMENTS_CONTAINER_NAME # Print logs for debugging
+                  exit 1
+              fi
+
+              # Check Connect Listener Log for a 200 OK response
+              echo "--- Checking connect webhook log... ---"
+              if docker logs $STRIPE_CONNECT_CONTAINER_NAME | grep -q "200 OK"; then
+                  echo "✅ Connect webhook test PASSED."
+              else
+                  echo "❌ Connect webhook test FAILED. 200 OK not found in logs."
+                  docker logs $STRIPE_CONNECT_CONTAINER_NAME # Print logs for debugging
+                  exit 1
+              fi
+
+              # 8. FINAL CLEANUP
+              echo "--- Pruning unused Docker images... ---"
+              docker image prune -a -f
+              echo "--- ✅ Deployment and Verification Successful. ---"
