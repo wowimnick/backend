@@ -1,5 +1,6 @@
 # serializers/classes/business_class_serializers.py
 from decimal import Decimal
+from django.conf import settings
 from rest_framework.validators import ValidationError
 from rest_framework.exceptions import PermissionDenied
 from rest_framework import serializers
@@ -33,22 +34,22 @@ class PublicSubcategorySerializer(serializers.ModelSerializer):
 
 
 class PublicCategorySerializer(serializers.ModelSerializer):
-    """
-    MODIFIED: This serializer is now tailored for the public homepage.
-    It provides the necessary fields for the dynamic category cards.
-    """
+    """Provides category data, including an optimized image for display."""
 
-    image = serializers.ImageField(read_only=True, use_url=True)
+    image_medium_url = serializers.SerializerMethodField()
 
     class Meta:
         model = ClassCategory
-        fields = [
-            "name",
-            "key",
-            "description",
-            "image",
-            "icon_name",
-        ]
+        fields = ["name", "key", "description", "image_medium_url", "icon_name"]
+
+    def get_image_medium_url(self, obj):
+        if not obj.image or not obj.image.name:
+            return None
+        original_path = obj.image.name
+        if not original_path.startswith("originals/"):
+            return None
+        resized_path = original_path.replace("originals/", "public/medium/", 1)
+        return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
 
 
 class ScheduleGroupActionSerializer(serializers.Serializer):
@@ -75,12 +76,51 @@ class BusinessContactInfoSerializer(serializers.ModelSerializer):
 
 
 class ClassImageSerializer(serializers.ModelSerializer):
-    """Serializer for managing class images (upload/delete)."""
+    """Serializer for managing class images, now providing optimized URLs."""
+
+    image_thumb_url = serializers.SerializerMethodField()
+    image_medium_url = serializers.SerializerMethodField()
+    image_large_url = serializers.SerializerMethodField()
+    image_original_url = serializers.ImageField(
+        source="image", read_only=True, use_url=True
+    )
 
     class Meta:
         model = ClassImage
-        fields = ["imageId", "image", "createdAt"]
-        read_only_fields = ["imageId", "createdAt"]
+        fields = [
+            "imageId",
+            "image_thumb_url",
+            "image_medium_url",
+            "image_large_url",
+            "image_original_url",
+            "createdAt",
+        ]
+        read_only_fields = [
+            "imageId",
+            "createdAt",
+            "image_thumb_url",
+            "image_medium_url",
+            "image_large_url",
+            "image_original_url",
+        ]
+
+    def _get_resized_image_url(self, obj, size_name):
+        if not obj.image or not obj.image.name:
+            return None
+        original_path = obj.image.name
+        if not original_path.startswith("originals/"):
+            return None
+        resized_path = original_path.replace("originals/", f"public/{size_name}/", 1)
+        return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
+
+    def get_image_thumb_url(self, obj):
+        return self._get_resized_image_url(obj, "thumb")
+
+    def get_image_medium_url(self, obj):
+        return self._get_resized_image_url(obj, "medium")
+
+    def get_image_large_url(self, obj):
+        return self._get_resized_image_url(obj, "large")
 
 
 class ScheduleInstanceSerializer(serializers.ModelSerializer):

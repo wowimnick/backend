@@ -1,3 +1,5 @@
+import os
+from django.conf import settings
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -726,9 +728,19 @@ class AdminSupportTicketViewSet(viewsets.ModelViewSet):
                     f"{agent.pop('assigned_to__first_name', '')} {agent.pop('assigned_to__last_name', '')}".strip()
                 )
                 avatar_path = agent.pop("assigned_to__avatar", None)
-                agent["avatar_url"] = (
-                    request.build_absolute_uri(avatar_path.url) if avatar_path else None
-                )
+                avatar_url = None
+
+                if avatar_path and getattr(settings, "CLOUDFRONT_DOMAIN", None):
+                    # The avatar_path from the DB is the 'originals/...' path
+                    if avatar_path.startswith("originals/"):
+                        base_path, _ = os.path.splitext(avatar_path)
+                        resized_base_path = base_path.replace(
+                            "originals/", "public/thumb/", 1
+                        )
+                        webp_path = resized_base_path + ".webp"
+                        avatar_url = f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
+
+                agent["avatar_url"] = avatar_url  # Use a consistent field name
                 agent["user_id"] = agent.pop("assigned_to__userId")
 
             data = {

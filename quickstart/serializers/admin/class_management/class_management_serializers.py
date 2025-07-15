@@ -1,3 +1,5 @@
+import os
+from django.conf import settings
 from rest_framework import serializers
 from decimal import Decimal  # Ensure Decimal is imported
 
@@ -115,14 +117,40 @@ class AdminClassOptionSerializer(serializers.ModelSerializer):
 
 # --- AdminClassImageSerializer ---
 class AdminClassImageSerializer(serializers.ModelSerializer):
+    """Provides multiple, optimized, absolute URLs for class images."""
+
+    image_thumb_url = serializers.SerializerMethodField()
+    image_medium_url = serializers.SerializerMethodField()
+
     class Meta:
         model = ClassImage
-        fields = ["imageId", "image", "createdAt"]
+        fields = ["imageId", "image_thumb_url", "image_medium_url", "createdAt"]
+
+    def _get_resized_url(self, obj, size):
+        if not obj.image or not hasattr(obj.image, "name") or not obj.image.name:
+            return None
+        if not getattr(settings, "CLOUDFRONT_DOMAIN", None):
+            return None
+
+        original_path = obj.image.name
+        if not original_path.startswith("originals/"):
+            return None
+
+        base_path, _ = os.path.splitext(original_path)
+        resized_base_path = base_path.replace("originals/", f"public/{size}/", 1)
+        webp_path = resized_base_path + ".webp"
+
+        return f"https://{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
+
+    def get_image_thumb_url(self, obj):
+        return self._get_resized_url(obj, "thumb")
+
+    def get_image_medium_url(self, obj):
+        return self._get_resized_url(obj, "medium")
 
 
-# --- AdminBusinessSerializer (Simplified) ---
 class AdminBusinessSerializer(serializers.ModelSerializer):
-    businessImage = serializers.ImageField(read_only=True, use_url=True)
+    business_image_thumb_url = serializers.SerializerMethodField()
 
     class Meta:
         model = BusinessInfo
@@ -130,13 +158,33 @@ class AdminBusinessSerializer(serializers.ModelSerializer):
             "businessId",
             "businessName",
             "businessType",
-            "businessImage",
+            "business_image_thumb_url",  # Corrected field
             "businessCity",
             "businessState",
             "verificationStatus",
             "isActive",
             "featured",
         ]
+
+    def get_business_image_thumb_url(self, obj):
+        if (
+            not obj.businessImage
+            or not hasattr(obj.businessImage, "name")
+            or not obj.businessImage.name
+        ):
+            return None
+        if not getattr(settings, "CLOUDFRONT_DOMAIN", None):
+            return None
+
+        original_path = obj.businessImage.name
+        if not original_path.startswith("originals/"):
+            return None
+
+        base_path, _ = os.path.splitext(original_path)
+        resized_base_path = base_path.replace("originals/", "public/thumb/", 1)
+        webp_path = resized_base_path + ".webp"
+
+        return f"https://{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
 
 
 class AdminClassSerializer(serializers.ModelSerializer):
@@ -287,20 +335,30 @@ class AdminReviewSerializer(serializers.ModelSerializer):
         ]  # Define fields admin cannot edit directly
 
     def get_user(self, obj):
-        # Ensure user object exists and has necessary fields
-        if obj.userId:
-            # Use related name or standard user fields
-            full_name = f"{obj.userId.first_name} {obj.userId.last_name}".strip()
-            return {
-                "id": obj.userId.userId,  # Assuming pk is userId
-                "name": full_name or obj.userId.email,  # Fallback to email
-                "avatar_url": (
-                    obj.userId.get_avatar_url()
-                    if hasattr(obj.userId, "get_avatar_url")
-                    else None
-                ),
-            }
-        return None
+        if not obj.userId:
+            return None
+
+        full_name = f"{obj.userId.first_name} {obj.userId.last_name}".strip()
+        avatar_url = None
+
+        if (
+            obj.userId.avatar
+            and hasattr(obj.userId.avatar, "name")
+            and obj.userId.avatar.name
+            and getattr(settings, "CLOUDFRONT_DOMAIN", None)
+        ):
+            original_path = obj.userId.avatar.name
+            if original_path.startswith("originals/"):
+                base_path, _ = os.path.splitext(original_path)
+                resized_base_path = base_path.replace("originals/", "public/thumb/", 1)
+                webp_path = resized_base_path + ".webp"
+                avatar_url = f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
+
+        return {
+            "id": obj.userId.userId,
+            "name": full_name or obj.userId.email,
+            "avatar_thumb_url": avatar_url,
+        }
 
 
 # --- AdminClassDetailSerializer ---
@@ -371,7 +429,7 @@ class AdminClassCategorySerializer(serializers.ModelSerializer):
     )
     class_count = serializers.IntegerField(read_only=True, default=0)
 
-    image = serializers.ImageField(use_url=True, required=False, allow_null=True)
+    image_medium_url = serializers.SerializerMethodField()
 
     class Meta:
         model = ClassCategory
@@ -381,7 +439,7 @@ class AdminClassCategorySerializer(serializers.ModelSerializer):
             "key",
             "description",
             "is_featured",
-            "image",
+            "image_medium_url",
             "color",
             "icon_name",
             "created_at",
@@ -399,6 +457,22 @@ class AdminClassCategorySerializer(serializers.ModelSerializer):
             "activeClasses",
             "class_count",
         ]
+
+    def get_image_medium_url(self, obj):
+        if not obj.image or not hasattr(obj.image, "name") or not obj.image.name:
+            return None
+        if not getattr(settings, "CLOUDFRONT_DOMAIN", None):
+            return None
+
+        original_path = obj.image.name
+        if not original_path.startswith("originals/"):
+            return None
+
+        base_path, _ = os.path.splitext(original_path)
+        resized_base_path = base_path.replace("originals/", "public/medium/", 1)
+        webp_path = resized_base_path + ".webp"
+
+        return f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
 
 
 class ReassignmentSerializer(serializers.Serializer):

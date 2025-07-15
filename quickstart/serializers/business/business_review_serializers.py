@@ -5,6 +5,8 @@ from quickstart.models import Reviews, CustomUser, Booking, ClassesMain
 class BusinessReviewUserSerializer(serializers.ModelSerializer):
     """Serializer for user details within a business review context."""
 
+    avatar_thumb_url = serializers.SerializerMethodField()  # ADDED
+
     class Meta:
         model = CustomUser
         fields = [
@@ -12,9 +14,18 @@ class BusinessReviewUserSerializer(serializers.ModelSerializer):
             "first_name",
             "last_name",
             "email",
-            "avatar",
-        ]  # Added avatar
+            "avatar_thumb_url",
+        ]
         read_only_fields = fields
+
+    def get_avatar_thumb_url(self, obj):  # ADDED method
+        if obj.avatar and hasattr(obj.avatar, "name") and obj.avatar.name:
+            original_path = obj.avatar.name
+            if not original_path.startswith("originals/"):
+                return None
+            resized_path = original_path.replace("originals/", "public/thumb/", 1)
+            return f"/{resized_path}"
+        return None
 
 
 class BusinessReviewBookingSerializer(serializers.ModelSerializer):

@@ -1,4 +1,5 @@
 from decimal import Decimal
+from django.conf import settings
 from rest_framework import serializers
 from quickstart.models import (
     Booking,
@@ -11,7 +12,7 @@ from quickstart.models import (
 
 class BusinessStudentNoteSerializer(serializers.ModelSerializer):
     author_name = serializers.SerializerMethodField()
-    author_avatar_url = serializers.SerializerMethodField()
+    author_avatar_thumb_url = serializers.SerializerMethodField()
 
     class Meta:
         model = StudentNote
@@ -21,15 +22,24 @@ class BusinessStudentNoteSerializer(serializers.ModelSerializer):
             "created_at",
             "author",
             "author_name",
-            "author_avatar_url",
+            "author_avatar_thumb_url",
         ]
         read_only_fields = [
             "id",
             "created_at",
             "author",
             "author_name",
-            "author_avatar_url",
+            "author_avatar_thumb_url",
         ]
+
+    def get_author_avatar_thumb_url(self, obj):
+        if obj.author and obj.author.avatar and hasattr(obj.author.avatar, "name"):
+            original_path = obj.author.avatar.name
+            if not original_path.startswith("originals/"):
+                return None
+            resized_path = original_path.replace("originals/", "public/thumb/", 1)
+            return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
+        return None
 
     def get_author_name(self, obj):
         if obj.author:
@@ -38,14 +48,6 @@ class BusinessStudentNoteSerializer(serializers.ModelSerializer):
             ]
             return " ".join(parts) if parts else obj.author.email
         return "Unknown Author"
-
-    def get_author_avatar_url(self, obj):
-        if obj.author and obj.author.avatar and hasattr(obj.author.avatar, "url"):
-            try:
-                return obj.author.avatar.url
-            except ValueError:
-                return None
-        return None
 
 
 class BookingHistorySerializer(serializers.ModelSerializer):
@@ -85,7 +87,7 @@ class BusinessStudentProfileSerializer(serializers.ModelSerializer):
         source="completed_bookings_count", read_only=True, default=0
     )
     is_active = serializers.BooleanField(source="is_active_student", read_only=True)
-    avatar_url = serializers.SerializerMethodField()
+    avatar_thumb_url = serializers.SerializerMethodField()
 
     last_booking_date_this_business = serializers.DateField(
         read_only=True, allow_null=True
@@ -111,7 +113,7 @@ class BusinessStudentProfileSerializer(serializers.ModelSerializer):
             "first_name",
             "last_name",
             "phone_number",
-            "avatar_url",
+            "avatar_thumb_url",  # UPDATED
             "active_classes",
             "total_classes_taken",
             "notes",
@@ -119,14 +121,15 @@ class BusinessStudentProfileSerializer(serializers.ModelSerializer):
             "createdAt",
             "last_booking_date_this_business",
             "total_spent_this_business",
-            "booking_history",  # Updated
+            "booking_history",
         ]
         read_only_fields = fields
 
-    def get_avatar_url(self, obj):
-        if obj.avatar and hasattr(obj.avatar, "url"):
-            try:
-                return obj.avatar.url
-            except ValueError:
+    def get_avatar_thumb_url(self, obj):
+        if obj.avatar and hasattr(obj.avatar, "name"):
+            original_path = obj.avatar.name
+            if not original_path.startswith("originals/"):
                 return None
+            resized_path = original_path.replace("originals/", "public/thumb/", 1)
+            return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
         return None

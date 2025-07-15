@@ -1,5 +1,6 @@
 from asyncio.log import logger
 from datetime import timedelta
+from .custom_storages import WebPStorage
 import random
 import string
 import pytz
@@ -293,7 +294,9 @@ class CustomUser(AbstractUser):
     state = models.CharField(max_length=100)
     address = models.CharField(max_length=255)
     zipCode = models.CharField(max_length=100)
-    avatar = models.ImageField(upload_to="avatars/", null=True, blank=True)
+    avatar = models.ImageField(
+        upload_to="originals/avatars/", null=True, blank=True, storage=WebPStorage()
+    )
     createdAt = models.DateTimeField(auto_now_add=True)
     role = models.ForeignKey(
         "Role", on_delete=models.SET_NULL, null=True, blank=True
@@ -454,7 +457,10 @@ class BusinessInfo(models.Model):
     )
     businessDescription = models.TextField(max_length=500)
     businessImage = models.ImageField(
-        upload_to="business_images/", blank=True, null=True
+        upload_to="originals/business_images/",
+        blank=True,
+        null=True,
+        storage=WebPStorage(),
     )
     featured = models.BooleanField(default=False)
     isActive = models.BooleanField(default=False)
@@ -700,7 +706,9 @@ class ClassImage(models.Model):
     classId = models.ForeignKey(
         "ClassesMain", related_name="images", on_delete=models.CASCADE
     )
-    image = models.ImageField(upload_to="originals/class_images/")
+    image = models.ImageField(
+        upload_to="originals/class_images/", storage=WebPStorage()
+    )
     isCover = models.BooleanField(default=False)
     createdAt = models.DateTimeField(auto_now_add=True)
 
@@ -721,10 +729,11 @@ class ClassCategory(models.Model):
         blank=True, help_text="A short, catchy description for the homepage card."
     )
     image = models.ImageField(
-        upload_to="category_images/",
+        upload_to="originals/category_images/",
         blank=True,
         null=True,
         help_text="Image displayed on the homepage category card.",
+        storage=WebPStorage(),
     )
     is_featured = models.BooleanField(
         default=False, db_index=True, help_text="Show this category on the homepage."
@@ -1589,7 +1598,12 @@ class Reviews(models.Model):
         validators=[MinValueValidator(1), MaxValueValidator(5)]
     )
     comment = models.TextField()
-    image = models.ImageField(upload_to="review_images/", null=True, blank=True)
+    image = models.ImageField(
+        upload_to="originals/review_images/",
+        null=True,
+        blank=True,
+        storage=WebPStorage(),
+    )
     status = models.CharField(
         max_length=20,
         choices=[

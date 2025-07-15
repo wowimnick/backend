@@ -1,3 +1,4 @@
+from django.conf import settings
 from rest_framework import serializers
 from quickstart.models import BusinessInfo, ClassesMain, Reviews
 from django.db.models import Avg
@@ -20,11 +21,7 @@ class BusinessContactDetailSerializer(serializers.ModelSerializer):
 
 
 class PublicBusinessInfoSerializer(serializers.ModelSerializer):
-    """
-    Serializer for PUBLIC display of Business Information.
-    Only includes fields safe for anyone to view.
-    Conditionally hides contact information based on the business's privacy settings.
-    """
+    """Serializer for PUBLIC display of Business Information."""
 
     average_rating = serializers.DecimalField(
         max_digits=3, decimal_places=1, read_only=True
@@ -33,11 +30,7 @@ class PublicBusinessInfoSerializer(serializers.ModelSerializer):
         source="total_reviews_count", read_only=True
     )
 
-    # FIX: This field was based on a non-existent `classCategory` field on the BusinessInfo model.
-    # It has been removed to prevent errors. A business's categories are determined by the classes it offers.
-    # classCategoryName = serializers.CharField(
-    #     source="classCategory.name", read_only=True, allow_null=True
-    # )
+    business_image_medium_url = serializers.SerializerMethodField()
 
     class Meta:
         model = BusinessInfo
@@ -46,7 +39,7 @@ class PublicBusinessInfoSerializer(serializers.ModelSerializer):
             "businessName",
             "businessType",
             "businessDescription",
-            "businessImage",
+            "business_image_medium_url",
             "website",
             "social_media_links",
             "business_timezone",
@@ -56,7 +49,6 @@ class PublicBusinessInfoSerializer(serializers.ModelSerializer):
             "studentContactEmail",
             "businessCity",
             "businessState",
-            # "classCategoryName", # FIX: Removed this field from the output.
             "totalReviews",
             "average_rating",
             "featured",
@@ -65,6 +57,15 @@ class PublicBusinessInfoSerializer(serializers.ModelSerializer):
             "createdAt",
         ]
         read_only_fields = fields
+
+    def get_business_image_medium_url(self, obj):
+        if not obj.businessImage or not obj.businessImage.name:
+            return None
+        original_path = obj.businessImage.name
+        if not original_path.startswith("originals/"):
+            return None
+        resized_path = original_path.replace("originals/", "public/medium/", 1)
+        return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
 
     def to_representation(self, instance):
         """

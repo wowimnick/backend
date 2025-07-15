@@ -21,7 +21,6 @@ class PublicClassImageSerializer(serializers.ModelSerializer):
     """
 
     # This correctly uses your PrivateMediaStorage to generate a pre-signed URL for the original.
-    # NO CHANGE NEEDED HERE.
     original_url = serializers.ImageField(source="image", read_only=True)
 
     # These methods will now build the correct CloudFront URLs.
@@ -42,34 +41,33 @@ class PublicClassImageSerializer(serializers.ModelSerializer):
 
     def _get_resized_url(self, obj, size_name):
         """
-        Constructs a public, cacheable CloudFront URL for a resized image.
+        Constructs a public CloudFront URL for a resized WebP image.
         """
-        # Ensure the CLOUDFRONT_DOMAIN is set in your settings.py
         if not getattr(settings, "CLOUDFRONT_DOMAIN", None):
             logger.warning("CLOUDFRONT_DOMAIN is not configured in settings.py")
             return None
 
-        # obj.image.name provides the raw file path in S3 (e.g., "originals/class_images/photo.png")
-        # This is the correct way to get the path without the pre-signed signature.
         if obj.image and obj.image.name:
             original_path = obj.image.name
 
-            # Your Lambda only processes files from 'originals/', so this is a safe check.
             if not original_path.startswith("originals/"):
-                return None  # Or handle as an error
+                return None
 
-            # 1. Create the new path structure for the public, resized image.
-            # e.g., 'originals/class_images/photo.png' -> 'public/thumb/class_images/photo.png'
-            resized_path = original_path.replace(
+            # 1. Get the base path of the original image, without its extension
+            base_path, _ = os.path.splitext(
+                original_path
+            )  # e.g., "originals/path/image.png" -> "originals/path/image"
+
+            # 2. Replace the path prefix
+            # e.g., "originals/path/image" -> "public/thumb/path/image"
+            resized_base_path = base_path.replace(
                 "originals/", f"public/{size_name}/", 1
             )
 
-            # 2. Change the file extension to .jpeg, as per your Lambda's output.
-            base_path, _ = os.path.splitext(resized_path)
-            final_path = base_path + ".jpeg"
+            # 3. Add the correct .webp extension
+            final_path = resized_base_path + ".webp"
 
-            # 3. Construct the full URL using your CloudFront domain.
-            # e.g., "https://d123abc.cloudfront.net/public/thumb/class_images/photo.jpeg"
+            # 4. Construct the full URL
             return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
 
         return None

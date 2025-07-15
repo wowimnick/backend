@@ -1,4 +1,6 @@
+import os
 import re
+from django.conf import settings
 from rest_framework import serializers
 from django.db import transaction
 
@@ -9,19 +11,35 @@ class UserBriefSerializer(serializers.ModelSerializer):
     """Brief user information serializer"""
 
     full_name = serializers.SerializerMethodField()
-    avatar_url = serializers.SerializerMethodField()
+    avatar_thumb_url = serializers.SerializerMethodField()  # RENAMED for consistency
 
     class Meta:
         model = CustomUser
-        fields = ["userId", "email", "full_name", "avatar_url"]
+        fields = [
+            "userId",
+            "email",
+            "full_name",
+            "avatar_thumb_url",
+        ]
 
     def get_full_name(self, obj):
         return f"{obj.first_name} {obj.last_name}"
 
-    def get_avatar_url(self, obj):
-        if obj.avatar:
-            return obj.avatar.url
-        return None
+    def get_avatar_thumb_url(self, obj):
+        if not obj.avatar or not hasattr(obj.avatar, "name") or not obj.avatar.name:
+            return None
+        if not getattr(settings, "CLOUDFRONT_DOMAIN", None):
+            return None
+
+        original_path = obj.avatar.name
+        if not original_path.startswith("originals/"):
+            return None
+
+        base_path, _ = os.path.splitext(original_path)
+        resized_base_path = base_path.replace("originals/", "public/thumb/", 1)
+        webp_path = resized_base_path + ".webp"
+
+        return f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
 
 
 class ChatMessageSerializer(serializers.ModelSerializer):

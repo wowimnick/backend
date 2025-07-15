@@ -1,3 +1,5 @@
+import os
+from django.conf import settings
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.db.models import Count
@@ -57,7 +59,7 @@ class AdminUserListSerializer(serializers.ModelSerializer):
     status = serializers.SerializerMethodField()
     last_login_date = serializers.DateTimeField(source="last_login", read_only=True)
     bookings_count = serializers.IntegerField(read_only=True)
-    avatar_url = serializers.SerializerMethodField()
+    avatar_thumb_url = serializers.SerializerMethodField()
     owned_business_name = serializers.SerializerMethodField()
 
     class Meta:
@@ -77,13 +79,13 @@ class AdminUserListSerializer(serializers.ModelSerializer):
             "country",
             "city",
             "bookings_count",
-            "avatar_url",
+            "avatar_thumb_url",
             "owned_business_name",
         ]
         read_only_fields = [
             "last_login_date",
             "bookings_count",
-            "avatar_url",
+            "avatar_thumb_url",
             "createdAt",
             "status",
             "role_name",
@@ -102,12 +104,21 @@ class AdminUserListSerializer(serializers.ModelSerializer):
             return "pending"
         return "active"
 
-    def get_avatar_url(self, obj):
-        if hasattr(obj, "get_avatar_url"):
-            return obj.get_avatar_url()
-        if obj.avatar and hasattr(obj.avatar, "url"):
-            return obj.avatar.url
-        return None
+    def get_avatar_thumb_url(self, obj):
+        if not obj.avatar or not hasattr(obj.avatar, "name") or not obj.avatar.name:
+            return None
+        if not getattr(settings, "CLOUDFRONT_DOMAIN", None):
+            return None
+
+        original_path = obj.avatar.name
+        if not original_path.startswith("originals/"):
+            return None
+
+        base_path, _ = os.path.splitext(original_path)
+        resized_base_path = base_path.replace("originals/", "public/thumb/", 1)
+        webp_path = resized_base_path + ".webp"
+
+        return f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
 
     def get_owned_business_name(self, obj):
         businesses = obj.owned_businesses.all()
@@ -126,7 +137,8 @@ class AdminUserDetailSerializer(serializers.ModelSerializer):
         source="role.color", read_only=True, allow_null=True, default="#64748b"
     )
     status = serializers.SerializerMethodField()
-    avatar_url = serializers.SerializerMethodField()
+    avatar_thumb_url = serializers.SerializerMethodField()
+    avatar_medium_url = serializers.SerializerMethodField()
     owned_businesses_info = serializers.SerializerMethodField()
 
     class Meta:
@@ -148,7 +160,8 @@ class AdminUserDetailSerializer(serializers.ModelSerializer):
             "role_name",
             "role_color",
             "status",
-            "avatar_url",
+            "avatar_thumb_url",
+            "avatar_medium_url",
             "createdAt",
             "last_login",
             "is_active",
@@ -179,12 +192,37 @@ class AdminUserDetailSerializer(serializers.ModelSerializer):
             return "pending"
         return "active"
 
-    def get_avatar_url(self, obj):
-        if hasattr(obj, "get_avatar_url"):
-            return obj.get_avatar_url()
-        if obj.avatar and hasattr(obj.avatar, "url"):
-            return obj.avatar.url
-        return None
+    def get_avatar_thumb_url(self, obj):
+        if not obj.avatar or not hasattr(obj.avatar, "name") or not obj.avatar.name:
+            return None
+        if not getattr(settings, "CLOUDFRONT_DOMAIN", None):
+            return None
+
+        original_path = obj.avatar.name
+        if not original_path.startswith("originals/"):
+            return None
+
+        base_path, _ = os.path.splitext(original_path)
+        resized_base_path = base_path.replace("originals/", "public/thumb/", 1)
+        webp_path = resized_base_path + ".webp"
+
+        return f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
+
+    def get_avatar_medium_url(self, obj):
+        if not obj.avatar or not hasattr(obj.avatar, "name") or not obj.avatar.name:
+            return None
+        if not getattr(settings, "CLOUDFRONT_DOMAIN", None):
+            return None
+
+        original_path = obj.avatar.name
+        if not original_path.startswith("originals/"):
+            return None
+
+        base_path, _ = os.path.splitext(original_path)
+        resized_base_path = base_path.replace("originals/", "public/medium/", 1)
+        webp_path = resized_base_path + ".webp"
+
+        return f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
 
     def get_owned_businesses_info(self, obj):
         # Using the prefetched related manager

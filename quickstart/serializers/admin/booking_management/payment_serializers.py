@@ -1,5 +1,7 @@
 # quickstart/serializers/admin/booking_management/payment_serializers.py
 
+import os
+from django.conf import settings
 from rest_framework import serializers
 from ....models import Payment, Booking, CustomUser
 
@@ -145,6 +147,7 @@ class AdminBookingListSerializer(serializers.ModelSerializer):
     )
     user_name = serializers.SerializerMethodField()
     user_email = serializers.CharField(source="user.email", read_only=True)
+    user_avatar_thumb_url = serializers.SerializerMethodField()
     business_name = serializers.CharField(
         source="schedule_instance.schedule.option.classId.businessId.businessName",
         read_only=True,
@@ -167,6 +170,7 @@ class AdminBookingListSerializer(serializers.ModelSerializer):
             "user",
             "user_name",
             "user_email",
+            "user_avatar_thumb_url",
             "class_name",
             "business_name",
             "option_name",
@@ -189,18 +193,34 @@ class AdminBookingListSerializer(serializers.ModelSerializer):
             return f"{obj.user.first_name} {obj.user.last_name}".strip()
         return "N/A"
 
+    def get_user_avatar_thumb_url(self, obj):
+        if (
+            not obj.user
+            or not obj.user.avatar
+            or not hasattr(obj.user.avatar, "name")
+            or not obj.user.avatar.name
+        ):
+            return None
+        if not getattr(settings, "CLOUDFRONT_DOMAIN", None):
+            return None
+
+        original_path = obj.user.avatar.name
+        if not original_path.startswith("originals/"):
+            return None
+
+        base_path, _ = os.path.splitext(original_path)
+        resized_base_path = base_path.replace("originals/", "public/thumb/", 1)
+        webp_path = resized_base_path + ".webp"
+
+        return f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
+
     def get_payment(self, obj):
-        # FIX: This is the correct, efficient implementation. The duplicate method was removed.
-        # It uses the prefetched 'payments' queryset to avoid a database hit per booking.
         payment_instance = obj.payments.first()
         if payment_instance:
             return AdminBookingPaymentSerializer(payment_instance).data
         return None
 
     def get_session_info(self, obj):
-        # FIX: The original logic here caused an N+1 query for every course booking.
-        # This is too expensive for a list view. This simplified version provides a
-        # basic marker for course bookings without hitting the database again.
         if obj.enrollment_type == "Full Course":
             return {"is_course": True}
         return None
