@@ -155,12 +155,14 @@ jobs:
 
               # Test 1: Trigger a payment event
               echo "--- Triggering 'payment_intent.succeeded' event... ---"
-              docker exec $STRIPE_PAYMENTS_CONTAINER_NAME stripe trigger payment_intent.succeeded
+              # ADD --api-key to make the command non-interactive
+              docker exec $STRIPE_PAYMENTS_CONTAINER_NAME stripe trigger payment_intent.succeeded --api-key "${{ secrets.STRIPE_SECRET_KEY }}"
               sleep 2 # Give a moment for logs to appear
 
               # Test 2: Trigger a connect event
               echo "--- Triggering 'account.updated' event... ---"
-              docker exec $STRIPE_CONNECT_CONTAINER_NAME stripe trigger account.updated
+              # ADD --api-key to make the command non-interactive
+              docker exec $STRIPE_CONNECT_CONTAINER_NAME stripe trigger account.updated --api-key "${{ secrets.STRIPE_SECRET_KEY }}"
               sleep 2
 
               # 7. VERIFY TEST RESULTS BY CHECKING LOGS
