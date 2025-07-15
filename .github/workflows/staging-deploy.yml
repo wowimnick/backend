@@ -68,6 +68,7 @@ jobs:
             SITE_DOMAIN=${{ secrets.STAGING_EC2_HOST }}
             ALLOWED_HOSTS=${{ secrets.ALLOWED_HOSTS }}
             CSRF_TRUSTED_ORIGINS=${{ secrets.CSRF_TRUSTED_ORIGINS }}
+            SECURE_SSL_REDIRECT=${{ secrets.SECURE_SSL_REDIRECT }}
 
             # --- Database (RDS) ---
             DB_ENGINE=${{ secrets.DB_ENGINE }}
