@@ -3,14 +3,12 @@ name: Deploy Staging to EC2
 on:
   push:
     branches:
-      - main # This workflow runs when you push to the 'main' branch
+      - main
 
-# Environment variables available to all jobs
 env:
-  AWS_REGION: us-east-2 # <-- IMPORTANT: Change to your AWS region
-  ECR_REPOSITORY: classeasily-backend-staging # <-- Your ECR repository name
+  AWS_REGION: us-east-2
+  ECR_REPOSITORY: classeasily-backend-staging
 
-# Permissions needed for OIDC connection
 permissions:
   id-token: write
   contents: read
@@ -38,15 +36,12 @@ jobs:
         id: build-image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }} # Use the unique commit SHA as the image tag
+          IMAGE_TAG: ${{ github.sha }}
         run: |
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
-      # ==========================================================
-      # ==      UPDATED DEPLOYMENT STEP - NO MANUAL SETUP       ==
-      # ==========================================================
       - name: Deploy to EC2 instance
         uses: appleboy/ssh-action@master
         with:
@@ -54,9 +49,8 @@ jobs:
           username: ${{ secrets.STAGING_EC2_USERNAME }}
           key: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
           script: |
-            # This comment is outside the EOF block, so it's fine.
-            # The following block creates the .env.staging file on the server.
-
+            # --- PREPARATION ---
+            # Create the .env file from secrets
             cat << 'EOF' > /home/ec2-user/.env.staging
             # --- Meta ---
             IS_DOCKER=true
@@ -70,25 +64,21 @@ jobs:
             CSRF_TRUSTED_ORIGINS=${{ secrets.CSRF_TRUSTED_ORIGINS }}
             SECURE_SSL_REDIRECT=${{ secrets.SECURE_SSL_REDIRECT }}
 
-            # --- Database (RDS) ---
+            # --- Database, Cache, S3, etc. ---
             DB_ENGINE=${{ secrets.DB_ENGINE }}
             DB_NAME=${{ secrets.DB_NAME }}
             DB_USER=${{ secrets.DB_USER }}
             DB_PASSWORD=${{ secrets.DB_PASSWORD }}
             DB_HOST=${{ secrets.DB_HOST }}
             DB_PORT=${{ secrets.DB_PORT }}
-
-            # --- Cache & Celery (ElastiCache for Redis) ---
             CACHE_URL=${{ secrets.CACHE_URL }}
             CELERY_BROKER_URL=${{ secrets.CELERY_BROKER_URL }}
             CELERY_RESULT_BACKEND=${{ secrets.CELERY_RESULT_BACKEND }}
-
-            # --- Static Files (S3) ---
             AWS_STORAGE_BUCKET_NAME=${{ secrets.AWS_STORAGE_BUCKET_NAME }}
             AWS_S3_REGION_NAME=${{ secrets.AWS_S3_REGION_NAME }}
             CLOUDFRONT_DOMAIN=${{ secrets.CLOUDFRONT_DOMAIN }}
 
-            # --- API & Service Keys ---
+            # --- API & Service Keys (Including Stripe) ---
             RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
             GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
             GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
@@ -102,67 +92,72 @@ jobs:
             DEFAULT_FROM_EMAIL=${{ secrets.DEFAULT_FROM_EMAIL }}
             EOF
 
-            # Step 2: Now, run commands on the remote EC2 instance to get the IP
-            # and dynamically replace the ALLOWED_HOSTS line.
             TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
             INSTANCE_PRIVATE_IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/local-ipv4)
             INSTANCE_PUBLIC_IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4)
-
-            # Use `sed` to find the line starting with "ALLOWED_HOSTS=" and replace it entirely.
-            # This is the most robust way to do an in-place update of a specific key.
             sed -i "s/^ALLOWED_HOSTS=.*/ALLOWED_HOSTS=${{ secrets.ALLOWED_HOSTS }},$INSTANCE_PRIVATE_IP,$INSTANCE_PUBLIC_IP,localhost/" /home/ec2-user/.env.staging
 
-                 # --- DEPLOYMENT LOGIC ---
+            # --- DEPLOYMENT LOGIC ---
             IMAGE_NAME=${{ steps.build-image.outputs.image }}
             WEB_CONTAINER_NAME="web"
             WORKER_CONTAINER_NAME="worker"
+            STRIPE_PAYMENTS_CONTAINER_NAME="stripe-cli-payments" # NEW: Specific name
+            STRIPE_CONNECT_CONTAINER_NAME="stripe-cli-connect"   # NEW: Name for the second listener
+            NETWORK_NAME="classeasily-net"
             ECR_REGISTRY=${{ steps.login-ecr.outputs.registry }}
 
-            # 1. LOGIN TO ECR (CRITICAL FIX)
-            # Authenticate the EC2 instance with Amazon ECR.
-            # This requires the EC2 instance to have an IAM Role with ECR pull permissions.
+            # 1. AUTHENTICATE & PULL
             echo "--- Logging into Amazon ECR... ---"
             aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin $ECR_REGISTRY
-
-            # 2. PULL THE NEW IMAGE FIRST (CRITICAL FIX)
-            # Pull the new image before stopping the old container.
-            # If this fails, the script will exit and the old container will keep running.
             echo "--- Pulling new image: $IMAGE_NAME ---"
             docker pull $IMAGE_NAME
 
+            # 2. SETUP DOCKER NETWORK
+            echo "--- Ensuring Docker network '$NETWORK_NAME' exists... ---"
+            docker network create $NETWORK_NAME || true
+
             # 3. STOP AND REMOVE OLD CONTAINERS
-            # Stop the old worker container if it exists
-            echo "--- Stopping old worker container... ---"
+            echo "--- Stopping old containers... ---"
+            docker stop $WEB_CONTAINER_NAME || true
             docker stop $WORKER_CONTAINER_NAME || true
+            docker stop $STRIPE_PAYMENTS_CONTAINER_NAME || true # NEW: Stop specific container
+            docker stop $STRIPE_CONNECT_CONTAINER_NAME || true  # NEW: Stop second container
+            docker rm $WEB_CONTAINER_NAME || true
             docker rm $WORKER_CONTAINER_NAME || true
+            docker rm $STRIPE_PAYMENTS_CONTAINER_NAME || true # NEW: Remove specific container
+            docker rm $STRIPE_CONNECT_CONTAINER_NAME || true  # NEW: Remove second container
 
-            # Find and stop the old web container
-            OLD_WEB_CONTAINER_ID=$(docker ps -q --filter "publish=80")
-            if [ -n "$OLD_WEB_CONTAINER_ID" ]; then
-                echo "--- Stopping old web container $OLD_WEB_CONTAINER_ID... ---"
-                docker stop $OLD_WEB_CONTAINER_ID
-                docker rm $OLD_WEB_CONTAINER_ID
-            fi
+            # 4. START NEW APPLICATION CONTAINERS
+            echo "--- Starting new web and worker containers... ---"
+            docker run -d --env-file /home/ec2-user/.env.staging -p 80:8000 --name $WEB_CONTAINER_NAME --network $NETWORK_NAME $IMAGE_NAME gunicorn CEBackend.asgi:application -w 2 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
+            docker run -d --rm --env-file /home/ec2-user/.env.staging --name $WORKER_CONTAINER_NAME --network $NETWORK_NAME $IMAGE_NAME celery -A CEBackend.celery worker -l info --without-mingle --without-gossip
 
-            # 4. START NEW CONTAINERS
-            # Start the new containers with the image we just pulled.
-            echo "--- Starting new web container... ---"
-            docker run -d --rm --env-file /home/ec2-user/.env.staging -p 80:8000 --name $WEB_CONTAINER_NAME $IMAGE_NAME gunicorn CEBackend.asgi:application -w 2 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
+            # 5. START THE STRIPE CLI SIDECAR CONTAINERS (NOW TWO OF THEM!)
+            echo "--- Starting Stripe CLI for Payments Webhook... ---"
+            docker run -d --name $STRIPE_PAYMENTS_CONTAINER_NAME --network $NETWORK_NAME stripe/stripe-cli:latest \
+              listen \
+                --api-key "${{ secrets.STRIPE_SECRET_KEY }}" \
+                --forward-to "http://web:8000/api/payments/webhook/" \
+                --events "payment_intent.succeeded,payment_intent.payment_failed"
 
-            echo "--- Starting new worker container... ---"
-            docker run -d --rm --env-file /home/ec2-user/.env.staging --name $WORKER_CONTAINER_NAME $IMAGE_NAME celery -A CEBackend.celery worker -l info --without-mingle --without-gossip
+            echo "--- Starting Stripe CLI for Connect Webhook... ---"
+            docker run -d --name $STRIPE_CONNECT_CONTAINER_NAME --network $NETWORK_NAME stripe/stripe-cli:latest \
+              listen \
+                --api-key "${{ secrets.STRIPE_SECRET_KEY }}" \
+                --forward-to "http://web:8000/api/webhooks/stripe-connect/" \
+                --events "account.updated,capability.updated,charge.refunded,payout.paid,payout.failed" # Example Connect events
 
-            # 5. VERIFY AND LOG
+            # 6. VERIFY AND LOG
             echo "--- Waiting 5 seconds for containers to boot... ---"
             sleep 5
             echo "--- ✅ Deployment containers started. Tailing logs for 15 seconds... ---"
             timeout 15s docker logs --follow $WEB_CONTAINER_NAME &
             timeout 15s docker logs --follow $WORKER_CONTAINER_NAME &
+            timeout 15s docker logs --follow $STRIPE_PAYMENTS_CONTAINER_NAME & # Log first listener
+            timeout 15s docker logs --follow $STRIPE_CONNECT_CONTAINER_NAME & # Log second listener
             wait
 
-            # 6. CLEANUP (MOVED TO THE END - SAFER)
-            # Now that the new containers are running, we can safely clean up old images.
+            # 7. CLEANUP
             echo "--- Pruning unused Docker images... ---"
             docker image prune -a -f
-
             echo "--- ✅ Deployment script finished successfully. ---"
