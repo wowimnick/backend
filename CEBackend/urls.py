@@ -4,6 +4,7 @@ from django.views.generic import TemplateView
 from django.contrib.sitemaps.views import sitemap  # Import the sitemap view
 
 # Import your sitemap classes from your app
+from quickstart.views.healthcheck import robots_txt_view
 from quickstart.sitemaps import StaticViewSitemap, ClassSitemap
 
 # Define the sitemaps dictionary here, at the project level
@@ -20,6 +21,7 @@ urlpatterns = [
     path("api/", include("quickstart.urls")),
     # 3. Sitemap URL (at the root)
     # This is the corrected placement. It's now outside the 'api/' prefix.
+    path("robots.txt", robots_txt_view, name="robots.txt"),
     path(
         "sitemap.xml",
         sitemap,
