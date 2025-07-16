@@ -139,6 +139,7 @@ jobs:
             sleep 5
             echo "--- ✅ Deployment containers started. Tailing final logs for 15 seconds... ---"
             timeout 15s docker logs --follow $WEB_CONTAINER_NAME &
+            timeout 15s docker logs --follow $WORKER_CONTAINER_NAME &
             timeout 15s docker logs --follow $STRIPE_PAYMENTS_CONTAINER_NAME &
             wait
 
