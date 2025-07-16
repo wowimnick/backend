@@ -1,5 +1,5 @@
+import os
 from django.http import HttpResponse
-from django.conf import settings
 
 
 def health_check(request):
@@ -9,7 +9,7 @@ def health_check(request):
 
 def robots_txt_view(request):
     # Check the environment variable you set in your deployment script
-    is_staging = settings.DJANGO_ENV == "staging"
+    is_staging = os.environ.get("DJANGO_ENV") == "staging"
 
     if is_staging:
         lines = ["User-agent: *", "Disallow: /"]
