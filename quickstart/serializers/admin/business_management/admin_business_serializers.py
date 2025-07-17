@@ -1,5 +1,7 @@
 # quickstart/serializers/admin/business_management/admin_business_serializers.py
 
+import os
+from django.conf import settings
 from rest_framework import serializers
 from ....models import BusinessInfo, ClassCategory
 from decimal import Decimal
@@ -36,8 +38,7 @@ class AdminBusinessListSerializer(serializers.ModelSerializer):
     review_count = serializers.IntegerField(read_only=True, default=0)
 
     # --- Model Fields (Read-Only for List) ---
-    # FIX: Use a SerializerMethodField to safely generate the image URL.
-    businessImage = serializers.SerializerMethodField()
+    business_image_thumb_url = serializers.SerializerMethodField()
 
     class Meta:
         model = BusinessInfo
@@ -45,7 +46,7 @@ class AdminBusinessListSerializer(serializers.ModelSerializer):
             "businessId",
             "businessName",
             "businessType",
-            "businessImage",  # This will now use the method field
+            "business_image_thumb_url",
             "businessCity",
             "businessState",
             "isActive",
@@ -62,13 +63,16 @@ class AdminBusinessListSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
-    def get_businessImage(self, obj):
-        """
-        Safely get the business image URL.
-        Returns the URL if the image exists, otherwise returns None.
-        """
-        if obj.businessImage and hasattr(obj.businessImage, "url"):
-            return obj.businessImage.url
+    def get_business_image_thumb_url(self, obj):
+        if obj.businessImage and hasattr(obj.businessImage, "name"):
+            original_path = obj.businessImage.name
+            if not original_path.startswith("originals/"):
+                return None
+            # Correctly builds the path to the .webp thumbnail
+            base_path, _ = os.path.splitext(original_path)
+            resized_base_path = base_path.replace("originals/", "public/thumb/", 1)
+            webp_path = resized_base_path + ".webp"
+            return f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
         return None
 
 
@@ -97,8 +101,7 @@ class AdminBusinessDetailSerializer(serializers.ModelSerializer):
     skillLevels_list = serializers.SerializerMethodField(read_only=True)
     ageGroups_list = serializers.SerializerMethodField(read_only=True)
 
-    # FIX: Use a SerializerMethodField for businessImage here as well.
-    businessImage = serializers.SerializerMethodField()
+    business_image_medium_url = serializers.SerializerMethodField()
 
     class Meta:
         model = BusinessInfo
@@ -106,7 +109,7 @@ class AdminBusinessDetailSerializer(serializers.ModelSerializer):
             "businessId",
             "businessName",
             "businessType",
-            "businessImage",
+            "business_image_medium_url",
             "businessDescription",
             "createdAt",
             "openingTime",
@@ -159,12 +162,17 @@ class AdminBusinessDetailSerializer(serializers.ModelSerializer):
             "ageGroups_list",
         ]
 
-    def get_businessImage(self, obj):
-        """
-        Safely get the business image URL for the detail view.
-        """
-        if obj.businessImage and hasattr(obj.businessImage, "url"):
-            return obj.businessImage.url
+    def get_business_image_medium_url(self, obj):
+        """Safely get the medium-sized business image URL."""
+        if obj.businessImage and hasattr(obj.businessImage, "name"):
+            original_path = obj.businessImage.name
+            if not original_path.startswith("originals/"):
+                return None
+            # Correctly builds the path to the .webp medium image
+            base_path, _ = os.path.splitext(original_path)
+            resized_base_path = base_path.replace("originals/", "public/medium/", 1)
+            webp_path = resized_base_path + ".webp"
+            return f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
         return None
 
     def get_classFormats_list(self, obj):

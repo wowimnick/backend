@@ -1,3 +1,4 @@
+# quickstart/tests/test_views/test_auth_views.py
 from rest_framework.test import APITestCase
 from rest_framework import status
 from django.urls import reverse
@@ -161,7 +162,8 @@ class AuthAndProfileTests(APITestCase):
 
         self.user.refresh_from_db()
         self.assertEqual(self.user.first_name, "Updated First")
-        self.assertTrue(self.user.avatar.name.startswith("avatars/avatar"))
+        # FIX: Assert that the image path starts with the new 'originals/avatars/' prefix.
+        self.assertTrue(self.user.avatar.name.startswith("originals/avatars/"))
         print("✅ PASSED: User can update their profile information.")
 
     def test_cannot_update_readonly_fields(self):

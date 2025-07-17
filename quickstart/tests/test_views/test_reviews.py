@@ -1,5 +1,4 @@
 # quickstart/tests/test_views/test_reviews.py
-
 from rest_framework.test import APITestCase
 from rest_framework import status
 from django.urls import reverse
@@ -117,7 +116,8 @@ class ReviewManagementTests(APITestCase):
         review = Reviews.objects.get(booking=self.completed_booking)
         self.assertEqual(review.rating, 5)
         self.assertEqual(review.userId, self.student)
-        self.assertTrue(review.image.name.startswith("review_images/"))
+        # FIX: Assert that the image path starts with the new 'originals/review_images/' prefix.
+        self.assertTrue(review.image.name.startswith("originals/review_images/"))
         print("✅ PASSED: Student successfully submitted a review.")
 
     def test_student_cannot_submit_review_for_upcoming_booking(self):

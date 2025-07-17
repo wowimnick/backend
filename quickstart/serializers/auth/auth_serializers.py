@@ -1,5 +1,6 @@
 # quickstart/serializers/auth_serializers.py
 
+import os
 from django.conf import settings
 from rest_framework import serializers
 from dj_rest_auth.registration.serializers import RegisterSerializer
@@ -79,7 +80,10 @@ class RoleNestedSerializer(serializers.ModelSerializer):
 
 
 class CustomUserDetailsSerializer(serializers.ModelSerializer):
-    avatar_url = serializers.SerializerMethodField()
+    avatar_thumb_url = serializers.SerializerMethodField()
+    avatar_medium_url = serializers.SerializerMethodField()
+    avatar_original_url = serializers.SerializerMethodField()
+
     avatar = serializers.ImageField(write_only=True, required=False, allow_null=True)
     role = RoleNestedSerializer(read_only=True, allow_null=True)
     favorited_ids = serializers.PrimaryKeyRelatedField(
@@ -105,7 +109,9 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
             "address",
             "zipCode",
             "avatar",
-            "avatar_url",
+            "avatar_thumb_url",
+            "avatar_medium_url",
+            "avatar_original_url",
             "role",
             "user_timezone",
             "favorited_ids",
@@ -117,20 +123,41 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
             "email",
             "username",
             "role",
-            "avatar_url",
+            "avatar_thumb_url",
+            "avatar_medium_url",
+            "avatar_original_url",
             "favorited_ids",
             "permissions",
             "has_business",
         )
         extra_kwargs = {"email": {"read_only": True}, "username": {"read_only": True}}
 
-    def get_avatar_url(self, obj):
-        if obj.avatar and hasattr(obj.avatar, "url"):
-            try:
-                return obj.avatar.url
-            except ValueError:
-                return None
-        return None
+    def _get_avatar_url(self, obj, size=None):
+        if not obj.avatar or not hasattr(obj.avatar, "name") or not obj.avatar.name:
+            return None
+        if not getattr(settings, "CLOUDFRONT_DOMAIN", None):
+            logger.warning("CLOUDFRONT_DOMAIN is not configured.")
+            return None
+
+        original_path = obj.avatar.name
+        if not original_path.startswith("originals/"):
+            return None
+
+        if size:
+            final_path = original_path.replace("originals/", f"public/{size}/", 1)
+        else:
+            final_path = original_path
+
+        return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
+
+    def get_avatar_thumb_url(self, obj):
+        return self._get_avatar_url(obj, "thumb")
+
+    def get_avatar_medium_url(self, obj):
+        return self._get_avatar_url(obj, "medium")
+
+    def get_avatar_original_url(self, obj):
+        return self._get_avatar_url(obj, None)
 
     def get_permissions(self, user):
         if not user or not user.is_authenticated:

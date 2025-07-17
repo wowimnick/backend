@@ -1,5 +1,6 @@
 import re
 import string
+from django.conf import settings
 from rest_framework import serializers
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import validate_email, URLValidator, RegexValidator
@@ -363,9 +364,7 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
 class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
     owner_email = serializers.EmailField(source="owner.email", read_only=True)
     managers_emails = serializers.SerializerMethodField(read_only=True)
-    businessImage = serializers.ImageField(
-        required=False, allow_null=True, use_url=True
-    )
+    business_image_medium_url = serializers.SerializerMethodField()
     website = serializers.URLField(required=False, allow_blank=True, allow_null=True)
     business_timezone = serializers.ChoiceField(
         choices=COMMON_TIMEZONE_CHOICES_SERIALIZER, required=False, allow_blank=True
@@ -404,6 +403,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "businessType",
             "businessDescription",
             "businessImage",
+            "business_image_medium_url",
             "website",
             "business_timezone",
             "social_media_links",
@@ -452,6 +452,11 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "ageGroups",
         )
         extra_kwargs = {
+            "businessImage": {
+                "write_only": True,
+                "required": False,
+                "allow_null": True,
+            },
             "businessName": {"required": False},
             "businessType": {"required": False},
             "contact_privacy": {"required": False},
@@ -488,6 +493,15 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
         if hasattr(obj, "managers"):
             return [manager.email for manager in obj.managers.all()]
         return []
+
+    def get_business_image_medium_url(self, obj):
+        if not obj.businessImage or not obj.businessImage.name:
+            return None
+        original_path = obj.businessImage.name
+        if not original_path.startswith("originals/"):
+            return None
+        resized_path = original_path.replace("originals/", "public/medium/", 1)
+        return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
 
     def _parse_boolean_from_string(self, value, field_name):
         if isinstance(value, bool):
@@ -798,21 +812,42 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
         return data
 
     def update(self, instance, validated_data):
-        # Handle businessImage: if None, it means remove. If a file, update. If not in validated_data, no change.
-        business_image_update = validated_data.pop(
-            "businessImage", ...
-        )  # Use a sentinel
+        logger.info(
+            f"Serializer update called for Business ID: {instance.pk}. Validated data keys: {validated_data.keys()}"
+        )
+
+        if "businessImage" in validated_data:
+            logger.info(
+                f"'businessImage' in validated_data. Type: {type(validated_data['businessImage'])}"
+            )
+        else:
+            logger.warning(
+                "'businessImage' NOT in validated_data. Cannot process image update."
+            )
+
+        business_image_update = validated_data.pop("businessImage", ...)
 
         if business_image_update is None:  # Explicitly set to None means remove
+            logger.info(
+                f"Attempting to remove businessImage for Business ID: {instance.pk}"
+            )
             if instance.businessImage:
                 instance.businessImage.delete(save=False)
             instance.businessImage = None
         elif business_image_update is not ...:  # A new file was provided
+            logger.info(
+                f"Attempting to update businessImage for Business ID: {instance.pk}. New file: {business_image_update}"
+            )
             if instance.businessImage:
+                logger.info(
+                    f"Deleting old businessImage: {instance.businessImage.name}"
+                )
                 instance.businessImage.delete(
                     save=False
                 )  # Delete old before saving new
             instance.businessImage = business_image_update
+        else:
+            logger.info(f"No update to businessImage for Business ID: {instance.pk}")
 
         # Update other fields
         for attr, value in validated_data.items():
@@ -828,6 +863,7 @@ class BusinessStatsSerializer(serializers.ModelSerializer):
     total_classes = serializers.SerializerMethodField()
     average_rating = serializers.SerializerMethodField()
     recent_bookings = serializers.SerializerMethodField()
+    business_image_thumb_url = serializers.SerializerMethodField()
     registration_date = serializers.DateTimeField(source="createdAt", read_only=True)
     totalReviews = serializers.SerializerMethodField()
 
@@ -836,7 +872,7 @@ class BusinessStatsSerializer(serializers.ModelSerializer):
         fields = [
             "businessId",
             "businessName",
-            "businessImage",
+            "business_image_thumb_url",
             "totalReviews",
             "total_revenue",
             "total_students",
@@ -846,10 +882,16 @@ class BusinessStatsSerializer(serializers.ModelSerializer):
             "registration_date",
         ]
 
+    def get_business_image_thumb_url(self, obj):
+        if not obj.businessImage or not obj.businessImage.name:
+            return None
+        original_path = obj.businessImage.name
+        if not original_path.startswith("originals/"):
+            return None
+        resized_path = original_path.replace("originals/", "public/thumb/", 1)
+        return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
+
     def get_totalReviews(self, obj):
-        # Assuming Reviews model has a ForeignKey to BusinessInfo named 'business' or similar
-        # If Reviews are linked via ClassesMain -> BusinessInfo, adjust the query
-        # Example: return Reviews.objects.filter(classId__businessId=obj, status='approved').count()
         return obj.reviews_directly_to_business.filter(
             status="approved"
         ).count()  # Use the direct relation if available

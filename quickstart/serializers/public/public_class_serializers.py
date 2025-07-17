@@ -1,3 +1,5 @@
+import os
+from django.conf import settings
 from rest_framework import serializers
 from quickstart.models import (
     ClassesMain,
@@ -14,11 +16,70 @@ logger = logging.getLogger(__name__)
 
 
 class PublicClassImageSerializer(serializers.ModelSerializer):
-    """Serializer for publicly displaying class images."""
+    """
+    Serializer for publicly displaying class images, now with optimized versions.
+    """
+
+    # This correctly uses your PrivateMediaStorage to generate a pre-signed URL for the original.
+    original_url = serializers.ImageField(source="image", read_only=True)
+
+    # These methods will now build the correct CloudFront URLs.
+    thumbnail_url = serializers.SerializerMethodField()
+    medium_url = serializers.SerializerMethodField()
+    large_url = serializers.SerializerMethodField()
 
     class Meta:
         model = ClassImage
-        fields = ["imageId", "image"]  # Only show ID and image URL
+        fields = [
+            "imageId",
+            "original_url",
+            "thumbnail_url",
+            "medium_url",
+            "large_url",
+        ]
+        read_only_fields = fields
+
+    def _get_resized_url(self, obj, size_name):
+        """
+        Constructs a public CloudFront URL for a resized WebP image.
+        """
+        if not getattr(settings, "CLOUDFRONT_DOMAIN", None):
+            logger.warning("CLOUDFRONT_DOMAIN is not configured in settings.py")
+            return None
+
+        if obj.image and obj.image.name:
+            original_path = obj.image.name
+
+            if not original_path.startswith("originals/"):
+                return None
+
+            # 1. Get the base path of the original image, without its extension
+            base_path, _ = os.path.splitext(
+                original_path
+            )  # e.g., "originals/path/image.png" -> "originals/path/image"
+
+            # 2. Replace the path prefix
+            # e.g., "originals/path/image" -> "public/thumb/path/image"
+            resized_base_path = base_path.replace(
+                "originals/", f"public/{size_name}/", 1
+            )
+
+            # 3. Add the correct .webp extension
+            final_path = resized_base_path + ".webp"
+
+            # 4. Construct the full URL
+            return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
+
+        return None
+
+    def get_thumbnail_url(self, obj):
+        return self._get_resized_url(obj, "thumb")
+
+    def get_medium_url(self, obj):
+        return self._get_resized_url(obj, "medium")
+
+    def get_large_url(self, obj):
+        return self._get_resized_url(obj, "large")
 
 
 class PublicScheduleSerializer(serializers.ModelSerializer):

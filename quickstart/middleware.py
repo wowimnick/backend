@@ -1,6 +1,5 @@
+import os
 from django.conf import settings
-from rest_framework_simplejwt.tokens import AccessToken
-import jwt
 
 
 class JWTCookieMiddleware:
@@ -40,3 +39,18 @@ class HealthCheckMiddleware(MiddlewareMixin):
             # This is the magic. We tell the `SecurityMiddleware` that the
             # request is already secure, so it doesn't need to redirect.
             request.is_secure = lambda: True
+
+
+class SeoStagingMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+        self.is_staging = os.environ.get("DJANGO_ENV") == "staging"
+
+    def __call__(self, request):
+        response = self.get_response(request)
+
+        # The rest of the logic is the same and is correct.
+        if self.is_staging:
+            response["X-Robots-Tag"] = "noindex, nofollow"
+
+        return response

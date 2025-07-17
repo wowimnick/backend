@@ -4,30 +4,31 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.throttling import ScopedRateThrottle
 from dj_rest_auth.registration.views import RegisterView
+from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
+from rest_framework_simplejwt.token_blacklist.models import (
+    BlacklistedToken,
+    OutstandingToken,
+)
 
-# --- MODIFIED: Removed import of DefaultPasswordResetView ---
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.contrib.auth import get_user_model
 from django.conf import settings
 import logging
 
+from datetime import timedelta
+from django.utils import timezone
+
 from django.views import View
 from django.http import JsonResponse
 
-# --- REQUIRED IMPORTS FOR THE FIX ---
-from django.utils.http import urlsafe_base64_decode
-from django.utils.encoding import force_str
 from django.contrib.auth.tokens import default_token_generator
 
-# --- MODIFIED: Import allauth's form directly ---
 from allauth.account.forms import ResetPasswordForm, SetPasswordForm
 
-# --- END REQUIRED IMPORTS ---
 
 from quickstart.serializers.auth.auth_serializers import CustomAllAuthPasswordResetForm
 from quickstart.models import AuditLog
@@ -165,70 +166,146 @@ class CustomTokenObtainPairView(TokenObtainPairView):
 
 class CustomTokenRefreshView(APIView):
     def post(self, request, *args, **kwargs):
-        refresh_token = request.COOKIES.get(settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"])
+        refresh_token_str = request.COOKIES.get(
+            settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"]
+        )
 
-        if not refresh_token:
+        if not refresh_token_str:
             return Response(
                 {"detail": "Refresh token not found in cookies"},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
         User = get_user_model()
+
         try:
-            refresh = RefreshToken(refresh_token)
+            # First, attempt a standard refresh. This will work 99% of the time.
+            refresh = RefreshToken(refresh_token_str)
             user_id = refresh.payload.get("user_id")
-            try:
-                user = User.objects.select_related("role").get(userId=user_id)
-                user_serializer = CustomUserDetailsSerializer(user)
-                user_data = user_serializer.data
-            except User.DoesNotExist:
-                logger.error(
-                    f"User with ID {user_id} from valid refresh token not found."
-                )
-                raise TokenError("User not found.")
+            user = User.objects.select_related("role").get(userId=user_id)
+            user_serializer = CustomUserDetailsSerializer(user)
 
-            data = {"access": str(refresh.access_token), "user": user_data}
+            data = {
+                "access": str(refresh.access_token),
+                "user": user_serializer.data,
+            }
 
             if settings.SIMPLE_JWT["ROTATE_REFRESH_TOKENS"]:
-                new_refresh = RefreshToken.for_user(user)
-                data["refresh"] = str(new_refresh)
-
-            response = Response(data, status=status.HTTP_200_OK)
-
-            response.set_cookie(
-                settings.SIMPLE_JWT["AUTH_COOKIE"],
-                data["access"],
-                max_age=settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"].total_seconds(),
-                httponly=True,
-                samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],
-                secure=settings.SIMPLE_JWT["AUTH_COOKIE_SECURE"],
-            )
-            if settings.SIMPLE_JWT["ROTATE_REFRESH_TOKENS"]:
-                response.set_cookie(
-                    settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"],
-                    data["refresh"],
-                    max_age=settings.SIMPLE_JWT[
-                        "REFRESH_TOKEN_LIFETIME"
-                    ].total_seconds(),
-                    httponly=True,
-                    samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],
-                    secure=settings.SIMPLE_JWT["AUTH_COOKIE_SECURE"],
-                )
                 if settings.SIMPLE_JWT["BLACKLIST_AFTER_ROTATION"]:
                     try:
                         refresh.blacklist()
                     except AttributeError:
                         pass
+
+                new_refresh = RefreshToken.for_user(user)
+                data["refresh"] = str(new_refresh)
+
+            response = Response(data, status=status.HTTP_200_OK)
+            self._set_auth_cookies(response, data["access"], data.get("refresh"))
             return response
-        except (TokenError, AttributeError, User.DoesNotExist) as e:
+
+        except TokenError as e:
+            # --- THIS IS THE ROBUST FIX ---
+            # If the token failed, check if it's because it was blacklisted.
+            # This is a strong indicator of our race condition.
+            if "blacklisted" in str(e).lower():
+                try:
+                    logger.warning(
+                        f"Potential token refresh race condition detected for user. Error: {e}"
+                    )
+                    # The token is invalid, but we can still decode it without verification to get user info.
+                    unverified_payload = RefreshToken(
+                        refresh_token_str, verify=False
+                    ).payload
+                    user_id = unverified_payload.get("user_id")
+                    jti = unverified_payload.get("jti")
+
+                    # Find the newest valid token for this user that was created *after* the blacklisted one.
+                    blacklisted_entry = BlacklistedToken.objects.get(token__jti=jti)
+                    latest_token = (
+                        OutstandingToken.objects.filter(
+                            user_id=user_id,
+                            created_at__gt=blacklisted_entry.blacklisted_at,
+                        )
+                        .order_by("-created_at")
+                        .first()
+                    )
+
+                    # Give a 60-second grace period for the race condition.
+                    grace_period = timedelta(seconds=60)
+                    if (
+                        latest_token
+                        and (timezone.now() - latest_token.created_at) < grace_period
+                    ):
+                        logger.warning(
+                            f"RACE CONDITION CONFIRMED AND HANDLED for user_id: {user_id}. Issuing new tokens."
+                        )
+                        # A new token was created recently. This confirms the race condition.
+                        # We create new tokens based on this valid, most recent token.
+                        new_refresh = RefreshToken(latest_token.token)
+                        user = User.objects.select_related("role").get(userId=user_id)
+
+                        data = {
+                            "access": str(new_refresh.access_token),
+                            "refresh": str(
+                                new_refresh
+                            ),  # Send the newest refresh token back
+                            "user": CustomUserDetailsSerializer(user).data,
+                        }
+                        response = Response(data, status=status.HTTP_200_OK)
+                        self._set_auth_cookies(
+                            response, data["access"], data["refresh"]
+                        )
+                        return response
+
+                except Exception as race_condition_error:
+                    # If anything goes wrong inside our handler, log it and fail safely.
+                    logger.error(
+                        f"CRITICAL: Error during token refresh race condition handling: {race_condition_error}"
+                    )
+                    # Fall through to the generic error response below.
+
+            # If it wasn't a blacklisted token or the race condition handler failed, log the original error and fail.
             logger.error(f"Token Refresh Error: {e}")
             response = Response(
                 {"detail": "Token refresh failed or user not found."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
-            response.delete_cookie(settings.SIMPLE_JWT["AUTH_COOKIE"])
-            response.delete_cookie(settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"])
+            self._delete_auth_cookies(response)
             return response
+
+        except (AttributeError, User.DoesNotExist) as e:
+            # Catches errors like user deleted between token issue and refresh.
+            logger.error(f"Token Refresh Error (User/Attribute): {e}")
+            response = Response(
+                {"detail": "Token refresh failed or user not found."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+            self._delete_auth_cookies(response)
+            return response
+
+    def _set_auth_cookies(self, response, access_token, refresh_token=None):
+        response.set_cookie(
+            settings.SIMPLE_JWT["AUTH_COOKIE"],
+            access_token,
+            max_age=settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"].total_seconds(),
+            httponly=True,
+            samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],
+            secure=settings.SIMPLE_JWT["AUTH_COOKIE_SECURE"],
+        )
+        if refresh_token:
+            response.set_cookie(
+                settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"],
+                refresh_token,
+                max_age=settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds(),
+                httponly=True,
+                samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],
+                secure=settings.SIMPLE_JWT["AUTH_COOKIE_SECURE"],
+            )
+
+    def _delete_auth_cookies(self, response):
+        response.delete_cookie(settings.SIMPLE_JWT["AUTH_COOKIE"])
+        response.delete_cookie(settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"])
 
 
 class UserUpdateView(APIView):

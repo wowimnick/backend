@@ -15,6 +15,7 @@ from pathlib import Path
 # For local development without Docker, we load a .env file.
 # The DJANGO_ENV variable controls which file is loaded locally.
 IS_DOCKER = os.environ.get("IS_DOCKER") == "true"
+CLOUDFRONT_DOMAIN = os.environ.get("CLOUDFRONT_DOMAIN")
 
 if not IS_DOCKER:
     env_type = os.environ.get("DJANGO_ENV", "local")
@@ -73,7 +74,9 @@ CSRF_COOKIE_SAMESITE = "Lax"
 
 if IS_DEPLOYED_ENV:
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
-    SECURE_SSL_REDIRECT = True
+    SECURE_SSL_REDIRECT = (
+        os.environ.get("SECURE_SSL_REDIRECT", "True").lower() == "true"
+    )
     SECURE_HSTS_SECONDS = 31536000
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
@@ -127,6 +130,7 @@ MIDDLEWARE = [
     "quickstart.middleware.HealthCheckMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "corsheaders.middleware.CorsMiddleware",
+    "quickstart.middleware.SeoStagingMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",

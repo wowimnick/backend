@@ -1,3 +1,4 @@
+from django.conf import settings
 from rest_framework import serializers
 from quickstart.models import CustomUser, Reviews
 
@@ -37,55 +38,62 @@ class UserReviewSerializer(serializers.ModelSerializer):
     """Serializer for displaying basic user info attached to a public review."""
 
     name = serializers.SerializerMethodField()
-    avatar_url = serializers.SerializerMethodField()
+    # Updated to provide a thumbnail URL for the avatar
+    avatar_thumb_url = serializers.SerializerMethodField()
 
     class Meta:
         model = CustomUser
-        fields = ["name", "avatar_url"]  # Only public-safe fields
+        fields = ["name", "avatar_thumb_url"]
 
     def get_name(self, obj):
-        # Display first name and last initial for privacy
         if obj.first_name:
             last_initial = f" {obj.last_name[0]}." if obj.last_name else ""
             return f"{obj.first_name}{last_initial}"
-        # Fallback if no first name (shouldn't happen often with required fields)
         return "Anonymous User"
 
-    def get_avatar_url(self, obj):
-        if obj.avatar and hasattr(obj.avatar, "url"):
-            try:
-                return obj.avatar.url
-            except ValueError:  # Handle file missing
-                return None
-        return None  # Default no avatar
+    def get_avatar_thumb_url(self, obj):
+        if not obj.avatar or not obj.avatar.name:
+            return None
+        original_path = obj.avatar.name
+        if not original_path.startswith("originals/"):
+            return None
+        resized_path = original_path.replace("originals/", "public/thumb/", 1)
+        return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
 
 
 class PublicReviewSerializer(serializers.ModelSerializer):
-    """Serializer for publicly displaying reviews (e.g., on a class page)."""
+    """Serializer for publicly displaying reviews with optimized images."""
 
-    user = UserReviewSerializer(
-        source="userId", read_only=True
-    )  # Use the privacy-conscious user serializer
-    image_url = serializers.SerializerMethodField()
+    user = UserReviewSerializer(source="userId", read_only=True)
+    # Updated to provide multiple sizes for the review image
+    image_thumb_url = serializers.SerializerMethodField()
+    image_medium_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Reviews
-        # Fields safe for public display
         fields = [
             "reviewId",
-            "user",  # Nested user info
+            "user",
             "rating",
             "comment",
-            "image_url",  # URL for the image
+            "image_thumb_url",
+            "image_medium_url",
             "createdAt",
-            "business_response",  # Make the business response public
+            "business_response",
         ]
-        read_only_fields = fields  # All fields read-only in this context
+        read_only_fields = fields
 
-    def get_image_url(self, obj):
-        if obj.image and hasattr(obj.image, "url"):
-            try:
-                return obj.image.url
-            except ValueError:
-                return None
-        return None
+    def _get_resized_image_url(self, obj, size_name):
+        if not obj.image or not obj.image.name:
+            return None
+        original_path = obj.image.name
+        if not original_path.startswith("originals/"):
+            return None
+        resized_path = original_path.replace("originals/", f"public/{size_name}/", 1)
+        return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
+
+    def get_image_thumb_url(self, obj):
+        return self._get_resized_image_url(obj, "thumb")
+
+    def get_image_medium_url(self, obj):
+        return self._get_resized_image_url(obj, "medium")
