@@ -4,7 +4,7 @@ from django.views.generic import TemplateView
 from django.contrib.sitemaps.views import sitemap  # Import the sitemap view
 
 # Import your sitemap classes from your app
-from quickstart.views.healthcheck import robots_txt_view
+from quickstart.views.healthcheck import health_check, robots_txt_view
 from quickstart.sitemaps import StaticViewSitemap, ClassSitemap
 
 # Define the sitemaps dictionary here, at the project level
@@ -15,6 +15,7 @@ sitemaps = {
 
 urlpatterns = [
     # 1. Admin Interface (at the root)
+    path("health-check/", health_check, name="health-check"),
     path("classeasily-control-panel/", admin.site.urls),
     # 2. API Routes (all prefixed with 'api/')j
     # This will include all the URLs from your quickstart/urls.py file.
