@@ -177,7 +177,6 @@ class CreatePaymentIntentView(APIView):
                 }
             )
 
-        # --- Exception handling remains the same ---
         except ScheduleInstance.DoesNotExist:
             logger.error(
                 f"CreatePaymentIntentView: ScheduleInstance not found. Request Data: {request.data}",
@@ -277,19 +276,17 @@ class ProcessBookingWebhook(APIView):
                 payload, sig_header, settings.STRIPE_WEBHOOK_SECRET
             )
             logger.info(
-                f"ProcessBookingWebhook - Stripe Webhook Received: ID={event.id}, Type={event.type}"
+                f"--- Booking Webhook: Received event ID={event.id}, Type={event.type} ---"
             )
         except ValueError as e:  # Invalid payload
-            logger.error(f"ProcessBookingWebhook - Webhook Error: Invalid payload. {e}")
+            logger.error(f"Booking Webhook - Webhook Error: Invalid payload. {e}")
             return Response(status=status.HTTP_400_BAD_REQUEST)
         except stripe.error.SignatureVerificationError as e:  # Invalid signature
-            logger.error(
-                f"ProcessBookingWebhook - Webhook Error: Invalid signature. {e}"
-            )
+            logger.error(f"Booking Webhook - Webhook Error: Invalid signature. {e}")
             return Response(status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             logger.error(
-                f"ProcessBookingWebhook - Webhook Error: Unexpected error constructing event. {e}",
+                f"Booking Webhook - Webhook Error: Unexpected error constructing event. {e}",
                 exc_info=True,
             )
             return Response(status=status.HTTP_400_BAD_REQUEST)
@@ -297,7 +294,7 @@ class ProcessBookingWebhook(APIView):
         if event.type == "payment_intent.succeeded":
             payment_intent = event.data.object
             logger.info(
-                f"ProcessBookingWebhook - PaymentIntent {payment_intent.id} succeeded."
+                f"Booking Webhook - PaymentIntent {payment_intent.id} succeeded."
             )
             try:
                 response_data = self.handle_successful_payment(payment_intent)
@@ -305,7 +302,7 @@ class ProcessBookingWebhook(APIView):
             except DRFValidationError as ve:
                 error_detail_msg = ve.detail if hasattr(ve, "detail") else str(ve)
                 logger.error(
-                    f"ProcessBookingWebhook - Validation Error handling PI {payment_intent.id}: {error_detail_msg}"
+                    f"Booking Webhook - Validation Error handling PI {payment_intent.id}: {error_detail_msg}"
                 )
                 self._attempt_stripe_refund(
                     payment_intent.id, f"Booking validation failed: {error_detail_msg}"
@@ -315,7 +312,7 @@ class ProcessBookingWebhook(APIView):
                 )
             except Exception as e:
                 logger.error(
-                    f"ProcessBookingWebhook - Unexpected Error processing successful PI {payment_intent.id}: {e}",
+                    f"Booking Webhook - Unexpected Error processing successful PI {payment_intent.id}: {e}",
                     exc_info=True,
                 )
                 self._attempt_stripe_refund(
@@ -331,9 +328,8 @@ class ProcessBookingWebhook(APIView):
         elif event.type == "payment_intent.payment_failed":
             payment_intent = event.data.object
             logger.warning(
-                f'ProcessBookingWebhook - PaymentIntent {payment_intent.id} failed. Reason: {payment_intent.last_payment_error.message if payment_intent.last_payment_error else "Unknown"}'
+                f'Booking Webhook - PaymentIntent {payment_intent.id} failed. Reason: {payment_intent.last_payment_error.message if payment_intent.last_payment_error else "Unknown"}'
             )
-            # Optionally: Update any related pending Payment record in your DB to 'failed'
             Payment.objects.filter(
                 stripe_payment_intent_id=payment_intent.id, status="pending"
             ).update(
@@ -345,7 +341,7 @@ class ProcessBookingWebhook(APIView):
                 ),
             )
         else:
-            logger.debug(f"ProcessBookingWebhook - Unhandled event type {event.type}")
+            logger.debug(f"Booking Webhook - Unhandled event type {event.type}")
 
         return Response(status=status.HTTP_200_OK)  # Acknowledge other events
 
@@ -358,7 +354,7 @@ class ProcessBookingWebhook(APIView):
             )
             booking = payment_record.booking
             logger.warning(
-                f"ProcessBookingWebhook - PaymentIntent {payment_intent.id} has already been successfully processed. Booking ID: {booking.id}, Ref: {booking.user_facing_reference}. Skipping."
+                f"Booking Webhook - PaymentIntent {payment_intent.id} has already been successfully processed. Booking ID: {booking.id}, Ref: {booking.user_facing_reference}. Skipping."
             )
             return {
                 "message": "Already processed",
@@ -372,9 +368,13 @@ class ProcessBookingWebhook(APIView):
             metadata = payment_intent.metadata
             if not metadata:
                 logger.error(
-                    f"ProcessBookingWebhook - Error: Missing metadata for successful PaymentIntent {payment_intent.id}"
+                    f"Booking Webhook - Error: Missing metadata for successful PaymentIntent {payment_intent.id}"
                 )
                 raise DRFValidationError("Payment metadata missing.")
+
+            logger.info(
+                f"Booking Webhook: Processing PI {payment_intent.id} with full metadata: {metadata}"
+            )
 
             user_id = metadata.get("user_id")
             first_slot_id = metadata.get("first_slot_id")
@@ -408,7 +408,7 @@ class ProcessBookingWebhook(APIView):
                     key for key in required_meta_keys if key not in metadata
                 ]
                 logger.error(
-                    f"ProcessBookingWebhook - Error: Missing required metadata for PI {payment_intent.id}. Missing: {missing_keys}"
+                    f"Booking Webhook - Error: Missing required metadata for PI {payment_intent.id}. Missing: {missing_keys}"
                 )
                 raise DRFValidationError(
                     f"Payment metadata incomplete. Missing: {', '.join(missing_keys)}"
@@ -434,7 +434,7 @@ class ProcessBookingWebhook(APIView):
                 ScheduleInstance.DoesNotExist,
             ) as e:
                 logger.error(
-                    f"ProcessBookingWebhook - Error: Invalid metadata types or object not found for PI {payment_intent.id}. Error: {e}"
+                    f"Booking Webhook - Error: Invalid metadata types or object not found for PI {payment_intent.id}. Error: {e}"
                 )
                 raise DRFValidationError(
                     f"Invalid payment metadata or related object not found: {e}"
@@ -511,7 +511,7 @@ class ProcessBookingWebhook(APIView):
                 created_bookings_for_email.append(booking)
 
             logger.info(
-                f"ProcessBookingWebhook - Created {len(created_bookings_for_email)} booking(s) for PI {payment_intent.id}. Group ID: {booking_group_id}. First ref: {created_bookings_for_email[0].user_facing_reference if created_bookings_for_email else 'N/A'}"
+                f"Booking Webhook - Created {len(created_bookings_for_email)} booking(s) for PI {payment_intent.id}. Group ID: {booking_group_id}. First ref: {created_bookings_for_email[0].user_facing_reference if created_bookings_for_email else 'N/A'}"
             )
 
             charge_details = None
@@ -521,7 +521,7 @@ class ProcessBookingWebhook(APIView):
                     charge_details = stripe.Charge.retrieve(latest_charge_id)
                 except stripe.StripeError as e:
                     logger.warning(
-                        f"ProcessBookingWebhook - Could not retrieve charge {latest_charge_id} for PI {payment_intent.id}: {e}"
+                        f"Booking Webhook - Could not retrieve charge {latest_charge_id} for PI {payment_intent.id}: {e}"
                     )
 
             payment_record = Payment.objects.create(
@@ -560,27 +560,24 @@ class ProcessBookingWebhook(APIView):
                     if card:
                         payment_record.card_brand = card.brand
                         payment_record.card_last4 = card.last4
-                        # No more isinstance checks needed here
                         payment_record.card_exp_month = card.exp_month
                         payment_record.card_exp_year = card.exp_year
 
                 payment_record.receipt_url = getattr(
                     charge_details, "receipt_url", None
                 )
-                # No more isinstance checks needed here
                 payment_record.receipt_number = getattr(
                     charge_details, "receipt_number", None
                 )
 
                 billing_details = getattr(charge_details, "billing_details", None)
-                # The .to_dict() call is now safe because the test mock provides it
                 payment_record.billing_details = (
                     billing_details.to_dict() if billing_details else {}
                 )
                 payment_record.save()
 
             logger.info(
-                f"ProcessBookingWebhook - Created Payment record {payment_record.id} for PI {payment_intent.id}"
+                f"Booking Webhook - Created Payment record {payment_record.id} for PI {payment_intent.id}"
             )
 
         if created_bookings_for_email:
@@ -588,11 +585,11 @@ class ProcessBookingWebhook(APIView):
             try:
                 send_booking_confirmation_email(user, first_booking)
                 logger.info(
-                    f"ProcessBookingWebhook - Booking confirmation email prepared/queued for booking {first_booking.id} (Ref: {first_booking.user_facing_reference}), user {user.email}"
+                    f"Booking Webhook - Booking confirmation email prepared/queued for booking {first_booking.id} (Ref: {first_booking.user_facing_reference}), user {user.email}"
                 )
             except Exception as email_error:
                 logger.error(
-                    f"ProcessBookingWebhook - Failed to send confirmation email for booking {first_booking.id} (PI: {payment_intent.id}): {email_error}",
+                    f"Booking Webhook - Failed to send confirmation email for booking {first_booking.id} (PI: {payment_intent.id}): {email_error}",
                     exc_info=True,
                 )
 
@@ -609,20 +606,20 @@ class ProcessBookingWebhook(APIView):
                     for biz_user in recipients_to_notify:
                         send_business_new_booking_email(biz_user, first_booking)
                         logger.info(
-                            f"ProcessBookingWebhook - New Booking notification email prepared/queued for booking {first_booking.id} to business user {biz_user.email}"
+                            f"Booking Webhook - New Booking notification email prepared/queued for booking {first_booking.id} to business user {biz_user.email}"
                         )
                 else:
                     logger.info(
-                        f"ProcessBookingWebhook - Skipped new booking notification for business {business_info_obj.businessId if business_info_obj else 'N/A'} (Setting disabled or missing owner/managers)"
+                        f"Booking Webhook - Skipped new booking notification for business {business_info_obj.businessId if business_info_obj else 'N/A'} (Setting disabled or missing owner/managers)"
                     )
             except AttributeError as ae_email:
                 logger.error(
-                    f"ProcessBookingWebhook - Error accessing business details for notification email for booking {first_booking.id} (PI: {payment_intent.id}): {ae_email}",
+                    f"Booking Webhook - Error accessing business details for notification email for booking {first_booking.id} (PI: {payment_intent.id}): {ae_email}",
                     exc_info=True,
                 )
             except Exception as email_error_biz:
                 logger.error(
-                    f"ProcessBookingWebhook - Failed to send new booking notification email for booking {first_booking.id} (PI: {payment_intent.id}): {email_error_biz}",
+                    f"Booking Webhook - Failed to send new booking notification email for booking {first_booking.id} (PI: {payment_intent.id}): {email_error_biz}",
                     exc_info=True,
                 )
 
@@ -632,7 +629,7 @@ class ProcessBookingWebhook(APIView):
             }
         else:
             logger.error(
-                f"ProcessBookingWebhook - Transaction successful but no bookings were created/retrieved for PI {payment_intent.id}"
+                f"Booking Webhook - Transaction successful but no bookings were created/retrieved for PI {payment_intent.id}"
             )
             raise DRFValidationError(
                 "Booking creation failed unexpectedly after payment. Your payment will be refunded."

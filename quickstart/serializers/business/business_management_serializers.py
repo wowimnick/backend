@@ -402,6 +402,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "businessName",
             "businessType",
             "businessDescription",
+            "businessImage",
             "business_image_medium_url",
             "website",
             "business_timezone",
@@ -451,6 +452,11 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "ageGroups",
         )
         extra_kwargs = {
+            "businessImage": {
+                "write_only": True,
+                "required": False,
+                "allow_null": True,
+            },
             "businessName": {"required": False},
             "businessType": {"required": False},
             "contact_privacy": {"required": False},
@@ -806,21 +812,42 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
         return data
 
     def update(self, instance, validated_data):
-        # Handle businessImage: if None, it means remove. If a file, update. If not in validated_data, no change.
-        business_image_update = validated_data.pop(
-            "businessImage", ...
-        )  # Use a sentinel
+        logger.info(
+            f"Serializer update called for Business ID: {instance.pk}. Validated data keys: {validated_data.keys()}"
+        )
+
+        if "businessImage" in validated_data:
+            logger.info(
+                f"'businessImage' in validated_data. Type: {type(validated_data['businessImage'])}"
+            )
+        else:
+            logger.warning(
+                "'businessImage' NOT in validated_data. Cannot process image update."
+            )
+
+        business_image_update = validated_data.pop("businessImage", ...)
 
         if business_image_update is None:  # Explicitly set to None means remove
+            logger.info(
+                f"Attempting to remove businessImage for Business ID: {instance.pk}"
+            )
             if instance.businessImage:
                 instance.businessImage.delete(save=False)
             instance.businessImage = None
         elif business_image_update is not ...:  # A new file was provided
+            logger.info(
+                f"Attempting to update businessImage for Business ID: {instance.pk}. New file: {business_image_update}"
+            )
             if instance.businessImage:
+                logger.info(
+                    f"Deleting old businessImage: {instance.businessImage.name}"
+                )
                 instance.businessImage.delete(
                     save=False
                 )  # Delete old before saving new
             instance.businessImage = business_image_update
+        else:
+            logger.info(f"No update to businessImage for Business ID: {instance.pk}")
 
         # Update other fields
         for attr, value in validated_data.items():

@@ -190,25 +190,27 @@ class StripeConnectView(views.APIView):
             )
 
         except stripe.StripeError as e:
+            user_message = getattr(
+                e,
+                "user_message",
+                "We couldn't connect to Stripe. Please check your details and try again.",
+            )
             error_param = getattr(e, "param", "N/A")
-            error_code = getattr(e, "code", "N/A")
-            user_message = getattr(e, "user_message", str(e))
             logger.error(
                 f"StripeConnect: Stripe API error for Business {business.businessId} (Account: {stripe_account_id}). "
-                f"Param: {error_param}, Code: {error_code}, Message: {user_message}",
+                f"Param: {error_param}, User Message: '{user_message}'",
                 exc_info=True,
             )
-            error_payload = {"error": f"Stripe error: {user_message}"}
-            if error_param:
-                error_payload["param"] = error_param
-            return Response(error_payload, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": user_message}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             logger.error(
                 f"StripeConnect: Non-Stripe error for Business {business.businessId} (Account: {stripe_account_id}): {str(e)}",
                 exc_info=True,
             )
             return Response(
-                {"error": "An unexpected error occurred while setting up payments."},
+                {
+                    "error": "An unexpected server error occurred. Our team has been notified. Please try again later."
+                },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -232,51 +234,84 @@ class StripeConnectView(views.APIView):
                 }
             )
 
+        logger.info(
+            f"--- GET Endpoint: Evaluating status for Stripe Account: {business.stripe_account_id} ---"
+        )
+
         try:
             account = stripe.Account.retrieve(business.stripe_account_id)
 
+            logger.info(
+                f"GET Endpoint: Current DB status is '{business.stripe_account_status}'."
+            )
+
+            # --- DETAILED LOGGING OF INCOMING STRIPE DATA ---
+            requirements = account.get("requirements", {})
+            disabled_reason = account.get("disabled_reason")
+
+            currently_due = requirements.get("currently_due", [])
+            eventually_due = requirements.get("eventually_due", [])
+            pending_verification = requirements.get("pending_verification", [])
+
+            logger.info(
+                f"GET Endpoint: Stripe Data | charges_enabled: {account.charges_enabled}"
+            )
+            logger.info(
+                f"GET Endpoint: Stripe Data | payouts_enabled: {account.payouts_enabled}"
+            )
+            logger.info(
+                f"GET Endpoint: Stripe Data | details_submitted: {account.details_submitted}"
+            )
+            logger.info(
+                f"GET Endpoint: Stripe Data | disabled_reason: '{disabled_reason}'"
+            )
+            logger.info(f"GET Endpoint: Stripe Data | currently_due: {currently_due}")
+            logger.info(
+                f"GET Endpoint: Stripe Data | pending_verification: {pending_verification}"
+            )
+            logger.info(f"GET Endpoint: Stripe Data | eventually_due: {eventually_due}")
+            # --- END OF DETAILED LOGGING ---
+
             new_platform_status = "unlinked"
             is_onboarding_complete = False
-            if account:
-                requirements = account.get("requirements", {})
-                currently_due = requirements.get("currently_due", [])
-                eventually_due = requirements.get("eventually_due", [])
-                disabled_reason = account.get("disabled_reason")
 
-                if not account.details_submitted:
-                    new_platform_status = "incomplete"
-                elif (
-                    account.charges_enabled
-                    and account.payouts_enabled
-                    and not currently_due
-                    and not eventually_due
-                    and not disabled_reason
-                ):
-                    new_platform_status = "active"
-                    is_onboarding_complete = True
-                elif disabled_reason:
-                    new_platform_status = "restricted"
-                elif (
-                    currently_due
-                    or eventually_due
-                    or not account.charges_enabled
-                    or not account.payouts_enabled
-                ):
-                    new_platform_status = "pending"
-                else:
-                    new_platform_status = "pending"
+            if (
+                account.charges_enabled
+                and account.payouts_enabled
+                and not currently_due
+                and not eventually_due
+                and not disabled_reason
+            ):
+                new_platform_status = "active"
+                is_onboarding_complete = True
+            elif disabled_reason or currently_due:
+                new_platform_status = "restricted"
+            elif pending_verification:
+                new_platform_status = "pending"
+            elif not account.details_submitted:
+                new_platform_status = "incomplete"
+            else:
+                new_platform_status = "pending"
+
+            logger.info(
+                f"GET Endpoint: Final determined status is '{new_platform_status}'."
+            )
 
             if business.stripe_account_status != new_platform_status:
                 business.stripe_account_status = new_platform_status
                 business.save(update_fields=["stripe_account_status"])
                 logger.info(
-                    f"StripeConnect: GET - Stripe account status for Business {business.businessId} updated to '{new_platform_status}'."
+                    f"GET Endpoint: SUCCESS! Business {business.businessId} status updated from '{business.stripe_account_status}' to '{new_platform_status}'."
+                )
+            else:
+                logger.info(
+                    f"GET Endpoint: Status '{new_platform_status}' is unchanged. No DB update needed."
                 )
 
             return Response(
                 {
                     "stripe_account_id": account.id,
-                    "status": business.stripe_account_status,
+                    "status": new_platform_status,
                     "raw_stripe_status": {
                         "charges_enabled": account.charges_enabled,
                         "details_submitted": account.details_submitted,
@@ -289,7 +324,7 @@ class StripeConnectView(views.APIView):
             )
         except stripe.StripeError as e:
             logger.error(
-                f"StripeConnect: GET - Stripe API error retrieving account {business.stripe_account_id}: {str(e)}"
+                f"GET Endpoint: Stripe API error retrieving account {business.stripe_account_id}: {str(e)}"
             )
             return Response(
                 {
@@ -302,7 +337,7 @@ class StripeConnectView(views.APIView):
             )
         except Exception as e:
             logger.error(
-                f"StripeConnect: GET - Unexpected error retrieving Stripe account {business.stripe_account_id}: {str(e)}",
+                f"GET Endpoint: Unexpected error retrieving Stripe account {business.stripe_account_id}: {str(e)}",
                 exc_info=True,
             )
             return Response(

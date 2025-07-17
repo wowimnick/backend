@@ -340,6 +340,7 @@ class StudentBookingSerializer(serializers.ModelSerializer):
         source="amount_paid", max_digits=10, decimal_places=2, read_only=True
     )
     class_image_thumb = serializers.SerializerMethodField(read_only=True)
+    class_image_large_url = serializers.SerializerMethodField(read_only=True)
     booking_id = serializers.IntegerField(source="id", read_only=True)
     has_review = serializers.SerializerMethodField(read_only=True)
     enrollment_type = serializers.CharField(read_only=True)
@@ -369,6 +370,7 @@ class StudentBookingSerializer(serializers.ModelSerializer):
             "price",
             "status",
             "class_image_thumb",  # UPDATED field name
+            "class_image_large_url",
             "has_review",
             "session_info",
             "enrollment_type",
@@ -400,6 +402,30 @@ class StudentBookingSerializer(serializers.ModelSerializer):
                 if not original_path.startswith("originals/"):
                     return None
                 resized_path = original_path.replace("originals/", "public/thumb/", 1)
+                return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
+            return None
+        except (AttributeError, ValueError, TypeError):
+            return None
+
+    def get_class_image_large_url(self, obj):
+        try:
+            class_obj = obj.schedule_instance.schedule.option.classId
+            if hasattr(class_obj, "prefetched_images") and class_obj.prefetched_images:
+                image_instance = class_obj.prefetched_images[0]
+            else:
+                image_instance = class_obj.images.order_by(
+                    "-isCover", "createdAt"
+                ).first()
+
+            if (
+                image_instance
+                and image_instance.image
+                and hasattr(image_instance.image, "name")
+            ):
+                original_path = image_instance.image.name
+                if not original_path.startswith("originals/"):
+                    return None
+                resized_path = original_path.replace("originals/", "public/large/", 1)
                 return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
             return None
         except (AttributeError, ValueError, TypeError):
