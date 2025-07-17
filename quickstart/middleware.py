@@ -1,5 +1,6 @@
 import os
 from django.conf import settings
+from django.http import HttpResponse
 
 
 class JWTCookieMiddleware:
@@ -24,21 +25,28 @@ class JWTCookieMiddleware:
         return response
 
 
-from django.utils.deprecation import MiddlewareMixin
-
-
-class HealthCheckMiddleware(MiddlewareMixin):
+class HealthCheckMiddleware:
     """
-    Intercepts requests to the health check endpoint and bypasses
-    the `SecurityMiddleware`'s HTTPS redirect.
+    This middleware is designed to intercept health check requests from the
+    AWS ELB at the earliest possible moment and return a successful response.
+    It completely bypasses all other Django middleware (including the
+    one that checks ALLOWED_HOSTS), ensuring that health checks are fast,
+    reliable, and immune to Host header issues.
     """
 
-    def process_request(self, request):
-        # NOTE: Adjust this path if your health check URL is different.
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        # The health check path configured in your ELB Target Group.
+        # Change this if you change it in the Target Group.
         if request.path == "/api/health-check/":
-            # This is the magic. We tell the `SecurityMiddleware` that the
-            # request is already secure, so it doesn't need to redirect.
-            request.is_secure = lambda: True
+            return HttpResponse("OK")
+        if request.path == "/health-check/":
+            return HttpResponse("OK")
+
+        # If it's not a health check, let Django process the request normally.
+        return self.get_response(request)
 
 
 class SeoStagingMiddleware:
