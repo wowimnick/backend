@@ -46,7 +46,8 @@ class VerificationRequestListSerializer(serializers.ModelSerializer):
     document_count = serializers.SerializerMethodField()
     role = serializers.CharField(source="user.role.name", read_only=True)
     role_color = serializers.CharField(source="user.role.color", read_only=True)
-    user_avatar = serializers.SerializerMethodField()
+    # MODIFIED: Renamed 'user_avatar' to 'user_avatar_thumb_url' to match frontend expectations
+    user_avatar_thumb_url = serializers.SerializerMethodField()
     business_avatar = serializers.SerializerMethodField()
     reviewer_name = serializers.SerializerMethodField()
 
@@ -64,7 +65,8 @@ class VerificationRequestListSerializer(serializers.ModelSerializer):
             "document_count",
             "role",
             "role_color",
-            "user_avatar",
+            # MODIFIED: Changed field name in the list
+            "user_avatar_thumb_url",
             "business_avatar",
             "reviewed_by",
             "reviewer_name",
@@ -80,7 +82,8 @@ class VerificationRequestListSerializer(serializers.ModelSerializer):
     def get_document_count(self, obj):
         return obj.documents.count()
 
-    def get_user_avatar(self, obj):
+    # MODIFIED: Renamed method to match the new field name
+    def get_user_avatar_thumb_url(self, obj):
         if (
             not obj.user
             or not obj.user.avatar
@@ -93,10 +96,9 @@ class VerificationRequestListSerializer(serializers.ModelSerializer):
         original_path = obj.user.avatar.name
         if not original_path.startswith("originals/"):
             return None
-        base_path, _ = os.path.splitext(original_path)
-        resized_base_path = base_path.replace("originals/", "public/thumb/", 1)
-        webp_path = resized_base_path + ".webp"
-        return f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
+        # The logic to create the thumb URL is already correct.
+        final_path = original_path.replace("originals/", "public/thumb/", 1)
+        return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
 
     def get_business_avatar(self, obj):
         if (
@@ -111,10 +113,8 @@ class VerificationRequestListSerializer(serializers.ModelSerializer):
         original_path = obj.business.businessImage.name
         if not original_path.startswith("originals/"):
             return None
-        base_path, _ = os.path.splitext(original_path)
-        resized_base_path = base_path.replace("originals/", "public/thumb/", 1)
-        webp_path = resized_base_path + ".webp"
-        return f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
+        final_path = original_path.replace("originals/", "public/thumb/", 1)
+        return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
 
     def get_reviewer_name(self, obj):
         if obj.reviewed_by:
@@ -224,12 +224,10 @@ class VerificationRequestDetailSerializer(serializers.ModelSerializer):
         original_path = obj.user.avatar.name
         if not original_path.startswith("originals/"):
             return None
-        base_path, _ = os.path.splitext(original_path)
-        resized_base_path = base_path.replace(
+        final_path = original_path.replace(
             "originals/", "public/medium/", 1
         )  # Using medium for detail
-        webp_path = resized_base_path + ".webp"
-        return f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
+        return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
 
     def get_business_image_medium_url(self, obj):
         if (
@@ -244,10 +242,8 @@ class VerificationRequestDetailSerializer(serializers.ModelSerializer):
         original_path = obj.business.businessImage.name
         if not original_path.startswith("originals/"):
             return None
-        base_path, _ = os.path.splitext(original_path)
-        resized_base_path = base_path.replace("originals/", "public/medium/", 1)
-        webp_path = resized_base_path + ".webp"
-        return f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
+        final_path = original_path.replace("originals/", "public/medium/", 1)
+        return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
 
 
 class VerificationSubmissionSerializer(serializers.ModelSerializer):

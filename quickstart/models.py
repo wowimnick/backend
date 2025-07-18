@@ -455,7 +455,7 @@ class BusinessInfo(models.Model):
             ("center", "Learning Center"),
         ],
     )
-    businessDescription = models.TextField(max_length=500)
+    businessDescription = models.TextField(max_length=750)
     businessImage = models.ImageField(
         upload_to="originals/business_images/",
         blank=True,
