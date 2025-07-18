@@ -180,19 +180,18 @@ class PublicClassSerializer(serializers.ModelSerializer):
     business_timezone = serializers.CharField(
         source="businessId.business_timezone", read_only=True
     )
-    # FIX: Add business_name from the related Business model.
-    # The `source` points to the `businessName` field on the `Business` model,
-    # and it will be serialized as `business_name` in the JSON response.
     business_name = serializers.CharField(
         source="businessId.businessName", read_only=True, allow_null=True
     )
+
+    coordinates = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = ClassesMain
         fields = [
             "classId",
             "businessId",
-            "business_name",  # FIX: Added business_name to the list of fields.
+            "business_name",
             "title",
             "description",
             "features",
@@ -213,19 +212,22 @@ class PublicClassSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_coordinates(self, obj):
-        if not obj.coordinates:
+        # PERFORMANCE FIX: Use the clean numeric fields instead of parsing a string.
+        if obj.latitude is None or obj.longitude is None:
             return None
+
         try:
-            lat, lng = map(float, obj.coordinates.split(","))
+            lat, lng = float(obj.latitude), float(obj.longitude)
             if obj.saltLocation:
                 lat_salt = uniform(-0.0005, 0.0005)
                 lng_salt = uniform(-0.0005, 0.0005)
                 lat += lat_salt
                 lng += lng_salt
+            # Return the string format the frontend expects.
             return f"{lat:.8f},{lng:.8f}"
         except (ValueError, TypeError):
             logger.warning(
-                f"Invalid public coordinates format for Class {obj.classId}: {obj.coordinates}"
+                f"Invalid numeric coordinates for Class {obj.classId}: lat={obj.latitude}, lng={obj.longitude}"
             )
             return None
 
