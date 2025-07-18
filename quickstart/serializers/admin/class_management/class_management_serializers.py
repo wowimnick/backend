@@ -428,7 +428,6 @@ class AdminClassCategorySerializer(serializers.ModelSerializer):
         read_only=True, default=0, source="active_classes"
     )
     class_count = serializers.IntegerField(read_only=True, default=0)
-
     image_medium_url = serializers.SerializerMethodField()
 
     class Meta:
@@ -439,6 +438,7 @@ class AdminClassCategorySerializer(serializers.ModelSerializer):
             "key",
             "description",
             "is_featured",
+            "image",  # CRITICAL: The 'image' field is now included.
             "image_medium_url",
             "color",
             "icon_name",
@@ -456,7 +456,10 @@ class AdminClassCategorySerializer(serializers.ModelSerializer):
             "subcategories",
             "activeClasses",
             "class_count",
+            "image_medium_url",
         ]
+        # This allows updating a category without needing to re-upload the image every time.
+        extra_kwargs = {"image": {"required": False, "allow_null": True}}
 
     def get_image_medium_url(self, obj):
         if not obj.image or not hasattr(obj.image, "name") or not obj.image.name:
