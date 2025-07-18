@@ -455,7 +455,7 @@ class BusinessInfo(models.Model):
             ("center", "Learning Center"),
         ],
     )
-    businessDescription = models.TextField(max_length=500)
+    businessDescription = models.TextField(max_length=750)
     businessImage = models.ImageField(
         upload_to="originals/business_images/",
         blank=True,
@@ -814,6 +814,12 @@ class ClassesMain(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="active")
     location = models.CharField(max_length=255)
     coordinates = models.CharField(max_length=50)
+    latitude = models.DecimalField(
+        max_digits=10, decimal_places=8, null=True, blank=True, db_index=True
+    )
+    longitude = models.DecimalField(
+        max_digits=11, decimal_places=8, null=True, blank=True, db_index=True
+    )
     saltLocation = models.BooleanField(default=False)
     studentContactEmail = models.EmailField(null=True, blank=True)
     studentContactPhone = models.CharField(max_length=20, null=True, blank=True)
@@ -904,11 +910,8 @@ def classesmain_post_save_receiver(sender, instance, created, update_fields, **k
             # logger.info(f"Search vector updated for ClassesMain {instance.pk}")
 
 
-APP_LABEL = "quickstart"
-
-
-@receiver(post_save, sender=f"{APP_LABEL}.ClassOption")
-@receiver(post_delete, sender=f"{APP_LABEL}.ClassOption")  # Also update on delete
+@receiver(post_save, sender="quickstart.ClassOption")
+@receiver(post_delete, sender="quickstart.ClassOption")  # Also update on delete
 def classoption_change_receiver(sender, instance, **kwargs):
     if hasattr(instance, "classId") and instance.classId:
         class_instance = instance.classId
@@ -920,46 +923,48 @@ def classoption_change_receiver(sender, instance, **kwargs):
             # logger.info(f"SV for Class {class_instance.pk} updated due to ClassOption change.")
 
 
-@receiver(post_save, sender=f"{APP_LABEL}.BusinessInfo")
+@receiver(post_save, sender="quickstart.BusinessInfo")
 def businessinfo_change_receiver(sender, instance, update_fields, **kwargs):
     if kwargs.get("raw", False):
         return
     if update_fields is None or "businessName" in update_fields:
-        for class_instance in ClassesMain.objects.filter(businessId=instance):
-            new_vector = get_classesmain_search_vector(class_instance)
-            if class_instance.search_vector != new_vector:
-                ClassesMain.objects.filter(pk=class_instance.pk).update(
-                    search_vector=new_vector
-                )
-                # logger.info(f"SV for Class {class_instance.pk} updated due to BusinessInfo name change.")
+        # This still iterates, which is not ideal, but wrapping it in a single transaction helps.
+        # A true fix requires background tasks (e.g., Celery).
+        with transaction.atomic():
+            for class_instance in instance.classes.iterator():
+                new_vector = get_classesmain_search_vector(class_instance)
+                if class_instance.search_vector != new_vector:
+                    ClassesMain.objects.filter(pk=class_instance.pk).update(
+                        search_vector=new_vector
+                    )
 
 
-@receiver(post_save, sender=f"{APP_LABEL}.ClassCategory")
+@receiver(post_save, sender="quickstart.ClassCategory")
 def classcategory_change_receiver(sender, instance, update_fields, **kwargs):
     if kwargs.get("raw", False):
         return
     if update_fields is None or "name" in update_fields:
-        for class_instance in ClassesMain.objects.filter(category=instance):
-            new_vector = get_classesmain_search_vector(class_instance)
-            if class_instance.search_vector != new_vector:
-                ClassesMain.objects.filter(pk=class_instance.pk).update(
-                    search_vector=new_vector
-                )
-                # logger.info(f"SV for Class {class_instance.pk} updated due to ClassCategory name change.")
+        with transaction.atomic():
+            for class_instance in instance.classes_in_category.iterator():
+                new_vector = get_classesmain_search_vector(class_instance)
+                if class_instance.search_vector != new_vector:
+                    ClassesMain.objects.filter(pk=class_instance.pk).update(
+                        search_vector=new_vector
+                    )
 
 
-@receiver(post_save, sender=f"{APP_LABEL}.ClassSubcategory")
+@receiver(post_save, sender="quickstart.ClassSubcategory")
 def classsubcategory_change_receiver(sender, instance, update_fields, **kwargs):
     if kwargs.get("raw", False):
         return
     if update_fields is None or "name" in update_fields:
-        for class_instance in ClassesMain.objects.filter(subcategory=instance):
-            new_vector = get_classesmain_search_vector(class_instance)
-            if class_instance.search_vector != new_vector:
-                ClassesMain.objects.filter(pk=class_instance.pk).update(
-                    search_vector=new_vector
-                )
-                # logger.info(f"SV for Class {class_instance.pk} updated due to ClassSubcategory name change.")
+        with transaction.atomic():
+            for class_instance in instance.classes_in_subcategory.iterator():
+                new_vector = get_classesmain_search_vector(class_instance)
+                if class_instance.search_vector != new_vector:
+                    ClassesMain.objects.filter(pk=class_instance.pk).update(
+                        search_vector=new_vector
+                    )
 
 
 class Favorites(models.Model):

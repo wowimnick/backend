@@ -375,11 +375,13 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             # --- Date and Availability Filters ---
             req_date_str = request.query_params.get("date")
             req_participants_str = request.query_params.get("participants")
+            # FIX: Use `time_preference` (snake_case) to match the actual query parameter.
+            time_preferences = request.query_params.getlist("time_preference")
 
-            # Only apply instance/availability filters if date or participant counts are specified.
-            # This prevents classes without schedules from being filtered out in a general search.
-            if req_date_str or (
-                req_participants_str and req_participants_str.isdigit()
+            if (
+                req_date_str
+                or (req_participants_str and req_participants_str.isdigit())
+                or time_preferences
             ):
                 instance_filters = Q(options__schedules__instances__status="scheduled")
                 if req_date_str:
@@ -389,15 +391,32 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                             options__schedules__instances__date=target_date
                         )
                     except ValueError:
-                        # Fallback for invalid date format
                         instance_filters &= Q(
                             options__schedules__instances__date__gte=timezone.now().date()
                         )
                 else:
-                    # This runs if only participants is specified, which implies future dates
                     instance_filters &= Q(
                         options__schedules__instances__date__gte=timezone.now().date()
                     )
+
+                if time_preferences:
+                    time_ranges = {
+                        "Morning (6am-12pm)": (time(6, 0), time(11, 59, 59)),
+                        "Afternoon (12pm-5pm)": (time(12, 0), time(16, 59, 59)),
+                        "Evening (5pm-10pm)": (time(17, 0), time(21, 59, 59)),
+                    }
+                    time_range_filters = Q()
+                    for pref in time_preferences:
+                        if pref in time_ranges:
+                            start_time, end_time = time_ranges[pref]
+                            time_range_filters |= Q(
+                                options__schedules__instances__time__range=(
+                                    start_time,
+                                    end_time,
+                                )
+                            )
+                    if time_range_filters:
+                        instance_filters &= time_range_filters
 
                 if (
                     req_participants_str
@@ -412,59 +431,43 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
 
                 queryset = queryset.filter(instance_filters).distinct()
 
-            # --- Haversine Distance Calculation (Parsing String in DB) ---
+            # --- PERFORMANCE FIX: Haversine Distance Calculation (Using new indexed fields) ---
             if search_lat is not None and search_lng is not None:
-                # Exclude rows with invalid coordinate formats to prevent DB errors
                 queryset = queryset.exclude(
-                    Q(coordinates__isnull=True)
-                    | Q(coordinates__exact="")
-                    | ~Q(coordinates__contains=",")
+                    Q(latitude__isnull=True) | Q(longitude__isnull=True)
                 )
 
-                # Use database functions to split the string and cast to float
-                comma_pos = StrIndex(F("coordinates"), Value(","))
-                db_lat = Cast(
-                    Substr(F("coordinates"), 1, comma_pos - 1),
-                    output_field=FloatField(),
-                )
-                db_lng = Cast(
-                    Substr(F("coordinates"), comma_pos + 1), output_field=FloatField()
-                )
+                db_lat = F("latitude")
+                db_lng = F("longitude")
 
                 lat_r = Radians(db_lat)
                 lng_r = Radians(db_lng)
-                search_lat_r = Radians(Value(search_lat))
-                search_lng_r = Radians(Value(search_lng))
+                search_lat_r = Radians(Value(search_lat, output_field=FloatField()))
+                search_lng_r = Radians(Value(search_lng, output_field=FloatField()))
 
                 d_lng = lng_r - search_lng_r
                 d_lat = lat_r - search_lat_r
                 a = Power(Sin(d_lat / 2), 2) + Cos(search_lat_r) * Cos(lat_r) * Power(
                     Sin(d_lng / 2), 2
                 )
-                # FIX: Use the correct ATan2 formula instead of the incorrect Acos one.
                 c = 2 * ATan2(Power(a, 0.5), Power(1 - a, 0.5))
                 distance_expr = ExpressionWrapper(6371 * c, output_field=FloatField())
 
                 queryset = queryset.annotate(distance=distance_expr)
 
-                # Apply a search radius filter. Use the provided radius, or fall back to the default.
-                search_radius_km = DEFAULT_SEARCH_RADIUS_KM  # Apply the default
+                search_radius_km = DEFAULT_SEARCH_RADIUS_KM
                 if (
                     req_radius_km_str
                     and req_radius_km_str.replace(".", "", 1).isdigit()
                     and float(req_radius_km_str) > 0
                 ):
-                    search_radius_km = float(
-                        req_radius_km_str
-                    )  # Override with user value if provided
+                    search_radius_km = float(req_radius_km_str)
 
                 queryset = queryset.filter(distance__lte=search_radius_km)
 
             # --- Relevance Score Calculation (DB Level) ---
-            # Get days since creation (epoch seconds / seconds in a day)
             days_old = Extract(Now() - F("createdAt"), "epoch") / Value(86400.0)
 
-            # Quality Score (0-1): Combination of description length and image count
             quality_score = ExpressionWrapper(
                 (
                     (
@@ -501,7 +504,6 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 output_field=FloatField(),
             )
 
-            # Combine all weighted scores into a final relevance score
             relevance_score = ExpressionWrapper(
                 (
                     (Value(W_QUALITY) * quality_score)
@@ -520,7 +522,6 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             if sort_by == "relevance":
                 queryset = queryset.order_by("-relevance_score", "-createdAt")
             elif sort_by == "distance" and search_lat is not None:
-                # Ensure classes without coordinates are last
                 queryset = queryset.order_by(F("distance").asc(nulls_last=True))
             elif sort_by == "price_asc":
                 queryset = queryset.order_by(F("min_price").asc(nulls_last=True))
@@ -528,6 +529,8 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 queryset = queryset.order_by(F("min_price").desc(nulls_first=True))
             elif sort_by == "rating":
                 queryset = queryset.order_by("-average_rating", "-review_count")
+            elif sort_by == "reviews":
+                queryset = queryset.order_by("-review_count", "-average_rating")
             elif sort_by == "newest":
                 queryset = queryset.order_by("-createdAt")
 
@@ -539,7 +542,6 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 )
                 return self.get_paginated_response(serializer.data)
 
-            # Fallback if pagination is not used for some reason
             serializer = self.get_serializer(
                 queryset, many=True, context={"request": request}
             )
