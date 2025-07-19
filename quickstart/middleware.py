@@ -40,7 +40,6 @@ class HealthCheckMiddleware:
         # Handle both health check paths
         if request.path in ["/api/health-check/", "/health-check/"]:
             try:
-                # Log the health check for debugging
                 logger.debug(
                     f"Health check request from {request.META.get('REMOTE_ADDR', 'unknown')}"
                 )
