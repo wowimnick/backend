@@ -4,58 +4,24 @@ import os
 from django.conf import settings
 from rest_framework import serializers
 from dj_rest_auth.registration.serializers import RegisterSerializer
-
-# --- MODIFIED: Removed unused ResetPasswordForm import ---
 from dj_rest_auth.serializers import LoginSerializer as DefaultLoginSerializer
 from django.contrib.auth import get_user_model
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from django.db.models import Exists, OuterRef, Q
 from allauth.account.adapter import get_adapter
 from django.core.files.uploadedfile import InMemoryUploadedFile
-from allauth.account.utils import (  # <--- ADD THIS IMPORT
+from allauth.account.utils import (
     filter_users_by_email,
     get_next_redirect_url,
     passthrough_next_redirect_url,
 )
-
-# --- MODIFIED: Removed unused PasswordResetSerializer import ---
 from django.utils.http import urlsafe_base64_encode
 from django.utils.encoding import force_bytes
 from django.contrib.sites.shortcuts import get_current_site
 from quickstart.models import Role, ClassesMain, BusinessInfo
 from django.contrib.auth.tokens import default_token_generator
 import logging
-
-logger = logging.getLogger(__name__)
-
-User = get_user_model()
-
-
-from django.conf import settings
-from rest_framework import serializers
-from dj_rest_auth.registration.serializers import RegisterSerializer
 from allauth.account.forms import ResetPasswordForm
-from dj_rest_auth.serializers import LoginSerializer as DefaultLoginSerializer
-from django.contrib.auth import get_user_model
-from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from django.db.models import Exists, OuterRef, Q
-from django.core.files.uploadedfile import InMemoryUploadedFile
-
-# --- MODIFIED: Removed unused PasswordResetSerializer import ---
-
-# --- DIAGNOSTIC IMPORTS ---
-from dj_rest_auth.serializers import (
-    PasswordResetConfirmSerializer as DefaultPasswordResetConfirmSerializer,
-)
-from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
-from django.utils.encoding import force_bytes, force_str
-from django.core.exceptions import ObjectDoesNotExist
-
-# --- END DIAGNOSTIC IMPORTS ---
-from django.contrib.sites.shortcuts import get_current_site
-from quickstart.models import Role, ClassesMain, BusinessInfo
-from django.contrib.auth.tokens import default_token_generator
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -201,31 +167,15 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
 class CustomRegisterSerializer(RegisterSerializer):
     first_name = serializers.CharField(required=True, max_length=150)
     last_name = serializers.CharField(required=True, max_length=150)
-    birth_date = serializers.DateField(required=False, allow_null=True)
-    phone_number = serializers.CharField(
-        required=False, allow_blank=True, max_length=20
-    )
+    birth_date = serializers.DateField(required=True)
+    phone_number = serializers.CharField(required=True, max_length=20)
     bio = serializers.CharField(required=False, allow_blank=True)
-    country = serializers.CharField(required=False, allow_blank=True, max_length=100)
-    state = serializers.CharField(required=False, allow_blank=True, max_length=100)
-    city = serializers.CharField(required=False, allow_blank=True, max_length=100)
-    address = serializers.CharField(required=False, allow_blank=True, max_length=255)
-    zipCode = serializers.CharField(required=False, allow_blank=True, max_length=20)
     avatar = serializers.ImageField(required=False, allow_null=True)
-    user_timezone = serializers.CharField(
-        required=False, allow_blank=True, max_length=50
-    )
+    user_timezone = serializers.CharField(required=True, max_length=50)
 
     def validate(self, data):
-        """
-        Custom validation to robustly check for email uniqueness directly on the User model.
-        This prevents IntegrityError exceptions from bubbling up as 500 errors when test
-        factories or race conditions bypass allauth's default checks.
-        """
         email = data.get("email", "").lower()
         if email and User.objects.filter(email__iexact=email).exists():
-            # Raise a validation error that mimics the default 'unique' validator.
-            # This ensures the test assertion on `error.code` passes.
             raise serializers.ValidationError(
                 {
                     "email": serializers.ErrorDetail(
@@ -234,8 +184,6 @@ class CustomRegisterSerializer(RegisterSerializer):
                     )
                 }
             )
-        # It's good practice to call the parent's validate method if it exists,
-        # but RegisterSerializer does not have a top-level validate method to call.
         return data
 
     def get_cleaned_data(self):
@@ -247,13 +195,10 @@ class CustomRegisterSerializer(RegisterSerializer):
                 "birth_date": self.validated_data.get("birth_date", None),
                 "phone_number": self.validated_data.get("phone_number", ""),
                 "bio": self.validated_data.get("bio", ""),
-                "country": self.validated_data.get("country", ""),
-                "state": self.validated_data.get("state", ""),
-                "city": self.validated_data.get("city", ""),
-                "address": self.validated_data.get("address", ""),
-                "zipCode": self.validated_data.get("zipCode", ""),
                 "avatar": self.validated_data.get("avatar", None),
-                "user_timezone": self.validated_data.get("user_timezone", "UTC"),
+                "user_timezone": self.validated_data.get(
+                    "user_timezone", "America/Toronto"
+                ),
             }
         )
         return data
@@ -265,17 +210,11 @@ class CustomRegisterSerializer(RegisterSerializer):
         user.birth_date = self.validated_data.get("birth_date", None)
         user.phone_number = self.validated_data.get("phone_number", "")
         user.bio = self.validated_data.get("bio", "")
-        user.country = self.validated_data.get("country", "")
-        user.state = self.validated_data.get("state", "")
-        user.city = self.validated_data.get("city", "")
-        user.address = self.validated_data.get("address", "")
-        user.zipCode = self.validated_data.get("zipCode", "")
         user.avatar = self.validated_data.get("avatar", None)
-        user.user_timezone = self.validated_data.get("user_timezone", "UTC")
+        user.user_timezone = self.validated_data.get("user_timezone", "America/Toronto")
 
         if not user.role:
             try:
-                # Assign the default role upon registration
                 default_role, created = Role.objects.get_or_create(
                     is_default=True,
                     defaults={"name": "Student", "hierarchy_level": 10},
@@ -291,47 +230,28 @@ class CustomRegisterSerializer(RegisterSerializer):
 
 
 class CustomAllAuthPasswordResetForm(ResetPasswordForm):
-    """
-    Custom password reset form that correctly orchestrates URL generation
-    through the custom adapter.
-    """
-
-    # --- THIS IS THE MISSING METHOD. ADD IT. ---
     def get_users(self, email):
-        """
-        This is a direct copy of the method from allauth.account.forms.ResetPasswordForm.
-        It's required for the form's save() method to function correctly.
-        """
         return filter_users_by_email(email, is_active=True)
 
     def save(self, request, **kwargs):
         current_site = get_current_site(request)
         email = self.cleaned_data["email"]
         token_generator = kwargs.get("token_generator", default_token_generator)
-
-        # Get all active users with this email address
         users = self.get_users(email)
 
         for user in users:
-            # Create the token
             temp_key = token_generator.make_token(user)
-
-            # Explicitly call our custom adapter to get the frontend-specific URL
             adapter = get_adapter(request)
             password_reset_url = adapter.get_password_reset_url(request, user, temp_key)
             logger.info(
                 f"Correctly generated password reset URL via adapter: {password_reset_url}"
             )
-
-            # Prepare the context for the email template
             context = {
                 "current_site": current_site,
                 "user": user,
                 "password_reset_url": password_reset_url,
                 "request": request,
             }
-
-            # Use the adapter to send the email
             adapter.send_mail("account/email/password_reset_key", email, context)
 
         return self.cleaned_data["email"]

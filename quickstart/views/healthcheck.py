@@ -1,10 +1,53 @@
 import os
-from django.http import HttpResponse
+import logging
+from django.http import HttpResponse, JsonResponse
+from django.db import connection
+from django.core.cache import cache
+from django.conf import settings
+import time
+
+logger = logging.getLogger(__name__)
 
 
 def health_check(request):
-    """A simple view for the Load Balancer health check."""
-    return HttpResponse("OK")
+    """
+    Enhanced health check that verifies critical services are working
+    """
+    try:
+        # Basic response for ELB
+        if request.method == "GET":
+            # Quick check - just return OK for ELB
+            return HttpResponse("OK", status=200)
+
+        # Detailed health check for monitoring (optional)
+        health_status = {"status": "healthy", "timestamp": time.time(), "checks": {}}
+
+        # Database connectivity check
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1")
+            health_status["checks"]["database"] = "healthy"
+        except Exception as e:
+            logger.error(f"Database health check failed: {e}")
+            health_status["checks"]["database"] = "unhealthy"
+            health_status["status"] = "unhealthy"
+
+        # Cache connectivity check
+        try:
+            cache.set("health_check", "test", 10)
+            cache.get("health_check")
+            health_status["checks"]["cache"] = "healthy"
+        except Exception as e:
+            logger.error(f"Cache health check failed: {e}")
+            health_status["checks"]["cache"] = "unhealthy"
+            health_status["status"] = "unhealthy"
+
+        status_code = 200 if health_status["status"] == "healthy" else 503
+        return JsonResponse(health_status, status=status_code)
+
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return HttpResponse("Service Unavailable", status=503)
 
 
 def robots_txt_view(request):

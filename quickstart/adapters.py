@@ -57,13 +57,26 @@ class CustomAccountAdapter(DefaultAccountAdapter):
 
 
 class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
+    """
+    Custom adapter to hook into the social account creation process.
+    """
+
     def pre_social_login(self, request, sociallogin):
+        """
+        Invoked just after a user successfully authenticates via a
+        social provider, but before the login is actually processed.
+        We can use this to automatically connect a social account to
+        an existing user account if the emails match.
+        """
+        # If the social account is already connected, do nothing
         if sociallogin.is_existing:
             return
 
+        # If the social provider doesn't give us an email, we can't connect
         if not sociallogin.email_addresses:
             return
 
+        # Find the primary verified email from the social provider
         verified_email = None
         for email in sociallogin.email_addresses:
             if email.verified:
@@ -73,42 +86,70 @@ class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
         if not verified_email:
             return
 
+        # Check if a user with this email already exists
         User = get_user_model()
         try:
             user = User.objects.get(email__iexact=verified_email)
+            # If they do, automatically connect the social account to that user
             sociallogin.connect(request, user)
             logger.info(
                 f"Auto-connected social account for {verified_email} to existing user."
             )
         except User.DoesNotExist:
+            # If no user exists, the normal signup flow will continue
             pass
         except User.MultipleObjectsReturned:
+            # Safety check in case of data integrity issues
             logger.error(
                 f"Multiple users found with email {verified_email}. Cannot auto-connect social account."
             )
             pass
 
     def populate_user(self, request, sociallogin, data):
+        """
+        This hook is called right after a new user object is created from a social login.
+        We can use it to populate fields on the user model from the social account data.
+        """
         user = super().populate_user(request, sociallogin, data)
+
+        # Get first/last name from the social account's data
         first_name = data.get("first_name")
         last_name = data.get("last_name")
         if not first_name and sociallogin.account.extra_data:
             first_name = sociallogin.account.extra_data.get("given_name")
         if not last_name and sociallogin.account.extra_data:
             last_name = sociallogin.account.extra_data.get("family_name")
+
+        # Use allauth's helper to set the name fields
         if first_name:
             user_field(user, "first_name", first_name)
         if last_name:
             user_field(user, "last_name", last_name)
+
+        # --- MODIFIED: Set a default timezone for all new social signups ---
+        if not user.user_timezone:
+            default_tz = "America/Toronto"
+            user.user_timezone = default_tz
+            logger.info(
+                f"New social user {user.email} created. Set default timezone to {default_tz}."
+            )
+
         logger.info(
-            f"Populated user {user.email} with social data: Name='{first_name} {last_name}'"
+            f"Populated new user {user.email} with social data: Name='{first_name} {last_name}'"
         )
         return user
 
     def save_user(self, request, sociallogin, form=None):
+        """
+        Invoked after a user is created and populated. We can use this to
+        assign default roles or perform other final actions before the user is saved.
+        """
         user = super().save_user(request, sociallogin, form)
+
+        # Assign a default role if the user doesn't already have one
         if not user.role:
             try:
+                # Local import to avoid potential circular dependency issues
                 from .models import Role
 
                 default_role, created = Role.objects.get_or_create(

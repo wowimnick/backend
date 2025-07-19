@@ -495,7 +495,7 @@ class BusinessInfo(models.Model):
     business_timezone = models.CharField(  # ADDED
         max_length=50,
         choices=COMMON_TIMEZONE_CHOICES,
-        default="UTC",
+        default="America/Toronto",
         blank=False,  # Make it required during registration
         help_text="Primary IANA timezone for this business's operations.",
     )

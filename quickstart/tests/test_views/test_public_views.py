@@ -232,6 +232,9 @@ class PublicClassViewSetTest(APITestCase):
             title="Active Yoga Class",
             description="A class for testing.",
             coordinates="45.4215,-75.6972",  # Ottawa, ON
+            # FIX: Explicitly set latitude and longitude for distance queries.
+            latitude=45.4215,
+            longitude=-75.6972,
             category=self.category,
         )
         ReviewFactory.create_batch(5, classId=self.active_class, rating=5)
@@ -334,6 +337,9 @@ class PublicClassViewSetTest(APITestCase):
         ClassesMainFactory(
             title="Far Away Class",
             coordinates="34.0522,-118.2437",
+            # FIX: Explicitly set latitude and longitude for distance queries.
+            latitude=34.0522,
+            longitude=-118.2437,
             category=self.category,
         )  # Los Angeles
 

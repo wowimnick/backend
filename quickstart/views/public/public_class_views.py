@@ -41,7 +41,7 @@ from django.db.models.functions import (
     StrIndex,
     Substr,
     Length,
-    ATan2,  # FIX: Import ATan2
+    ATan2,
 )
 from django.contrib.postgres.search import SearchVector, SearchQuery, SearchRank
 from django.utils import timezone
@@ -75,16 +75,17 @@ logger = logging.getLogger(__name__)
 PHOTON_API_URL = "https://photon.komoot.io/api/"
 DEFAULT_SEARCH_RADIUS_KM = 50
 
-# --- NEW: Relevance Scoring Weights (Tune these values based on business goals) ---
+# --- REFINED: Relevance Scoring Weights (Tune these values based on business goals) ---
 W_FEATURED = 1.5  # Multiplier for featured businesses
 W_QUALITY = 1.0  # Base weight for quality score (description, images)
 W_RATING = 0.8  # Weight for average rating
 W_REVIEW_COUNT = 0.5  # Weight for number of reviews (log-scaled)
 W_NEWNESS = 0.7  # Weight for how new a class is (decaying)
 
-# --- NEW: Relevance Score Normalization/Tuning Constants ---
+# --- REFINED: Relevance Score Normalization/Tuning Constants ---
 QUALITY_SCORE_MAX_DESCRIPTION_LEN = 1000  # Optimal description length for max score
-QUALITY_SCORE_MAX_IMAGES = 5  # Number of images to reach max score
+QUALITY_SCORE_BASE_IMAGES = 5  # The minimum number of images required
+QUALITY_SCORE_IDEAL_IMAGES = 10  # The ideal number of images to get the max score
 RECENCY_HALFLIFE_DAYS = 90  # A class's "newness" boost drops by 50% every 90 days
 REVIEW_COUNT_FOR_MAX_SCORE = 50  # Number of reviews to get the max review count score
 
@@ -185,8 +186,6 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         return (
             ClassesMain.objects.select_related("businessId", "category", "subcategory")
             .prefetch_related(
-                # FIX: Use a Prefetch object to explicitly order the images.
-                # This ensures the cover photo (isCover=True) is always first.
                 Prefetch(
                     "images",
                     queryset=ClassImage.objects.order_by("-isCover", "createdAt"),
@@ -217,33 +216,48 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 ),
                 review_count=Coalesce(self.REVIEW_COUNT_SUBQUERY, Value(0)),
                 min_price=Coalesce(self.MIN_PRICE_SUBQUERY, None),
-                image_count=Count("images", distinct=True),  # NEW: For quality score
+                image_count=Count("images", distinct=True),
             )
             .distinct()
         )
 
-    def list(self, request, *args, **kwargs):
+    def _calculate_relevance_score(self, queryset):
         """
-        Overrides the default list action to provide relevance-sorted classes
-        for the homepage or general browsing.
+        Helper function to encapsulate the relevance score calculation logic.
+        This can now be called by both list() and search().
         """
-        queryset = self.get_queryset()
-
-        # --- Relevance Score Calculation ---
         days_old = Extract(Now() - F("createdAt"), "epoch") / Value(86400.0)
 
+        # REFINED IMAGE SCORE: This now calculates a score from 0.0 to 1.0 based on
+        # how many images a class has *above the minimum*.
+        # A class with 5 images gets a score of 0 for this part.
+        # A class with 10 or more images gets a score of 1.0.
+        image_score_numerator = Log(
+            10, F("image_count") - Value(QUALITY_SCORE_BASE_IMAGES) + 1
+        )
+        image_score_denominator = Log(
+            10, Value(QUALITY_SCORE_IDEAL_IMAGES - QUALITY_SCORE_BASE_IMAGES) + 1
+        )
+
+        image_score = Case(
+            When(image_count__gte=QUALITY_SCORE_IDEAL_IMAGES, then=Value(1.0)),
+            When(
+                image_count__gt=QUALITY_SCORE_BASE_IMAGES,
+                then=ExpressionWrapper(
+                    image_score_numerator / image_score_denominator,
+                    output_field=FloatField(),
+                ),
+            ),
+            default=Value(0.0),  # Score is 0 if at or below the base minimum
+            output_field=FloatField(),
+        )
+
+        description_score = Log(10, Length("description") + 1) / Log(
+            10, Value(QUALITY_SCORE_MAX_DESCRIPTION_LEN + 1)
+        )
+
         quality_score = ExpressionWrapper(
-            (
-                (
-                    Log(10, Length("description") + 1)
-                    / Log(10, Value(QUALITY_SCORE_MAX_DESCRIPTION_LEN + 1))
-                )
-                + (
-                    Log(10, F("image_count") + 1)
-                    / Log(10, Value(QUALITY_SCORE_MAX_IMAGES + 1))
-                )
-            )
-            / 2.0,
+            (description_score + image_score) / 2.0,
             output_field=FloatField(),
         )
 
@@ -279,7 +293,15 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             output_field=FloatField(),
         )
 
-        queryset = queryset.annotate(relevance_score=relevance_score)
+        return queryset.annotate(relevance_score=relevance_score)
+
+    def list(self, request, *args, **kwargs):
+        """
+        Overrides the default list action to provide relevance-sorted classes
+        for the homepage or general browsing.
+        """
+        queryset = self.get_queryset()
+        queryset = self._calculate_relevance_score(queryset)
 
         # Order by the calculated relevance score for a better user experience
         queryset = queryset.order_by("-relevance_score", "-createdAt")
@@ -375,7 +397,6 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             # --- Date and Availability Filters ---
             req_date_str = request.query_params.get("date")
             req_participants_str = request.query_params.get("participants")
-            # FIX: Use `time_preference` (snake_case) to match the actual query parameter.
             time_preferences = request.query_params.getlist("time_preference")
 
             if (
@@ -431,7 +452,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
 
                 queryset = queryset.filter(instance_filters).distinct()
 
-            # --- PERFORMANCE FIX: Haversine Distance Calculation (Using new indexed fields) ---
+            # --- PERFORMANCE FIX: Haversine Distance Calculation ---
             if search_lat is not None and search_lng is not None:
                 queryset = queryset.exclude(
                     Q(latitude__isnull=True) | Q(longitude__isnull=True)
@@ -466,56 +487,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 queryset = queryset.filter(distance__lte=search_radius_km)
 
             # --- Relevance Score Calculation (DB Level) ---
-            days_old = Extract(Now() - F("createdAt"), "epoch") / Value(86400.0)
-
-            quality_score = ExpressionWrapper(
-                (
-                    (
-                        Log(10, Length("description") + 1)
-                        / Log(10, Value(QUALITY_SCORE_MAX_DESCRIPTION_LEN + 1))
-                    )
-                    + (
-                        Log(10, F("image_count") + 1)
-                        / Log(10, Value(QUALITY_SCORE_MAX_IMAGES + 1))
-                    )
-                )
-                / 2.0,
-                output_field=FloatField(),
-            )
-
-            rating_score = ExpressionWrapper(
-                F("average_rating") / Value(5.0), output_field=FloatField()
-            )
-
-            review_count_score = ExpressionWrapper(
-                Log(10, F("review_count") + 1)
-                / Log(10, Value(REVIEW_COUNT_FOR_MAX_SCORE + 1)),
-                output_field=FloatField(),
-            )
-
-            newness_score = ExpressionWrapper(
-                Power(2, -days_old / Value(RECENCY_HALFLIFE_DAYS)),
-                output_field=FloatField(),
-            )
-
-            featured_multiplier = Case(
-                When(businessId__featured=True, then=Value(W_FEATURED)),
-                default=Value(1.0),
-                output_field=FloatField(),
-            )
-
-            relevance_score = ExpressionWrapper(
-                (
-                    (Value(W_QUALITY) * quality_score)
-                    + (Value(W_RATING) * rating_score)
-                    + (Value(W_REVIEW_COUNT) * review_count_score)
-                    + (Value(W_NEWNESS) * newness_score)
-                )
-                * featured_multiplier,
-                output_field=FloatField(),
-            )
-
-            queryset = queryset.annotate(relevance_score=relevance_score)
+            queryset = self._calculate_relevance_score(queryset)
 
             # --- Sorting (DB Level) ---
             sort_by = request.query_params.get("sort_by", "relevance")
@@ -570,16 +542,6 @@ class PublicScheduleViewSet(viewsets.ReadOnlyModelViewSet):
         Calculates available spots for a given class option over a date range.
         Input query params: `option_id`, `start_date`, `end_date` (YYYY-MM-DD).
         Output: A dictionary keyed by date string, with a list of available slots.
-        Example:
-        {
-          "2024-08-15": [
-            {"time": "10:00:00", "available_spots": 8, "instance_id": 123, "price": "25.00"},
-            {"time": "14:00:00", "available_spots": 5, "instance_id": 124, "price": "25.00"}
-          ],
-          "2024-08-16": [
-            {"time": "10:00:00", "available_spots": 10, "instance_id": 125, "price": "25.00"}
-          ]
-        }
         """
         option_id_str = request.query_params.get("option_id")
         start_date_str = request.query_params.get("start_date")
@@ -601,26 +563,20 @@ class PublicScheduleViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # FIX: Added permission check to ensure the option belongs to a publicly visible class.
-        # This prevents users from querying the availability of classes that are inactive,
-        # suspended, or part of an unverified/inactive business.
         try:
             option = get_object_or_404(
                 ClassOption.objects.select_related("classId__businessId"),
                 pk=option_id,
-                # These are the same criteria used to filter public class listings.
                 classId__status="active",
                 classId__businessId__isActive=True,
                 classId__businessId__verificationStatus="verified",
             )
         except Http404:
-            # Return a 404 to hide the existence of the inactive/unverified class option.
             return Response(
                 {"error": "Class option not found or is not available."},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # Fetch all relevant instances and their confirmed bookings in one go
         instances_in_range = (
             ScheduleInstance.objects.filter(
                 schedule__option_id=option_id,
@@ -628,7 +584,6 @@ class PublicScheduleViewSet(viewsets.ReadOnlyModelViewSet):
                 status="scheduled",
             )
             .annotate(
-                # Sum the participants of confirmed bookings for each instance
                 confirmed_participants=Coalesce(
                     Subquery(
                         Booking.objects.filter(
@@ -645,7 +600,6 @@ class PublicScheduleViewSet(viewsets.ReadOnlyModelViewSet):
             .order_by("date", "time")
         )
 
-        # Group available instances by date
         availability_by_date = {}
         for instance in instances_in_range:
             available_spots = (
