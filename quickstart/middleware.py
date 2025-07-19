@@ -1,6 +1,9 @@
 import os
 from django.conf import settings
 from django.http import HttpResponse
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class JWTCookieMiddleware:
@@ -27,25 +30,36 @@ class JWTCookieMiddleware:
 
 class HealthCheckMiddleware:
     """
-    This middleware is designed to intercept health check requests from the
-    AWS ELB at the earliest possible moment and return a successful response.
-    It completely bypasses all other Django middleware (including the
-    one that checks ALLOWED_HOSTS), ensuring that health checks are fast,
-    reliable, and immune to Host header issues.
+    Enhanced middleware that handles health checks with better error handling
     """
 
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request):
-        # The health check path configured in your ELB Target Group.
-        # Change this if you change it in the Target Group.
-        if request.path == "/api/health-check/":
-            return HttpResponse("OK")
-        if request.path == "/health-check/":
-            return HttpResponse("OK")
+        # Handle both health check paths
+        if request.path in ["/api/health-check/", "/health-check/"]:
+            try:
+                # Log the health check for debugging
+                logger.debug(
+                    f"Health check request from {request.META.get('REMOTE_ADDR', 'unknown')}"
+                )
 
-        # If it's not a health check, let Django process the request normally.
+                # Always return 200 OK for ELB health checks
+                response = HttpResponse("OK", status=200)
+
+                # Add headers to help with debugging
+                response["X-Health-Check"] = "OK"
+                response["X-Container-ID"] = request.META.get("HOSTNAME", "unknown")
+
+                return response
+
+            except Exception as e:
+                logger.error(f"Health check middleware error: {e}")
+                # Even if there's an error, return 200 for ELB
+                return HttpResponse("OK", status=200)
+
+        # If it's not a health check, let Django process the request normally
         return self.get_response(request)
 
 

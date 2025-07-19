@@ -1,3 +1,5 @@
+# quickstart/views/business/business_class_views.py
+
 from datetime import timedelta
 from decimal import Decimal
 from rest_framework import viewsets, status, filters, generics, permissions
@@ -121,10 +123,20 @@ class AllCategoriesForBusinessViewSet(viewsets.ReadOnlyModelViewSet):
     pagination_class = None  # This is the key change to return all results
 
     def get_queryset(self):
-        # We can reuse the same efficient query from the admin panel
-        subcat_queryset = ClassSubcategory.objects.annotate(
-            class_count=Count("classes_in_subcategory", distinct=True)
+        """
+        Returns all ClassCategory objects. Subcategories are prefetched, but
+        only if they have at least one class associated with them.
+        """
+        # MODIFIED: This queryset now filters to only include subcategories that have classes.
+        subcat_queryset = (
+            ClassSubcategory.objects.annotate(
+                class_count=Count("classes_in_subcategory", distinct=True)
+            )
+            .filter(class_count__gt=0)
+            .order_by("name")
         )
+
+        # Main categories are fetched regardless of class count, but their subcategory list will be filtered.
         return (
             ClassCategory.objects.annotate(
                 class_count=Count("classes_in_category", distinct=True)
