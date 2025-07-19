@@ -1,5 +1,3 @@
-# quickstart/views/business/business_class_views.py
-
 from datetime import timedelta
 from decimal import Decimal
 from rest_framework import viewsets, status, filters, generics, permissions
@@ -79,8 +77,8 @@ logger = logging.getLogger(__name__)
 
 class PublicCategoryViewSet(viewsets.ReadOnlyModelViewSet):
     """
-    Provides a list of public, featured class categories that have active classes.
-    This endpoint is used to dynamically populate the homepage.
+    Provides a list of ALL public class categories. For each category,
+    it only includes subcategories that contain at least one class.
     """
 
     permission_classes = [AllowAny]
@@ -88,24 +86,21 @@ class PublicCategoryViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         """
-        Returns ClassCategory objects that are featured (is_featured=True) and
-        have at least one associated 'active' class, where the business is also
-        active and verified.
+        Returns ALL ClassCategory objects. It then attaches a filtered list
+        of subcategories (only those with classes) to each category object.
         """
-        live_class_filter = Q(
-            classes_in_category__status="active",
-            classes_in_category__businessId__isActive=True,
-            classes_in_category__businessId__verificationStatus="verified",
-        )
+        # This sub-query selects only the subcategories that have one or more associated classes.
+        subcategories_with_classes = ClassSubcategory.objects.annotate(
+            class_count=Count("classes_in_subcategory")
+        ).filter(class_count__gt=0)
 
+        # The main query fetches ALL categories and uses a Prefetch to attach the
+        # filtered list of subcategories.
         return (
-            ClassCategory.objects.filter(is_featured=True)
-            .annotate(
-                live_class_count=Count(
-                    "classes_in_category", filter=live_class_filter, distinct=True
-                )
+            ClassCategory.objects.all()
+            .prefetch_related(
+                Prefetch("subcategories", queryset=subcategories_with_classes)
             )
-            .filter(live_class_count__gt=0)
             .order_by("name")
         )
 
@@ -123,20 +118,10 @@ class AllCategoriesForBusinessViewSet(viewsets.ReadOnlyModelViewSet):
     pagination_class = None  # This is the key change to return all results
 
     def get_queryset(self):
-        """
-        Returns all ClassCategory objects. Subcategories are prefetched, but
-        only if they have at least one class associated with them.
-        """
-        # MODIFIED: This queryset now filters to only include subcategories that have classes.
-        subcat_queryset = (
-            ClassSubcategory.objects.annotate(
-                class_count=Count("classes_in_subcategory", distinct=True)
-            )
-            .filter(class_count__gt=0)
-            .order_by("name")
+        # We can reuse the same efficient query from the admin panel
+        subcat_queryset = ClassSubcategory.objects.annotate(
+            class_count=Count("classes_in_subcategory", distinct=True)
         )
-
-        # Main categories are fetched regardless of class count, but their subcategory list will be filtered.
         return (
             ClassCategory.objects.annotate(
                 class_count=Count("classes_in_category", distinct=True)
