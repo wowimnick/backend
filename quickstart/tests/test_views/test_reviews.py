@@ -1,14 +1,8 @@
-# quickstart/tests/test_views/test_reviews.py
 from rest_framework.test import APITestCase
 from rest_framework import status
 from django.urls import reverse
-from django.core.files.uploadedfile import SimpleUploadedFile
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.auth.models import Permission
-
-# FIX: Import Pillow and io to create a real image in memory
-from PIL import Image
-import io
 
 from quickstart.models import Reviews, Booking, BusinessInfo, Role
 from quickstart.tests.factories import (
@@ -39,7 +33,6 @@ class ReviewManagementTests(APITestCase):
     """
 
     def setUp(self):
-        # Create Roles and Permissions
         student_role = RoleFactory(name="Student", is_default=True)
         business_role = RoleFactory(name="Business Owner")
         _get_and_assign_permission(
@@ -48,37 +41,25 @@ class ReviewManagementTests(APITestCase):
         _get_and_assign_permission(
             business_role, "add_business_review_response", Reviews
         )
-
-        # Create Users
         self.student = UserFactory(role=student_role)
         self.other_student = UserFactory(role=student_role)
         self.owner = UserFactory(role=business_role)
-
-        # Assign permissions directly to users for test client
         self.owner.user_permissions.add(*business_role.permissions.all())
-
-        # Create Business and Class structure
         self.business = BusinessInfoFactory(owner=self.owner)
         self.category = ClassCategoryFactory()
         self.klass = ClassesMainFactory(
             businessId=self.business, category=self.category
         )
-
-        # Create a COMPLETED booking, which is eligible for review
         self.completed_booking = BookingFactory(
             user=self.student,
             schedule_instance__schedule__option__classId=self.klass,
             status="completed",
         )
-
-        # Create an UPCOMING booking, which is NOT eligible for review
         self.upcoming_booking = BookingFactory(
             user=self.student,
             schedule_instance__schedule__option__classId=self.klass,
             status="confirmed",
         )
-
-        # Create a completed booking for another student to test permission boundaries
         self.other_student_booking = BookingFactory(
             user=self.other_student,
             schedule_instance__schedule__option__classId=self.klass,
@@ -93,30 +74,22 @@ class ReviewManagementTests(APITestCase):
         self.client.force_authenticate(user=self.student)
         url = reverse("submit-review")
 
-        # FIX: Create a real, valid image in memory using Pillow.
-        image = Image.new("RGB", (100, 100))
-        image_io = io.BytesIO()
-        image.save(image_io, "JPEG")
-        image_io.seek(0)
-        image_file = SimpleUploadedFile(
-            "review_pic.jpg", image_io.read(), content_type="image/jpeg"
-        )
-
+        # MODIFIED: The payload is now JSON with an `image_s3_key`.
         data = {
             "booking_id": self.completed_booking.id,
             "rating": 5,
             "comment": "This was an absolutely fantastic class! Highly recommended.",
-            "image": image_file,
+            "image_s3_key": "originals/review_images/test-review-pic.jpg",
         }
 
-        response = self.client.post(url, data, format="multipart")
+        # MODIFIED: The format is now 'json'.
+        response = self.client.post(url, data, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
         self.assertTrue(Reviews.objects.filter(booking=self.completed_booking).exists())
         review = Reviews.objects.get(booking=self.completed_booking)
         self.assertEqual(review.rating, 5)
         self.assertEqual(review.userId, self.student)
-        # FIX: Assert that the image path starts with the new 'originals/review_images/' prefix.
         self.assertTrue(review.image.name.startswith("originals/review_images/"))
         print("✅ PASSED: Student successfully submitted a review.")
 
@@ -135,8 +108,8 @@ class ReviewManagementTests(APITestCase):
             "comment": "Trying to review this early.",
         }
 
-        # FIX: Use format="multipart" to match the view's parser configuration.
-        response = self.client.post(url, data, format="multipart")
+        # MODIFIED: Use format="json".
+        response = self.client.post(url, data, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("You can only review completed bookings", str(response.data))
@@ -150,9 +123,7 @@ class ReviewManagementTests(APITestCase):
         POST /api/reviews/submit/ - A student cannot submit two reviews for the same booking.
         """
         print("\n--- Running: test_student_cannot_submit_duplicate_review ---")
-        # First, create a valid review
         ReviewFactory(booking=self.completed_booking, userId=self.student)
-
         self.client.force_authenticate(user=self.student)
         url = reverse("submit-review")
         data = {
@@ -161,8 +132,8 @@ class ReviewManagementTests(APITestCase):
             "comment": "This is a second attempt to review.",
         }
 
-        # FIX: Use format="multipart" to match the view's parser configuration.
-        response = self.client.post(url, data, format="multipart")
+        # MODIFIED: Use format="json".
+        response = self.client.post(url, data, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("already been submitted", str(response.data))
@@ -179,12 +150,12 @@ class ReviewManagementTests(APITestCase):
         self.client.force_authenticate(user=self.student)
         url = reverse("submit-review")
         data = {
-            "booking_id": self.other_student_booking.id,  # Try to review other student's booking
+            "booking_id": self.other_student_booking.id,
             "rating": 5,
             "comment": "I am trying to review a class I did not take.",
         }
 
-        response = self.client.post(url, data, format="multipart")
+        response = self.client.post(url, data, format="json")
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertIn("You can only review your own", str(response.data))
         print("✅ PASSED: Student correctly blocked from reviewing another's booking.")

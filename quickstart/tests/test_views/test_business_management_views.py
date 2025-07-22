@@ -1,5 +1,3 @@
-# quickstart/tests/test_views/test_business_management_views.py
-
 from rest_framework.test import APITestCase
 from rest_framework import status
 from django.urls import reverse
@@ -33,8 +31,6 @@ class BusinessManagementTests(APITestCase):
     def setUp(self):
         self.user = UserFactory()
         self.other_user = UserFactory()
-
-        # Create a role and explicitly assign the necessary permissions for these tests.
         self.business_owner_role = RoleFactory(name="Business Owner")
         _get_and_assign_permission(
             self.business_owner_role, "access_business_dashboard", BusinessInfo
@@ -42,12 +38,9 @@ class BusinessManagementTests(APITestCase):
         _get_and_assign_permission(
             self.business_owner_role, "manage_own_business_profile", BusinessInfo
         )
-
         self.user.role = self.business_owner_role
         self.user.save()
         self.user.user_permissions.add(*self.business_owner_role.permissions.all())
-
-        # Base data for a valid registration
         self.valid_data = {
             "businessName": "Test Fitness Studio",
             "businessType": "studio",
@@ -66,6 +59,8 @@ class BusinessManagementTests(APITestCase):
             "businessZipCode": "90210",
             "termsAccepted": True,
             "privacyAccepted": True,
+            # MODIFIED: Add the S3 key to the payload
+            "businessImage_s3_key": "originals/business_images/test-biz-img.jpg",
         }
 
     def test_successful_business_registration(self):
@@ -76,7 +71,8 @@ class BusinessManagementTests(APITestCase):
         self.client.force_authenticate(user=self.user)
         url = reverse("business-register")
 
-        response = self.client.post(url, self.valid_data, format="multipart")
+        # MODIFIED: The format is now 'json'.
+        response = self.client.post(url, self.valid_data, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
         self.assertTrue(BusinessInfo.objects.filter(owner=self.user).exists())
@@ -94,7 +90,7 @@ class BusinessManagementTests(APITestCase):
         data = self.valid_data.copy()
         data["business_timezone"] = "Mars/Olympus_Mons"
 
-        response = self.client.post(url, data, format="multipart")
+        response = self.client.post(url, data, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("business_timezone", response.data["error"])
@@ -105,16 +101,11 @@ class BusinessManagementTests(APITestCase):
         POST /api/business/register/ - A user who already owns a business cannot register another.
         """
         print("\n--- Running: test_cannot_register_second_business ---")
-        # Create a first business for the user
         BusinessInfoFactory(owner=self.user)
-
         self.client.force_authenticate(user=self.user)
         url = reverse("business-register")
-        data = {
-            "businessName": "Second Business"
-        }  # Incomplete data is fine, it should fail before validation
-
-        response = self.client.post(url, data)
+        data = {"businessName": "Second Business"}
+        response = self.client.post(url, data, format="json")
         self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
         print("✅ PASSED: User prevented from registering a second business.")
 
@@ -126,11 +117,50 @@ class BusinessManagementTests(APITestCase):
         business = BusinessInfoFactory(owner=self.user)
         self.client.force_authenticate(user=self.user)
         url = reverse("my-business-profile")
-
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["businessId"], business.businessId)
         print("✅ PASSED: Owner can view their own business profile.")
+
+    def test_random_user_cannot_view_business_profile(self):
+        """
+        GET /api/my-business/profile/ - A non-owner/manager cannot access the profile view.
+        """
+        print("\n--- Running: test_random_user_cannot_view_business_profile ---")
+        BusinessInfoFactory(owner=self.user)
+        self.client.force_authenticate(user=self.other_user)
+        url = reverse("my-business-profile")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        print("✅ PASSED: Random user cannot view another's business profile.")
+
+    def test_owner_can_update_own_business_profile(self):
+        """
+        PATCH /api/my-business/profile/ - An owner can update their business profile.
+        """
+        print("\n--- Running: test_owner_can_update_own_business_profile ---")
+        business = BusinessInfoFactory(owner=self.user)
+        self.client.force_authenticate(user=self.user)
+        url = reverse("my-business-profile")
+
+        # MODIFIED: The payload is now JSON. `tags_keywords` is a direct list.
+        update_data = {
+            "businessName": "Updated Name Fitness",
+            "tags_keywords": ["cardio", "weights"],
+            "businessImage": "originals/business_images/new-image.png",  # The field is named 'businessImage' in the serializer
+        }
+
+        # MODIFIED: The format is now 'json'.
+        response = self.client.patch(url, update_data, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        business.refresh_from_db()
+        self.assertEqual(business.businessName, "Updated Name Fitness")
+        self.assertEqual(business.tags_keywords, ["cardio", "weights"])
+        self.assertEqual(
+            business.businessImage.name, "originals/business_images/new-image.png"
+        )
+        print("✅ PASSED: Owner can update their business profile.")
 
     def test_random_user_cannot_view_business_profile(self):
         """

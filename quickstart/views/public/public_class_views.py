@@ -67,6 +67,7 @@ from quickstart.models import (
 from quickstart.serializers import (
     PublicClassSerializer,
     ScheduleSerializer,
+    PublicClassDetailSerializer,
 )
 from ..utils import haversine_distance
 
@@ -123,6 +124,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
     Provides a public list and detail view for active, verified classes.
     """
 
+    # The default serializer is the lean one, for list/search
     serializer_class = PublicClassSerializer
     permission_classes = [AllowAny]
     pagination_class = StandardResultsSetPagination
@@ -138,10 +140,19 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         "createdAt",
         "average_rating",
         "total_reviews",
-        "relevance_score",  # Add for potential user sorting
+        "relevance_score",
     ]
+    ordering = ["-createdAt"]
 
-    ordering = ["-createdAt"]  # Default ordering for actions other than list
+    def get_serializer_class(self):
+        """
+        Return the appropriate serializer class based on the action.
+        - Use PublicClassDetailSerializer for the 'retrieve' (detail) action.
+        - Use PublicClassSerializer for all other actions (list, search).
+        """
+        if self.action == "retrieve":
+            return PublicClassDetailSerializer
+        return super().get_serializer_class()
 
     AVERAGE_RATING_SUBQUERY = Subquery(
         Reviews.objects.filter(classId=OuterRef("pk"), status="approved")
@@ -157,52 +168,41 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         .values("count")[:1],
         output_field=IntegerField(),
     )
-    MIN_PRICE_SUBQUERY = Subquery(
+    MIN_SESSION_PRICE_SUBQUERY = Subquery(
         Schedule.objects.filter(
             option__classId=OuterRef("pk"),
-        )
-        .filter(
-            Q(option__booking_type="Full Course", end_date__gte=timezone.now().date())
-            | Q(option__booking_type="Single Session", date__gte=timezone.now().date())
+            option__booking_type="Single Session",
+            date__gte=timezone.now().date(),  # Only future or current single sessions
         )
         .order_by("price")
         .values("price")[:1],
         output_field=DecimalField(max_digits=10, decimal_places=2),
     )
-    MAX_PRICE_SUBQUERY = Subquery(
+
+    MIN_COURSE_PRICE_SUBQUERY = Subquery(
         Schedule.objects.filter(
             option__classId=OuterRef("pk"),
+            option__booking_type="Full Course",
+            end_date__gte=timezone.now().date(),  # Only active courses
         )
-        .filter(
-            Q(option__booking_type="Full Course", end_date__gte=timezone.now().date())
-            | Q(option__booking_type="Single Session", date__gte=timezone.now().date())
-        )
-        .order_by("-price")
+        .order_by("price")
         .values("price")[:1],
         output_field=DecimalField(max_digits=10, decimal_places=2),
     )
 
     def get_queryset(self):
-        return (
+        """
+        MODIFIED: This queryset is now smarter. It only prefetches schedules
+        when they are needed for the detail view ('retrieve' action).
+        """
+        queryset = (
             ClassesMain.objects.select_related("businessId", "category", "subcategory")
             .prefetch_related(
                 Prefetch(
                     "images",
                     queryset=ClassImage.objects.order_by("-isCover", "createdAt"),
                 ),
-                Prefetch(
-                    "options__schedules",
-                    queryset=Schedule.objects.filter(
-                        Q(
-                            option__booking_type="Full Course",
-                            end_date__gte=timezone.now().date(),
-                        )
-                        | Q(
-                            option__booking_type="Single Session",
-                            date__gte=timezone.now().date(),
-                        )
-                    ),
-                ),
+                "options",  # Prefetch options for both list and detail
             )
             .filter(
                 status="active",
@@ -210,16 +210,34 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 businessId__verificationStatus="verified",
             )
             .annotate(
-                # Annotate base metrics here for reusability
                 average_rating=Coalesce(
                     self.AVERAGE_RATING_SUBQUERY, Value(Decimal("0.0"))
                 ),
                 review_count=Coalesce(self.REVIEW_COUNT_SUBQUERY, Value(0)),
-                min_price=Coalesce(self.MIN_PRICE_SUBQUERY, None),
+                min_session_price=Coalesce(self.MIN_SESSION_PRICE_SUBQUERY, None),
+                min_course_price=Coalesce(self.MIN_COURSE_PRICE_SUBQUERY, None),
                 image_count=Count("images", distinct=True),
             )
-            .distinct()
         )
+
+        # --- PERFORMANCE OPTIMIZATION ---
+        # Only prefetch the heavy schedule data if we are on the detail page.
+        if self.action == "retrieve":
+            logger.debug(
+                f"Action is 'retrieve', prefetching schedules for class detail."
+            )
+            queryset = queryset.prefetch_related(
+                Prefetch(
+                    "options__schedules",
+                    queryset=Schedule.objects.filter(
+                        # This logic is good, it only gets active/future schedules
+                        Q(date__gte=timezone.now().date())
+                        | Q(end_date__gte=timezone.now().date())
+                    ).order_by("date", "time"),
+                )
+            )
+
+        return queryset.distinct()
 
     def _calculate_relevance_score(self, queryset):
         """
@@ -383,13 +401,22 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 if subcategory_key:
                     queryset = queryset.filter(subcategory__key=subcategory_key)
 
-            # --- Price Filter ---
+            # --- MODIFIED: Price Filter now uses the new annotated fields ---
             price_max_str = request.query_params.get("price_max")
             if price_max_str:
                 try:
+                    price_max_decimal = Decimal(price_max_str)
+                    # A class is included if EITHER its session price OR course price is within the range.
+                    # This is more inclusive for users who don't care about the type, just the price.
                     queryset = queryset.filter(
-                        Q(min_price__lte=Decimal(price_max_str))
-                        | Q(min_price__isnull=True)
+                        Q(min_session_price__lte=price_max_decimal)
+                        | Q(min_course_price__lte=price_max_decimal)
+                        |
+                        # Also include classes where prices are not yet set
+                        (
+                            Q(min_session_price__isnull=True)
+                            & Q(min_course_price__isnull=True)
+                        )
                     )
                 except InvalidOperation:
                     logger.warning(f"Invalid price_max: {price_max_str}")
@@ -496,9 +523,18 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             elif sort_by == "distance" and search_lat is not None:
                 queryset = queryset.order_by(F("distance").asc(nulls_last=True))
             elif sort_by == "price_asc":
-                queryset = queryset.order_by(F("min_price").asc(nulls_last=True))
+                # Sort by the lowest available price, whether it's a session or course
+                queryset = queryset.order_by(
+                    Coalesce(F("min_session_price"), F("min_course_price")).asc(
+                        nulls_last=True
+                    )
+                )
             elif sort_by == "price_desc":
-                queryset = queryset.order_by(F("min_price").desc(nulls_first=True))
+                queryset = queryset.order_by(
+                    Coalesce(F("min_session_price"), F("min_course_price")).desc(
+                        nulls_first=True
+                    )
+                )
             elif sort_by == "rating":
                 queryset = queryset.order_by("-average_rating", "-review_count")
             elif sort_by == "reviews":

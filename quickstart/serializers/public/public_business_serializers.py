@@ -1,3 +1,4 @@
+import os
 from django.conf import settings
 from rest_framework import serializers
 from quickstart.models import BusinessInfo, ClassesMain, Reviews
@@ -58,14 +59,38 @@ class PublicBusinessInfoSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
+    def _get_resized_url(self, obj, size_name):
+        """
+        Constructs a public CloudFront URL for a resized WebP image.
+        """
+
+        if obj.businessImage and obj.businessImage.name:
+            original_path = obj.businessImage.name
+
+            if not original_path.startswith("originals/"):
+                return None
+
+            # 1. Get the base path of the original image, without its extension
+            base_path, _ = os.path.splitext(
+                original_path
+            )  # e.g., "originals/path/image.png" -> "originals/path/image"
+
+            # 2. Replace the path prefix
+            # e.g., "originals/path/image" -> "public/thumb/path/image"
+            resized_base_path = base_path.replace(
+                "originals/", f"public/{size_name}/", 1
+            )
+
+            # 3. Add the correct .webp extension
+            final_path = resized_base_path + ".webp"
+
+            # 4. Construct the full URL
+            return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
+
+        return None
+
     def get_business_image_medium_url(self, obj):
-        if not obj.businessImage or not obj.businessImage.name:
-            return None
-        original_path = obj.businessImage.name
-        if not original_path.startswith("originals/"):
-            return None
-        resized_path = original_path.replace("originals/", "public/medium/", 1)
-        return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
+        return self._get_resized_url(obj, "medium")
 
     def to_representation(self, instance):
         """

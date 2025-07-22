@@ -2,12 +2,13 @@ from django.urls import path, include, re_path
 from django.views.generic import TemplateView
 from django.contrib import admin
 
-# --- Import all your existing views and routers ---
-# THIS SECTION IS RESTORED TO YOUR ORIGINAL STRUCTURE
 from rest_framework.routers import DefaultRouter
 from dj_rest_auth.registration.views import VerifyEmailView, ResendEmailVerificationView
-from dj_rest_auth.views import PasswordChangeView  # Kept this specific import
+from dj_rest_auth.views import PasswordChangeView
 
+from quickstart.views.business.business_management_views import (
+    generate_presigned_upload_url,
+)
 from quickstart.views.healthcheck import health_check
 from quickstart.views.auth.auth_views import (
     CSRFTokenView,
@@ -170,10 +171,6 @@ urlpatterns = [
         "admin/silk/", include("silk.urls", namespace="admin_silk")
     ),  # Changed namespace to avoid conflict
     path("admin/panel/", admin.site.urls),
-    # --- THE FIX: Include allauth's URLs ---
-    # This is required for allauth's internal reverse() calls to work,
-    # e.g., when its password reset form is used. These URLs are not intended
-    # to be used directly by the frontend SPA.
     path("accounts/", include("allauth.urls")),
     # --- Routers ---
     path("admin/", include(admin_router.urls)),
@@ -181,9 +178,6 @@ urlpatterns = [
     path("", include(public_router.urls)),
     path("", include(user_self_router.urls)),
     # --- Authentication & User Management ---
-    # NOTE: These paths are now defined explicitly to override dj-rest-auth defaults
-    # and ensure our custom views are used.
-    # Token-based authentication
     path("login/", CustomTokenObtainPairView.as_view(), name="token_obtain_pair"),
     path("token/refresh/", CustomTokenRefreshView.as_view(), name="token_refresh"),
     path("logout/", LogoutView.as_view(), name="logout"),
@@ -217,9 +211,6 @@ urlpatterns = [
             ]
         ),
     ),
-    # *** THIS IS THE CRITICAL FIX ***
-    # We define the password reset flow using our custom views BEFORE including
-    # any other auth URLs that might conflict.
     path(
         "auth/password/reset/",
         CustomPasswordResetView.as_view(),
@@ -230,8 +221,6 @@ urlpatterns = [
         CustomPasswordResetConfirmView.as_view(),
         name="password_reset_confirm",
     ),
-    # Include other dj-rest-auth URLs that we don't need to override, like password change.
-    # By placing our custom URLs first, they take precedence.
     path("auth/", include("dj_rest_auth.urls")),
     # Social Auth
     path("auth/google/", GoogleLogin.as_view(), name="google_login"),
@@ -239,12 +228,16 @@ urlpatterns = [
     path("user/update/", UserUpdateView.as_view(), name="user-update"),
     path("user/profile/", MyProfileView.as_view(), name="my-profile"),
     path("my-favorites/", MyFavoritesListView.as_view(), name="my-favorites-list"),
-    # --- Other Application Views (Unchanged) ---
+    # --- Other Application Views ---
+    path(
+        "business/generate-upload-url/",
+        generate_presigned_upload_url,
+        name="generate-upload-url",
+    ),
     path("admin/metrics/", AdminMetricsView.as_view(), name="admin-metrics"),
     path(
         "classes/<int:pk>/reviews/", ClassReviews.as_view(), name="public-class-reviews"
     ),
-    # ... (rest of your original URLs are here and unchanged)
     path(
         "business-stats/",
         BusinessDashboardViewSet.as_view({"get": "list"}),
@@ -322,6 +315,6 @@ urlpatterns = [
         "support-tickets/create/",
         CreateSupportTicketView.as_view(),
         name="create-support-ticket",
-    ),  # Added this missing url
+    ),
     path("health-check/", health_check, name="health-check"),
 ]

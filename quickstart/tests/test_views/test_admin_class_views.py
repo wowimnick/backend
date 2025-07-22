@@ -148,14 +148,13 @@ class AdminClassReviewManagementTests(APITestCase):
         )
         data = {"new_id": new_category.pk}
 
-        response = self.client.post(url, data)
+        # FIX: Add format="json" to the request.
+        response = self.client.post(url, data, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
         self.klass1.refresh_from_db()
         self.assertEqual(self.klass1.category, new_category)
-        self.assertIsNone(
-            self.klass1.subcategory
-        )  # Subcategory should be cleared on reassignment
+        self.assertIsNone(self.klass1.subcategory)
         self.assertFalse(
             ClassCategory.objects.filter(pk=category_to_delete.pk).exists()
         )

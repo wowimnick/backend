@@ -1,4 +1,8 @@
-from rest_framework import viewsets, status, permissions, generics, views
+from rest_framework import viewsets, status, permissions, generics
+import boto3
+import uuid
+from botocore.exceptions import ClientError
+from django.conf import settings
 from rest_framework.decorators import (
     action,
     api_view,
@@ -6,6 +10,7 @@ from rest_framework.decorators import (
     parser_classes,
     throttle_classes,
 )
+from django.db import transaction
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from django.utils import timezone
@@ -43,7 +48,6 @@ from quickstart.models import (
     Schedule,
     ScheduleInstance,
     Payment,
-    CustomUser,
 )
 
 from .revenue_analytics_views import RevenueAnalyticsView
@@ -52,6 +56,7 @@ from quickstart.serializers import (
     BusinessStatsSerializer,
     BusinessRegistrationSerializer,
     BusinessDashboardOverviewSerializer,
+    CustomUserDetailsSerializer,
     colors,
 )
 
@@ -63,16 +68,94 @@ from quickstart.utils.permissions import (
 
 logger = logging.getLogger(__name__)
 
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@throttle_classes([ScopedRateThrottle])
+def generate_presigned_upload_url(request):
+    """
+    Generates a pre-signed S3 POST URL for direct client-side uploads.
+    Enforces a file size limit and content type.
+
+    MODIFIED: Now accepts an 'uploadType' to place files in correct subdirectories.
+    """
+    user = request.user
+    file_name = request.data.get("fileName")
+    content_type = request.data.get("contentType")
+    upload_type = request.data.get("uploadType")  # <-- NEW: Get the upload context
+
+    if not all([file_name, content_type, upload_type]):
+        return Response(
+            {"error": "fileName, contentType, and uploadType are required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Define allowed upload types and their corresponding subfolders
+    # This acts as a security whitelist.
+    allowed_upload_types = {
+        "avatar": "avatars/",
+        "business_image": "business_images/",
+        "class_image": "class_images/",
+        "review_image": "review_images/",
+        "category_image": "category_images/",  # Example for future use
+    }
+
+    subfolder = allowed_upload_types.get(upload_type)
+
+    if not subfolder:
+        return Response(
+            {"error": f"Invalid uploadType: '{upload_type}'."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not content_type.startswith("image/"):
+        return Response(
+            {"error": "Only image content types are allowed."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Create a unique key in the correct subdirectory within 'originals/'
+    unique_key = f"originals/{subfolder}{uuid.uuid4()}-{file_name}"
+
+    # Security policy that S3 will enforce.
+    conditions = [
+        ["content-length-range", 0, 10 * 1024 * 1024],
+        ["starts-with", "$Content-Type", "image/"],
+    ]
+
+    s3_client = boto3.client("s3", region_name=settings.AWS_S3_REGION_NAME)
+
+    try:
+        response = s3_client.generate_presigned_post(
+            Bucket=settings.AWS_STORAGE_BUCKET_NAME,
+            Key=unique_key,
+            Fields=None,
+            Conditions=conditions,
+            ExpiresIn=300,
+        )
+
+        response["s3_key"] = unique_key
+
+        return Response(response)
+    except ClientError as e:
+        logger.error(f"Error generating presigned URL for user {user.email}: {e}")
+        return Response(
+            {"error": "Could not prepare the file upload. Please try again."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
 # --- Business Registration ---
 
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
-@parser_classes([MultiPartParser, FormParser])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
 @throttle_classes([ScopedRateThrottle])
 def register_business(request):
     """
     Handles the creation of a new BusinessInfo instance by an authenticated user.
+    Now expects 'businessImage_s3_key' in the request data instead of a file upload.
     """
     if BusinessInfo.objects.filter(owner=request.user).exists():
         return Response(
@@ -85,6 +168,7 @@ def register_business(request):
     request.throttle_scope = "sensitive"
 
     try:
+        # The serializer is updated to handle 'businessImage_s3_key'
         serializer = BusinessRegistrationSerializer(
             data=request.data, context={"request": request}
         )
@@ -102,12 +186,14 @@ def register_business(request):
         )
 
         updated_user = request.user
+        # Use the serializer to get the correct avatar URL
+        user_serializer = CustomUserDetailsSerializer(updated_user)
         user_data = {
             "userId": updated_user.userId,
             "email": updated_user.email,
             "first_name": updated_user.first_name,
             "last_name": updated_user.last_name,
-            "avatar_url": updated_user.avatar.url if updated_user.avatar else None,
+            "avatar_url": user_serializer.data.get("avatar_medium_url"),
             "has_business": True,
             "role": (
                 {
@@ -773,39 +859,67 @@ class MyBusinessProfileView(generics.RetrieveUpdateDestroyAPIView):
 
     def perform_destroy(self, instance):
         """
-        Handles the deletion of the business profile.
+        Handles the "deletion" of a business profile by the owner.
+        This is a SOFT DELETE. The business is deactivated, not removed from the database.
+        This preserves historical data and prevents orphaned Stripe accounts.
         """
         business_name = instance.businessName
         business_id = instance.businessId
+        user_email = self.request.user.email
+        today = timezone.now().date()
 
-        # Handle related file deletions carefully
-        if instance.businessImage:
-            try:
-                instance.businessImage.delete(
-                    save=False
-                )  # `save=False` because the instance itself will be deleted
-            except Exception as e:
-                logger.warning(
-                    f"Could not delete businessImage for Business ID {business_id} during profile deletion: {e}"
-                )
+        # --- SAFETY CHECK: Block deletion if there are future, confirmed bookings ---
+        has_future_bookings = Booking.objects.filter(
+            schedule_instance__schedule__option__classId__businessId=instance,
+            schedule_instance__date__gte=today,
+            status="confirmed",
+        ).exists()
 
-        # Any other related file fields would be handled similarly.
-        # if instance.verificationDocument: ... (if this field existed)
+        if has_future_bookings:
+            logger.warning(
+                f"Attempt to delete Business Profile '{business_name}' (ID: {business_id}) by {user_email} was BLOCKED due to future confirmed bookings."
+            )
+            # Use DRFValidationError to send a structured 400 error to the client.
+            raise DRFValidationError(
+                {
+                    "detail": "Cannot deactivate your profile because you have future, confirmed bookings. Please cancel or complete these bookings before deactivating your business."
+                }
+            )
 
         try:
-            instance.delete()
-            logger.warning(
-                f"Business Profile '{business_name}' (ID: {business_id}) DELETED by owner/manager {self.request.user.email}"
-            )
+            with transaction.atomic():
+                # Step 1: Deactivate the business profile
+                instance.isActive = False
+                instance.verificationStatus = "closed"  # Use a distinct status
+                instance.save(update_fields=["isActive", "verificationStatus"])
+                logger.warning(
+                    f"Business Profile '{business_name}' (ID: {business_id}) DEACTIVATED (soft-deleted) by owner/manager {user_email}"
+                )
+
+                # Step 2: Clean up all future, scheduled (but not booked) instances for this business.
+                future_instances_to_delete = ScheduleInstance.objects.filter(
+                    schedule__option__classId__businessId=instance,
+                    date__gte=today,
+                    status="scheduled",
+                )
+
+                if future_instances_to_delete.exists():
+                    deleted_count, _ = future_instances_to_delete.delete()
+                    logger.info(
+                        f"Cleaned up {deleted_count} future schedule instances for deactivated business {business_id}."
+                    )
+
+                # NOTE: The businessImage file on S3 is intentionally NOT deleted.
+                # This preserves it in case the user wishes to reactivate their account.
+                # A separate, manual admin process should handle permanent data purging for GDPR/compliance.
+
         except Exception as e:
             logger.error(
-                f"Error deleting Business Profile '{business_name}' (ID: {business_id}) by user {self.request.user.email}: {str(e)}",
+                f"Error deactivating Business Profile '{business_name}' (ID: {business_id}) by user {user_email}: {str(e)}",
                 exc_info=True,
             )
-            # It's good practice to return a server error if deletion fails unexpectedly
-            # However, DRF's DestroyModelMixin typically returns 204 on success and doesn't expect a Response here.
-            # If an error occurs, DRF will likely handle it and return 500.
-            # For explicit control:
             raise DRFValidationError(
-                {"detail": "Failed to delete business profile due to a server error."}
+                {
+                    "detail": "Failed to deactivate business profile due to a server error."
+                }
             )

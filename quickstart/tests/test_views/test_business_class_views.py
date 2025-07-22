@@ -6,7 +6,6 @@ from django.urls import reverse
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 import json
-from django.core.files.uploadedfile import SimpleUploadedFile
 from django.utils import timezone
 from datetime import timedelta
 
@@ -40,33 +39,24 @@ class BusinessClassManagementTests(APITestCase):
 
     def setUp(self):
         self.owner = UserFactory()
-
-        # Create a role and explicitly assign the necessary permissions.
         business_role = RoleFactory(name="Business Test Role")
         _get_and_assign_permission(business_role, "manage_own_classes", BusinessInfo)
-
         self.owner.role = business_role
         self.owner.save()
         self.owner.user_permissions.add(*business_role.permissions.all())
-
         self.business = BusinessInfoFactory(owner=self.owner)
-
-        # FIX: Create specific categories needed for the tests.
         self.category = ClassCategoryFactory(name="Arts", key="arts")
         self.subcategory = ClassSubcategoryFactory(
             category=self.category, name="Pottery Making", key="pottery-making"
         )
-
         self.own_class = ClassesMainFactory(
             businessId=self.business,
             category=self.category,
             subcategory=self.subcategory,
         )
         self.own_option = ClassOptionFactory(classId=self.own_class)
-
         self.other_business = BusinessInfoFactory()
         self.other_class = ClassesMainFactory(businessId=self.other_business)
-
         self.client.force_authenticate(user=self.owner)
 
     def test_non_business_user_cannot_access(self):
@@ -76,12 +66,8 @@ class BusinessClassManagementTests(APITestCase):
         print("\n--- Running: test_non_business_user_cannot_access ---")
         non_business_user = UserFactory()
         self.client.force_authenticate(user=non_business_user)
-
         url = reverse("business-class-list")
         response = self.client.get(url)
-
-        # FIX: The test now correctly asserts that a 403 Forbidden is returned,
-        # which is the proper behavior for a user lacking the required permission.
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         print("✅ PASSED: User without permission is correctly denied access.")
 
@@ -92,25 +78,30 @@ class BusinessClassManagementTests(APITestCase):
         print("\n--- Running: test_create_class_successfully ---")
         url = reverse("business-class-list")
 
-        option_data = [{"booking_type": "Single Session", "level": "beginner"}]
+        # MODIFIED: Options are now sent as a JSON string within the main JSON payload.
+        option_data_string = json.dumps(
+            [{"booking_type": "Single Session", "level": "beginner"}]
+        )
 
+        # MODIFIED: The entire payload is now JSON.
         data = {
             "title": "New Pottery Class",
             "description": "Learn to make pottery. " * 15,
             "category_key": "arts",
-            # FIX: The subcategory_key cannot be blank. Use the one created in setUp.
             "subcategory_key": "pottery-making",
             "location": "Studio B",
             "coordinates": "40.7128,-74.0060",
-            # The _process_images_and_options method now expects 'images'
-            "images": [
-                SimpleUploadedFile(f"img{i}.jpg", b"content", "image/jpeg")
-                for i in range(5)
+            # MODIFIED: We now send a list of S3 key strings.
+            "image_s3_keys": [
+                "originals/class_images/test1.jpg",
+                "originals/class_images/test2.jpg",
             ],
-            "options": json.dumps(option_data),
+            "cover_image_s3_key": "originals/class_images/test1.jpg",
+            "options": option_data_string,
         }
 
-        response = self.client.post(url, data, format="multipart")
+        # MODIFIED: The format is now 'json'.
+        response = self.client.post(url, data, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
         self.assertTrue(ClassesMain.objects.filter(title="New Pottery Class").exists())
@@ -125,9 +116,7 @@ class BusinessClassManagementTests(APITestCase):
         response = self.client.get(url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        # FIX: The view is returning a raw list, not a paginated dictionary.
-        # Adjust the assertion to check the length of the list directly.
-        self.assertEqual(len(response.data), 1)
+        self.assertEqual(len(response.data["results"]), 1)
         print("✅ PASSED: Business owner can list only their own classes.")
 
     def test_cannot_retrieve_other_business_class(self):
@@ -137,7 +126,6 @@ class BusinessClassManagementTests(APITestCase):
         print("\n--- Running: test_cannot_retrieve_other_business_class ---")
         url = reverse("business-class-detail", kwargs={"pk": self.other_class.pk})
         response = self.client.get(url)
-        # 404 is the correct response because the queryset for the view won't find it.
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         print("✅ PASSED: Owner correctly gets 404 for another business's class.")
 
@@ -148,7 +136,8 @@ class BusinessClassManagementTests(APITestCase):
         print("\n--- Running: test_update_own_class ---")
         url = reverse("business-class-detail", kwargs={"pk": self.own_class.pk})
         data = {"title": "Updated Class Title"}
-        response = self.client.patch(url, data)
+        # MODIFIED: Update calls should also use format="json" now.
+        response = self.client.patch(url, data, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
         self.own_class.refresh_from_db()
@@ -161,7 +150,6 @@ class BusinessClassManagementTests(APITestCase):
         """
         print("\n--- Running: test_create_schedule_for_own_class_option ---")
         url = reverse("business-schedule-list")
-        # FIX: Use a dynamic future date to avoid validation errors.
         future_date = (timezone.now() + timedelta(days=30)).strftime("%Y-%m-%d")
         data = {
             "option": self.own_option.optionId,

@@ -1,6 +1,5 @@
 from asyncio.log import logger
 from datetime import timedelta
-from .custom_storages import WebPStorage
 import random
 import string
 import pytz
@@ -295,7 +294,10 @@ class CustomUser(AbstractUser):
     address = models.CharField(max_length=255)
     zipCode = models.CharField(max_length=100)
     avatar = models.ImageField(
-        upload_to="originals/avatars/", null=True, blank=True, storage=WebPStorage()
+        upload_to="originals/avatars/",
+        max_length=255,
+        null=True,
+        blank=True,
     )
     createdAt = models.DateTimeField(auto_now_add=True)
     role = models.ForeignKey(
@@ -460,7 +462,7 @@ class BusinessInfo(models.Model):
         upload_to="originals/business_images/",
         blank=True,
         null=True,
-        storage=WebPStorage(),
+        max_length=255,
     )
     featured = models.BooleanField(default=False)
     isActive = models.BooleanField(default=False)
@@ -707,7 +709,9 @@ class ClassImage(models.Model):
         "ClassesMain", related_name="images", on_delete=models.CASCADE
     )
     image = models.ImageField(
-        upload_to="originals/class_images/", storage=WebPStorage()
+        upload_to="originals/class_images/",
+        max_length=255,
+        help_text="Image uploaded by the user, e.g., a photo from the class.",
     )
     isCover = models.BooleanField(default=False)
     createdAt = models.DateTimeField(auto_now_add=True)
@@ -733,7 +737,6 @@ class ClassCategory(models.Model):
         blank=True,
         null=True,
         help_text="Image displayed on the homepage category card.",
-        storage=WebPStorage(),
     )
     is_featured = models.BooleanField(
         default=False, db_index=True, help_text="Show this category on the homepage."
@@ -991,9 +994,6 @@ class ClassOption(models.Model):
     classId = models.ForeignKey(
         "ClassesMain", on_delete=models.CASCADE, related_name="options"
     )
-
-    # Title and Description are now sourced from the parent ClassesMain instance.
-    # No separate title or description fields on ClassOption.
 
     BOOKING_TYPES = [
         ("Single Session", "Single Session"),
@@ -1438,6 +1438,18 @@ class Booking(models.Model):
     cancelled_at = models.DateTimeField(null=True, blank=True)
     cancellation_reason = models.TextField(blank=True)
 
+    cancellation_policy = models.CharField(
+        max_length=30,
+        choices=CANCELLATION_POLICY_CHOICES,  # Assuming this is defined in your models.py
+        default="flexible",
+        help_text="The cancellation policy snapshotted at the time of booking.",
+    )
+    cancellation_refund_percentage = models.PositiveIntegerField(
+        default=100,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+        help_text="The refund percentage snapshotted at the time of booking.",
+    )
+
     amount_paid = models.DecimalField(max_digits=10, decimal_places=2)
     payment_status = models.CharField(
         max_length=20,
@@ -1607,7 +1619,8 @@ class Reviews(models.Model):
         upload_to="originals/review_images/",
         null=True,
         blank=True,
-        storage=WebPStorage(),
+        max_length=255,
+        help_text="Image uploaded by the user, e.g., a photo from the class.",
     )
     status = models.CharField(
         max_length=20,

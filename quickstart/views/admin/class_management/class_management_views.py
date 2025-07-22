@@ -4,7 +4,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated, BasePermission
-from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.parsers import JSONParser, FormParser
 from django.db import transaction
 from django.db.models import (
     Q,
@@ -630,7 +630,8 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "put", "patch", "delete", "head", "options"]
     filter_backends = [filters.SearchFilter]
     search_fields = ["name", "key"]
-    parser_classes = [MultiPartParser, FormParser]
+    # MODIFIED: Removed MultiPartParser to disallow direct file uploads.
+    parser_classes = [JSONParser, FormParser]
 
     def get_queryset(self):
         # Using get_queryset to handle annotations centrally
@@ -656,18 +657,15 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         if not request.user.has_perm("quickstart.add_classcategory"):
             self.permission_denied(request, message="You cannot create categories.")
-        response = super().create(request, *args, **kwargs)
-        if response.status_code == status.HTTP_201_CREATED:
-            logger.info(
-                f"Category '{response.data.get('name')}' created by Admin {request.user.email}"
-            )
-        return response
+        # The serializer now handles the creation logic with the S3 key
+        return super().create(request, *args, **kwargs)
 
     def update(self, request, *args, **kwargs):
         if not request.user.has_perm("quickstart.change_classcategory"):
             self.permission_denied(request, message="You cannot update categories.")
         instance = self.get_object()
         old_name = instance.name
+        # The serializer now handles the update logic with the S3 key
         response = super().update(request, *args, **kwargs)
         if response.status_code == status.HTTP_200_OK:
             logger.info(

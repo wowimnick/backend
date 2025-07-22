@@ -39,6 +39,7 @@ from .public.public_class_serializers import (
     PublicClassSerializer,
     PublicClassOptionSerializer,
     PublicScheduleSerializer,
+    PublicClassDetailSerializer,
 )
 
 from .business.business_booking_serializers import (
@@ -123,6 +124,7 @@ __all__ = [
     "PublicClassSerializer",
     "PublicClassOptionSerializer",
     "PublicScheduleSerializer",
+    "PublicClassDetailSerializer",
     # Booking Serializers
     "BookingCreateSerializer",
     "StudentBookingSerializer",

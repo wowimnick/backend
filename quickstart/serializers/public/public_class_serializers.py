@@ -1,3 +1,5 @@
+# --- START OF FILE quickstart/serializers/public/public_class_serializers.py ---
+
 import os
 from django.conf import settings
 from rest_framework import serializers
@@ -103,9 +105,10 @@ class PublicScheduleSerializer(serializers.ModelSerializer):
 
 
 class PublicClassOptionSerializer(serializers.ModelSerializer):
-    """Serializer for publicly displaying class options."""
-
-    schedules = serializers.SerializerMethodField()
+    """
+    Serializer for publicly displaying class options.
+    This serializer is now lean and does NOT include schedules, for use in LIST views.
+    """
 
     class Meta:
         model = ClassOption
@@ -117,43 +120,30 @@ class PublicClassOptionSerializer(serializers.ModelSerializer):
             "tags",
             "cancellationPolicy",
             "cancellationRefundPercentage",
-            "schedules",
             "price_type",
         ]
         read_only_fields = fields
 
-    def get_schedules(self, option_instance: ClassOption):
-        """
-        Returns only active and future schedules for the given class option.
-        This relies on prefetching in the ViewSet to be efficient.
-        """
-        today = timezone.now().date()
 
-        # Access schedules related to the option_instance.
-        active_schedules = option_instance.schedules.all()
+# --- NEW SERIALIZER FOR DETAIL VIEW ---
+class PublicClassOptionWithSchedulesSerializer(PublicClassOptionSerializer):
+    """
+    Extends the basic option serializer to include its schedules.
+    Used ONLY for the class detail view.
+    """
 
-        future_schedules_objects = []
-        for schedule_obj in active_schedules:
-            is_future = False
-            # Logic for course or single session based on parent option booking_type
-            if option_instance.booking_type == "Full Course":
-                if schedule_obj.end_date and schedule_obj.end_date >= today:
-                    is_future = True
-            else:  # Single Session
-                if schedule_obj.date and schedule_obj.date >= today:
-                    is_future = True
+    schedules = PublicScheduleSerializer(many=True, read_only=True)
 
-            if is_future:
-                future_schedules_objects.append(schedule_obj)
-
-        # Serialize only the filtered future schedules
-        return PublicScheduleSerializer(
-            future_schedules_objects, many=True, context=self.context
-        ).data
+    class Meta(PublicClassOptionSerializer.Meta):
+        # Inherit fields and add 'schedules'
+        fields = PublicClassOptionSerializer.Meta.fields + ["schedules"]
 
 
 class PublicClassSerializer(serializers.ModelSerializer):
-    """Serializer for public listing and detail view of classes."""
+    """
+    Serializer for the PUBLIC LIST VIEW of classes. Lean and performant.
+    It does NOT include schedules to keep the payload small.
+    """
 
     options = PublicClassOptionSerializer(many=True, read_only=True)
     images = PublicClassImageSerializer(many=True, read_only=True)
@@ -184,7 +174,12 @@ class PublicClassSerializer(serializers.ModelSerializer):
         source="businessId.businessName", read_only=True, allow_null=True
     )
 
-    coordinates = serializers.SerializerMethodField(read_only=True)
+    min_session_price = serializers.DecimalField(
+        max_digits=10, decimal_places=2, read_only=True
+    )
+    min_course_price = serializers.DecimalField(
+        max_digits=10, decimal_places=2, read_only=True
+    )
 
     class Meta:
         model = ClassesMain
@@ -208,11 +203,12 @@ class PublicClassSerializer(serializers.ModelSerializer):
             "review_count",
             "is_favorited",
             "business_timezone",
+            "min_session_price",
+            "min_course_price",
         ]
         read_only_fields = fields
 
     def get_coordinates(self, obj):
-        # PERFORMANCE FIX: Use the clean numeric fields instead of parsing a string.
         if obj.latitude is None or obj.longitude is None:
             return None
 
@@ -223,7 +219,6 @@ class PublicClassSerializer(serializers.ModelSerializer):
                 lng_salt = uniform(-0.0005, 0.0005)
                 lat += lat_salt
                 lng += lng_salt
-            # Return the string format the frontend expects.
             return f"{lat:.8f},{lng:.8f}"
         except (ValueError, TypeError):
             logger.warning(
@@ -237,14 +232,17 @@ class PublicClassSerializer(serializers.ModelSerializer):
             return request.user.favorited.filter(pk=obj.pk).exists()
         return False
 
-    def get_business_image(self, obj):
-        if (
-            obj.businessId
-            and hasattr(obj.businessId, "businessImage")
-            and obj.businessId.businessImage
-        ):
-            try:
-                return obj.businessId.businessImage.url
-            except ValueError:
-                return None
-        return None
+
+class PublicClassDetailSerializer(PublicClassSerializer):
+    """
+    The serializer for the class DETAIL VIEW (`/api/classes/<id>/`).
+    It inherits everything from the list serializer and overrides the `options`
+    field to use the new serializer that INCLUDES schedules.
+    """
+
+    options = PublicClassOptionWithSchedulesSerializer(many=True, read_only=True)
+
+    class Meta(PublicClassSerializer.Meta):
+        # The fields are inherited, so we don't need to redeclare them.
+        # The override of the `options` field above is all that's needed.
+        pass

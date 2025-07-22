@@ -1,5 +1,6 @@
-# serializers/classes/business_class_serializers.py
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
+import json
+import os
 from django.conf import settings
 from rest_framework.validators import ValidationError
 from rest_framework.exceptions import PermissionDenied
@@ -9,7 +10,7 @@ from django.db.models import Q, Sum
 from django.utils import timezone
 import logging
 
-# Adjust import paths as needed
+
 from quickstart.models import (
     Booking,
     BusinessInfo,
@@ -24,13 +25,11 @@ from quickstart.models import (
 
 logger = logging.getLogger(__name__)
 
-# --- Serializers primarily used in Business Management Context ---
-
 
 class PublicSubcategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = ClassSubcategory
-        fields = ["name", "key"]  # This remains 'key' as per the models provided
+        fields = ["name", "key"]
 
 
 class PublicCategorySerializer(serializers.ModelSerializer):
@@ -49,6 +48,8 @@ class PublicCategorySerializer(serializers.ModelSerializer):
         if not original_path.startswith("originals/"):
             return None
         resized_path = original_path.replace("originals/", "public/medium/", 1)
+        if not resized_path.endswith(".webp"):
+            resized_path = os.path.splitext(resized_path)[0] + ".webp"
         return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
 
 
@@ -110,7 +111,12 @@ class ClassImageSerializer(serializers.ModelSerializer):
         original_path = obj.image.name
         if not original_path.startswith("originals/"):
             return None
-        resized_path = original_path.replace("originals/", f"public/{size_name}/", 1)
+
+        base_path = os.path.splitext(original_path)[0]
+
+        resized_path = (
+            base_path.replace("originals/", f"public/{size_name}/", 1) + ".webp"
+        )
         return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
 
     def get_image_thumb_url(self, obj):
@@ -128,7 +134,7 @@ class ScheduleInstanceSerializer(serializers.ModelSerializer):
 
     current_bookings_count = serializers.IntegerField(read_only=True)
     available_spots = serializers.SerializerMethodField(read_only=True)
-    # --- NEW FIELDS ---
+
     class_name = serializers.CharField(
         source="schedule.option.classId.title", read_only=True
     )
@@ -158,7 +164,6 @@ class ScheduleInstanceSerializer(serializers.ModelSerializer):
             "available_spots",
             "created_at",
             "updated_at",
-            # --- NEW FIELDS ---
             "class_name",
             "class_id",
             "booking_type",
@@ -171,7 +176,6 @@ class ScheduleInstanceSerializer(serializers.ModelSerializer):
             "updated_at",
             "current_bookings_count",
             "available_spots",
-            # --- NEW FIELDS ---
             "class_name",
             "class_id",
             "booking_type",
@@ -460,7 +464,7 @@ class ManagedClassSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ClassesMain
-        # MODIFIED: Replaced __all__ with an explicit list to use new field name
+
         fields = [
             "classId",
             "businessId",
@@ -505,6 +509,50 @@ class ManagedClassSerializer(serializers.ModelSerializer):
             "review_count",
         ]
 
+    def update(self, instance, validated_data):
+        """
+        Custom update to handle parsing 'coordinates' into latitude and longitude,
+        and to correctly handle stringified JSON for 'features'.
+        This is now NON-DESTRUCTIVE for coordinates.
+        """
+
+        if "features" in validated_data and isinstance(validated_data["features"], str):
+            try:
+
+                validated_data["features"] = json.loads(validated_data["features"])
+            except json.JSONDecodeError:
+
+                raise serializers.ValidationError(
+                    {
+                        "features": "Invalid format. Features must be a valid JSON array string."
+                    }
+                )
+
+        if "coordinates" in validated_data:
+            coordinates_str = validated_data.get("coordinates")
+
+            if (
+                coordinates_str
+                and isinstance(coordinates_str, str)
+                and coordinates_str.lower() != "undefined"
+            ):
+                try:
+
+                    lat_str, lng_str = map(str.strip, coordinates_str.split(","))
+
+                    validated_data["latitude"] = Decimal(lat_str)
+                    validated_data["longitude"] = Decimal(lng_str)
+
+                except (ValueError, InvalidOperation) as e:
+
+                    logger.warning(
+                        f"During class update (ID: {instance.pk}), could not parse coordinates: '{coordinates_str}'. Error: {e}. Existing coordinates will be preserved."
+                    )
+
+            validated_data.pop("coordinates", None)
+
+        return super().update(instance, validated_data)
+
 
 class ClassCreateSerializer(serializers.ModelSerializer):
     """Serializer specifically for creating new classes."""
@@ -516,7 +564,6 @@ class ClassCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ClassesMain
-        # MODIFIED: Updated field list to use category_key
         fields = [
             "title",
             "description",
@@ -532,14 +579,12 @@ class ClassCreateSerializer(serializers.ModelSerializer):
             "adminContactPhone",
         ]
 
-    # MODIFIED: Renamed and updated validation logic for key
     def validate_category_key(self, value):
         if not ClassCategory.objects.filter(key=value).exists():
             raise serializers.ValidationError(f"Category with key '{value}' not found.")
         return value
 
     def validate(self, data):
-        # MODIFIED: Use category_key in validation
         category_key = data.get("category_key")
         subcategory_key = data.get("subcategory_key")
 
@@ -557,3 +602,53 @@ class ClassCreateSerializer(serializers.ModelSerializer):
                     }
                 )
         return data
+
+    def create(self, validated_data):
+        """
+        Custom create method to handle conversion of category/subcategory keys
+        and to parse coordinates into latitude and longitude.
+        """
+        category_key = validated_data.pop("category_key")
+        subcategory_key = validated_data.pop("subcategory_key", None)
+
+        coordinates_str = validated_data.get("coordinates")
+        if coordinates_str:
+            try:
+                lat_str, lng_str = map(str.strip, coordinates_str.split(","))
+                validated_data["latitude"] = Decimal(lat_str)
+                validated_data["longitude"] = Decimal(lng_str)
+            except (ValueError, InvalidOperation):
+                logger.warning(
+                    f"Could not parse coordinates on create: '{coordinates_str}'. Lat/Lng will not be set."
+                )
+                validated_data["latitude"] = None
+                validated_data["longitude"] = None
+        else:
+            validated_data["latitude"] = None
+            validated_data["longitude"] = None
+
+        try:
+            category = ClassCategory.objects.get(key=category_key)
+        except ClassCategory.DoesNotExist:
+            raise serializers.ValidationError(
+                {"category_key": f"Invalid category key: {category_key}"}
+            )
+
+        subcategory = None
+        if subcategory_key:
+            try:
+                subcategory = ClassSubcategory.objects.get(
+                    category=category, key=subcategory_key
+                )
+            except ClassSubcategory.DoesNotExist:
+                raise serializers.ValidationError(
+                    {
+                        "subcategory_key": f"Invalid subcategory key '{subcategory_key}' for the selected category."
+                    }
+                )
+
+        validated_data["category"] = category
+        validated_data["subcategory"] = subcategory
+
+        instance = ClassesMain.objects.create(**validated_data)
+        return instance

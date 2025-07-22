@@ -186,6 +186,9 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
         """
         Provides detailed, definitive information about the cancellation eligibility
         and policy for a specific booking. This is the single source of truth.
+
+        MODIFIED: This now reads the policy directly from the Booking object itself,
+        reflecting the terms at the time of purchase.
         """
         booking = self.get_object()
         if booking.status not in ["confirmed", "pending"]:
@@ -197,28 +200,22 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            # Defensive checks (no changes needed here)
+            # --- MODIFIED: Policy details are now sourced directly from the booking ---
+            policy_key = booking.cancellation_policy
+            refund_percentage = booking.cancellation_refund_percentage
+
+            # --- The rest of the logic uses the snapshotted policy ---
             schedule_instance = booking.schedule_instance
             if not schedule_instance:
                 raise AttributeError("Booking is missing a schedule instance.")
-            schedule = schedule_instance.schedule
-            if not schedule:
-                raise AttributeError("Schedule instance is missing a schedule.")
-            class_option = schedule.option
-            if not class_option:
-                raise AttributeError("Schedule is missing a class option.")
-            class_main = class_option.classId
-            if not class_main:
-                raise AttributeError("Class option is missing a parent class.")
-            business = class_main.businessId
+
+            business = schedule_instance.schedule.option.classId.businessId
             if not business:
                 raise AttributeError("Class is missing a business.")
+
             business_timezone_str = business.business_timezone
             if not business_timezone_str:
                 raise ValueError("Business is missing a timezone setting.")
-
-            policy_key = class_option.cancellationPolicy
-            refund_percentage = class_option.cancellationRefundPercentage
 
             business_tz = pytz.timezone(business_timezone_str)
 
@@ -234,25 +231,20 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
             cancellation_deadline_aware = None
             cancellation_deadline_utc = None
 
-            # --- FIX: Implement the "Flexible = 1 hour" rule ---
-            hours_notice_required = 0
             policy_hours_map = {"flexible": 1, "24h": 24, "48h": 48, "72h": 72}
             policy_description_map = {
                 "flexible": f"Full refund if cancelled at least 1 hour before the class starts. A {refund_percentage}% refund applies.",
-                "24h": f"Full refund if cancelled at least 24 hours before the class starts. A {refund_percentage}% refund applies.",
-                "48h": f"Full refund if cancelled at least 48 hours before the class starts. A {refund_percentage}% refund applies.",
-                "72h": f"Full refund if cancelled at least 72 hours before the class starts. A {refund_percentage}% refund applies.",
+                "24h": f"A {refund_percentage}% refund applies if cancelled at least 24 hours before the class starts.",
+                "48h": f"A {refund_percentage}% refund applies if cancelled at least 48 hours before the class starts.",
+                "72h": f"A {refund_percentage}% refund applies if cancelled at least 72 hours before the class starts.",
                 "strict": "This booking is non-refundable according to the strict policy.",
             }
 
-            if policy_key in policy_hours_map:
-                hours_notice_required = policy_hours_map[policy_key]
-
+            hours_notice_required = policy_hours_map.get(policy_key, 0)
             policy_description = policy_description_map.get(
                 policy_key, "Standard cancellation policy applies."
             )
 
-            # Calculate deadline for any policy that has a time requirement
             if hours_notice_required > 0:
                 cancellation_deadline_aware = instance_datetime_aware - timedelta(
                     hours=hours_notice_required
@@ -261,15 +253,11 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
                     pytz.utc
                 )
 
-            # --- FIX: Unified and simplified refund eligibility logic ---
             if can_cancel and policy_key != "strict":
-                # If there's a deadline, check against it.
                 if cancellation_deadline_aware:
                     if now_aware_in_business_tz <= cancellation_deadline_aware:
                         is_eligible_for_refund = True
                 else:
-                    # This case would be for a future policy type with no time limit, but it's safe to keep.
-                    # As of now, 'strict' is the only one without a deadline check.
                     is_eligible_for_refund = True
 
             return Response(
@@ -287,29 +275,15 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
                 }
             )
 
-        # --- (Catch blocks remain the same) ---
-        except AttributeError as e:
-            logger.error(f"Data integrity error for booking {pk}: {e}", exc_info=True)
-            return Response(
-                {
-                    "error": "Cannot retrieve cancellation policy due to incomplete booking data."
-                },
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-        except ValueError as e:
-            logger.error(f"Configuration error for booking {pk}: {e}", exc_info=True)
-            return Response(
-                {
-                    "error": "Cannot retrieve cancellation policy due to a configuration error (e.g., missing timezone)."
-                },
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-        except pytz.UnknownTimeZoneError:
+        except (AttributeError, ValueError, pytz.UnknownTimeZoneError) as e:
             logger.error(
-                f"Unknown timezone for business during cancellation check for booking {pk}."
+                f"Configuration or data integrity error for booking {pk}: {e}",
+                exc_info=True,
             )
             return Response(
-                {"error": "System error: Could not verify business timezone."},
+                {
+                    "error": "Cannot retrieve cancellation policy due to incomplete or misconfigured booking/business data."
+                },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
         except Exception as e:
@@ -338,10 +312,8 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
             )
 
         cancellation_reason = request.data.get("reason", "Cancelled by student.")
-
-        refund_details_message = "As per the cancellation policy, no refund was applicable for this cancellation."
-        needs_refund_processing = False
-        payment = None
+        needs_refund_processing = False  # Keep this here
+        payment = None  # Keep this here
 
         if booking.status == "confirmed":
             try:
@@ -349,6 +321,15 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
                 class_option = schedule_instance.schedule.option
                 policy = class_option.cancellationPolicy
 
+                # 1. Immediately block "Strict" (non-cancellable) policies.
+                if policy == "strict":
+                    raise ValidationError(
+                        {
+                            "policy": "This booking has a strict policy and cannot be cancelled by a student."
+                        }
+                    )
+
+                # 2. Get business timezone and create aware datetimes for accurate comparison.
                 business_timezone_str = (
                     class_option.classId.businessId.business_timezone
                 )
@@ -358,29 +339,32 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
                     schedule_instance.date, schedule_instance.time
                 )
                 instance_datetime_aware = business_tz.localize(instance_datetime_naive)
+                now_aware = timezone.now().astimezone(business_tz)
 
-                if instance_datetime_aware <= timezone.now():
+                # 3. Check if the class has already started.
+                if instance_datetime_aware <= now_aware:
                     raise ValidationError(
                         {
                             "policy": "Cannot cancel a class that has already started or is in the past."
                         }
                     )
 
-                # 'flexible' policy always allows cancellation
-                can_cancel_based_on_policy = True
-                if policy != "flexible":
-                    policy_hours_map = {"24h": 24, "48h": 48, "72h": 72}
-                    required_hours = policy_hours_map.get(policy, 0)
-                    time_diff = instance_datetime_aware - timezone.now()
+                # 4. Enforce time-based policies (24h, 48h, flexible, etc.).
+                policy_hours_map = {"flexible": 1, "24h": 24, "48h": 48, "72h": 72}
+                required_hours = policy_hours_map.get(policy, 0)
+
+                if required_hours > 0:
+                    time_diff = instance_datetime_aware - now_aware
                     hours_until_class = time_diff.total_seconds() / 3600
+
                     if hours_until_class < required_hours:
-                        can_cancel_based_on_policy = False
                         raise ValidationError(
                             {
-                                "policy": f"Cancellation not allowed. Requires {policy} notice."
+                                "policy": f"Cancellation not allowed. This policy requires {required_hours} hours notice."
                             }
                         )
 
+                # 5. If all checks pass, the booking is cancellable and eligible for a refund.
                 payment = (
                     booking.payments.filter(
                         status__in=["succeeded", "partially_refunded"]
@@ -388,8 +372,10 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
                     .order_by("-created_at")
                     .first()
                 )
-                if can_cancel_based_on_policy and payment:
+                if payment:
                     needs_refund_processing = True
+
+                # --- END: REWRITTEN VALIDATION LOGIC ---
 
             except pytz.UnknownTimeZoneError:
                 logger.error(
@@ -399,7 +385,7 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
                     {"error": "System error: Could not verify business timezone."}
                 )
             except ValidationError as ve:
-                raise ve  # Re-raise policy validation errors
+                raise ve  # Re-raise policy validation errors to send 400 response
             except Exception as e:
                 logger.error(
                     f"Unexpected error checking cancellation policy for booking {pk}: {e}",
@@ -410,9 +396,12 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
                 )
 
         try:
+            # This part of the logic for saving and sending emails remains the same.
             business_user_to_notify = (
                 booking.schedule_instance.schedule.option.classId.businessId.owner
             )
+
+            refund_details_message = "As per the cancellation policy, no refund was applicable for this cancellation."
 
             with transaction.atomic():
                 booking.status = "cancelled"
@@ -425,6 +414,7 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
                     and payment.available_refund_amount > 0
                 ):
                     refund_amount_display = payment.available_refund_amount
+                    # Re-assign the message if a refund is pending.
                     refund_details_message = (
                         f"A refund of ${refund_amount_display:.2f} will be processed."
                     )
@@ -448,6 +438,7 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
 
             # Email notifications after successful transaction
             try:
+                # Now, refund_details_message is guaranteed to have a value.
                 send_booking_cancellation_user_email(
                     user=request.user,
                     booking=booking,
@@ -463,9 +454,7 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
                     exc_info=True,
                 )
 
-            serializer = self.get_serializer(
-                booking
-            )  # Will use StudentBookingDetailSerializer
+            serializer = self.get_serializer(booking)
             return Response(serializer.data, status=status.HTTP_200_OK)
 
         except Exception as e:
