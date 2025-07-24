@@ -185,6 +185,7 @@ class PublicClassSerializer(serializers.ModelSerializer):
         model = ClassesMain
         fields = [
             "classId",
+            "slug",  # --- ADDED: Include the slug for SEO-friendly URLs ---
             "businessId",
             "business_name",
             "title",
@@ -243,6 +244,6 @@ class PublicClassDetailSerializer(PublicClassSerializer):
     options = PublicClassOptionWithSchedulesSerializer(many=True, read_only=True)
 
     class Meta(PublicClassSerializer.Meta):
-        # The fields are inherited, so we don't need to redeclare them.
-        # The override of the `options` field above is all that's needed.
+        # The fields are inherited from PublicClassSerializer, including the new 'slug' field.
+        # No need to redeclare them. The override of the `options` field above is all that's needed.
         pass

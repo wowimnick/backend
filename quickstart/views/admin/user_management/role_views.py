@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from django.db import transaction
 from rest_framework.permissions import IsAuthenticated
 from django.contrib.auth.models import Permission
-from django.db.models import Count, Prefetch
+from django.db.models import Count, Prefetch, Max
 from django.contrib.contenttypes.models import ContentType
 import logging
 
@@ -58,15 +58,17 @@ class RoleManagementViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Check if user has sufficient privileges to delete this role
-        user_role = request.user.role
-        if user_role and user_role.hierarchy_level <= instance.hierarchy_level:
-            return Response(
-                {
-                    "detail": "You cannot delete a role with equal or higher privileges than your own."
-                },
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        # Superusers can bypass hierarchy checks
+        if not request.user.is_superuser:
+            user_role = request.user.role
+            # Check if user has sufficient privileges to delete this role
+            if user_role and user_role.hierarchy_level <= instance.hierarchy_level:
+                return Response(
+                    {
+                        "detail": "You cannot delete a role with equal or higher privileges than your own."
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
 
         # Log the action
         try:
@@ -90,28 +92,18 @@ class RoleManagementViewSet(viewsets.ModelViewSet):
         """Get content types to exclude in a single query"""
         excluded_apps = [
             "admin",
-            "theme",
             "admin_interface",
-            "silk",
             "allauth",
             "account",
-            "socialaccount",
-            "rest_framework.authtoken",
-            "authtoken",
-            "token_blacklist",
             "auth",
+            "authtoken",
             "contenttypes",
             "sessions",
             "sites",
-            "theme",
-            "silk",
-            "allauth",
-            "account",
             "socialaccount",
-            "token",
-            "tokenproxy",
-            "blacklistedtoken",
-            "outstandingtoken",
+            "silk",
+            "theme",
+            "token_blacklist",
         ]
 
         return ContentType.objects.filter(app_label__in=excluded_apps)
@@ -120,12 +112,21 @@ class RoleManagementViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
+        # Superusers can bypass hierarchy checks
+        if not request.user.is_superuser:
+            user_role = request.user.role
+            new_role_level = serializer.validated_data.get("hierarchy_level", 0)
+            if not user_role or user_role.hierarchy_level <= new_role_level:
+                return Response(
+                    {
+                        "detail": "You cannot create a role with privileges equal to or greater than your own."
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
         # Filter out Django internal permissions - optimized
         if "permissions" in request.data:
-            # Get all excluded content types in a single query
             excluded_content_types = self._get_excluded_content_types()
-
-            # Filter permissions
             permissions = serializer.validated_data.get("permissions", [])
             filtered_permissions = [
                 p
@@ -163,21 +164,41 @@ class RoleManagementViewSet(viewsets.ModelViewSet):
         partial = kwargs.pop("partial", False)
         instance = self.get_object()
 
-        # Basic permission checks
-        user_role = request.user.role
-        if user_role and user_role.hierarchy_level <= instance.hierarchy_level:
-            return Response(
-                {
-                    "detail": "You cannot edit a role with equal or higher privileges than your own."
-                },
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        # Superusers can bypass all permission checks
+        if not request.user.is_superuser:
+            user_role = request.user.role
+            is_editing_own_role = user_role == instance
 
-        if instance.name == "SuperAdmin" and user_role.name != "SuperAdmin":
-            return Response(
-                {"detail": "Only SuperAdmin users can edit the SuperAdmin role."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+            if is_editing_own_role:
+                # User can edit their own role only if they have the highest level
+                max_level = Role.objects.aggregate(max_level=Max("hierarchy_level"))[
+                    "max_level"
+                ]
+                if user_role.hierarchy_level < max_level:
+                    return Response(
+                        {
+                            "detail": "You cannot edit your own role unless you have the highest hierarchy level."
+                        },
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+            else:
+                # For other roles, user must have a strictly higher hierarchy level
+                if (
+                    not user_role
+                    or user_role.hierarchy_level <= instance.hierarchy_level
+                ):
+                    return Response(
+                        {
+                            "detail": "You cannot edit a role with equal or higher privileges than your own."
+                        },
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+
+            if instance.name == "SuperAdmin" and user_role.name != "SuperAdmin":
+                return Response(
+                    {"detail": "Only SuperAdmin users can edit the SuperAdmin role."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
 
         # Get current permissions
         current_permission_ids = set(instance.permissions.values_list("id", flat=True))
@@ -191,26 +212,19 @@ class RoleManagementViewSet(viewsets.ModelViewSet):
             to_add = new_permission_ids - current_permission_ids
             to_remove = current_permission_ids - new_permission_ids
 
-            # Modify the request data to exclude permissions
             modified_data = request.data.copy()
             if "permissions" in modified_data:
                 del modified_data["permissions"]
 
-            # Update non-permission fields first
             serializer = self.get_serializer(instance, data=modified_data, partial=True)
             serializer.is_valid(raise_exception=True)
             updated_instance = serializer.save()
 
-            # Now apply only the permission changes that are needed
             if to_add:
-                # Add new permissions
                 updated_instance.permissions.add(*to_add)
-
             if to_remove:
-                # Remove permissions that are no longer needed
                 updated_instance.permissions.remove(*to_remove)
 
-            # Log the changes
             if to_add or to_remove:
                 try:
                     AuditLog.objects.create(
@@ -232,14 +246,12 @@ class RoleManagementViewSet(viewsets.ModelViewSet):
                 except Exception as e:
                     logger.error(f"Failed to create audit log: {str(e)}")
         else:
-            # No permissions in the request, just update the other fields
             serializer = self.get_serializer(
                 instance, data=request.data, partial=partial
             )
             serializer.is_valid(raise_exception=True)
             updated_instance = serializer.save()
 
-            # Log the update without permission changes
             try:
                 AuditLog.objects.create(
                     user=self.request.user,
@@ -267,38 +279,37 @@ class RoleManagementViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Verify that all required fields are present and valid
+        # Verify that all required fields are present
         for item in roles_data:
-            if (
-                not isinstance(item, dict)
-                or "id" not in item
-                or "hierarchy_level" not in item
-            ):
+            if "id" not in item or "hierarchy_level" not in item:
                 return Response(
                     {"detail": "Each item must contain id and hierarchy_level fields."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-        # Update roles in a single transaction
         try:
             with transaction.atomic():
                 updated_roles = []
+                user_role = request.user.role
+
                 for item in roles_data:
-                    role_id = item["id"]
-                    hierarchy_level = item["hierarchy_level"]
+                    role = Role.objects.get(id=item["id"])
 
-                    role = Role.objects.get(id=role_id)
+                    # Superusers can bypass hierarchy checks
+                    if not request.user.is_superuser:
+                        # Prevent user from editing roles at or above their own level
+                        if (
+                            user_role
+                            and user_role.hierarchy_level <= role.hierarchy_level
+                        ):
+                            return Response(
+                                {
+                                    "detail": f"You cannot modify role '{role.name}' with equal or higher privileges than your own."
+                                },
+                                status=status.HTTP_403_FORBIDDEN,
+                            )
 
-                    user_role = request.user.role
-                    if user_role and user_role.hierarchy_level < role.hierarchy_level:
-                        return Response(
-                            {
-                                "detail": f"You cannot modify role {role.name} with higher privileges than your own."
-                            },
-                            status=status.HTTP_403_FORBIDDEN,
-                        )
-
-                    role.hierarchy_level = hierarchy_level
+                    role.hierarchy_level = item["hierarchy_level"]
                     role.save(update_fields=["hierarchy_level"])
                     updated_roles.append(role)
 
@@ -333,32 +344,24 @@ class RoleManagementViewSet(viewsets.ModelViewSet):
     def duplicate(self, request, pk=None):
         """Duplicate an existing role"""
         source_role = self.get_object()
+        new_name = request.data.get("name", f"{source_role.name} (Copy)")
 
-        # Get new role name
-        new_name = request.data.get("name")
-        if not new_name:
-            new_name = f"{source_role.name} (Copy)"
-
-        # Check if name already exists
         if Role.objects.filter(name=new_name).exists():
             return Response(
                 {"detail": "A role with this name already exists."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Create the new role
         new_role = Role.objects.create(
             name=new_name,
             description=source_role.description,
             is_system=False,
             is_default=False,
             color=source_role.color,
-            hierarchy_level=max(
-                1, source_role.hierarchy_level - 1
-            ),  # Always set duplicated role lower
+            hierarchy_level=max(1, source_role.hierarchy_level - 1),
         )
 
-        # Copy permissions - filter out excluded ones - optimized
+        # Copy permissions - filter out excluded ones
         excluded_apps = [
             "admin",
             "auth",
@@ -372,14 +375,9 @@ class RoleManagementViewSet(viewsets.ModelViewSet):
             "socialaccount",
         ]
         excluded_content_types = ContentType.objects.filter(app_label__in=excluded_apps)
-        excluded_content_type_ids = excluded_content_types.values_list("id", flat=True)
-
-        # More efficient query with a single filter
         permissions_to_copy = source_role.permissions.exclude(
-            content_type_id__in=excluded_content_type_ids
+            content_type__in=excluded_content_types
         )
-
-        # Bulk operation instead of individual queries
         new_role.permissions.set(permissions_to_copy)
 
         # Log the action
@@ -405,7 +403,6 @@ class RoleManagementViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["get"])
     def permissions(self, request):
         """Get all available permissions grouped for the UI"""
-        # Define which Django app content types to exclude
         excluded_apps = [
             "admin",
             "auth",
@@ -419,16 +416,13 @@ class RoleManagementViewSet(viewsets.ModelViewSet):
             "socialaccount",
         ]
 
-        # Optimize: Get content types once
         excluded_content_types = ContentType.objects.filter(app_label__in=excluded_apps)
         excluded_content_type_ids = excluded_content_types.values_list("id", flat=True)
 
-        # Use the optimized query with select_related to reduce queries
         enhanced_permissions = EnhancedPermission.objects.select_related(
             "permission", "permission__content_type", "group"
         ).exclude(permission__content_type_id__in=excluded_content_type_ids)
 
-        # Optimize groups query
         permission_groups = PermissionGroup.objects.prefetch_related(
             Prefetch("permissions", queryset=enhanced_permissions)
         ).filter(

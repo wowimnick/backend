@@ -77,17 +77,6 @@ from .business.business_notification_serializers import (
     NotificationSerializer,
 )
 
-from .public.support_chat_serializer import (
-    ChatMessageSerializer,
-    ChatRequestSerializer,
-    ChatSessionSerializer,
-    SupportTicketSerializer,
-    SupportTicketDetailSerializer,
-    SupportTicketStatsSerializer,
-    CreateSupportTicketSerializer,
-    UserSupportTicketSerializer,
-)
-
 __all__ = [
     # Auth Serializers
     "CustomLoginSerializer",
@@ -141,13 +130,4 @@ __all__ = [
     "BusinessReviewUserSerializer",
     "BusinessReviewBookingSerializer",
     "BusinessReviewSerializer",
-    # Chat Serializers
-    "ChatMessageSerializer",
-    "ChatRequestSerializer",
-    "ChatSessionSerializer",
-    "SupportTicketSerializer",
-    "SupportTicketDetailSerializer",
-    "SupportTicketStatsSerializer",
-    "CreateSupportTicketSerializer",
-    "UserSupportTicketSerializer",
 ]

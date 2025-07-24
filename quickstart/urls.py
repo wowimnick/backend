@@ -1,11 +1,18 @@
 from django.urls import path, include, re_path
 from django.views.generic import TemplateView
 from django.contrib import admin
-
+from django.shortcuts import get_object_or_404, redirect
 from rest_framework.routers import DefaultRouter
 from dj_rest_auth.registration.views import VerifyEmailView, ResendEmailVerificationView
 from dj_rest_auth.views import PasswordChangeView
 
+# --- Model import for the new redirect view ---
+from quickstart.models import ClassesMain
+
+from quickstart.views.admin.support_management.support_ticket_views import (
+    AdminSupportTicketViewSet,
+)
+from quickstart.views.public.user_support_views import UserSupportTicketViewSet
 from quickstart.views.business.business_management_views import (
     generate_presigned_upload_url,
 )
@@ -43,9 +50,6 @@ from quickstart.views.admin.user_management.audit_views import AuditLogViewSet
 from quickstart.views.admin.business_management.business_admin_views import (
     BusinessAdminViewSet,
 )
-from quickstart.views.admin.support_management.support_management_views import (
-    AdminSupportTicketViewSet,
-)
 
 from quickstart.views import (
     CustomTokenObtainPairView,
@@ -65,9 +69,6 @@ from quickstart.views import (
     MyProfileView,
     RevenueAnalyticsView,
     ReviewSubmission,
-    ChatMessageView,
-    UserSupportTicketViewSet,
-    CreateSupportTicketView,
     BusinessClassViewSet,
     BusinessClassOptionDetail,
     BusinessScheduleViewSet,
@@ -85,7 +86,7 @@ from quickstart.views import (
 )
 
 # =============================================================================
-# ROUTER DEFINITIONS (Unchanged)
+# ROUTER DEFINITIONS
 # =============================================================================
 
 # --- Public Router ---
@@ -93,7 +94,6 @@ public_router = DefaultRouter()
 public_router.register(
     r"businesses", PublicBusinessInfoViewSet, basename="public-business"
 )
-public_router.register(r"classes", PublicClassViewSet, basename="public-class")
 public_router.register(r"schedules", PublicScheduleViewSet, basename="public-schedule")
 public_router.register(
     r"categories", PublicCategoryViewSet, basename="public-categories"
@@ -129,7 +129,7 @@ business_management_router.register(
 user_self_router = DefaultRouter()
 user_self_router.register(r"my-bookings", StudentBookingViewSet, basename="my-booking")
 user_self_router.register(
-    r"support-tickets", UserSupportTicketViewSet, basename="user-support-ticket"
+    r"support-tickets", UserSupportTicketViewSet, basename="support-ticket"
 )
 
 # --- Admin Router ---
@@ -140,15 +140,15 @@ admin_router.register(
     r"verification", VerificationRequestViewSet, basename="admin-verification"
 )
 admin_router.register(r"audit-logs", AuditLogViewSet, basename="admin-audit-logs")
+admin_router.register(
+    r"support-tickets", AdminSupportTicketViewSet, basename="admin-support-tickets"
+)
 admin_router.register(r"businesses", BusinessAdminViewSet, basename="admin-businesses")
 admin_router.register(r"classes", AdminClassViewSet, basename="admin-classes")
 admin_router.register(r"categories", AdminCategoryViewSet, basename="admin-categories")
 admin_router.register(r"reviews", AdminReviewViewSet, basename="admin-reviews")
 admin_router.register(r"bookings", AdminBookingViewSet, basename="admin-bookings")
 admin_router.register(r"payments", AdminPaymentViewSet, basename="admin-payments")
-admin_router.register(
-    r"support-tickets", AdminSupportTicketViewSet, basename="admin-support-tickets"
-)
 admin_router.register(
     r"notifications", AdminNotificationCampaignViewSet, basename="admin-notifications"
 )
@@ -161,15 +161,29 @@ admin_router.register(
     basename="admin-notification-attachments",
 )
 
+
+# --- ADDED: SEO Redirect View for old Class URLs ---
+def class_id_redirect_view(request, class_id):
+    """
+    Permanently redirects an old ID-based browser URL to the new slug-based URL.
+    e.g., /classes/123 -> /classes/new-york-pottery-class
+    """
+    klass = get_object_or_404(ClassesMain, pk=class_id)
+    if klass.slug:
+        # Redirect to the frontend path, not a named DRF URL.
+        # This sends the browser to the correct React route.
+        return redirect(f"/classes/{klass.slug}", permanent=True)
+    # Fallback if a slug doesn't exist for some reason.
+    return redirect("/")  # Redirect to the homepage
+
+
 # =============================================================================
-# URL PATTERNS - THE ONLY SECTION WITH CHANGES
+# URL PATTERNS
 # =============================================================================
 
 urlpatterns = [
     # --- Django Admin & 3rd Party Libs ---
-    path(
-        "admin/silk/", include("silk.urls", namespace="admin_silk")
-    ),  # Changed namespace to avoid conflict
+    path("admin/silk/", include("silk.urls", namespace="admin_silk")),
     path("admin/panel/", admin.site.urls),
     path("accounts/", include("allauth.urls")),
     # --- Routers ---
@@ -196,8 +210,6 @@ urlpatterns = [
                     ResendEmailVerificationView.as_view(),
                     name="rest_resend_email",
                 ),
-                # This re_path is now handled by the 'allauth.urls' include above
-                # but we keep it to be explicit for any old links.
                 re_path(
                     r"^account-confirm-email/(?P<key>[-:\w]+)/$",
                     VerifyEmailView.as_view(),
@@ -228,7 +240,34 @@ urlpatterns = [
     path("user/update/", UserUpdateView.as_view(), name="user-update"),
     path("user/profile/", MyProfileView.as_view(), name="my-profile"),
     path("my-favorites/", MyFavoritesListView.as_view(), name="my-favorites-list"),
-    # --- Other Application Views ---
+    path(
+        "classes/search/",
+        PublicClassViewSet.as_view({"get": "search"}),
+        name="public-class-search",
+    ),
+    path(
+        "classes/<str:pk>/toggle-favorite/",
+        PublicClassViewSet.as_view({"post": "toggle_favorite"}),
+        name="public-class-toggle-favorite",
+    ),
+    # This URL pattern uses <str:pk> which the view's get_object method
+    # handles as either an ID or a slug. It points to the React ClassPage.
+    path(
+        "classes/<str:pk>/",
+        PublicClassViewSet.as_view({"get": "retrieve"}),
+        name="public-class-detail",
+    ),
+    # The list view (for API consumers, not directly for a page)
+    path(
+        "classes/",
+        PublicClassViewSet.as_view({"get": "list"}),
+        name="public-class-list",
+    ),
+    # --- ADDED: SEO Redirect for Old ID-based URLs ---
+    # This path will capture old /classes/123 style URLs and permanently redirect them.
+    # It will not be used by the React router.
+    path("classes/<int:class_id>/", class_id_redirect_view, name="class-id-redirect"),
+    # --- Other Application Views (Original order maintained) ---
     path(
         "business/generate-upload-url/",
         generate_presigned_upload_url,
@@ -299,7 +338,6 @@ urlpatterns = [
     path(
         "revenue/analytics/", RevenueAnalyticsView.as_view(), name="revenue-analytics"
     ),
-    path("chat/message/", ChatMessageView.as_view(), name="chat-message"),
     path("payments/webhook/", ProcessBookingWebhook.as_view(), name="payment-webhook"),
     path(
         "booking-status/by-payment-intent/<str:payment_intent_id>/",
@@ -310,11 +348,6 @@ urlpatterns = [
         "payments/create-payment-intent/",
         CreatePaymentIntentView.as_view(),
         name="create-payment-intent",
-    ),
-    path(
-        "support-tickets/create/",
-        CreateSupportTicketView.as_view(),
-        name="create-support-ticket",
     ),
     path("health-check/", health_check, name="health-check"),
 ]
