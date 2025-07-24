@@ -1,6 +1,3 @@
-# In: quickstart/views/admin/support_management/support_ticket_views.py
-# Action: Update the AdminSupportTicketViewSet class to fix all POST actions.
-
 from rest_framework import viewsets, status, serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -14,7 +11,7 @@ from rest_framework.pagination import PageNumberPagination
 User = get_user_model()
 
 
-# --- SERIALIZERS --- (No changes here)
+# --- SERIALIZERS ---
 class SimpleUserSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
     avatar_thumb_url = serializers.ImageField(source="avatar", read_only=True)
@@ -85,6 +82,8 @@ class AdminSupportTicketDetailSerializer(AdminSupportTicketListSerializer):
 
     def get_user_context(self, obj):
         user = obj.user
+        if not user:
+            return None
         return {
             "member_since": user.createdAt.strftime("%b %Y"),
             "total_bookings": user.bookings.filter(status="completed").count(),
@@ -100,12 +99,26 @@ class ReplySerializer(serializers.Serializer):
 class AssignTicketSerializer(serializers.Serializer):
     agent_id = serializers.IntegerField()
 
+    def validate_agent_id(self, value):
+        # FIX: Ensure the agent exists and has a support-related role
+        try:
+            agent = User.objects.get(
+                pk=value,
+                is_active=True,
+                role__name__in=["Admin", "Super Admin", "Support Agent"],
+            )
+        except User.DoesNotExist:
+            raise serializers.ValidationError(
+                "An active agent with the specified ID does not exist."
+            )
+        return value
+
 
 class ResolveTicketSerializer(serializers.Serializer):
-    resolution_notes = serializers.CharField(min_length=1)
+    resolution_notes = serializers.CharField(min_length=10, max_length=5000)
 
 
-# --- PAGINATION --- (No changes here)
+# --- PAGINATION ---
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 10
     page_size_query_param = "page_size"
@@ -132,6 +145,13 @@ class AdminSupportTicketViewSet(viewsets.ReadOnlyModelViewSet):
         )
 
     def list(self, request, *args, **kwargs):
+        # FIX: Add explicit permission check for this admin-only endpoint
+        if not request.user.has_perm("quickstart.access_support_admin"):
+            return Response(
+                {"detail": "You do not have permission to access this resource."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         queryset = self.get_queryset().order_by("-updated_at")
         filters = request.query_params
         if filters.get("status") and filters["status"] != "all":
@@ -148,17 +168,19 @@ class AdminSupportTicketViewSet(viewsets.ReadOnlyModelViewSet):
                 | Q(user__last_name__icontains=search_term)
             )
         page = self.paginate_queryset(queryset)
-        serializer = self.get_serializer(page, many=True)
-        return self.get_paginated_response(serializer.data)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
     @action(detail=True, methods=["post"], serializer_class=ReplySerializer)
     def reply(self, request, pk=None):
         ticket = self.get_object()
-
-        # FIX: Instantiate the specific ReplySerializer
         serializer = ReplySerializer(data=request.data)
-
         serializer.is_valid(raise_exception=True)
+
         TicketMessage.objects.create(
             ticket=ticket,
             sender=request.user,
@@ -171,32 +193,34 @@ class AdminSupportTicketViewSet(viewsets.ReadOnlyModelViewSet):
             user_email=request.user.email,
             details="Replied to ticket.",
         )
-        if ticket.status == "resolved":
+
+        # FIX: Change status to 'in_progress' if it's 'open' or 'resolved'
+        if ticket.status in ["open", "resolved"]:
+            original_status = ticket.status
             ticket.status = "in_progress"
             ticket.save(update_fields=["status"])
             TicketHistoryLog.objects.create(
                 ticket=ticket,
                 user=request.user,
                 user_email=request.user.email,
-                details="Status changed to In Progress due to reply.",
+                details=f"Status changed from '{original_status.title()}' to 'In Progress' due to reply.",
             )
 
         return Response(AdminSupportTicketDetailSerializer(ticket).data)
 
     @action(detail=True, methods=["post"], serializer_class=AssignTicketSerializer)
     def assign(self, request, pk=None):
-        ticket = self.get_object()
-
-        # FIX: Instantiate the specific AssignTicketSerializer
-        serializer = AssignTicketSerializer(data=request.data)
-
-        serializer.is_valid(raise_exception=True)
-        try:
-            agent = User.objects.get(pk=serializer.validated_data["agent_id"])
-        except User.DoesNotExist:
+        if not request.user.has_perm("quickstart.assign_support_ticket"):
             return Response(
-                {"error": "Selected agent not found."}, status=status.HTTP_404_NOT_FOUND
+                {"detail": "You do not have permission to assign tickets."},
+                status=status.HTTP_403_FORBIDDEN,
             )
+
+        ticket = self.get_object()
+        serializer = AssignTicketSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        agent = User.objects.get(pk=serializer.validated_data["agent_id"])
 
         old_agent_name = (
             ticket.assigned_to.get_full_name() if ticket.assigned_to else "Unassigned"
@@ -218,11 +242,9 @@ class AdminSupportTicketViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=["post"], serializer_class=ResolveTicketSerializer)
     def resolve(self, request, pk=None):
         ticket = self.get_object()
-
-        # FIX: Instantiate the specific ResolveTicketSerializer
         serializer = ResolveTicketSerializer(data=request.data)
-
         serializer.is_valid(raise_exception=True)
+
         ticket.status = "resolved"
         ticket.resolution_notes = serializer.validated_data["resolution_notes"]
         ticket.resolved_at = timezone.now()
@@ -236,7 +258,6 @@ class AdminSupportTicketViewSet(viewsets.ReadOnlyModelViewSet):
 
         return Response(AdminSupportTicketDetailSerializer(ticket).data)
 
-    # --- NO CHANGES NEEDED FOR GET ACTIONS ---
     @action(detail=True, methods=["get"])
     def history(self, request, pk=None):
         history_logs = self.get_object().history_logs.order_by("timestamp")

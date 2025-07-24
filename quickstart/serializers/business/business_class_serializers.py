@@ -2,7 +2,6 @@ from decimal import Decimal, InvalidOperation
 import json
 import os
 from django.conf import settings
-from rest_framework.validators import ValidationError
 from rest_framework.exceptions import PermissionDenied
 from rest_framework import serializers
 from django.db.models.functions import Coalesce
@@ -369,7 +368,9 @@ class BulkScheduleCreateSerializer(serializers.Serializer):
     def validate(self, data):
         request = self.context.get("request")
         if not request:
-            raise ValidationError("Request context is required for validation.")
+            raise serializers.ValidationError(
+                "Request context is required for validation."
+            )
         user = request.user
         option = data["option"]
         business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
@@ -378,11 +379,11 @@ class BulkScheduleCreateSerializer(serializers.Serializer):
                 "You do not have permission to create schedules for this class option."
             )
         if data["start_date"] > data["end_date"]:
-            raise ValidationError(
+            raise serializers.ValidationError(
                 {"end_date": "End date must be on or after start date."}
             )
         if data["start_date"] < timezone.now().date():
-            raise ValidationError(
+            raise serializers.ValidationError(
                 {"start_date": "Bulk creation cannot start in the past."}
             )
         return data

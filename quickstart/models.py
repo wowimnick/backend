@@ -8,7 +8,7 @@ from django.conf import settings
 from django.db import models
 from django.contrib.auth.models import AbstractUser, Permission
 from django.contrib.contenttypes.models import ContentType
-import slugify
+from django.utils.text import slugify as django_slugify
 from storages.backends.s3boto3 import S3Boto3Storage
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.contrib.postgres.search import SearchVectorField
@@ -846,7 +846,7 @@ class ClassesMain(models.Model):
             return
 
         # Create a base slug from city and title for better SEO
-        base_slug = slugify(f"{self.businessId.businessCity} {self.title}")
+        base_slug = django_slugify(f"{self.businessId.businessCity} {self.title}")
 
         # If the base slug is empty, fallback to a generic one
         if not base_slug:

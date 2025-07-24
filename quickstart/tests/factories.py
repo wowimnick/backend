@@ -17,6 +17,7 @@ from quickstart.models import (
     Booking,
     Reviews,
     Role,
+    SupportTicket,
     VerificationRequest,
 )
 
@@ -166,8 +167,6 @@ class ReviewFactory(DjangoModelFactory):
     userId = factory.SubFactory(UserFactory)
     classId = factory.SubFactory(ClassesMainFactory)
     businessId = factory.SelfAttribute("classId.businessId")
-    # Use LazyAttribute to correctly resolve the context of the review (o)
-    # being created, ensuring the booking is for the correct user and class.
     booking = factory.LazyAttribute(
         lambda o: BookingFactory(
             user=o.userId,
@@ -177,6 +176,18 @@ class ReviewFactory(DjangoModelFactory):
     rating = factory.Faker("pyint", min_value=4, max_value=5)
     comment = factory.Faker("text")
     status = "approved"
+
+
+class SupportTicketFactory(DjangoModelFactory):
+    class Meta:
+        model = SupportTicket
+
+    user = factory.SubFactory(UserFactory)
+    subject = factory.Faker("sentence", nb_words=6)
+    description = factory.Faker("text", max_nb_chars=300)
+    category = "technical"
+    status = "open"
+    priority = "medium"
 
 
 class PaymentFactory(DjangoModelFactory):
