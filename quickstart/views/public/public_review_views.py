@@ -1,5 +1,5 @@
 from rest_framework import status, permissions, generics
-from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -32,77 +32,62 @@ class StandardResultsSetPagination(PageNumberPagination):
     max_page_size = 100  # Max page size client can request
 
 
+# In public_review_views.py
+
+
 class ReviewSubmission(APIView):
     """
     API endpoint for authenticated users to submit reviews for completed bookings.
-    (PUBLIC/STUDENT CONTEXT)
+    MODIFIED to use JSON payload with an S3 key for the image.
     """
 
     permission_classes = [IsAuthenticated]
-    parser_classes = [MultiPartParser, FormParser]
+    # MODIFIED: Changed parsers to primarily handle JSON.
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
     # --- Rate Limiting ---
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "sensitive"
 
     @transaction.atomic
     def post(self, request):
-        # Validate the incoming data using the updated serializer
+        # The request data is now expected to be JSON.
         serializer = ReviewSubmissionSerializer(
             data=request.data, context={"request": request}
         )
-        serializer.is_valid(
-            raise_exception=True
-        )  # Will raise 400 if basic validation fails
+        serializer.is_valid(raise_exception=True)
 
-        # --- Get booking_id from VALIDATED data ---
         booking_id = serializer.validated_data["booking_id"]
 
-        # --- Fetch the booking using the validated ID ---
         try:
-            # Fetch the booking and related objects needed for creation/validation
             booking = Booking.objects.select_related(
-                "user",  # Needed for ownership check
-                "schedule_instance__schedule__option__classId",  # Need class for name and business link
-                "schedule_instance__schedule__option__classId__businessId",  # Needed for review creation
+                "user",
+                "schedule_instance__schedule__option__classId",
+                "schedule_instance__schedule__option__classId__businessId",
             ).get(id=booking_id)
         except Booking.DoesNotExist:
             logger.warning(
                 f"User {request.user.email} submitted review for non-existent booking ID {booking_id}."
             )
-            # Raise validation error linked to the input field
             raise DRFValidationError(
                 {"booking_id": "Valid booking not found for this ID."}
             )
 
-        # --- Validation: Ensure booking belongs to user and is reviewable ---
+        # --- (All validation logic for booking ownership and status remains the same) ---
         if booking.user != request.user:
-            logger.warning(
-                f"User {request.user.email} attempted to review booking {booking.id} owned by {booking.user.email}."
-            )
-            # Use PermissionDenied for authorization issues
             raise PermissionDenied("You can only review your own completed bookings.")
 
         if booking.status != "completed":
-            logger.warning(
-                f"User {request.user.email} attempted to review non-completed booking {booking.id} (Status: {booking.status})."
-            )
-            # Use DRFValidationError for business logic validation failures linked to input
             raise DRFValidationError(
                 {"booking_id": "You can only review completed bookings."}
             )
 
-        # Check if review already exists for this booking
         if Reviews.objects.filter(booking=booking).exists():
-            logger.warning(
-                f"User {request.user.email} attempted duplicate review for booking {booking.id}."
-            )
             raise DRFValidationError(
                 {"booking_id": "A review has already been submitted for this booking."}
             )
 
         # --- Create Review ---
         try:
-            # Extract necessary related objects
             class_instance = booking.schedule_instance.schedule.option.classId
             business_instance = class_instance.businessId
 
@@ -113,11 +98,13 @@ class ReviewSubmission(APIView):
                 booking=booking,
                 rating=serializer.validated_data["rating"],
                 comment=serializer.validated_data["comment"],
-                image=serializer.validated_data.get("image"),
-                status="approved",  # Or 'under_review'
+                # MODIFIED: Get the S3 key from validated_data
+                image=serializer.validated_data.get("image_s3_key"),
+                status="approved",
             )
 
-            # --- Update business review aggregates ---
+            # --- (The rest of the view logic remains the same) ---
+
             try:
                 business_instance.update_review_aggregates()
             except Exception as update_error:
@@ -130,9 +117,7 @@ class ReviewSubmission(APIView):
                 f"Review {review.reviewId} submitted by user {request.user.email} for booking {booking.id}"
             )
 
-            # --- Send confirmation email ---
             try:
-                # *** CORRECTED CALL: Removed class_name argument ***
                 send_review_submission_confirmation_email(request.user, review)
                 logger.info(
                     f"Review submission confirmation email prepared/queued for review {review.reviewId}"
@@ -142,14 +127,12 @@ class ReviewSubmission(APIView):
                     f"Failed to send review submission confirmation email for review {review.reviewId}: {email_error}",
                     exc_info=True,
                 )
-            # --- End email sending ---
 
             response_serializer = PublicReviewSerializer(
                 review, context={"request": request}
             )
             return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
-        # ... (rest of the try/except block remains the same) ...
         except Exception as e:
             logger.error(
                 f"Error saving review for user {request.user.email}, booking {booking.id}: {str(e)}",

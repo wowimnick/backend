@@ -168,21 +168,30 @@ CHANNEL_LAYERS = {
         "CONFIG": {"hosts": [CACHE_URL]},
     },
 }
-CACHES = {
-    "default": {
-        "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": CACHE_URL,
-        "OPTIONS": {
-            "CLIENT_CLASS": "django_redis.client.DefaultClient",
-            "CONNECTION_POOL_KWARGS": (
-                {"ssl_cert_reqs": ssl.CERT_NONE}
-                if CACHE_URL.startswith("rediss://")
-                else {}
-            ),
-        },
-        "KEY_PREFIX": "classeasily",
+if DEBUG:
+    # Use a simple in-memory cache for local development
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "unique-snowflake",
+        }
     }
-}
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django_redis.cache.RedisCache",
+            "LOCATION": CACHE_URL,
+            "OPTIONS": {
+                "CLIENT_CLASS": "django_redis.client.DefaultClient",
+                "CONNECTION_POOL_KWARGS": (
+                    {"ssl_cert_reqs": ssl.CERT_NONE}
+                    if CACHE_URL.startswith("rediss://")
+                    else {}
+                ),
+            },
+            "KEY_PREFIX": "classeasily",
+        }
+    }
 
 
 # --- Celery Configuration ---

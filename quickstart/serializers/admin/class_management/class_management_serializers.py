@@ -140,7 +140,7 @@ class AdminClassImageSerializer(serializers.ModelSerializer):
         resized_base_path = base_path.replace("originals/", f"public/{size}/", 1)
         webp_path = resized_base_path + ".webp"
 
-        return f"https://{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
+        return f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
 
     def get_image_thumb_url(self, obj):
         return self._get_resized_url(obj, "thumb")
@@ -184,7 +184,7 @@ class AdminBusinessSerializer(serializers.ModelSerializer):
         resized_base_path = base_path.replace("originals/", "public/thumb/", 1)
         webp_path = resized_base_path + ".webp"
 
-        return f"https://{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
+        return f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
 
 
 class AdminClassSerializer(serializers.ModelSerializer):
@@ -419,8 +419,7 @@ class SubcategorySerializer(serializers.ModelSerializer):
 class AdminClassCategorySerializer(serializers.ModelSerializer):
     """
     Handles serialization for the admin category management view.
-    MODIFIED to correctly handle all form fields including image uploads
-    and to provide all necessary data for form prepopulation.
+    MODIFIED to correctly handle image updates via an S3 key instead of direct upload.
     """
 
     subcategories = SubcategorySerializer(many=True, read_only=True)
@@ -430,6 +429,11 @@ class AdminClassCategorySerializer(serializers.ModelSerializer):
     class_count = serializers.IntegerField(read_only=True, default=0)
     image_medium_url = serializers.SerializerMethodField()
 
+    # MODIFIED: This field now accepts an S3 key from the frontend.
+    image_s3_key = serializers.CharField(
+        write_only=True, required=False, allow_null=True
+    )
+
     class Meta:
         model = ClassCategory
         fields = [
@@ -438,7 +442,7 @@ class AdminClassCategorySerializer(serializers.ModelSerializer):
             "key",
             "description",
             "is_featured",
-            "image",  # CRITICAL: The 'image' field is now included.
+            "image_s3_key",  # The new write-only field
             "image_medium_url",
             "color",
             "icon_name",
@@ -458,8 +462,6 @@ class AdminClassCategorySerializer(serializers.ModelSerializer):
             "class_count",
             "image_medium_url",
         ]
-        # This allows updating a category without needing to re-upload the image every time.
-        extra_kwargs = {"image": {"required": False, "allow_null": True}}
 
     def get_image_medium_url(self, obj):
         if not obj.image or not hasattr(obj.image, "name") or not obj.image.name:
@@ -471,11 +473,38 @@ class AdminClassCategorySerializer(serializers.ModelSerializer):
         if not original_path.startswith("originals/"):
             return None
 
-        base_path, _ = os.path.splitext(original_path)
-        resized_base_path = base_path.replace("originals/", "public/medium/", 1)
-        webp_path = resized_base_path + ".webp"
+        # Correctly generate the .webp path for the medium size
+        base_name, _ = os.path.splitext(original_path.replace("originals/", "", 1))
+        webp_path = f"public/medium/{base_name}.webp"
 
         return f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
+
+    def _handle_image_update(self, instance, s3_key_data):
+        """Helper to process image updates from an S3 key."""
+        s3_key = s3_key_data.pop("image_s3_key", "NOT_PROVIDED")
+
+        # If null was sent, clear the image.
+        if s3_key is None:
+            if instance.image:
+                instance.image.delete(save=False)
+            instance.image = None
+        # If a new key was provided, update it.
+        elif s3_key != "NOT_PROVIDED":
+            if instance.image:
+                instance.image.delete(save=False)  # Delete old S3 object
+            instance.image = s3_key  # Assign the new S3 key string
+
+    def create(self, validated_data):
+        s3_key = validated_data.pop("image_s3_key", None)
+        instance = ClassCategory.objects.create(**validated_data)
+        if s3_key:
+            instance.image = s3_key
+            instance.save()
+        return instance
+
+    def update(self, instance, validated_data):
+        self._handle_image_update(instance, validated_data)
+        return super().update(instance, validated_data)
 
 
 class ReassignmentSerializer(serializers.Serializer):

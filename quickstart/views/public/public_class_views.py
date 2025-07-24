@@ -67,6 +67,7 @@ from quickstart.models import (
 from quickstart.serializers import (
     PublicClassSerializer,
     ScheduleSerializer,
+    PublicClassDetailSerializer,
 )
 from ..utils import haversine_distance
 
@@ -138,10 +139,42 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         "createdAt",
         "average_rating",
         "total_reviews",
-        "relevance_score",  # Add for potential user sorting
+        "relevance_score",
     ]
+    ordering = ["-createdAt"]
 
-    ordering = ["-createdAt"]  # Default ordering for actions other than list
+    # --- MODIFIED: The lookup_field should now be 'pk' as we handle it in get_object ---
+    lookup_field = "pk"
+
+    def get_serializer_class(self):
+        if self.action == "retrieve":
+            return PublicClassDetailSerializer
+        return super().get_serializer_class()
+
+    # --- ADDED: This is the critical fix for the 404 error ---
+    def get_object(self):
+        """
+        Overrides the default `get_object` to allow lookup by either the
+        numeric primary key (pk) or the SEO-friendly slug.
+        """
+        queryset = self.filter_queryset(self.get_queryset())
+
+        # The identifier from the URL (e.g., '123' or 'richmond-hill-intro-to-soy-candle-making')
+        identifier = self.kwargs.get(self.lookup_field)
+
+        # Check if the identifier is a number (ID) or a string (slug)
+        if identifier.isdigit():
+            filter_kwargs = {"pk": identifier}
+        else:
+            filter_kwargs = {"slug": identifier}
+
+        # Fetch the object using the determined filter
+        obj = get_object_or_404(queryset, **filter_kwargs)
+
+        # This is a standard part of get_object and should be kept
+        self.check_object_permissions(self.request, obj)
+
+        return obj
 
     AVERAGE_RATING_SUBQUERY = Subquery(
         Reviews.objects.filter(classId=OuterRef("pk"), status="approved")
@@ -157,52 +190,37 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         .values("count")[:1],
         output_field=IntegerField(),
     )
-    MIN_PRICE_SUBQUERY = Subquery(
+    MIN_SESSION_PRICE_SUBQUERY = Subquery(
         Schedule.objects.filter(
             option__classId=OuterRef("pk"),
-        )
-        .filter(
-            Q(option__booking_type="Full Course", end_date__gte=timezone.now().date())
-            | Q(option__booking_type="Single Session", date__gte=timezone.now().date())
+            option__booking_type="Single Session",
+            date__gte=timezone.now().date(),
         )
         .order_by("price")
         .values("price")[:1],
         output_field=DecimalField(max_digits=10, decimal_places=2),
     )
-    MAX_PRICE_SUBQUERY = Subquery(
+
+    MIN_COURSE_PRICE_SUBQUERY = Subquery(
         Schedule.objects.filter(
             option__classId=OuterRef("pk"),
+            option__booking_type="Full Course",
+            end_date__gte=timezone.now().date(),
         )
-        .filter(
-            Q(option__booking_type="Full Course", end_date__gte=timezone.now().date())
-            | Q(option__booking_type="Single Session", date__gte=timezone.now().date())
-        )
-        .order_by("-price")
+        .order_by("price")
         .values("price")[:1],
         output_field=DecimalField(max_digits=10, decimal_places=2),
     )
 
     def get_queryset(self):
-        return (
+        queryset = (
             ClassesMain.objects.select_related("businessId", "category", "subcategory")
             .prefetch_related(
                 Prefetch(
                     "images",
                     queryset=ClassImage.objects.order_by("-isCover", "createdAt"),
                 ),
-                Prefetch(
-                    "options__schedules",
-                    queryset=Schedule.objects.filter(
-                        Q(
-                            option__booking_type="Full Course",
-                            end_date__gte=timezone.now().date(),
-                        )
-                        | Q(
-                            option__booking_type="Single Session",
-                            date__gte=timezone.now().date(),
-                        )
-                    ),
-                ),
+                "options",
             )
             .filter(
                 status="active",
@@ -210,28 +228,35 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 businessId__verificationStatus="verified",
             )
             .annotate(
-                # Annotate base metrics here for reusability
                 average_rating=Coalesce(
                     self.AVERAGE_RATING_SUBQUERY, Value(Decimal("0.0"))
                 ),
                 review_count=Coalesce(self.REVIEW_COUNT_SUBQUERY, Value(0)),
-                min_price=Coalesce(self.MIN_PRICE_SUBQUERY, None),
+                min_session_price=Coalesce(self.MIN_SESSION_PRICE_SUBQUERY, None),
+                min_course_price=Coalesce(self.MIN_COURSE_PRICE_SUBQUERY, None),
                 image_count=Count("images", distinct=True),
             )
-            .distinct()
         )
 
+        if self.action == "retrieve":
+            logger.debug(
+                f"Action is 'retrieve', prefetching schedules for class detail."
+            )
+            queryset = queryset.prefetch_related(
+                Prefetch(
+                    "options__schedules",
+                    queryset=Schedule.objects.filter(
+                        Q(date__gte=timezone.now().date())
+                        | Q(end_date__gte=timezone.now().date())
+                    ).order_by("date", "time"),
+                )
+            )
+
+        return queryset.distinct()
+
     def _calculate_relevance_score(self, queryset):
-        """
-        Helper function to encapsulate the relevance score calculation logic.
-        This can now be called by both list() and search().
-        """
         days_old = Extract(Now() - F("createdAt"), "epoch") / Value(86400.0)
 
-        # REFINED IMAGE SCORE: This now calculates a score from 0.0 to 1.0 based on
-        # how many images a class has *above the minimum*.
-        # A class with 5 images gets a score of 0 for this part.
-        # A class with 10 or more images gets a score of 1.0.
         image_score_numerator = Log(
             10, F("image_count") - Value(QUALITY_SCORE_BASE_IMAGES) + 1
         )
@@ -248,7 +273,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     output_field=FloatField(),
                 ),
             ),
-            default=Value(0.0),  # Score is 0 if at or below the base minimum
+            default=Value(0.0),
             output_field=FloatField(),
         )
 
@@ -296,14 +321,8 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         return queryset.annotate(relevance_score=relevance_score)
 
     def list(self, request, *args, **kwargs):
-        """
-        Overrides the default list action to provide relevance-sorted classes
-        for the homepage or general browsing.
-        """
         queryset = self.get_queryset()
         queryset = self._calculate_relevance_score(queryset)
-
-        # Order by the calculated relevance score for a better user experience
         queryset = queryset.order_by("-relevance_score", "-createdAt")
 
         page = self.paginate_queryset(queryset)
@@ -352,13 +371,11 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=["get"], permission_classes=[AllowAny])
     def search(self, request):
         try:
-            # --- Get and Process Query Parameters ---
             req_lat_str = request.query_params.get("lat")
             req_lng_str = request.query_params.get("lng")
             req_radius_km_str = request.query_params.get("radius")
             location_search_text = request.query_params.get("location_search")
 
-            # --- Location Processing ---
             search_lat, search_lng = None, None
             if req_lat_str and req_lng_str:
                 try:
@@ -372,10 +389,8 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 if geocoded_result:
                     search_lat, search_lng = geocoded_result
 
-            # --- Base Queryset ---
             queryset = self.get_queryset()
 
-            # --- Category Filter ---
             category_key = request.query_params.get("category_key")
             subcategory_key = request.query_params.get("subcategory_key")
             if category_key and category_key.lower() != "all":
@@ -383,18 +398,21 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 if subcategory_key:
                     queryset = queryset.filter(subcategory__key=subcategory_key)
 
-            # --- Price Filter ---
             price_max_str = request.query_params.get("price_max")
             if price_max_str:
                 try:
+                    price_max_decimal = Decimal(price_max_str)
                     queryset = queryset.filter(
-                        Q(min_price__lte=Decimal(price_max_str))
-                        | Q(min_price__isnull=True)
+                        Q(min_session_price__lte=price_max_decimal)
+                        | Q(min_course_price__lte=price_max_decimal)
+                        | (
+                            Q(min_session_price__isnull=True)
+                            & Q(min_course_price__isnull=True)
+                        )
                     )
                 except InvalidOperation:
                     logger.warning(f"Invalid price_max: {price_max_str}")
 
-            # --- Date and Availability Filters ---
             req_date_str = request.query_params.get("date")
             req_participants_str = request.query_params.get("participants")
             time_preferences = request.query_params.getlist("time_preference")
@@ -452,7 +470,6 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
 
                 queryset = queryset.filter(instance_filters).distinct()
 
-            # --- PERFORMANCE FIX: Haversine Distance Calculation ---
             if search_lat is not None and search_lng is not None:
                 queryset = queryset.exclude(
                     Q(latitude__isnull=True) | Q(longitude__isnull=True)
@@ -486,19 +503,25 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
 
                 queryset = queryset.filter(distance__lte=search_radius_km)
 
-            # --- Relevance Score Calculation (DB Level) ---
             queryset = self._calculate_relevance_score(queryset)
 
-            # --- Sorting (DB Level) ---
             sort_by = request.query_params.get("sort_by", "relevance")
             if sort_by == "relevance":
                 queryset = queryset.order_by("-relevance_score", "-createdAt")
             elif sort_by == "distance" and search_lat is not None:
                 queryset = queryset.order_by(F("distance").asc(nulls_last=True))
             elif sort_by == "price_asc":
-                queryset = queryset.order_by(F("min_price").asc(nulls_last=True))
+                queryset = queryset.order_by(
+                    Coalesce(F("min_session_price"), F("min_course_price")).asc(
+                        nulls_last=True
+                    )
+                )
             elif sort_by == "price_desc":
-                queryset = queryset.order_by(F("min_price").desc(nulls_first=True))
+                queryset = queryset.order_by(
+                    Coalesce(F("min_session_price"), F("min_course_price")).desc(
+                        nulls_first=True
+                    )
+                )
             elif sort_by == "rating":
                 queryset = queryset.order_by("-average_rating", "-review_count")
             elif sort_by == "reviews":
@@ -506,7 +529,6 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             elif sort_by == "newest":
                 queryset = queryset.order_by("-createdAt")
 
-            # --- Pagination & Serialization ---
             page = self.paginate_queryset(queryset)
             if page is not None:
                 serializer = self.get_serializer(
@@ -538,11 +560,6 @@ class PublicScheduleViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=["get"], url_path="availability")
     def availability(self, request, *args, **kwargs):
-        """
-        Calculates available spots for a given class option over a date range.
-        Input query params: `option_id`, `start_date`, `end_date` (YYYY-MM-DD).
-        Output: A dictionary keyed by date string, with a list of available slots.
-        """
         option_id_str = request.query_params.get("option_id")
         start_date_str = request.query_params.get("start_date")
         end_date_str = request.query_params.get("end_date")

@@ -39,6 +39,7 @@ from .public.public_class_serializers import (
     PublicClassSerializer,
     PublicClassOptionSerializer,
     PublicScheduleSerializer,
+    PublicClassDetailSerializer,
 )
 
 from .business.business_booking_serializers import (
@@ -74,17 +75,6 @@ from .business.business_review_serializers import (
 
 from .business.business_notification_serializers import (
     NotificationSerializer,
-)
-
-from .public.support_chat_serializer import (
-    ChatMessageSerializer,
-    ChatRequestSerializer,
-    ChatSessionSerializer,
-    SupportTicketSerializer,
-    SupportTicketDetailSerializer,
-    SupportTicketStatsSerializer,
-    CreateSupportTicketSerializer,
-    UserSupportTicketSerializer,
 )
 
 __all__ = [
@@ -123,6 +113,7 @@ __all__ = [
     "PublicClassSerializer",
     "PublicClassOptionSerializer",
     "PublicScheduleSerializer",
+    "PublicClassDetailSerializer",
     # Booking Serializers
     "BookingCreateSerializer",
     "StudentBookingSerializer",
@@ -139,13 +130,4 @@ __all__ = [
     "BusinessReviewUserSerializer",
     "BusinessReviewBookingSerializer",
     "BusinessReviewSerializer",
-    # Chat Serializers
-    "ChatMessageSerializer",
-    "ChatRequestSerializer",
-    "ChatSessionSerializer",
-    "SupportTicketSerializer",
-    "SupportTicketDetailSerializer",
-    "SupportTicketStatsSerializer",
-    "CreateSupportTicketSerializer",
-    "UserSupportTicketSerializer",
 ]

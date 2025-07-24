@@ -60,15 +60,6 @@ from .public.public_review_views import (
     ClassReviews,
 )
 
-from .public.support_chat_views import (
-    ChatMessageView,
-)
-
-from .public.support_ticket_views import (
-    UserSupportTicketViewSet,
-    CreateSupportTicketView,
-)
-
 from .utils import (
     haversine_distance,
 )
@@ -108,17 +99,12 @@ __all__ = [
     # Booking Views
     "BusinessBookingViewSet",
     "StudentBookingViewSet",
-    # Support Ticket Views
-    "UserSupportTicketViewSet",
-    "CreateSupportTicketView",
     # Revenue Analytics
     "RevenueAnalyticsView",
     # Review Views
     "ReviewSubmission",
     "ClassReviews",
     "BusinessReviewViewSet",
-    # Chat Views
-    "ChatMessageView",
     # Utils
     "haversine_distance",
 ]

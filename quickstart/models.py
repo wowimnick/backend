@@ -1,6 +1,5 @@
 from asyncio.log import logger
 from datetime import timedelta
-from .custom_storages import WebPStorage
 import random
 import string
 import pytz
@@ -9,6 +8,7 @@ from django.conf import settings
 from django.db import models
 from django.contrib.auth.models import AbstractUser, Permission
 from django.contrib.contenttypes.models import ContentType
+import slugify
 from storages.backends.s3boto3 import S3Boto3Storage
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.contrib.postgres.search import SearchVectorField
@@ -295,7 +295,10 @@ class CustomUser(AbstractUser):
     address = models.CharField(max_length=255)
     zipCode = models.CharField(max_length=100)
     avatar = models.ImageField(
-        upload_to="originals/avatars/", null=True, blank=True, storage=WebPStorage()
+        upload_to="originals/avatars/",
+        max_length=255,
+        null=True,
+        blank=True,
     )
     createdAt = models.DateTimeField(auto_now_add=True)
     role = models.ForeignKey(
@@ -460,7 +463,7 @@ class BusinessInfo(models.Model):
         upload_to="originals/business_images/",
         blank=True,
         null=True,
-        storage=WebPStorage(),
+        max_length=255,
     )
     featured = models.BooleanField(default=False)
     isActive = models.BooleanField(default=False)
@@ -707,7 +710,9 @@ class ClassImage(models.Model):
         "ClassesMain", related_name="images", on_delete=models.CASCADE
     )
     image = models.ImageField(
-        upload_to="originals/class_images/", storage=WebPStorage()
+        upload_to="originals/class_images/",
+        max_length=255,
+        help_text="Image uploaded by the user, e.g., a photo from the class.",
     )
     isCover = models.BooleanField(default=False)
     createdAt = models.DateTimeField(auto_now_add=True)
@@ -733,7 +738,6 @@ class ClassCategory(models.Model):
         blank=True,
         null=True,
         help_text="Image displayed on the homepage category card.",
-        storage=WebPStorage(),
     )
     is_featured = models.BooleanField(
         default=False, db_index=True, help_text="Show this category on the homepage."
@@ -790,6 +794,13 @@ class ClassesMain(models.Model):
     businessId = models.ForeignKey(
         "BusinessInfo", on_delete=models.CASCADE, related_name="classes"
     )
+    slug = models.SlugField(
+        max_length=255,
+        unique=True,
+        blank=False,  # Now required
+        help_text="SEO-friendly URL slug. Auto-generated from title and city.",
+        db_index=True,
+    )
     title = models.CharField(max_length=100)
     description = models.TextField(max_length=2000)
     features = models.JSONField(default=list)
@@ -829,6 +840,33 @@ class ClassesMain(models.Model):
     createdAt = models.DateTimeField(auto_now_add=True)
     updatedAt = models.DateTimeField(auto_now=True)
 
+    def _generate_unique_slug(self):
+        """Generates a unique slug from the business city and class title."""
+        if self.slug:  # Do not regenerate if a slug already exists
+            return
+
+        # Create a base slug from city and title for better SEO
+        base_slug = slugify(f"{self.businessId.businessCity} {self.title}")
+
+        # If the base slug is empty, fallback to a generic one
+        if not base_slug:
+            base_slug = "class"
+
+        slug = base_slug
+        # Use a transaction to ensure atomic check and creation
+        with transaction.atomic():
+            # Check for uniqueness and append a suffix if necessary
+            while ClassesMain.objects.filter(slug=slug).exists():
+                random_suffix = uuid.uuid4().hex[:6]
+                slug = f"{base_slug}-{random_suffix}"
+        self.slug = slug
+
+    def save(self, *args, **kwargs):
+        """Override save to generate a slug if one doesn't exist."""
+        if not self.slug:
+            self._generate_unique_slug()
+        super().save(*args, **kwargs)
+
     class Meta:
         db_table = "classes"
         indexes = [
@@ -836,6 +874,7 @@ class ClassesMain(models.Model):
             models.Index(fields=["location"]),
             models.Index(fields=["businessId"]),
             models.Index(fields=["status"]),
+            models.Index(fields=["slug"]),
             GinIndex(fields=["search_vector"]),
         ]
         permissions = [
@@ -991,9 +1030,6 @@ class ClassOption(models.Model):
     classId = models.ForeignKey(
         "ClassesMain", on_delete=models.CASCADE, related_name="options"
     )
-
-    # Title and Description are now sourced from the parent ClassesMain instance.
-    # No separate title or description fields on ClassOption.
 
     BOOKING_TYPES = [
         ("Single Session", "Single Session"),
@@ -1438,6 +1474,18 @@ class Booking(models.Model):
     cancelled_at = models.DateTimeField(null=True, blank=True)
     cancellation_reason = models.TextField(blank=True)
 
+    cancellation_policy = models.CharField(
+        max_length=30,
+        choices=CANCELLATION_POLICY_CHOICES,  # Assuming this is defined in your models.py
+        default="flexible",
+        help_text="The cancellation policy snapshotted at the time of booking.",
+    )
+    cancellation_refund_percentage = models.PositiveIntegerField(
+        default=100,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+        help_text="The refund percentage snapshotted at the time of booking.",
+    )
+
     amount_paid = models.DecimalField(max_digits=10, decimal_places=2)
     payment_status = models.CharField(
         max_length=20,
@@ -1607,7 +1655,8 @@ class Reviews(models.Model):
         upload_to="originals/review_images/",
         null=True,
         blank=True,
-        storage=WebPStorage(),
+        max_length=255,
+        help_text="Image uploaded by the user, e.g., a photo from the class.",
     )
     status = models.CharField(
         max_length=20,
@@ -1695,123 +1744,164 @@ class Reviews(models.Model):
         super().save(*args, **kwargs)
 
 
-class ChatSession(models.Model):
-    userId = models.ForeignKey(
-        CustomUser, on_delete=models.CASCADE, related_name="chat_session"
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        db_table = "chat_sessions"
-
-
-class ChatMessage(models.Model):
-    session = models.ForeignKey(
-        ChatSession, on_delete=models.CASCADE, related_name="messages"
-    )
-    content = models.TextField()
-    is_user = models.BooleanField()
-    sender_type = models.CharField(
-        max_length=10,
-        choices=[
-            ("user", "User"),
-            ("ai", "AI"),
-            ("agent", "Agent"),
-            ("system", "System"),  # Added System type
-        ],
-        default="user",
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        db_table = "chat_messages"
-        ordering = ["created_at"]
-
-
 class SupportTicket(models.Model):
+    """
+    Represents a customer support ticket.
+    """
+
+    # Core Fields
     ticket_id = models.AutoField(primary_key=True)
+    user_facing_id = models.CharField(
+        max_length=15, unique=True, editable=False, db_index=True
+    )
     user = models.ForeignKey(
-        CustomUser, on_delete=models.CASCADE, related_name="support_tickets"
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="support_tickets",
     )
-    chat_session = models.ForeignKey(
-        ChatSession, on_delete=models.SET_NULL, null=True, related_name="tickets"
-    )
+    subject = models.CharField(max_length=255)
+    description = models.TextField(help_text="Initial description of the issue.")
 
-    # Ticket categorization
-    category = models.CharField(
-        max_length=50,
-        choices=[
-            ("account", "Account Issues"),
-            ("booking", "Booking Problems"),
-            ("payment", "Payment Issues"),
-            ("technical", "Technical Support"),
-            ("feature", "Feature Request"),
-            ("other", "Other"),
-        ],
-    )
+    # Categorization
+    CATEGORY_CHOICES = [
+        ("account", "Account Issues"),
+        ("booking", "Booking Problems"),
+        ("payment", "Payment Issues"),
+        ("technical", "Technical Support"),
+        ("feature", "Feature Request"),
+        ("other", "Other"),
+    ]
+    category = models.CharField(max_length=50, choices=CATEGORY_CHOICES)
 
-    subject = models.CharField(max_length=600)
-    description = models.TextField()
-
-    # Status tracking
+    STATUS_CHOICES = [
+        ("open", "Open"),
+        ("in_progress", "In Progress"),
+        ("resolved", "Resolved"),
+        ("closed", "Closed"),
+    ]
     status = models.CharField(
-        max_length=20,
-        choices=[
-            ("open", "Open"),
-            ("in_progress", "In Progress"),
-            ("resolved", "Resolved"),
-            ("closed", "Closed"),
-        ],
-        default="open",
+        max_length=20, choices=STATUS_CHOICES, default="open", db_index=True
     )
 
+    PRIORITY_CHOICES = [
+        ("low", "Low"),
+        ("medium", "Medium"),
+        ("high", "High"),
+        ("urgent", "Urgent"),
+    ]
     priority = models.CharField(
-        max_length=20,
-        choices=[
-            ("low", "Low"),
-            ("medium", "Medium"),
-            ("high", "High"),
-            ("urgent", "Urgent"),
-        ],
-        default="medium",
+        max_length=20, choices=PRIORITY_CHOICES, default="medium", db_index=True
     )
 
-    # Timestamps and management
+    # Management & Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    first_responded_at = models.DateTimeField(
-        null=True, blank=True, help_text="Timestamp of the first agent reply."
-    )
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    closed_at = models.DateTimeField(null=True, blank=True)
+    first_agent_response_at = models.DateTimeField(null=True, blank=True)
+    last_user_reply_at = models.DateTimeField(null=True, blank=True)
+    last_agent_reply_at = models.DateTimeField(null=True, blank=True)
+
     assigned_to = models.ForeignKey(
-        CustomUser,
+        settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
+        blank=True,
         related_name="assigned_tickets",
+        limit_choices_to={"role__name__in": ["Admin", "Super Admin", "Support Agent"]},
     )
     resolution_notes = models.TextField(blank=True)
 
-    class Meta:
-        db_table = "support_tickets"
-        ordering = ["-created_at"]
-        permissions = [
-            # --- Platform Admin/Agent Permissions ---
-            (
-                "reply_any_support_ticket",
-                "Can reply to any support ticket (Admin/Agent)",
-            ),
-            ("assign_support_ticket", "Can assign any support ticket to an agent"),
-            ("resolve_support_ticket", "Can resolve/close any support ticket"),
-            (
-                "view_support_ticket_stats",
-                "Can view aggregated support ticket statistics",
-            ),
-            ("export_support_ticket_data", "Can export support ticket data"),
-            ("access_support_admin", "Can access Support Ticket Administration"),
-        ]
+    def save(self, *args, **kwargs):
+        if not self.user_facing_id:
+            last_ticket = SupportTicket.objects.all().order_by("ticket_id").last()
+            new_id = (last_ticket.ticket_id if last_ticket else 0) + 10001
+            self.user_facing_id = f"SPT-{new_id}"
+        super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"Ticket #{self.ticket_id}: {self.subject}"
+        return f"[{self.user_facing_id}] {self.subject}"
+
+    class Meta:
+        db_table = "support_tickets"
+        ordering = ["-updated_at"]
+        permissions = [
+            ("access_support_admin", "Can access Support Ticket Administration"),
+            ("assign_support_ticket", "Can assign any support ticket to an agent"),
+            ("view_support_ticket_stats", "Can view support ticket statistics"),
+            ("export_support_ticket_data", "Can export support ticket data"),
+            ("view_assignable_agents", "Can view list of assignable support agents"),
+        ]
+
+
+class TicketMessage(models.Model):
+    """
+    Represents a single message within a support ticket's conversation.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    ticket = models.ForeignKey(
+        SupportTicket, on_delete=models.CASCADE, related_name="conversation"
+    )
+    sender = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True
+    )
+    SENDER_TYPE_CHOICES = [("user", "User"), ("agent", "Agent")]
+    sender_type = models.CharField(max_length=10, choices=SENDER_TYPE_CHOICES)
+    text = models.TextField()
+    timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    def save(self, *args, **kwargs):
+        is_new = self._state.adding
+        super().save(*args, **kwargs)
+        if is_new:
+            ticket = self.ticket
+            ticket.updated_at = self.timestamp
+            update_fields = ["updated_at"]
+            if self.sender_type == "user":
+                ticket.last_user_reply_at = self.timestamp
+                update_fields.append("last_user_reply_at")
+            elif self.sender_type == "agent":
+                ticket.last_agent_reply_at = self.timestamp
+                update_fields.append("last_agent_reply_at")
+                if not ticket.first_agent_response_at:
+                    ticket.first_agent_response_at = self.timestamp
+                    update_fields.append("first_agent_response_at")
+            ticket.save(update_fields=update_fields)
+
+    class Meta:
+        db_table = "support_ticket_messages"
+        ordering = ["timestamp"]
+
+
+class TicketHistoryLog(models.Model):
+    """
+    An audit trail for actions performed on a support ticket.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    ticket = models.ForeignKey(
+        SupportTicket, on_delete=models.CASCADE, related_name="history_logs"
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        help_text="User who performed the action (can be system)",
+    )
+    user_email = models.CharField(
+        max_length=255, help_text="Snapshot of the user's email"
+    )
+    timestamp = models.DateTimeField(auto_now_add=True)
+    details = models.CharField(max_length=512, help_text="Description of the event")
+
+    def __str__(self):
+        return f"Log for Ticket {self.ticket.user_facing_id} at {self.timestamp}"
+
+    class Meta:
+        db_table = "support_ticket_history"
+        ordering = ["-timestamp"]
 
 
 class NotificationCampaign(models.Model):

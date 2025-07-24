@@ -1,3 +1,4 @@
+import os
 import re
 import string
 from django.conf import settings
@@ -107,6 +108,11 @@ class BusinessDashboardOverviewSerializer(serializers.Serializer):
 
 
 class BusinessRegistrationSerializer(serializers.ModelSerializer):
+    # MODIFIED: Accept an S3 key instead of a file
+    businessImage_s3_key = serializers.CharField(
+        write_only=True, required=False, allow_blank=True, allow_null=True
+    )
+
     latitude = serializers.DecimalField(
         max_digits=10, decimal_places=8, required=False, allow_null=True
     )
@@ -144,12 +150,13 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = BusinessInfo
+        # MODIFIED: Replaced 'businessImage' with 'businessImage_s3_key'
         fields = [
             # Step 0: Business Info
             "businessName",
             "businessType",
             "businessDescription",
-            "businessImage",
+            "businessImage_s3_key",  # Changed
             "openingTime",
             "closingTime",
             "liabilityWaiver",
@@ -178,6 +185,7 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
             "termsAccepted",
             "privacyAccepted",
         ]
+        # MODIFIED: Removed 'businessImage' from extra_kwargs
         extra_kwargs = {
             "businessName": {"required": True},
             "businessType": {"required": True},
@@ -189,7 +197,6 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
             "openingTime": {"required": True},
             "closingTime": {"required": True},
             "liabilityWaiver": {"required": True},
-            "businessImage": {"required": False, "allow_null": True},
             "website": {"required": False, "allow_blank": True, "allow_null": True},
             "business_timezone": {"required": True},
             "studentContactEmail": {"required": True},
@@ -317,7 +324,8 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         user = self.context["request"].user
 
-        # Pop list/dict fields to handle them separately
+        # MODIFIED: Pop the S3 key and other JSON fields
+        business_image_s3_key = validated_data.pop("businessImage_s3_key", None)
         classformats_data = validated_data.pop("classFormats", [])
         skilllevels_data = validated_data.pop("skillLevels", [])
         agegroups_data = validated_data.pop("ageGroups", [])
@@ -327,6 +335,8 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
         business = BusinessInfo.objects.create(
             owner=user,
             verificationStatus="pending",
+            # MODIFIED: Assign the S3 key directly to the image field
+            businessImage=business_image_s3_key,
             classFormats=classformats_data,
             skillLevels=skilllevels_data,
             ageGroups=agegroups_data,
@@ -385,6 +395,11 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
         max_digits=3, decimal_places=1, read_only=True
     )
 
+    # MODIFIED: Accept an S3 key string for updates
+    businessImage = serializers.CharField(
+        source="businessImage_s3_key", write_only=True, required=False, allow_null=True
+    )
+
     classFormats = serializers.ListField(
         child=serializers.CharField(), read_only=True, required=False
     )
@@ -397,12 +412,13 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = BusinessInfo
+        # MODIFIED: 'businessImage' is now write-only
         fields = [
             "businessId",
             "businessName",
             "businessType",
             "businessDescription",
-            "businessImage",
+            "businessImage",  # This is the write-only field
             "business_image_medium_url",
             "website",
             "business_timezone",
@@ -450,13 +466,9 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "classFormats",
             "skillLevels",
             "ageGroups",
+            "business_image_medium_url",
         )
         extra_kwargs = {
-            "businessImage": {
-                "write_only": True,
-                "required": False,
-                "allow_null": True,
-            },
             "businessName": {"required": False},
             "businessType": {"required": False},
             "contact_privacy": {"required": False},
@@ -500,7 +512,10 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
         original_path = obj.businessImage.name
         if not original_path.startswith("originals/"):
             return None
-        resized_path = original_path.replace("originals/", "public/medium/", 1)
+        # Split the path to separate filename and extension
+        base_path = os.path.splitext(original_path)[0]
+        # Replace directory and append .webp extension
+        resized_path = base_path.replace("originals/", "public/medium/", 1) + ".webp"
         return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
 
     def _parse_boolean_from_string(self, value, field_name):
@@ -802,54 +817,25 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
                 if instance and latitude is None and longitude is None
                 else False
             )
-
-        # If businessImage is explicitly set to None in data (meaning remove image)
-        # and the instance currently has an image, this is valid.
-        # If businessImage is not in data, it means no change to image.
-        # If businessImage is a file, it's an upload.
-        # This logic is mostly handled by how `update` method processes `businessImage`.
-
         return data
 
     def update(self, instance, validated_data):
-        logger.info(
-            f"Serializer update called for Business ID: {instance.pk}. Validated data keys: {validated_data.keys()}"
-        )
+        # The source='businessImage_s3_key' in the field maps the incoming data
+        # to 'businessImage_s3_key' in validated_data.
+        s3_key = validated_data.pop("businessImage_s3_key", "NOT_PROVIDED")
 
-        if "businessImage" in validated_data:
-            logger.info(
-                f"'businessImage' in validated_data. Type: {type(validated_data['businessImage'])}"
-            )
-        else:
-            logger.warning(
-                "'businessImage' NOT in validated_data. Cannot process image update."
-            )
-
-        business_image_update = validated_data.pop("businessImage", ...)
-
-        if business_image_update is None:  # Explicitly set to None means remove
-            logger.info(
-                f"Attempting to remove businessImage for Business ID: {instance.pk}"
-            )
+        # If a new key was provided, update the image field.
+        # If null was sent, clear the image field.
+        if s3_key is None:
             if instance.businessImage:
-                instance.businessImage.delete(save=False)
+                instance.businessImage.delete(save=False)  # Delete old S3 object
             instance.businessImage = None
-        elif business_image_update is not ...:  # A new file was provided
-            logger.info(
-                f"Attempting to update businessImage for Business ID: {instance.pk}. New file: {business_image_update}"
-            )
+        elif s3_key != "NOT_PROVIDED":
             if instance.businessImage:
-                logger.info(
-                    f"Deleting old businessImage: {instance.businessImage.name}"
-                )
-                instance.businessImage.delete(
-                    save=False
-                )  # Delete old before saving new
-            instance.businessImage = business_image_update
-        else:
-            logger.info(f"No update to businessImage for Business ID: {instance.pk}")
+                instance.businessImage.delete(save=False)  # Delete old S3 object
+            instance.businessImage = s3_key  # Assign the new S3 key
 
-        # Update other fields
+        # Update all other fields
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
 

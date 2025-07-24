@@ -1,15 +1,15 @@
-# serializers/public/public_booking_serializers.py
 from decimal import Decimal
+import os
 import uuid
 from django.conf import settings
 from rest_framework import serializers
 from django.utils import timezone
 
-# from django.core.exceptions import ValidationError as DjangoValidationError # Not directly used here
-from rest_framework.exceptions import ValidationError as DRFValidationError  # Use DRF's
+
+from rest_framework.exceptions import ValidationError as DRFValidationError
 from django.db import transaction
 
-# Adjust import path as needed
+
 from quickstart.models import (
     Booking,
     ClassImage,
@@ -24,19 +24,16 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-# --- Booking Create Serializer (Used by Students and Payment Intent Creation) ---
 class BookingCreateSerializer(serializers.Serializer):
     selectedSlots = serializers.ListField(child=serializers.DictField(), min_length=1)
     notes = serializers.CharField(
         required=False, allow_blank=True, trim_whitespace=True
     )
-    participants = serializers.IntegerField(
-        default=1, min_value=1, max_value=4
-    )  # Max value from existing model
+    participants = serializers.IntegerField(default=1, min_value=1, max_value=4)
     participant_details = serializers.ListField(
         child=serializers.DictField(),
-        required=False,  # Made optional; validation logic handles based on participants count
-        allow_empty=True,  # Allow empty list if participants=0 or if not provided for single participant
+        required=False,
+        allow_empty=True,
     )
 
     def validate_selectedSlots(self, value):
@@ -52,8 +49,8 @@ class BookingCreateSerializer(serializers.Serializer):
         try:
             instance = ScheduleInstance.objects.select_related(
                 "schedule",
-                "schedule__option",  # For booking_type
-                "schedule__option__classId__businessId",  # For business_timezone later
+                "schedule__option",
+                "schedule__option__classId__businessId",
             ).get(id=slot_id)
 
             if instance.status != "scheduled":
@@ -149,10 +146,14 @@ class BookingCreateSerializer(serializers.Serializer):
         notes = validated_data.get("notes", "")
 
         price_per_instance = initial_instance.price
-        booking_type = initial_instance.schedule.option.booking_type
+        class_option = initial_instance.schedule.option
+        booking_type = class_option.booking_type
         enrollment_type = (
             "Full Course" if booking_type == "Full Course" else "Single Session"
         )
+
+        snapshotted_policy = class_option.cancellationPolicy
+        snapshotted_refund_percent = class_option.cancellationRefundPercentage
 
         try:
             with transaction.atomic():
@@ -182,6 +183,8 @@ class BookingCreateSerializer(serializers.Serializer):
                             status="pending",
                             payment_status="pending",
                             enrollment_type=enrollment_type,
+                            cancellation_policy=snapshotted_policy,
+                            cancellation_refund_percentage=snapshotted_refund_percent,
                         )
                         bookings.append(booking)
 
@@ -189,9 +192,9 @@ class BookingCreateSerializer(serializers.Serializer):
                     logger.info(
                         f"BookingCreateSerializer: Pending Course Booking created (Group: {booking_group_id}) for User {user.email}. Total Price: {total_course_price}"
                     )
-                    # For response consistency, return the first booking of the course
+
                     return created_bookings[0] if created_bookings else None
-                else:  # Single Session
+                else:
                     single_session_price = price_per_instance * participants_count
                     booking = Booking.objects.create(
                         schedule_instance=initial_instance,
@@ -203,6 +206,8 @@ class BookingCreateSerializer(serializers.Serializer):
                         status="pending",
                         payment_status="pending",
                         enrollment_type=enrollment_type,
+                        cancellation_policy=snapshotted_policy,
+                        cancellation_refund_percentage=snapshotted_refund_percent,
                     )
                     logger.info(
                         f"BookingCreateSerializer: Pending Single Session Booking created (ID: {booking.id}) for User {user.email}. Price: {single_session_price}"
@@ -219,7 +224,6 @@ class BookingCreateSerializer(serializers.Serializer):
             )
 
 
-# --- BookingDetailSerializer (FOR ADMIN USE ONLY) ---
 class BookingDetailSerializer(serializers.ModelSerializer):
     """
     Comprehensive serializer for the ADMIN booking detail view.
@@ -246,7 +250,6 @@ class BookingDetailSerializer(serializers.ModelSerializer):
         read_only=True,
     )
 
-    # Admin-specific user fields
     user_avatar = serializers.URLField(
         source="user.get_avatar_url", read_only=True, allow_null=True
     )
@@ -305,7 +308,7 @@ class BookingDetailSerializer(serializers.ModelSerializer):
                     + 1
                 )
             except ValueError:
-                current_session_index = "?"  # Should not happen
+                current_session_index = "?"
             return {
                 "current_session": current_session_index,
                 "total_sessions": total_sessions,
@@ -313,7 +316,6 @@ class BookingDetailSerializer(serializers.ModelSerializer):
         return None
 
 
-# --- StudentBookingSerializer (for Student List View) ---
 class StudentBookingSerializer(serializers.ModelSerializer):
     """
     Lightweight serializer for the student's "My Bookings" list view.
@@ -369,7 +371,7 @@ class StudentBookingSerializer(serializers.ModelSerializer):
             "business_name",
             "price",
             "status",
-            "class_image_thumb",  # UPDATED field name
+            "class_image_thumb",
             "class_image_large_url",
             "has_review",
             "session_info",
@@ -402,6 +404,8 @@ class StudentBookingSerializer(serializers.ModelSerializer):
                 if not original_path.startswith("originals/"):
                     return None
                 resized_path = original_path.replace("originals/", "public/thumb/", 1)
+                if not resized_path.endswith(".webp"):
+                    resized_path = os.path.splitext(resized_path)[0] + ".webp"
                 return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
             return None
         except (AttributeError, ValueError, TypeError):
@@ -426,6 +430,8 @@ class StudentBookingSerializer(serializers.ModelSerializer):
                 if not original_path.startswith("originals/"):
                     return None
                 resized_path = original_path.replace("originals/", "public/large/", 1)
+                if not resized_path.endswith(".webp"):
+                    resized_path = os.path.splitext(resized_path)[0] + ".webp"
                 return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
             return None
         except (AttributeError, ValueError, TypeError):
@@ -461,7 +467,6 @@ class StudentBookingSerializer(serializers.ModelSerializer):
         return None
 
 
-# --- StudentBookingDetailSerializer (for Student Retrieve View) ---
 class StudentBookingDetailSerializer(serializers.ModelSerializer):
     """
     Dedicated serializer for the student's detailed booking view.
@@ -490,7 +495,6 @@ class StudentBookingDetailSerializer(serializers.ModelSerializer):
         source="schedule_instance.schedule.option.cancellationPolicy", read_only=True
     )
 
-    # User's own details
     user_name = serializers.SerializerMethodField(read_only=True)
     user_email = serializers.EmailField(source="user.email", read_only=True)
 

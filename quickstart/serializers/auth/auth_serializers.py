@@ -50,7 +50,8 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
     avatar_medium_url = serializers.SerializerMethodField()
     avatar_original_url = serializers.SerializerMethodField()
 
-    avatar = serializers.ImageField(write_only=True, required=False, allow_null=True)
+    # MODIFIED: This field is now for accepting the S3 key during an update.
+    avatar = serializers.CharField(write_only=True, required=False, allow_null=True)
     role = RoleNestedSerializer(read_only=True, allow_null=True)
     favorited_ids = serializers.PrimaryKeyRelatedField(
         source="favorited", many=True, read_only=True
@@ -74,7 +75,7 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
             "state",
             "address",
             "zipCode",
-            "avatar",
+            "avatar",  # This is now the write-only s3_key field
             "avatar_thumb_url",
             "avatar_medium_url",
             "avatar_original_url",
@@ -103,15 +104,21 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
             return None
         if not getattr(settings, "CLOUDFRONT_DOMAIN", None):
             logger.warning("CLOUDFRONT_DOMAIN is not configured.")
-            return None
+            # Fallback to standard URL if no CloudFront
+            return obj.avatar.url
 
         original_path = obj.avatar.name
-        if not original_path.startswith("originals/"):
-            return None
+        # The key from S3 might already be the full path.
+        if "originals/" not in original_path:
+            # This might happen if the key is already modified. Be defensive.
+            return f"{settings.CLOUDFRONT_DOMAIN}/{original_path}"
 
         if size:
-            final_path = original_path.replace("originals/", f"public/{size}/", 1)
+            # Replace the extension with .webp and the directory
+            base_name, _ = os.path.splitext(original_path.replace("originals/", "", 1))
+            final_path = f"public/{size}/{base_name}.webp"
         else:
+            # For original, just return the direct S3 URL or a CloudFront URL to the original
             final_path = original_path
 
         return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
@@ -123,7 +130,10 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
         return self._get_avatar_url(obj, "medium")
 
     def get_avatar_original_url(self, obj):
-        return self._get_avatar_url(obj, None)
+        if not obj.avatar or not hasattr(obj.avatar, "name") or not obj.avatar.name:
+            return None
+        # This should point to the original file in the originals/ bucket via CloudFront
+        return f"{settings.CLOUDFRONT_DOMAIN}/{obj.avatar.name}"
 
     def get_permissions(self, user):
         if not user or not user.is_authenticated:
@@ -136,16 +146,21 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
         return BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).exists()
 
     def update(self, instance, validated_data):
-        avatar_file = validated_data.pop("avatar", "NOT_PROVIDED")
+        # MODIFIED: Handle the avatar as an S3 key string
+        avatar_s3_key = validated_data.pop("avatar", "NOT_PROVIDED")
+
         instance = super().update(instance, validated_data)
-        if avatar_file is None:
+
+        # 'avatar_s3_key' will be None if the client sends avatar: null
+        if avatar_s3_key is None:
             if instance.avatar:
                 instance.avatar.delete(save=False)
-                instance.avatar = None
-        elif isinstance(avatar_file, InMemoryUploadedFile):
-            if instance.avatar:
-                instance.avatar.delete(save=False)
-            instance.avatar = avatar_file
+            instance.avatar = None
+        # 'avatar_s3_key' will be a string if a new key is provided
+        elif avatar_s3_key != "NOT_PROVIDED":
+            # Just assign the key. Django's FileField will store the string path.
+            instance.avatar = avatar_s3_key
+
         instance.save()
         return instance
 
