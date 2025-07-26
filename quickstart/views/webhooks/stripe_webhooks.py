@@ -6,7 +6,7 @@ from django.views.decorators.csrf import csrf_exempt
 import stripe
 import logging
 
-from quickstart.models import BusinessInfo  # Adjust import path as needed
+from quickstart.models import BusinessInfo, Payout  # Adjust import path as needed
 
 logger = logging.getLogger(__name__)
 
@@ -174,10 +174,50 @@ def stripe_connect_webhook(request):
                 "Webhook error during capability.updated processing", status=500
             )
 
+    elif event.type in [
+        "transfer.created",
+        "transfer.paid",
+        "transfer.failed",
+        "transfer.updated",
+    ]:
+        transfer = event.data.object
+        stripe_transfer_id = transfer.id
+        new_status = transfer.status  # e.g., 'paid', 'pending', 'failed'
+        logger.info(
+            f"Connect Webhook: Processing '{event.type}' for transfer {stripe_transfer_id} with new status '{new_status}'"
+        )
+        try:
+            # Update the local Payout record based on the Stripe transfer status
+            payout_record, updated = Payout.objects.update_or_create(
+                stripe_transfer_id=stripe_transfer_id, defaults={"status": new_status}
+            )
+            if updated:
+                logger.info(
+                    f"Payout {payout_record.id} status updated to '{new_status}'."
+                )
+
+            # If a transfer fails, you might want to revert the bookings
+            if new_status == "failed":
+                logger.warning(
+                    f"Transfer {stripe_transfer_id} failed. Reverting associated bookings' payout_status to 'pending'."
+                )
+                payout_record.bookings.all().update(payout_status="pending")
+                # TODO: Trigger an admin notification for the failed transfer
+
+        except Exception as e:
+            logger.error(
+                f"Error updating payout status for transfer {stripe_transfer_id}: {e}",
+                exc_info=True,
+            )
+            return HttpResponse("Webhook error during transfer processing", status=500)
+
     else:
         logger.info(
             f"Connect Webhook: Unhandled event type {event.type} (ID: {event.id})"
         )
+
+    # Acknowledge receipt of the event to Stripe
+    return HttpResponse(status=200)
 
     # Acknowledge receipt of the event to Stripe
     return HttpResponse(status=200)

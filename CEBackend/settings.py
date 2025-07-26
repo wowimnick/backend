@@ -7,6 +7,7 @@ import os
 import ssl
 import sys
 from datetime import timedelta
+from celery.schedules import crontab
 from pathlib import Path
 
 # --- Environment Loading ---
@@ -226,6 +227,22 @@ CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_SEND_SENT_EVENT = True
 
+CELERY_BEAT_SCHEDULE = {
+    # Runs daily at 2:00 AM UTC.
+    # Marks past confirmed bookings as 'completed'.
+    "update-completed-bookings-daily": {
+        "task": "tasks.update_completed_booking_status",
+        "schedule": crontab(hour=2, minute=0),
+    },
+    # Runs daily at 3:00 AM UTC, after the status update.
+    # Processes payouts for classes that were completed the previous day.
+    "process-payouts-daily": {
+        "task": "tasks.process_daily_payouts",
+        "schedule": crontab(hour=3, minute=0),
+        # You can add args if your task needs them, but ours doesn't.
+        # 'args': (),
+    },
+}
 
 # --- Authentication Backends ---
 AUTHENTICATION_BACKENDS = [

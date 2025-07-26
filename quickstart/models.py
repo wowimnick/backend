@@ -1,5 +1,6 @@
 from asyncio.log import logger
 from datetime import timedelta
+import math
 import random
 import string
 import pytz
@@ -391,6 +392,7 @@ class CustomUser(AbstractUser):
                 "access_admin_dashboard",
                 "Can access the main platform administration dashboard",
             ),
+            ("access_blog_admin", "Can access the Blog Management section"),
             # --- User/Student Permissions (Keep these as they are) ---
             ("reply_own_support_ticket", "Can reply to own support tickets"),
             (
@@ -515,6 +517,11 @@ class BusinessInfo(models.Model):
     smsNotifications = models.BooleanField(default=False)
 
     # --- Stripe Connect Fields ---
+    currency = models.CharField(
+        max_length=3,
+        default="CAD",  # Set a sensible default for your primary market
+        help_text="3-letter ISO currency code, e.g., CAD, USD.",
+    )
     stripe_account_id = models.CharField(
         max_length=255, blank=True, null=True, unique=True, db_index=True
     )
@@ -1460,6 +1467,19 @@ class Booking(models.Model):
         ],
         default="pending",
     )
+    payouts = models.ManyToManyField("Payout", related_name="bookings")
+    payout_status = models.CharField(
+        max_length=20,
+        choices=[
+            ("pending", "Pending"),
+            ("processed", "Processed"),
+            ("failed", "Failed"),
+            ("not_applicable", "Not Applicable"),  # For free classes
+        ],
+        default="pending",
+        db_index=True,
+        help_text="Tracks the payout status for this specific booking.",
+    )
 
     booking_date = models.DateTimeField(auto_now_add=True)
     participants = models.IntegerField(
@@ -1525,6 +1545,7 @@ class Booking(models.Model):
             models.Index(fields=["enrollment_type", "status"]),
             models.Index(fields=["status"]),
             models.Index(fields=["booking_group_id"]),
+            models.Index(fields=["payout_status"]),
             models.Index(fields=["user_facing_reference"]),  # Index new field
         ]
         permissions = [
@@ -1627,6 +1648,50 @@ class Payment(models.Model):
             ("view_payment_stats", "Can view aggregated payment statistics"),
             ("export_payment_data", "Can export payment data"),
             ("access_payment_admin", "Can access the Payment Administration section"),
+        ]
+
+
+class Payout(models.Model):
+    """
+    Records a payout transfer made from the platform to a business's Stripe account.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        BusinessInfo, on_delete=models.PROTECT, related_name="payouts"
+    )
+    stripe_transfer_id = models.CharField(max_length=255, unique=True, db_index=True)
+    amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="Amount transferred to the business in the specified currency.",
+    )
+    currency = models.CharField(max_length=3)
+    arrival_date = models.DateField()
+    status = models.CharField(
+        max_length=30,
+        help_text="Status of the transfer from Stripe (e.g., pending, paid, failed).",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    def __str__(self):
+        return f"Payout of {self.amount} {self.currency} to {self.business.businessName} ({self.status})"
+
+    class Meta:
+        db_table = "payouts"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["business"]),
+            models.Index(fields=["status"]),
+            models.Index(fields=["arrival_date"]),
+        ]
+        permissions = [
+            ("access_payout_admin", "Can access the Payout Administration section"),
+            ("view_payout_analytics", "Can view aggregated payout analytics"),
+            ("export_payout_data", "Can export payout data"),
+            ("trigger_manual_payout", "Can trigger a manual payout process"),
+            ("retry_failed_payout", "Can retry a failed payout transfer"),
         ]
 
 
@@ -1902,6 +1967,96 @@ class TicketHistoryLog(models.Model):
     class Meta:
         db_table = "support_ticket_history"
         ordering = ["-timestamp"]
+
+
+class BlogCategory(models.Model):
+    """Model for blog post categories."""
+
+    name = models.CharField(max_length=100, unique=True)
+    slug = models.SlugField(
+        max_length=120, unique=True, help_text="URL-friendly identifier."
+    )
+
+    def __str__(self):
+        return self.name
+
+    class Meta:
+        db_table = "blog_categories"
+        verbose_name_plural = "Blog Categories"
+        ordering = ["name"]
+        permissions = [
+            ("manage_blog_categories", "Can create, edit, and delete blog categories"),
+        ]
+
+
+class BlogPost(models.Model):
+    """Model for a single blog post."""
+
+    slug = models.SlugField(max_length=255, unique=True, db_index=True)
+    title = models.CharField(max_length=200)
+    excerpt = models.TextField(max_length=500, help_text="A short summary of the post.")
+    content = models.TextField(
+        help_text="The full content of the blog post in HTML format."
+    )
+    image_url = models.URLField(
+        max_length=1024, help_text="URL for the main post image."
+    )
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="blog_posts",
+    )
+    category = models.ForeignKey(
+        BlogCategory, on_delete=models.PROTECT, related_name="posts"
+    )
+    tags = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="A list of tags, e.g., ['Community', 'Education']",
+    )
+
+    STATUS_CHOICES = [("published", "Published"), ("draft", "Draft")]
+    status = models.CharField(
+        max_length=10, choices=STATUS_CHOICES, default="draft", db_index=True
+    )
+
+    published_date = models.DateTimeField(
+        default=timezone.now, help_text="The date and time the post is published."
+    )
+    read_time = models.PositiveIntegerField(
+        default=0, help_text="Estimated read time in minutes."
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.title
+
+    def save(self, *args, **kwargs):
+        # Estimate read time
+        word_count = len(self.content.split())
+        self.read_time = math.ceil(word_count / 230)  # Average reading speed
+
+        # Auto-generate slug if it's not set
+        if not self.slug:
+            self.slug = django_slugify(self.title)
+            # Ensure slug is unique
+            original_slug = self.slug
+            counter = 1
+            while BlogPost.objects.filter(slug=self.slug).exists():
+                self.slug = f"{original_slug}-{counter}"
+                counter += 1
+
+        super().save(*args, **kwargs)
+
+    class Meta:
+        ordering = ["-published_date"]
+        db_table = "blog_posts"
+        permissions = [
+            ("manage_blog_posts", "Can create, edit, and delete blog posts"),
+        ]
 
 
 class NotificationCampaign(models.Model):

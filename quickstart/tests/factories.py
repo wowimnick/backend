@@ -3,12 +3,13 @@ from factory.django import DjangoModelFactory
 from django.utils import timezone
 from datetime import date, time, timedelta
 from decimal import Decimal
+from django.utils.text import slugify
 
 from quickstart.models import (
     CustomUser,
     BusinessInfo,
     ClassCategory,
-    ClassSubcategory,  # Added ClassSubcategory
+    ClassSubcategory,
     ClassesMain,
     ClassOption,
     Payment,
@@ -19,6 +20,9 @@ from quickstart.models import (
     Role,
     SupportTicket,
     VerificationRequest,
+    Payout,
+    BlogCategory,
+    BlogPost,
 )
 
 
@@ -44,6 +48,32 @@ class UserFactory(DjangoModelFactory):
     is_active = True
 
 
+class BlogCategoryFactory(DjangoModelFactory):
+    class Meta:
+        model = BlogCategory
+        django_get_or_create = ("name",)
+
+    name = factory.Faker("word")
+    slug = factory.LazyAttribute(lambda o: slugify(o.name))
+
+
+class BlogPostFactory(DjangoModelFactory):
+    class Meta:
+        model = BlogPost
+        django_get_or_create = ("slug",)
+
+    title = factory.Faker("sentence", nb_words=5)
+    slug = factory.LazyAttribute(lambda o: slugify(o.title))
+    excerpt = factory.Faker("paragraph", nb_sentences=2)
+    content = factory.Faker("text", max_nb_chars=1000)
+    image_url = factory.Faker("image_url")
+    author = factory.SubFactory(UserFactory)
+    category = factory.SubFactory(BlogCategoryFactory)
+    tags = factory.LazyFunction(lambda: ["testing", "django", "api"])
+    status = factory.Iterator(["published", "draft"])
+    published_date = factory.LazyFunction(timezone.now)
+
+
 class ClassCategoryFactory(DjangoModelFactory):
     class Meta:
         model = ClassCategory
@@ -53,7 +83,6 @@ class ClassCategoryFactory(DjangoModelFactory):
     key = factory.LazyAttribute(lambda o: o.name.lower())
 
 
-# Added ClassSubcategoryFactory
 class ClassSubcategoryFactory(DjangoModelFactory):
     class Meta:
         model = ClassSubcategory
@@ -121,8 +150,6 @@ class ScheduleFactory(DjangoModelFactory):
         model = Schedule
 
     option = factory.SubFactory(ClassOptionFactory)
-    # Make the date sequential for single-session schedules
-    # to guarantee uniqueness when a new Schedule is created.
     date = factory.Sequence(lambda n: (timezone.now() + timedelta(days=n)).date())
     time = time(14, 0)
     duration = 60
@@ -135,8 +162,6 @@ class ScheduleInstanceFactory(DjangoModelFactory):
         model = ScheduleInstance
 
     schedule = factory.SubFactory(ScheduleFactory)
-    # Inherit the (now unique) date from the parent schedule.
-    # This ensures the (schedule, date) combination is always unique and consistent.
     date = factory.LazyAttribute(lambda o: o.schedule.date)
     time = factory.LazyAttribute(lambda o: o.schedule.time)
     duration = factory.LazyAttribute(lambda o: o.schedule.duration)
@@ -158,6 +183,31 @@ class BookingFactory(DjangoModelFactory):
         lambda o: o.schedule_instance.price * o.participants
     )
     payment_status = "paid"
+
+
+class PayoutFactory(DjangoModelFactory):
+    class Meta:
+        model = Payout
+
+    business = factory.SubFactory(BusinessInfoFactory)
+    stripe_transfer_id = factory.Sequence(lambda n: f"tr_test_{n}")
+    amount = factory.Faker(
+        "pydecimal", left_digits=4, right_digits=2, positive=True, min_value=50
+    )
+    currency = "cad"
+    arrival_date = factory.LazyFunction(
+        lambda: timezone.now().date() + timedelta(days=7)
+    )
+    status = factory.Iterator(["pending", "in_transit", "paid", "failed"])
+    created_at = factory.LazyFunction(timezone.now)
+
+    @factory.post_generation
+    def bookings(self, create, extracted, **kwargs):
+        if not create:
+            return
+        if extracted:
+            for booking in extracted:
+                self.bookings.add(booking)
 
 
 class ReviewFactory(DjangoModelFactory):

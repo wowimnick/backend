@@ -158,7 +158,7 @@ class CreatePaymentIntentView(APIView):
 
             intent = stripe.PaymentIntent.create(
                 amount=total_amount_for_stripe_cents,
-                currency=getattr(settings, "STRIPE_CURRENCY", "usd").lower(),
+                currency=getattr(settings, "STRIPE_CURRENCY", "CAD").lower(),
                 payment_method_types=["card"],
                 metadata=metadata,
             )

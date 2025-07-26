@@ -32,6 +32,11 @@ from .business.business_class_views import (
     AllCategoriesForBusinessViewSet,
 )
 
+from .public.public_blog_views import (
+    PublicBlogPostViewSet,
+    PublicBlogCategoryViewSet,
+)
+
 from .webhooks.stripe_webhooks import stripe_connect_webhook
 from .business.stripe_connect_views import StripeConnectView
 
@@ -79,6 +84,9 @@ __all__ = [
     "PublicBusinessInfoViewSet",
     "MyBusinessOverviewView",
     "NotificationViewSet",
+    # Blog Views
+    "PublicBlogPostViewSet",
+    "PublicBlogCategoryViewSet",
     # Stripe Connect Views
     "StripeConnectView",
     "stripe_connect_webhook",
