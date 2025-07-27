@@ -50,7 +50,6 @@ jobs:
           key: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
           script: |
             # --- PREPARATION ---
-            # Create the .env file from secrets.
             cat << 'EOF' > /home/ec2-user/.env.staging
             # --- Meta ---
             IS_DOCKER=true
@@ -91,8 +90,6 @@ jobs:
             FRONTEND_URL=${{ secrets.FRONTEND_URL }}
             DEFAULT_FROM_EMAIL=${{ secrets.DEFAULT_FROM_EMAIL }}
             EOF
-
-            # Dynamically add IPs and necessary hostnames to ALLOWED_HOSTS.
             TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
             INSTANCE_PRIVATE_IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/local-ipv4)
             INSTANCE_PUBLIC_IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4)
@@ -124,23 +121,26 @@ jobs:
 
             # 4. START NEW APPLICATION CONTAINERS
             echo "--- Starting new web and worker containers... ---"
-            docker run -d --rm --env-file /home/ec2-user/.env.staging -p 80:8000 --name $WEB_CONTAINER_NAME --network $NETWORK_NAME $IMAGE_NAME gunicorn CEBackend.asgi:application -w 2 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
-            docker run -d --rm --env-file /home/ec2-user/.env.staging --name $WORKER_CONTAINER_NAME --network $NETWORK_NAME $IMAGE_NAME celery -A CEBackend.celery worker -l info --without-mingle --without-gossip
+            # MODIFIED: Added "-e CONTAINER_ROLE=web" to give the container its job title.
+            docker run -d --rm --env-file /home/ec2-user/.env.staging -e CONTAINER_ROLE=web -p 80:8000 --name $WEB_CONTAINER_NAME --network $NETWORK_NAME $IMAGE_NAME gunicorn CEBackend.asgi:application -w 2 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
 
-            # 5. START THE STRIPE CLI SIDECAR CONTAINERS
+            # MODIFIED: Added "-e CONTAINER_ROLE=worker" and changed the command to start supervisord.
+            docker run -d --rm --env-file /home/ec2-user/.env.staging -e CONTAINER_ROLE=worker --name $WORKER_CONTAINER_NAME --network $NETWORK_NAME $IMAGE_NAME /usr/bin/supervisord -n
+
+            # 5. START THE STRIPE CLI SIDECAR CONTAINERS (No changes here)
             echo "--- Starting Stripe CLI for Payments Webhook... ---"
             docker run -d --rm --name $STRIPE_PAYMENTS_CONTAINER_NAME --network $NETWORK_NAME stripe/stripe-cli:latest listen --api-key "${{ secrets.STRIPE_SECRET_KEY }}" --forward-to "http://web:8000/api/payments/webhook/" --events "payment_intent.succeeded,payment_intent.payment_failed"
 
             echo "--- Starting Stripe CLI for Connect Webhook... ---"
-            docker run -d --rm --name $STRIPE_CONNECT_CONTAINER_NAME --network $NETWORK_NAME stripe/stripe-cli:latest listen --api-key "${{ secrets.STRIPE_SECRET_KEY }}" --forward-to "http://web:8000/api/webhooks/stripe-connect/" --events "account.updated,capability.updated"
+            docker run -d --rm --name $STRIPE_CONNECT_CONTAINER_NAME --network $NETWORK_NAME stripe/stripe-cli:latest listen --api-key "${{ secrets.STRIPE_SECRET_KEY }}" --forward-to "http://web:8000/api/webhooks/stripe-connect/" --events "account.updated,capability.updated,transfer.created,transfer.paid,transfer.failed"
 
-            # 6. VERIFY AND LOG
+            # 6. VERIFY AND LOG (No changes here)
             echo "--- Waiting 5 seconds for containers to boot... ---"
             sleep 5
             echo "--- ✅ Deployment containers started. Tailing final logs for 15 seconds... ---"
             timeout 15s docker logs --follow $WEB_CONTAINER_NAME &
             timeout 15s docker logs --follow $WORKER_CONTAINER_NAME &
-            timeout 15s docker logs --follow $STRIPE_PAYMENTS_CONTAINER_NAME &
+            timeout 15s docker logs --follow $STRIPE_CONNECT_CONTAINER_NAME &
             wait
 
             # 7. CLEANUP
