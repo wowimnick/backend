@@ -7,6 +7,13 @@ from dj_rest_auth.registration.views import VerifyEmailView, ResendEmailVerifica
 from dj_rest_auth.views import PasswordChangeView
 
 # --- Model import for the new redirect view ---
+from quickstart.views.admin.payout_management.admin_payout_views import (
+    AdminPayoutViewSet,
+)
+from quickstart.views.admin.blog_management.admin_blog_views import (
+    AdminBlogCategoryViewSet,
+    AdminBlogPostViewSet,
+)
 from quickstart.models import ClassesMain
 
 from quickstart.views.admin.support_management.support_ticket_views import (
@@ -83,6 +90,8 @@ from quickstart.views import (
     stripe_connect_webhook,
     NotificationViewSet,
     AllCategoriesForBusinessViewSet,
+    PublicBlogPostViewSet,
+    PublicBlogCategoryViewSet,
 )
 
 # =============================================================================
@@ -93,6 +102,12 @@ from quickstart.views import (
 public_router = DefaultRouter()
 public_router.register(
     r"businesses", PublicBusinessInfoViewSet, basename="public-business"
+)
+public_router.register(
+    r"blog/posts", PublicBlogPostViewSet, basename="public-blog-posts"
+)
+public_router.register(
+    r"blog/categories", PublicBlogCategoryViewSet, basename="public-blog-categories"
 )
 public_router.register(r"schedules", PublicScheduleViewSet, basename="public-schedule")
 public_router.register(
@@ -149,6 +164,11 @@ admin_router.register(r"categories", AdminCategoryViewSet, basename="admin-categ
 admin_router.register(r"reviews", AdminReviewViewSet, basename="admin-reviews")
 admin_router.register(r"bookings", AdminBookingViewSet, basename="admin-bookings")
 admin_router.register(r"payments", AdminPaymentViewSet, basename="admin-payments")
+admin_router.register(r"payouts", AdminPayoutViewSet, basename="admin-payouts")
+admin_router.register(r"blog/posts", AdminBlogPostViewSet, basename="admin-blog-posts")
+admin_router.register(
+    r"blog/categories", AdminBlogCategoryViewSet, basename="admin-blog-categories"
+)
 admin_router.register(
     r"notifications", AdminNotificationCampaignViewSet, basename="admin-notifications"
 )

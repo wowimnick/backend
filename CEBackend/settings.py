@@ -7,6 +7,7 @@ import os
 import ssl
 import sys
 from datetime import timedelta
+from celery.schedules import crontab
 from pathlib import Path
 
 # --- Environment Loading ---
@@ -88,7 +89,11 @@ GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
 GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
 STRIPE_PUBLIC_KEY = os.environ["STRIPE_PUBLIC_KEY"]
 STRIPE_SECRET_KEY = os.environ["STRIPE_SECRET_KEY"]
-STRIPE_WEBHOOK_SECRET = os.environ["STRIPE_WEBHOOK_SECRET"]
+# Secret for the endpoint at /api/webhooks/stripe-connect/
+STRIPE_CONNECT_WEBHOOK_SECRET = os.environ.get("STRIPE_CONNECT_WEBHOOK_SECRET")
+
+# Secret for the endpoint at /api/payments/webhook/
+STRIPE_PAYMENTS_WEBHOOK_SECRET = os.environ.get("STRIPE_PAYMENTS_WEBHOOK_SECRET")
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
 
 
@@ -120,6 +125,7 @@ INSTALLED_APPS = [
     "storages",
     "channels",
     "silk",
+    "django_celery_beat",
     "quickstart.apps.QuickstartConfig",
 ]
 
@@ -226,6 +232,27 @@ CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_SEND_SENT_EVENT = True
 
+CELERY_BEAT_SCHEDULE = {
+    # Runs daily at 2:00 AM UTC.
+    # Marks past confirmed bookings as 'completed'.
+    "update-completed-bookings-daily": {
+        "task": "tasks.update_completed_booking_status",
+        "schedule": crontab(hour=2, minute=0),
+    },
+    # Runs daily at 3:00 AM UTC, after the status update.
+    # Processes payouts for classes that were completed the previous day.
+    "process-payouts-daily": {
+        "task": "tasks.process_daily_payouts",
+        "schedule": crontab(hour=3, minute=0),
+        # You can add args if your task needs them, but ours doesn't.
+        # 'args': (),
+    },
+    # Runs daily at 4:00 AM UTC, after payouts are processed.
+    "process-refunds-daily": {
+        "task": "tasks.process_daily_refunds",
+        "schedule": crontab(hour=4, minute=0),
+    },
+}
 
 # --- Authentication Backends ---
 AUTHENTICATION_BACKENDS = [

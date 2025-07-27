@@ -65,6 +65,13 @@ class Command(BaseCommand):
                     "sort_order": 4,
                 },  # Renamed for clarity
             )
+            payout_group, _ = PermissionGroup.objects.update_or_create(
+                name="Payout Admin",
+                defaults={
+                    "description": "Permissions related to business payouts and financial transfers.",
+                    "sort_order": 5,  # Adjust sort order as needed
+                },
+            )
             notification_group, _ = PermissionGroup.objects.update_or_create(
                 name="Notification Management",
                 defaults={
@@ -80,6 +87,13 @@ class Command(BaseCommand):
                     "sort_order": 6,
                 },
             )
+            content_group, _ = PermissionGroup.objects.update_or_create(
+                name="Content Management",
+                defaults={
+                    "description": "Permissions related to managing blog posts, categories, and other site content.",
+                    "sort_order": 7,
+                },
+            )
             system_group, _ = PermissionGroup.objects.update_or_create(
                 name="System & Moderation",
                 defaults={
@@ -87,7 +101,6 @@ class Command(BaseCommand):
                     "sort_order": 99,
                 },
             )
-
             # --- Define Explicit Descriptions & Custom Permissions ---
             # This dictionary is now the ONLY source for which permissions get enhanced.
             descriptions = {
@@ -476,6 +489,41 @@ class Command(BaseCommand):
                     "group": business_users_group,
                     "description": "Cancel bookings within own business (e.g., requested by student)",
                 },
+                # --- Payout Admin (Platform Admins) ---
+                "access_payout_admin": {
+                    "group": payout_group,
+                    "description": "General access to the Payout Administration section",
+                },
+                "view_payout_analytics": {
+                    "group": payout_group,
+                    "description": "View aggregated payout statistics and reports",
+                },
+                "export_payout_data": {
+                    "group": payout_group,
+                    "description": "Export payout and included booking data",
+                    "is_sensitive": True,
+                },
+                "trigger_manual_payout": {
+                    "group": payout_group,
+                    "description": "Manually trigger the payout generation process",
+                    "is_sensitive": True,
+                },
+                "retry_failed_payout": {
+                    "group": payout_group,
+                    "description": "Retry a payout transfer that has previously failed",
+                    "is_sensitive": True,
+                },
+                "view_payout": {
+                    "group": payout_group,
+                    "description": "View details for any payout, including included bookings",
+                    "is_sensitive": True,
+                },
+                "delete_payout": {
+                    "group": payout_group,
+                    "description": "Delete a payout record (Use with extreme caution)",
+                    "is_sensitive": True,
+                    "requires_mfa": True,
+                },
                 # --- System & Moderation (Platform Admins) ---
                 "access_admin_dashboard": {
                     "group": system_group,
@@ -605,12 +653,26 @@ class Command(BaseCommand):
                 "view_permissiongroup": {
                     "group": system_group,
                     "description": "View permission groups (Admin)",
-                },  # Keep view for info
+                },
                 "view_enhancedpermission": {
                     "group": system_group,
                     "description": "View enhanced permission details (Admin)",
-                },  # Keep view for info
-                # Add default model permissions only if needed for explicit admin management
+                },
+                # --- Content Management ---
+                "manage_blog_posts": {
+                    "group": content_group,
+                    "description": "Can create, edit, publish, and delete blog posts.",
+                    "is_sensitive": True,
+                },
+                "manage_blog_categories": {
+                    "group": content_group,
+                    "description": "Can create, edit, and delete blog categories.",
+                    "is_sensitive": True,
+                },
+                "access_blog_admin": {
+                    "group": content_group,
+                    "description": "General access to the Blog Management section in the admin panel.",
+                },
             }
 
             # --- Enhance Permissions ---

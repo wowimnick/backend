@@ -4,6 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.throttling import ScopedRateThrottle
 from dj_rest_auth.registration.views import RegisterView
@@ -365,7 +366,7 @@ class CustomRegisterView(RegisterView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            # Call the parent method which handles user creation and triggers signup completion
+            # Call the parent method which handles user creation
             response = super().post(request, *args, **kwargs)
 
             # Log *after* the super().post() call, which includes user creation and signal sending
@@ -386,13 +387,36 @@ class CustomRegisterView(RegisterView):
 
             return response
 
+        # --- MODIFIED: Catch the specific validation error from the save() method ---
+
+        except DRFValidationError as e:
+            logger.warning(
+                f"Registration validation error for {request.data.get('email')}: {e.detail}"
+            )
+
+            # If the error is a non_field_error, extract and simplify it.
+            if isinstance(e.detail, dict) and "non_field_errors" in e.detail:
+                # Extract the first error message string.
+                error_message = str(e.detail["non_field_errors"][0])
+
+                # The validator uses "username", but the user only enters an email.
+                # Let's make the message more intuitive for the user.
+                user_facing_message = error_message.replace("username", "email")
+
+                # Return the cleaned message in a simple 'detail' key.
+                return Response(
+                    {"detail": user_facing_message}, status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Otherwise, it's a field-specific error (e.g., {'email': [...]}),
+            # so we return the original structured error.
+            return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
+
         except Exception as e:
-            # Catch any unexpected errors during the super().post call or user creation
             logger.error(
                 f"REGISTRATION VIEW LOG: Error during super().post or signup flow for {request.data.get('email')}: {e}",
                 exc_info=True,
             )
-            # Return a generic error response
             return Response(
                 {"detail": "An internal error occurred during registration."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
