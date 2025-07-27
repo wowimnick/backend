@@ -1,8 +1,10 @@
 # quickstart/stripe_webhooks.py
 
+from datetime import datetime
 from django.conf import settings
 from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
+import pytz
 import stripe
 import logging
 
@@ -108,106 +110,79 @@ def _update_business_status_from_stripe_account(stripe_account_obj):
 
 @csrf_exempt
 def stripe_connect_webhook(request):
+    # The initial part for event construction is correct.
     if request.method != "POST":
-        logger.warning("Webhook: Received non-POST request.")
         return HttpResponse("Request method not allowed.", status=405)
-
     payload = request.body
     sig_header = request.META.get("HTTP_STRIPE_SIGNATURE")
     event = None
 
     if not STRIPE_CONNECT_WEBHOOK_SECRET:
-        logger.error(
-            "Stripe Connect webhook secret (STRIPE_CONNECT_WEBHOOK_SECRET) not configured."
-        )
+        logger.error("CRITICAL ERROR: STRIPE_WEBHOOK_SECRET is not configured.")
         return HttpResponse("Webhook secret not configured.", status=500)
 
     try:
         event = stripe.Webhook.construct_event(
             payload, sig_header, STRIPE_CONNECT_WEBHOOK_SECRET
         )
-        logger.info(
-            f"--- Connect Webhook: Received event ID: {event.id}, Type: {event.type} ---"
-        )
-    except ValueError as e:
-        logger.error(f"Connect Webhook: Invalid payload: {e}")
-        return HttpResponse("Invalid payload", status=400)
-    except stripe.SignatureVerificationError as e:
-        logger.error(f"Connect Webhook: Invalid signature: {e}")
-        return HttpResponse("Invalid signature", status=400)
     except Exception as e:
-        logger.error(f"Connect Webhook: Error constructing event: {e}", exc_info=True)
-        return HttpResponse("Webhook error during construction", status=500)
+        logger.error(f"ERROR: Webhook construction failed: {e}")
+        return HttpResponse(f"Webhook error: {e}", status=400)
 
-    # Handle the event
-    if event.type == "account.updated":
-        account = event.data.object
-        logger.info(f"Connect Webhook: Processing 'account.updated' for {account.id}")
-        try:
-            _update_business_status_from_stripe_account(account)
-        except Exception:
-            # Errors are logged in the helper, return 500 to signal processing failure to Stripe
-            return HttpResponse(
-                "Webhook error during account.updated processing", status=500
-            )
+    # --- UPDATED EVENT HANDLING LOGIC ---
 
-    elif event.type == "capability.updated":
-        capability = event.data.object
-        stripe_account_id = capability.account
+    if event.type.startswith("transfer."):
+        transfer_object_from_event = event.data.object
+        stripe_transfer_id = transfer_object_from_event.id
         logger.info(
-            f"Connect Webhook: Processing 'capability.updated' for {stripe_account_id}. Capability: {capability.id}, Status: {capability.status}"
+            f"Webhook processing '{event.type}' for transfer ID: {stripe_transfer_id}"
         )
+
         try:
-            # When a capability updates, re-fetch the entire account to get the complete picture
-            account = stripe.Account.retrieve(stripe_account_id)
-            _update_business_status_from_stripe_account(account)
-        except stripe.StripeError as e:
-            logger.error(
-                f"Connect Webhook: Stripe error retrieving account {stripe_account_id} on capability update: {e}"
-            )
-            return HttpResponse(
-                "Stripe error during capability.updated processing", status=500
-            )
-        except Exception:
-            # Errors are logged in the helper, return 500 to signal processing failure to Stripe
-            return HttpResponse(
-                "Webhook error during capability.updated processing", status=500
+            # Retrieve the latest version of the transfer object to get the ground truth.
+            live_transfer_object = stripe.Transfer.retrieve(stripe_transfer_id)
+
+            # --- THE FIX ---
+            # Safely get all attributes from the Stripe object using .get() with a default value.
+            # This prevents the KeyError that was causing the crash.
+            new_status = live_transfer_object.get("status", "pending")
+            arrival_timestamp = live_transfer_object.get("arrival_date")
+            # --- END OF FIX ---
+
+            arrival_date_obj = (
+                datetime.fromtimestamp(arrival_timestamp, tz=pytz.utc).date()
+                if arrival_timestamp
+                else None
             )
 
-    elif event.type in [
-        "transfer.created",
-        "transfer.paid",
-        "transfer.failed",
-        "transfer.updated",
-    ]:
-        transfer = event.data.object
-        stripe_transfer_id = transfer.id
-        new_status = transfer.status  # e.g., 'paid', 'pending', 'failed'
-        logger.info(
-            f"Connect Webhook: Processing '{event.type}' for transfer {stripe_transfer_id} with new status '{new_status}'"
-        )
-        try:
-            # Update the local Payout record based on the Stripe transfer status
-            payout_record, updated = Payout.objects.update_or_create(
-                stripe_transfer_id=stripe_transfer_id, defaults={"status": new_status}
+            logger.info(
+                f"Live status for {stripe_transfer_id} is '{new_status}'. Updating database."
             )
-            if updated:
-                logger.info(
-                    f"Payout {payout_record.id} status updated to '{new_status}'."
-                )
 
-            # If a transfer fails, you might want to revert the bookings
-            if new_status == "failed":
+            # Use update_or_create to safely handle the database update.
+            payout_record, created = Payout.objects.update_or_create(
+                stripe_transfer_id=stripe_transfer_id,
+                defaults={"status": new_status, "arrival_date": arrival_date_obj},
+            )
+
+            if created:
                 logger.warning(
-                    f"Transfer {stripe_transfer_id} failed. Reverting associated bookings' payout_status to 'pending'."
+                    f"Webhook created a new Payout record for {stripe_transfer_id} as one did not exist."
                 )
+            else:
+                logger.info(
+                    f"SUCCESS: Payout record {payout_record.id} status updated to '{new_status}'."
+                )
+
+            if new_status == "failed":
                 payout_record.bookings.all().update(payout_status="pending")
-                # TODO: Trigger an admin notification for the failed transfer
+                logger.warning(
+                    f"Transfer failed. Associated bookings for Payout {payout_record.id} have been reset."
+                )
 
         except Exception as e:
             logger.error(
-                f"Error updating payout status for transfer {stripe_transfer_id}: {e}",
-                exc_info=True,
+                f"CRITICAL ERROR inside transfer processing block: {e}", exc_info=True
             )
             return HttpResponse("Webhook error during transfer processing", status=500)
 
@@ -215,9 +190,6 @@ def stripe_connect_webhook(request):
         logger.info(
             f"Connect Webhook: Unhandled event type {event.type} (ID: {event.id})"
         )
-
-    # Acknowledge receipt of the event to Stripe
-    return HttpResponse(status=200)
 
     # Acknowledge receipt of the event to Stripe
     return HttpResponse(status=200)

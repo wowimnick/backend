@@ -16,17 +16,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     jq \
     curl \
+    supervisor \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the requirements file
 COPY requirements.txt .
 
 # Install Python dependencies
-# This creates a cached layer. It will only re-run if requirements.txt changes.
 RUN pip install -r requirements.txt
 
 # Create a non-root user for security
 RUN groupadd -r django && useradd -r -g django django
+
+# --- NEW: Copy supervisor config first ---
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # Copy the rest of the application code
 COPY . .
@@ -35,8 +38,8 @@ COPY . .
 COPY ./entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# Change ownership of the app directory to the non-root user
-RUN chown -R django:django /home/django/app
+# Change ownership of the app directory and supervisor config to the non-root user
+RUN chown -R django:django /home/django/app /etc/supervisor/conf.d/supervisord.conf
 
 # Switch to the non-root user
 USER django

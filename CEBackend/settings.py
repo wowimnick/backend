@@ -121,6 +121,7 @@ INSTALLED_APPS = [
     "storages",
     "channels",
     "silk",
+    "django_celery_beat",
     "quickstart.apps.QuickstartConfig",
 ]
 
@@ -241,6 +242,11 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": crontab(hour=3, minute=0),
         # You can add args if your task needs them, but ours doesn't.
         # 'args': (),
+    },
+    # Runs daily at 4:00 AM UTC, after payouts are processed.
+    "process-refunds-daily": {
+        "task": "tasks.process_daily_refunds",
+        "schedule": crontab(hour=4, minute=0),
     },
 }
 

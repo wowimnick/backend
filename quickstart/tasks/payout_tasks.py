@@ -11,17 +11,17 @@ import stripe
 import logging
 import pytz
 
-from quickstart.models import Booking, BusinessInfo, Payout
+from quickstart.models import Booking, BusinessInfo, Payout, Payment
 
 logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
-PLATFORM_FEE_RATE = Decimal("0.20")
-
 
 @shared_task(name="tasks.update_completed_booking_status")
 def update_completed_booking_status():
-    # ... (this function is correct, no changes needed)
+    """
+    Marks past, confirmed bookings as 'completed' so they are eligible for payout.
+    """
     yesterday = timezone.now().date() - timedelta(days=1)
     instances_to_complete = Q(schedule_instance__date__lte=yesterday)
     bookings_to_update = Booking.objects.filter(
@@ -37,163 +37,187 @@ def update_completed_booking_status():
 
 @shared_task(name="tasks.process_daily_payouts")
 def process_daily_payouts():
-    # ... (parts of this function are the same)
-    payout_date_for_classes = timezone.now().date() - timedelta(days=1)
-    logger.info(
-        f"--- Starting daily payout process for classes completed on: {payout_date_for_classes} ---"
-    )
+    """
+    Calculates net daily revenue for businesses and initiates Stripe transfers.
+    """
+    logger.info("--- Starting Daily Payout Processing Task ---")
 
+    # Correctly fetches completed bookings ready for payout.
     bookings_to_payout = Booking.objects.filter(
-        schedule_instance__date=payout_date_for_classes,
         status="completed",
         payment_status="paid",
         payout_status="pending",
-    ).select_related("schedule_instance__schedule__option__classId__businessId")
+    ).select_related(
+        "schedule_instance__schedule__option__classId__businessId", "payments"
+    )
 
     if not bookings_to_payout.exists():
-        logger.info(
-            "No bookings found requiring payout for the target date. Process finished."
-        )
+        logger.info("No bookings found requiring payout. Process finished.")
         return "No bookings to pay out."
 
+    # Group bookings by business to create consolidated payouts
     payouts_by_business = {}
     for booking in bookings_to_payout:
-        try:
-            business_account_id = (
-                booking.schedule_instance.schedule.option.classId.businessId.stripe_account_id
+        business = booking.schedule_instance.schedule.option.classId.businessId
+        if business.stripe_account_id:
+            payouts_by_business.setdefault(
+                business.stripe_account_id,
+                {
+                    "business_instance": business,
+                    "net_revenue": Decimal("0.0"),
+                    "booking_ids": [],
+                },
             )
-            if business_account_id:
-                if business_account_id not in payouts_by_business:
-                    payouts_by_business[business_account_id] = {
-                        "business_instance": booking.schedule_instance.schedule.option.classId.businessId,
-                        "total_gross_revenue": Decimal("0.0"),
-                        "booking_ids": [],
-                    }
-                payouts_by_business[business_account_id][
-                    "total_gross_revenue"
-                ] += booking.amount_paid
-                payouts_by_business[business_account_id]["booking_ids"].append(
+
+            payment = booking.payments.first()
+            if payment:
+                service_fee = payment.service_fee_amount or Decimal("0.00")
+                net_amount = booking.amount_paid - service_fee
+                payouts_by_business[business.stripe_account_id][
+                    "net_revenue"
+                ] += net_amount
+                payouts_by_business[business.stripe_account_id]["booking_ids"].append(
                     booking.id
                 )
-        except Exception as e:
-            logger.error(
-                f"Error processing booking {booking.id} when grouping for payout: {e}",
-                exc_info=True,
-            )
-            continue
+            else:
+                logger.warning(
+                    f"Booking {booking.id} skipped for payout: no associated payment record found."
+                )
 
     logger.info(f"Found {len(payouts_by_business)} businesses to process payouts for.")
 
     successful_payouts = 0
-    failed_payouts = 0
-
     for stripe_id, data in payouts_by_business.items():
         business = data["business_instance"]
-        total_gross = data["total_gross_revenue"]
-        booking_ids_for_payout = data["booking_ids"]
+        net_payout_amount = data["net_revenue"]
+        booking_ids = data["booking_ids"]
+
+        if net_payout_amount <= Decimal("0.50"):
+            logger.warning(
+                f"Skipping payout for Business {business.businessId} as net amount ${net_payout_amount} is too low."
+            )
+            continue
 
         try:
             with transaction.atomic():
-                platform_fee = (total_gross * PLATFORM_FEE_RATE).quantize(
-                    Decimal("0.01")
-                )
-                net_payout_amount = total_gross - platform_fee
-
-                if net_payout_amount <= Decimal("0.50"):
-                    logger.warning(
-                        f"Skipping payout for Business {business.businessId} as net amount ${net_payout_amount} is too low."
-                    )
-                    Booking.objects.filter(id__in=booking_ids_for_payout).update(
-                        payout_status="processed"
-                    )
-                    continue
-
                 payout_amount_cents = int(net_payout_amount * 100)
-                logger.info(
-                    f"Attempting to transfer ${net_payout_amount} to Business {business.businessId} (Stripe ID: {stripe_id})"
-                )
-
                 transfer = stripe.Transfer.create(
                     amount=payout_amount_cents,
-                    currency=getattr(settings, "STRIPE_CURRENCY", "usd").lower(),
+                    currency=business.currency.lower(),
                     destination=stripe_id,
-                    description=f"ClassEasily Payout for classes on {payout_date_for_classes}",
+                    description=f"ClassEasily Payout",
                     metadata={
-                        "classeasily_business_id": business.businessId,
-                        "payout_date_for_classes": str(payout_date_for_classes),
-                        "included_booking_count": len(booking_ids_for_payout),
-                        "gross_revenue": str(total_gross),
-                        "platform_fee": str(platform_fee),
+                        "business_id": business.businessId,
+                        "booking_count": len(booking_ids),
                     },
                 )
 
-                # --- DEBUGGING STEP: Print the entire transfer object ---
-                logger.info("--- STRIPE TRANSFER OBJECT RESPONSE ---")
-                logger.info(transfer)
-                logger.info("------------------------------------")
-                # --- END DEBUGGING STEP ---
-
-                # --- FINAL FIX: Use getattr for ALL attributes for robustness ---
-                transfer_id = getattr(transfer, "id", None)
-                transfer_currency = getattr(transfer, "currency", "usd")
-                transfer_status = getattr(
-                    transfer, "status", "unknown"
-                )  # This is the key fix
-                arrival_date_timestamp = getattr(transfer, "arrival_date", None)
-
-                if not transfer_id:
-                    # If we don't even have an ID, something is very wrong.
-                    raise ValueError("Stripe API did not return a transfer ID.")
-
-                if arrival_date_timestamp:
-                    payout_arrival_date = datetime.fromtimestamp(
-                        arrival_date_timestamp, tz=pytz.utc
-                    ).date()
-                else:
-                    logger.warning(
-                        f"Stripe Transfer {transfer_id} did not include an arrival_date. Estimating a fallback date."
-                    )
-                    payout_arrival_date = timezone.now().date() + timedelta(days=3)
+                arrival_date = (
+                    datetime.fromtimestamp(transfer.arrival_date, tz=pytz.utc).date()
+                    if transfer.arrival_date
+                    else timezone.now().date() + timedelta(days=3)
+                )
 
                 payout_record = Payout.objects.create(
                     business=business,
-                    stripe_transfer_id=transfer_id,
+                    stripe_transfer_id=transfer.id,
                     amount=net_payout_amount,
-                    currency=transfer_currency.upper(),
-                    arrival_date=payout_arrival_date,
-                    status=transfer_status,  # Use the safely-retrieved status
+                    currency=transfer.currency.upper(),
+                    arrival_date=arrival_date,
+                    status=getattr(transfer, "status", "pending"),
                 )
 
-                bookings_in_payout = Booking.objects.filter(
-                    id__in=booking_ids_for_payout
-                )
-                payout_record.bookings.set(bookings_in_payout)
-                bookings_in_payout.update(payout_status="processed")
-
-                logger.info(
-                    f"SUCCESS: Created Stripe Transfer {transfer_id} and Payout Record {payout_record.id} for Business {business.businessId}."
-                )
+                bookings = Booking.objects.filter(id__in=booking_ids)
+                payout_record.bookings.set(bookings)
+                bookings.update(payout_status="processed")
                 successful_payouts += 1
-
-        except stripe.StripeError as e:
-            logger.error(
-                f"STRIPE ERROR processing payout for Business {business.businessId}: {e}",
-                exc_info=True,
-            )
-            Booking.objects.filter(id__in=booking_ids_for_payout).update(
-                payout_status="failed"
-            )
-            failed_payouts += 1
+                logger.info(
+                    f"SUCCESS: Created Stripe Transfer {transfer.id} for Business {business.businessId}."
+                )
         except Exception as e:
             logger.error(
-                f"UNEXPECTED ERROR processing payout for Business {business.businessId}: {e}",
+                f"ERROR processing payout for Business {business.businessId}: {e}",
                 exc_info=True,
             )
-            Booking.objects.filter(id__in=booking_ids_for_payout).update(
-                payout_status="failed"
-            )
-            failed_payouts += 1
 
-    summary = f"Payout process finished. Successful transfers: {successful_payouts}. Failed transfers: {failed_payouts}."
-    logger.info(summary)
-    return summary
+    return f"Payout process finished. Successful transfers: {successful_payouts}."
+
+
+@shared_task(name="tasks.process_daily_refunds")
+def process_daily_refunds():
+    """
+    A daily Celery task to find bookings pending a refund and process them via Stripe.
+    """
+    logger.info("--- Starting Daily Refund Processing Task ---")
+
+    bookings_to_refund = Booking.objects.filter(payment_status="refund_pending")
+
+    if not bookings_to_refund.exists():
+        logger.info("No bookings pending refund today.")
+        return "No refunds to process."
+
+    logger.info(f"Found {bookings_to_refund.count()} bookings to process for refunds.")
+    successful_refunds, failed_refunds = 0, 0
+
+    for booking in bookings_to_refund:
+        try:
+            with transaction.atomic():
+                locked_booking = Booking.objects.select_for_update().get(id=booking.id)
+                if locked_booking.payment_status != "refund_pending":
+                    continue
+
+                payment = locked_booking.payments.filter(
+                    status__in=["succeeded", "partially_refunded"]
+                ).first()
+                if not payment:
+                    logger.error(
+                        f"Cannot process refund for Booking {locked_booking.id}: No successful payment record found."
+                    )
+                    locked_booking.payment_status = "refund_failed"
+                    locked_booking.save(update_fields=["payment_status"])
+                    failed_refunds += 1
+                    continue
+
+                refund_percentage = (
+                    Decimal(locked_booking.cancellation_refund_percentage) / 100
+                )
+                amount_to_refund = payment.available_refund_amount * refund_percentage
+
+                if amount_to_refund < Decimal("0.50"):
+                    logger.warning(
+                        f"Refund for Booking {locked_booking.id} is too small (${amount_to_refund}). Marking as refunded without transaction."
+                    )
+                    locked_booking.payment_status = "refunded"
+                    locked_booking.save(update_fields=["payment_status"])
+                    successful_refunds += 1
+                    continue
+
+                stripe.Refund.create(
+                    payment_intent=payment.stripe_payment_intent_id,
+                    amount=int(amount_to_refund * 100),
+                    reason="customer_request",
+                )
+
+                locked_booking.payment_status = "refunded"
+                locked_booking.save(update_fields=["payment_status"])
+                successful_refunds += 1
+                logger.info(
+                    f"Successfully processed refund for Booking {locked_booking.id}."
+                )
+
+        except stripe.error.StripeError as e:
+            logger.error(
+                f"Stripe Error processing refund for Booking {booking.id}: {e}"
+            )
+            booking.payment_status = "refund_failed"
+            booking.save(update_fields=["payment_status"])
+            failed_refunds += 1
+        except Exception as e:
+            logger.error(
+                f"Unexpected error processing refund for Booking {booking.id}: {e}",
+                exc_info=True,
+            )
+            failed_refunds += 1
+            # Let the transaction rollback, so it will be retried tomorrow
+
+    return f"Refund process finished. Successful: {successful_refunds}. Failed: {failed_refunds}."
