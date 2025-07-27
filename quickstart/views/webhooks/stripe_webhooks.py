@@ -14,7 +14,7 @@ from quickstart.models import BusinessInfo, Payout
 logger = logging.getLogger(__name__)
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
-STRIPE_CONNECT_WEBHOOK_SECRET = getattr(settings, "STRIPE_WEBHOOK_SECRET", None)
+STRIPE_CONNECT_WEBHOOK_SECRET = getattr(settings, "STRIPE_CONNECT_WEBHOOK_SECRET", None)
 
 
 def _update_business_status_from_stripe_account(stripe_account_obj):
@@ -69,10 +69,11 @@ def stripe_connect_webhook(request):
     event = None
 
     if not STRIPE_CONNECT_WEBHOOK_SECRET:
-        logger.error("CRITICAL: STRIPE_WEBHOOK_SECRET is not configured.")
+        logger.error("CRITICAL: STRIPE_CONNECT_WEBHOOK_SECRET is not configured.")
         return HttpResponse(status=500)
 
     try:
+        # This is the key change: ensure it uses the specific variable
         event = stripe.Webhook.construct_event(
             payload, sig_header, STRIPE_CONNECT_WEBHOOK_SECRET
         )

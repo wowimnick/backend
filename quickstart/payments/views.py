@@ -273,7 +273,7 @@ class ProcessBookingWebhook(APIView):
 
         try:
             event = stripe.Webhook.construct_event(
-                payload, sig_header, settings.STRIPE_WEBHOOK_SECRET
+                payload, sig_header, settings.STRIPE_PAYMENTS_WEBHOOK_SECRET
             )
             logger.info(
                 f"--- Booking Webhook: Received event ID={event.id}, Type={event.type} ---"

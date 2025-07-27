@@ -89,7 +89,11 @@ GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
 GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
 STRIPE_PUBLIC_KEY = os.environ["STRIPE_PUBLIC_KEY"]
 STRIPE_SECRET_KEY = os.environ["STRIPE_SECRET_KEY"]
-STRIPE_WEBHOOK_SECRET = os.environ["STRIPE_WEBHOOK_SECRET"]
+# Secret for the endpoint at /api/webhooks/stripe-connect/
+STRIPE_CONNECT_WEBHOOK_SECRET = os.environ.get("STRIPE_CONNECT_WEBHOOK_SECRET")
+
+# Secret for the endpoint at /api/payments/webhook/
+STRIPE_PAYMENTS_WEBHOOK_SECRET = os.environ.get("STRIPE_PAYMENTS_WEBHOOK_SECRET")
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
 
 

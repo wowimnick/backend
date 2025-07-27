@@ -83,7 +83,8 @@ jobs:
             GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
             STRIPE_PUBLIC_KEY=${{ secrets.STRIPE_PUBLIC_KEY }}
             STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}
-            STRIPE_WEBHOOK_SECRET=${{ secrets.STRIPE_WEBHOOK_SECRET }}
+            STRIPE_CONNECT_WEBHOOK_SECRET=${{ secrets.STRIPE_CONNECT_WEBHOOK_SECRET }}
+            STRIPE_PAYMENTS_WEBHOOK_SECRET=${{ secrets.STRIPE_PAYMENTS_WEBHOOK_SECRET }}
             OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
 
             # --- Email & Frontend ---

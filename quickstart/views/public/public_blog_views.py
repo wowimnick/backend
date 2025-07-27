@@ -3,10 +3,6 @@ from rest_framework import viewsets, permissions, filters
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Count
 
-from quickstart.serializers.admin.blog_management.admin_blog_serializers import (
-    AdminBlogCategorySerializer,
-    AdminBlogPostSerializer,
-)
 from quickstart.models import BlogCategory, BlogPost
 from quickstart.serializers import (
     PublicBlogPostListSerializer,
@@ -57,35 +53,3 @@ class PublicBlogCategoryViewSet(viewsets.ReadOnlyModelViewSet):
         post_count__gt=0
     )
     lookup_field = "slug"
-
-
-# --- Admin Views ---
-
-
-class AdminBlogPostViewSet(viewsets.ModelViewSet):
-    """Admin viewset for managing blog posts."""
-
-    permission_classes = [
-        permissions.IsAuthenticated
-    ]  # Add 'quickstart.manage_blog_posts' later
-    serializer_class = AdminBlogPostSerializer
-    queryset = BlogPost.objects.all().select_related("author", "category")
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = [
-        "title",
-        "author__first_name",
-        "author__last_name",
-        "category__name",
-    ]
-    ordering_fields = ["published_date", "status", "title"]
-    pagination_class = BlogPagination
-
-
-class AdminBlogCategoryViewSet(viewsets.ModelViewSet):
-    """Admin viewset for managing blog categories."""
-
-    permission_classes = [
-        permissions.IsAuthenticated
-    ]  # Add 'quickstart.manage_blog_categories' later
-    serializer_class = AdminBlogCategorySerializer
-    queryset = BlogCategory.objects.annotate(post_count=Count("posts"))
