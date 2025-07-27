@@ -10,6 +10,7 @@ from decimal import Decimal
 import stripe
 import logging
 import pytz
+import random
 
 from quickstart.models import Booking, BusinessInfo, Payout, Payment
 
@@ -87,6 +88,8 @@ def process_daily_payouts():
     logger.info(f"Found {len(payouts_by_business)} businesses to process payouts for.")
 
     successful_payouts = 0
+    failed_payouts = 0
+
     for stripe_id, data in payouts_by_business.items():
         business = data["business_instance"]
         net_payout_amount = data["net_revenue"]
@@ -98,9 +101,31 @@ def process_daily_payouts():
             )
             continue
 
+        payout_record = None
+        temp_transfer_id = f"temp_task_{timezone.now().strftime('%Y%m%d_%H%M%S')}_{business.businessId}_{random.randint(1000, 9999)}"
+
         try:
             with transaction.atomic():
                 payout_amount_cents = int(net_payout_amount * 100)
+
+                # Create the payout record FIRST with 'pending' status and temporary ID
+                payout_record = Payout.objects.create(
+                    business=business,
+                    stripe_transfer_id=temp_transfer_id,  # Temporary ID, will be updated after successful Stripe call
+                    amount=net_payout_amount,
+                    currency=business.currency.upper(),
+                    arrival_date=timezone.now().date()
+                    + timedelta(days=3),  # Default arrival date
+                    status="pending",  # Start as pending
+                    metadata={
+                        "source": "daily_payout_task",
+                        "business_id": business.businessId,
+                        "booking_count": len(booking_ids),
+                        "temp_id": True,  # Flag to indicate this started with a temp ID
+                    },
+                )
+
+                # Try to create the Stripe transfer
                 transfer = stripe.Transfer.create(
                     amount=payout_amount_cents,
                     currency=business.currency.lower(),
@@ -109,38 +134,79 @@ def process_daily_payouts():
                     metadata={
                         "business_id": business.businessId,
                         "booking_count": len(booking_ids),
+                        "payout_record_id": payout_record.id,  # Link back to our record
                     },
                 )
 
+                # SUCCESS: Update the record with Stripe details
                 arrival_date = (
                     datetime.fromtimestamp(transfer.arrival_date, tz=pytz.utc).date()
                     if transfer.arrival_date
                     else timezone.now().date() + timedelta(days=3)
                 )
 
-                payout_record = Payout.objects.create(
-                    business=business,
-                    stripe_transfer_id=transfer.id,
-                    amount=net_payout_amount,
-                    currency=transfer.currency.upper(),
-                    arrival_date=arrival_date,
-                    status=getattr(transfer, "status", "pending"),
+                # Update metadata to remove temp flag and add real Stripe data
+                updated_metadata = transfer.metadata.copy()
+                updated_metadata.pop("temp_id", None)  # Remove temp flag
+
+                payout_record.stripe_transfer_id = (
+                    transfer.id
+                )  # Replace temp ID with real Stripe ID
+                payout_record.arrival_date = arrival_date
+                payout_record.status = (
+                    "paid"  # Hardcode to success since API call succeeded
+                )
+                payout_record.metadata = updated_metadata
+                payout_record.save(
+                    update_fields=[
+                        "stripe_transfer_id",
+                        "arrival_date",
+                        "status",
+                        "metadata",
+                    ]
                 )
 
+                # Associate bookings and mark as processed
                 bookings = Booking.objects.filter(id__in=booking_ids)
                 payout_record.bookings.set(bookings)
                 bookings.update(payout_status="processed")
+
                 successful_payouts += 1
                 logger.info(
-                    f"SUCCESS: Created Stripe Transfer {transfer.id} for Business {business.businessId}."
+                    f"SUCCESS: Created Stripe Transfer {transfer.id} for Business {business.businessId}. Payout record {payout_record.id} updated: temp ID '{temp_transfer_id}' → real ID '{transfer.id}', status → 'paid'."
                 )
-        except Exception as e:
-            logger.error(
-                f"ERROR processing payout for Business {business.businessId}: {e}",
-                exc_info=True,
-            )
 
-    return f"Payout process finished. Successful transfers: {successful_payouts}."
+        except stripe.error.StripeError as stripe_error:
+            # STRIPE API FAILURE: Mark as failed
+            failed_payouts += 1
+            if payout_record:
+                payout_record.status = "failed"
+                payout_record.save(update_fields=["status"])
+                logger.error(
+                    f"STRIPE ERROR for Business {business.businessId}: {stripe_error}. Payout record {payout_record.id} marked as 'failed'."
+                )
+            else:
+                logger.error(
+                    f"STRIPE ERROR for Business {business.businessId}: {stripe_error}. No payout record created."
+                )
+
+        except Exception as general_error:
+            # GENERAL FAILURE: Mark as failed
+            failed_payouts += 1
+            if payout_record:
+                payout_record.status = "failed"
+                payout_record.save(update_fields=["status"])
+                logger.error(
+                    f"GENERAL ERROR for Business {business.businessId}: {general_error}. Payout record {payout_record.id} marked as 'failed'.",
+                    exc_info=True,
+                )
+            else:
+                logger.error(
+                    f"GENERAL ERROR for Business {business.businessId}: {general_error}. No payout record created.",
+                    exc_info=True,
+                )
+
+    return f"Payout process finished. Successful: {successful_payouts}. Failed: {failed_payouts}."
 
 
 @shared_task(name="tasks.process_daily_refunds")

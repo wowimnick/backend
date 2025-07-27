@@ -132,7 +132,7 @@ jobs:
             docker run -d --rm --name $STRIPE_PAYMENTS_CONTAINER_NAME --network $NETWORK_NAME stripe/stripe-cli:latest listen --api-key "${{ secrets.STRIPE_SECRET_KEY }}" --forward-to "http://web:8000/api/payments/webhook/" --events "payment_intent.succeeded,payment_intent.payment_failed"
 
             echo "--- Starting Stripe CLI for Connect Webhook... ---"
-            docker run -d --rm --name $STRIPE_CONNECT_CONTAINER_NAME --network $NETWORK_NAME stripe/stripe-cli:latest listen --api-key "${{ secrets.STRIPE_SECRET_KEY }}" --forward-to "http://web:8000/api/webhooks/stripe-connect/" --events "account.updated,capability.updated,transfer.created,transfer.paid,transfer.failed"
+            docker run -d --rm --name $STRIPE_CONNECT_CONTAINER_NAME --network $NETWORK_NAME stripe/stripe-cli:latest listen --api-key "${{ secrets.STRIPE_SECRET_KEY }}" --forward-to "http://web:8000/api/webhooks/stripe-connect/" --events "account.updated,capability.updated,transfer.created"
 
             # 6. VERIFY AND LOG (No changes here)
             echo "--- Waiting 5 seconds for containers to boot... ---"
