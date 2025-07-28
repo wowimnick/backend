@@ -1,5 +1,3 @@
-# quickstart/tests/test_views/test_public_views.py
-
 from rest_framework.test import APITestCase
 from rest_framework import status
 from django.urls import reverse
@@ -7,8 +5,8 @@ from django.utils import timezone
 from datetime import date, timedelta, time
 from unittest.mock import patch
 from decimal import Decimal
-from django.test import override_settings  # <<< MODIFIED: Import override_settings
-from django.conf import settings  # <<< MODIFIED: Import settings
+from django.test import override_settings
+from django.conf import settings
 
 from quickstart.tests.factories import (
     UserFactory,
@@ -22,10 +20,7 @@ from quickstart.tests.factories import (
 )
 from quickstart.models import BusinessInfo, Favorites
 
-# --- Tests for PublicBusinessInfoViewSet ---
 
-
-# --- FIX: Disable Silk middleware for all tests in this class ---
 @override_settings(
     MIDDLEWARE=[mw for mw in settings.MIDDLEWARE if "silk.middleware" not in mw]
 )
@@ -190,7 +185,6 @@ class PublicBusinessInfoViewSetTest(APITestCase):
         BusinessInfoFactory.create_batch(
             16, isActive=True, verificationStatus="verified"
         )
-        # --- FIX: The total count is 2 from setUp + 16 from the batch = 18 ---
         self.assertEqual(
             BusinessInfo.objects.filter(
                 isActive=True, verificationStatus="verified"
@@ -200,11 +194,7 @@ class PublicBusinessInfoViewSetTest(APITestCase):
 
         url = reverse("public-business-list")
 
-        # --- FIX: Use a context manager to override settings for this specific test ---
         with self.settings(SILKY_META=False):
-            # Expected queries:
-            # 1. COUNT query for pagination.
-            # 2. SELECT query for the main business list (with category via select_related).
             with self.assertNumQueries(2):
                 response = self.client.get(url)
 
@@ -214,9 +204,6 @@ class PublicBusinessInfoViewSetTest(APITestCase):
         print(
             "✅ PASSED: Public business list endpoint is performant (avoids N+1 queries)."
         )
-
-
-# --- Tests for PublicClassViewSet ---
 
 
 class PublicClassViewSetTest(APITestCase):
@@ -232,7 +219,6 @@ class PublicClassViewSetTest(APITestCase):
             title="Active Yoga Class",
             description="A class for testing.",
             coordinates="45.4215,-75.6972",  # Ottawa, ON
-            # FIX: Explicitly set latitude and longitude for distance queries.
             latitude=45.4215,
             longitude=-75.6972,
             category=self.category,
@@ -256,8 +242,6 @@ class PublicClassViewSetTest(APITestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
-        # FIX: The API response is paginated, so the data is a dictionary.
-        # We need to access the list of results from the 'results' key.
         self.assertIn("results", response.data)
         self.assertIsInstance(
             response.data["results"],
@@ -265,7 +249,6 @@ class PublicClassViewSetTest(APITestCase):
             "The 'results' key in the response should contain a list.",
         )
 
-        # Extract titles from the list of class dictionaries
         class_titles = [c["title"] for c in response.data["results"]]
 
         self.assertIn(self.active_class.title, class_titles)
@@ -325,49 +308,42 @@ class PublicClassViewSetTest(APITestCase):
             ).exists()
         )
 
-    @patch("quickstart.views.public.public_class_views.geocode_location_text_backend")
-    def test_search_by_location_text(self, mock_geocode):
+    # FIX: Removed patch and updated test to align with backend changes (no more geocoding).
+    def test_search_by_location_coordinates(self):
         """
-        GET /api/classes/search/?location_search=... - Should use geocoding and filter by distance.
+        GET /api/classes/search/?lat=...&lng=... - Should use coordinates and filter by distance.
         """
-        # Mock the external API call
-        mock_geocode.return_value = (43.6532, -79.3832)  # Toronto, ON
-
         # Create a class far away that should be excluded by radius
         ClassesMainFactory(
             title="Far Away Class",
             coordinates="34.0522,-118.2437",
-            # FIX: Explicitly set latitude and longitude for distance queries.
             latitude=34.0522,
             longitude=-118.2437,
             category=self.category,
         )  # Los Angeles
 
         url = reverse("public-class-search")
-        # Search for Toronto, radius of 500km should include Ottawa but not LA
-        query_params = {"location_search": "Toronto, ON", "radius": "500"}
+        # Search for Toronto (43.6532, -79.3832), radius of 500km should include Ottawa but not LA
+        query_params = {"lat": "43.6532", "lng": "-79.3832", "radius": "500"}
 
         response = self.client.get(url, query_params)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data["results"]), 1)
         self.assertEqual(response.data["results"][0]["title"], "Active Yoga Class")
-        mock_geocode.assert_called_once_with("Toronto, ON")
 
-    @patch("quickstart.views.public.public_class_views.geocode_location_text_backend")
-    def test_search_with_invalid_location_text(self, mock_geocode):
+    # FIX: Rewrote test to check for graceful handling of invalid coordinate parameters.
+    def test_search_with_invalid_coordinates(self):
         """
-        [EDGE CASE] GET .../search/?location_search=... - Should gracefully handle un-geocodeable locations.
+        [EDGE CASE] GET .../search/?lat=... - Should gracefully handle invalid coordinates.
         """
-        print("\n--- Running: test_search_with_invalid_location_text ---")
-        mock_geocode.return_value = None  # Simulate geocoding failure
-
+        print("\n--- Running: test_search_with_invalid_coordinates ---")
         # Create multiple classes
         ClassesMainFactory(title="Class A", category=self.category)
         ClassesMainFactory(title="Class B", category=self.category)
 
         url = reverse("public-class-search")
-        query_params = {"location_search": "asdfghjkl", "radius": "50"}
+        query_params = {"lat": "asdf", "lng": "ghjk", "radius": "50"}
 
         response = self.client.get(url, query_params)
 
@@ -377,9 +353,8 @@ class PublicClassViewSetTest(APITestCase):
         self.assertEqual(
             len(response.data["results"]), 3
         )  # self.active_class, Class A, Class B
-        mock_geocode.assert_called_once_with("asdfghjkl")
         print(
-            "✅ PASSED: Search with invalid location text returns all results, not an error."
+            "✅ PASSED: Search with invalid coordinates returns all results, not an error."
         )
 
     def test_search_with_date_and_participants_filter(self):

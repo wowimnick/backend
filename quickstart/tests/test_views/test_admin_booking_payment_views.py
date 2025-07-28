@@ -7,8 +7,8 @@ from django.contrib.contenttypes.models import ContentType
 from django.contrib.auth.models import Permission
 from unittest.mock import patch, MagicMock
 from decimal import Decimal
-from django.test import override_settings  # <<< MODIFIED: Import override_settings
-from django.conf import settings  # <<< MODIFIED: Import settings
+from django.test import override_settings
+from django.conf import settings
 
 from quickstart.models import Booking, Payment, Role
 from quickstart.tests.factories import (
@@ -30,12 +30,19 @@ def _get_and_assign_permissions(role, permissions_map):
             role.permissions.add(permission)
 
 
-# --- FIX: Disable Silk middleware for all tests in this class ---
 @override_settings(
     MIDDLEWARE=[mw for mw in settings.MIDDLEWARE if "silk.middleware" not in mw]
 )
 class AdminBookingPaymentTests(APITestCase):
     def setUp(self):
+        # FIX: The patch target was incorrect. The task is defined in the
+        # 'quickstart.tasks.search_tasks' module, so we patch it at its source.
+        self.mock_task = patch(
+            "quickstart.tasks.search_tasks.update_search_vector_for_business"
+        )
+        self.mock_update_search_vector = self.mock_task.start()
+        self.addCleanup(self.mock_task.stop)
+
         self.admin_role = RoleFactory(name="Admin", hierarchy_level=80)
         _get_and_assign_permissions(
             self.admin_role,
