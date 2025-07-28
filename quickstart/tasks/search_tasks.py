@@ -1,4 +1,4 @@
-from backend.quickstart.models import BusinessInfo
+from quickstart.models import BusinessInfo
 from celery import shared_task
 
 
