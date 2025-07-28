@@ -10,6 +10,8 @@ from quickstart.models import (
     Schedule,
     ClassCategory,
 )
+
+from serializers import PublicReviewSerializer
 from django.utils import timezone
 import logging
 from random import uniform  # For coordinate salting if needed here
@@ -243,7 +245,12 @@ class PublicClassDetailSerializer(PublicClassSerializer):
 
     options = PublicClassOptionWithSchedulesSerializer(many=True, read_only=True)
 
+    # --- NEW ---
+    # Add a field to include the first few reviews.
+    initial_reviews = PublicReviewSerializer(
+        many=True, read_only=True, source="reviews"
+    )
+
     class Meta(PublicClassSerializer.Meta):
-        # The fields are inherited from PublicClassSerializer, including the new 'slug' field.
-        # No need to redeclare them. The override of the `options` field above is all that's needed.
-        pass
+        # Add 'initial_reviews' to the fields list
+        fields = PublicClassSerializer.Meta.fields + ["initial_reviews"]
