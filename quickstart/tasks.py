@@ -1,12 +1,13 @@
 # quickstart/tasks.py
 
+from datetime import timezone
 import logging
 from celery import shared_task, group
 from django.core.cache import cache
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives
 from django.urls import reverse
-from .models import CustomUser, NotificationCampaign
+from .models import BusinessInfo, CustomUser, NotificationCampaign
 from .views.admin.notifications.utils import generate_unsubscribe_token
 import resend
 

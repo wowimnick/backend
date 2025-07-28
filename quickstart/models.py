@@ -26,6 +26,7 @@ from django.dispatch import receiver
 import jsonfield
 import uuid
 
+
 COMMON_TIMEZONE_CHOICES = [(tz, tz.replace("_", " ")) for tz in pytz.common_timezones]
 
 
@@ -971,18 +972,10 @@ def classoption_change_receiver(sender, instance, **kwargs):
 
 @receiver(post_save, sender="quickstart.BusinessInfo")
 def businessinfo_change_receiver(sender, instance, update_fields, **kwargs):
-    if kwargs.get("raw", False):
-        return
+    from quickstart.tasks import update_search_vector_for_business
+
     if update_fields is None or "businessName" in update_fields:
-        # This still iterates, which is not ideal, but wrapping it in a single transaction helps.
-        # A true fix requires background tasks (e.g., Celery).
-        with transaction.atomic():
-            for class_instance in instance.classes.iterator():
-                new_vector = get_classesmain_search_vector(class_instance)
-                if class_instance.search_vector != new_vector:
-                    ClassesMain.objects.filter(pk=class_instance.pk).update(
-                        search_vector=new_vector
-                    )
+        update_search_vector_for_business.delay(instance.businessId)
 
 
 @receiver(post_save, sender="quickstart.ClassCategory")
@@ -1667,7 +1660,7 @@ class Payout(models.Model):
         help_text="Amount transferred to the business in the specified currency.",
     )
     currency = models.CharField(max_length=3)
-    arrival_date = models.DateField()
+    arrival_date = models.DateField(null=True, blank=True)
     status = models.CharField(
         max_length=30,
         help_text="Status of the transfer from Stripe (e.g., pending, paid, failed).",
