@@ -11,7 +11,7 @@ from quickstart.models import (
     ClassCategory,
 )
 
-from serializers import PublicReviewSerializer
+from .public_review_serializers import PublicReviewSerializer
 from django.utils import timezone
 import logging
 from random import uniform  # For coordinate salting if needed here

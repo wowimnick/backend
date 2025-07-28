@@ -209,14 +209,6 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     queryset=ClassImage.objects.order_by("-isCover", "createdAt"),
                 ),
                 "options",
-                # Prefetch the first 6 approved reviews for the detail view
-                Prefetch(
-                    "reviews",
-                    queryset=Reviews.objects.filter(status="approved").order_by(
-                        "-createdAt"
-                    )[:6],
-                    to_attr="reviews",  # The source for the serializer field
-                ),
             )
             .filter(
                 status="active",

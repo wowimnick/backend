@@ -1,5 +1,3 @@
-# quickstart/tests/test_views/test_booking_payment_flow.py
-
 import zoneinfo
 from rest_framework.test import APITestCase
 from rest_framework import status
@@ -146,10 +144,10 @@ class BookingFlowTests(APITestCase):
 
     def test_cancellation_policy_respects_business_timezone(
         self,
-    ):  # <--- REMOVE @patch and mock_now argument
+    ):
         print("\n--- Running: test_cancellation_policy_respects_business_timezone ---")
 
-        # 1. Setup: All database setup happens here, with the REAL timezone.now
+        # 1. Setup
         ny_tz = zoneinfo.ZoneInfo("America/New_York")
         self.business.business_timezone = "America/New_York"
         self.business.save()
@@ -162,13 +160,17 @@ class BookingFlowTests(APITestCase):
             date=class_datetime_ny.date(),
             time=class_datetime_ny.time(),
         )
+        # FIX: Explicitly set the cancellation_policy on the booking itself.
         booking = BookingFactory(
-            user=self.student, schedule_instance=instance, status="confirmed"
+            user=self.student,
+            schedule_instance=instance,
+            status="confirmed",
+            cancellation_policy="24h",
         )
         url = reverse("my-booking-student-cancel", kwargs={"pk": booking.pk})
         self.client.force_authenticate(user=self.student)
 
-        # 2. Test Case (FAIL): Use 'with patch' only for the API call
+        # 2. Test Case (FAIL)
         cancellation_fail_time = class_datetime_ny - timedelta(hours=23)
         with patch("django.utils.timezone.now") as mock_now_fail:
             mock_now_fail.return_value = cancellation_fail_time
@@ -177,7 +179,7 @@ class BookingFlowTests(APITestCase):
         self.assertEqual(response_fail.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("policy", str(response_fail.data))
 
-        # 3. Test Case (SUCCESS): Use 'with patch' again for the second API call
+        # 3. Test Case (SUCCESS)
         cancellation_success_time = class_datetime_ny - timedelta(hours=25)
         with patch("django.utils.timezone.now") as mock_now_success:
             mock_now_success.return_value = cancellation_success_time
@@ -257,8 +259,12 @@ class BookingFlowTests(APITestCase):
                 timezone.now() - timedelta(hours=1)
             ).time(),  # Time is in the past relative to now, but date is tomorrow. So less than 24h away.
         )
+        # FIX: Explicitly set the 24h policy on the booking object itself.
         booking = BookingFactory(
-            user=self.student, schedule_instance=instance_too_soon, status="confirmed"
+            user=self.student,
+            schedule_instance=instance_too_soon,
+            status="confirmed",
+            cancellation_policy="24h",
         )
         self.client.force_authenticate(user=self.student)
         url = reverse("my-booking-student-cancel", kwargs={"pk": booking.pk})
@@ -277,7 +283,7 @@ class BookingFlowTests(APITestCase):
             "\n--- Running: test_student_cannot_cancel_booking_just_past_boundary ---"
         )
 
-        # --- 1. SETUP: Create all database objects BEFORE mocking the time ---
+        # --- 1. SETUP ---
         utc_tz = zoneinfo.ZoneInfo("UTC")
         class_time = timezone.datetime(2025, 1, 15, 15, 0, 0, tzinfo=utc_tz)
 
@@ -286,16 +292,17 @@ class BookingFlowTests(APITestCase):
             date=class_time.date(),
             time=class_time.time(),
         )
+        # FIX: Explicitly set the 24h policy on the booking object itself.
         booking = BookingFactory(
-            user=self.student, schedule_instance=instance, status="confirmed"
+            user=self.student,
+            schedule_instance=instance,
+            status="confirmed",
+            cancellation_policy="24h",
         )
         self.client.force_authenticate(user=self.student)
         url = reverse("my-booking-student-cancel", kwargs={"pk": booking.pk})
 
-        # --- 2. MOCK AND EXECUTE: Use 'with patch' only for the API call ---
-
-        # Mock `now` to be 23 hours and 59 minutes before the class.
-        # This is INSIDE the 24h cancellation window, so it should fail.
+        # --- 2. MOCK AND EXECUTE ---
         cancellation_time = class_time - timedelta(hours=23, minutes=59)
 
         with patch("django.utils.timezone.now") as mock_now:
@@ -309,7 +316,7 @@ class BookingFlowTests(APITestCase):
             "✅ PASSED: Student correctly blocked from cancelling just inside the policy window."
         )
 
-    def test_student_can_cancel_booking_at_boundary(self):  # <--- REMOVE @patch
+    def test_student_can_cancel_booking_at_boundary(self):
         print("\n--- Running: test_student_can_cancel_booking_at_boundary ---")
 
         # 1. SETUP
@@ -457,7 +464,6 @@ class PaymentFlowTests(APITestCase):
         """
         print("\n--- Running: test_webhook_payment_succeeded_confirms_booking ---")
 
-        # ... (mock event setup remains the same) ...
         payment_intent_id = "pi_test_success_123"
         metadata = {
             "user_id": str(self.student.userId),
@@ -518,7 +524,7 @@ class PaymentFlowTests(APITestCase):
         self.assertEqual(Payment.objects.count(), 1)
         print("✅ PASSED: Webhook correctly confirms booking and is idempotent.")
 
-    @patch("quickstart.payments.views.ProcessBookingWebhook._attempt_stripe_refund")
+    @patch("quickstart.views.payments.ProcessBookingWebhook._attempt_stripe_refund")
     @patch("stripe.Webhook.construct_event")
     def test_webhook_refunds_on_booking_failure(
         self, mock_construct_event, mock_refund
