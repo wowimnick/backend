@@ -210,7 +210,7 @@ CELERY_BROKER_TRANSPORT_OPTIONS = {
     # The hash tag "{celery}" ensures all keys go to the same slot.
     "global_keyprefix": "{celery}:",
     # Makes fanout (broadcast) operations cluster-safe.
-    "fanout_prefix": True,
+    "fanout_prefix": False,
     "fanout_patterns": False,
     "visibility_timeout": 3600,
     "ack_emulation": False,
