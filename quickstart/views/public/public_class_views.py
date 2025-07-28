@@ -43,7 +43,15 @@ from django.db.models.functions import (
     Length,
     ATan2,
 )
+
+# --- MODIFIED: Added imports for Full-Text Search ---
 from django.contrib.postgres.search import SearchVector, SearchQuery, SearchRank
+
+# --- MODIFIED: Added imports for Caching ---
+from django.utils.decorators import method_decorator
+from django.views.decorators.cache import cache_page
+from django.views.decorators.vary import vary_on_headers
+
 from django.utils import timezone
 from decimal import Decimal, InvalidOperation
 import logging
@@ -73,44 +81,26 @@ from ..utils import haversine_distance
 
 logger = logging.getLogger(__name__)
 
-PHOTON_API_URL = "https://photon.komoot.io/api/"
+# --- REMOVED: Photon API is no longer used in the backend ---
+# PHOTON_API_URL = "https://photon.komoot.io/api/"
 DEFAULT_SEARCH_RADIUS_KM = 50
 
 # --- REFINED: Relevance Scoring Weights (Tune these values based on business goals) ---
-W_FEATURED = 1.5  # Multiplier for featured businesses
-W_QUALITY = 1.0  # Base weight for quality score (description, images)
-W_RATING = 0.8  # Weight for average rating
-W_REVIEW_COUNT = 0.5  # Weight for number of reviews (log-scaled)
-W_NEWNESS = 0.7  # Weight for how new a class is (decaying)
+W_FEATURED = 1.5
+W_QUALITY = 1.0
+W_RATING = 0.8
+W_REVIEW_COUNT = 0.5
+W_NEWNESS = 0.7
 
 # --- REFINED: Relevance Score Normalization/Tuning Constants ---
-QUALITY_SCORE_MAX_DESCRIPTION_LEN = 1000  # Optimal description length for max score
-QUALITY_SCORE_BASE_IMAGES = 5  # The minimum number of images required
-QUALITY_SCORE_IDEAL_IMAGES = 10  # The ideal number of images to get the max score
-RECENCY_HALFLIFE_DAYS = 90  # A class's "newness" boost drops by 50% every 90 days
-REVIEW_COUNT_FOR_MAX_SCORE = 50  # Number of reviews to get the max review count score
+QUALITY_SCORE_MAX_DESCRIPTION_LEN = 1000
+QUALITY_SCORE_BASE_IMAGES = 5
+QUALITY_SCORE_IDEAL_IMAGES = 10
+RECENCY_HALFLIFE_DAYS = 90
+REVIEW_COUNT_FOR_MAX_SCORE = 50
 
-
-def geocode_location_text_backend(location_text):
-    if not location_text:
-        return None
-    try:
-        params = {"q": quote(location_text), "limit": 1}
-        headers = {"User-Agent": "ClasseasilyApp/1.0 (Python Requests)"}
-        response = requests.get(
-            PHOTON_API_URL, params=params, headers=headers, timeout=5
-        )
-        response.raise_for_status()
-        data = response.json()
-        if data and data.get("features") and len(data["features"]) > 0:
-            feature = data["features"][0]
-            lon, lat = feature["geometry"]["coordinates"]
-            return float(lat), float(lon)  # Only need lat/lon here now
-    except requests.RequestException as e:
-        logger.error(f"Backend geocoding HTTP error for '{location_text}': {e}")
-    except (KeyError, IndexError, ValueError) as e:
-        logger.error(f"Error parsing geocoding response for '{location_text}': {e}")
-    return None
+# --- REMOVED: Backend geocoding function is no longer needed. ---
+# This is now handled by the frontend to prevent blocking API calls.
 
 
 class StandardResultsSetPagination(PageNumberPagination):
@@ -140,10 +130,10 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         "average_rating",
         "total_reviews",
         "relevance_score",
+        "rank",  # --- ADDED: Allow ordering by search rank ---
     ]
     ordering = ["-createdAt"]
 
-    # --- MODIFIED: The lookup_field should now be 'pk' as we handle it in get_object ---
     lookup_field = "pk"
 
     def get_serializer_class(self):
@@ -151,30 +141,28 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             return PublicClassDetailSerializer
         return super().get_serializer_class()
 
-    # --- ADDED: This is the critical fix for the 404 error ---
     def get_object(self):
         """
         Overrides the default `get_object` to allow lookup by either the
         numeric primary key (pk) or the SEO-friendly slug.
         """
         queryset = self.filter_queryset(self.get_queryset())
-
-        # The identifier from the URL (e.g., '123' or 'richmond-hill-intro-to-soy-candle-making')
         identifier = self.kwargs.get(self.lookup_field)
-
-        # Check if the identifier is a number (ID) or a string (slug)
         if identifier.isdigit():
             filter_kwargs = {"pk": identifier}
         else:
             filter_kwargs = {"slug": identifier}
-
-        # Fetch the object using the determined filter
         obj = get_object_or_404(queryset, **filter_kwargs)
-
-        # This is a standard part of get_object and should be kept
         self.check_object_permissions(self.request, obj)
-
         return obj
+
+    # --- MODIFIED: Added Caching to the retrieve method ---
+    # Caches the class detail page for 15 minutes. Varies by authentication
+    # to handle the 'is_favorited' field correctly for different users.
+    @method_decorator(cache_page(60 * 15))
+    @method_decorator(vary_on_headers("Authorization"))
+    def retrieve(self, request, *args, **kwargs):
+        return super().retrieve(request, *args, **kwargs)
 
     AVERAGE_RATING_SUBQUERY = Subquery(
         Reviews.objects.filter(classId=OuterRef("pk"), status="approved")
@@ -374,7 +362,9 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             req_lat_str = request.query_params.get("lat")
             req_lng_str = request.query_params.get("lng")
             req_radius_km_str = request.query_params.get("radius")
-            location_search_text = request.query_params.get("location_search")
+            # --- REMOVED: `location_search` is no longer used for backend geocoding ---
+            # location_search_text = request.query_params.get("location_search")
+            keyword_query_text = request.query_params.get("keyword")
 
             search_lat, search_lng = None, None
             if req_lat_str and req_lng_str:
@@ -384,12 +374,23 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     logger.warning(
                         f"Invalid geo params: lat='{req_lat_str}', lng='{req_lng_str}'"
                     )
-            elif location_search_text:
-                geocoded_result = geocode_location_text_backend(location_search_text)
-                if geocoded_result:
-                    search_lat, search_lng = geocoded_result
+
+            # --- REMOVED: Backend geocoding block ---
 
             queryset = self.get_queryset()
+
+            # --- MODIFIED: Integrated Full-Text Search ---
+            if keyword_query_text:
+                # Use 'websearch' for parsing queries like "pottery class" or "art -paint"
+                search_query = SearchQuery(
+                    keyword_query_text, search_type="websearch", config="english"
+                )
+                queryset = queryset.annotate(
+                    rank=SearchRank(F("search_vector"), search_query)
+                ).filter(search_vector=search_query)
+            else:
+                # Annotate with a null rank if no keyword is provided for consistent ordering
+                queryset = queryset.annotate(rank=Value(0.0, output_field=FloatField()))
 
             category_key = request.query_params.get("category_key")
             subcategory_key = request.query_params.get("subcategory_key")
@@ -505,9 +506,17 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
 
             queryset = self._calculate_relevance_score(queryset)
 
+            # --- MODIFIED: Enhanced sorting logic with Full-Text Search Rank ---
             sort_by = request.query_params.get("sort_by", "relevance")
             if sort_by == "relevance":
-                queryset = queryset.order_by("-relevance_score", "-createdAt")
+                # If a keyword search was performed, prioritize the text match rank.
+                # Otherwise, fall back to the general relevance score.
+                if keyword_query_text:
+                    queryset = queryset.order_by(
+                        "-rank", "-relevance_score", "-createdAt"
+                    )
+                else:
+                    queryset = queryset.order_by("-relevance_score", "-createdAt")
             elif sort_by == "distance" and search_lat is not None:
                 queryset = queryset.order_by(F("distance").asc(nulls_last=True))
             elif sort_by == "price_asc":

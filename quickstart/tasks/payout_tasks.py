@@ -12,7 +12,7 @@ import logging
 import pytz
 import random
 
-from quickstart.models import Booking, BusinessInfo, Payout, Payment
+from quickstart.models import Booking, Payout
 
 logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY

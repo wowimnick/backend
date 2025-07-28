@@ -10,6 +10,9 @@ from rest_framework.exceptions import (
     NotFound,
 )  # Added NotFound
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+from django.utils.decorators import method_decorator
+from django.views.decorators.cache import cache_page
+from django.views.decorators.vary import vary_on_headers
 from django.db import transaction
 from django.db.models import (
     Q,
@@ -85,6 +88,7 @@ class PublicCategoryViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Provides a list of ALL public class categories. For each category,
     it only includes subcategories that contain at least one class.
+    MODIFIED: This endpoint is now cached for 1 hour for performance.
     """
 
     permission_classes = [AllowAny]
@@ -95,13 +99,10 @@ class PublicCategoryViewSet(viewsets.ReadOnlyModelViewSet):
         Returns ALL ClassCategory objects. It then attaches a filtered list
         of subcategories (only those with classes) to each category object.
         """
-        # This sub-query selects only the subcategories that have one or more associated classes.
         subcategories_with_classes = ClassSubcategory.objects.annotate(
             class_count=Count("classes_in_subcategory")
         ).filter(class_count__gt=0)
 
-        # The main query fetches ALL categories and uses a Prefetch to attach the
-        # filtered list of subcategories.
         return (
             ClassCategory.objects.all()
             .prefetch_related(
@@ -110,21 +111,26 @@ class PublicCategoryViewSet(viewsets.ReadOnlyModelViewSet):
             .order_by("name")
         )
 
+    # --- ADDED: Caching decorator for the list view ---
+    @method_decorator(cache_page(60 * 60))  # Cache for 1 hour
+    @method_decorator(vary_on_headers("Authorization"))
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
+
 
 # --- NEW: ViewSet to provide ALL categories for business-side forms ---
 class AllCategoriesForBusinessViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Provides a complete, unpaginated list of all categories and their subcategories.
-    This is specifically for use in business-facing forms like registration or class creation,
-    where a full, unfiltered list is required for selection.
+    This is specifically for use in business-facing forms.
+    MODIFIED: This endpoint is now cached for 1 hour for performance.
     """
 
-    permission_classes = [IsAuthenticated]  # User must be logged in to access this
+    permission_classes = [IsAuthenticated]
     serializer_class = AdminClassCategorySerializer
-    pagination_class = None  # This is the key change to return all results
+    pagination_class = None
 
     def get_queryset(self):
-        # We can reuse the same efficient query from the admin panel
         subcat_queryset = ClassSubcategory.objects.annotate(
             class_count=Count("classes_in_subcategory", distinct=True)
         )
@@ -135,6 +141,12 @@ class AllCategoriesForBusinessViewSet(viewsets.ReadOnlyModelViewSet):
             .prefetch_related(Prefetch("subcategories", queryset=subcat_queryset))
             .order_by("name")
         )
+
+    # --- ADDED: Caching decorator for the list view ---
+    @method_decorator(cache_page(60 * 60))  # Cache for 1 hour
+    @method_decorator(vary_on_headers("Authorization"))
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
 
 
 class BusinessClassViewSet(viewsets.ModelViewSet):
