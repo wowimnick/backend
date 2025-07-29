@@ -44,12 +44,14 @@ def process_daily_payouts():
     logger.info("--- Starting Daily Payout Processing Task ---")
 
     # Correctly fetches completed bookings ready for payout.
-    bookings_to_payout = Booking.objects.filter(
-        status="completed",
-        payment_status="paid",
-        payout_status="pending",
-    ).select_related(
-        "schedule_instance__schedule__option__classId__businessId", "payments"
+    bookings_to_payout = (
+        Booking.objects.filter(
+            status="completed",
+            payment_status="paid",
+            payout_status="pending",
+        )
+        .select_related("schedule_instance__schedule__option__classId__businessId")
+        .prefetch_related("payments")
     )
 
     if not bookings_to_payout.exists():
