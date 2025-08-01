@@ -1088,6 +1088,13 @@ class ClassOption(models.Model):
     @property
     def parent_class_description(self):
         return self.classId.description
+    
+    def save(self, *args, **kwargs):
+        # Ensure tags are stored as a lowercase list of strings
+        if isinstance(self.tags, list):
+            self.tags = [str(tag).lower() for tag in self.tags if tag] # Convert to string, lowercase, and remove empty
+        
+        super().save(*args, **kwargs)
 
     def __str__(self):
         # Refer to the class's title for identification
