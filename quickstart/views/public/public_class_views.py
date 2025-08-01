@@ -1,5 +1,3 @@
-# quickstart/views/public/public_class_views.py
-
 import math
 from django.http import Http404
 from django.shortcuts import get_object_or_404
@@ -43,15 +41,10 @@ from django.db.models.functions import (
     Length,
     ATan2,
 )
-
-# --- MODIFIED: Added imports for Full-Text Search ---
 from django.contrib.postgres.search import SearchVector, SearchQuery, SearchRank
-
-# --- MODIFIED: Added imports for Caching ---
 from django.utils.decorators import method_decorator
 from django.views.decorators.cache import cache_page
 from django.views.decorators.vary import vary_on_headers
-
 from django.utils import timezone
 from decimal import Decimal, InvalidOperation
 import logging
@@ -81,26 +74,17 @@ from ..utils import haversine_distance
 
 logger = logging.getLogger(__name__)
 
-# --- REMOVED: Photon API is no longer used in the backend ---
-# PHOTON_API_URL = "https://photon.komoot.io/api/"
 DEFAULT_SEARCH_RADIUS_KM = 50
-
-# --- REFINED: Relevance Scoring Weights (Tune these values based on business goals) ---
 W_FEATURED = 1.5
 W_QUALITY = 1.0
 W_RATING = 0.8
 W_REVIEW_COUNT = 0.5
 W_NEWNESS = 0.7
-
-# --- REFINED: Relevance Score Normalization/Tuning Constants ---
 QUALITY_SCORE_MAX_DESCRIPTION_LEN = 1000
 QUALITY_SCORE_BASE_IMAGES = 5
 QUALITY_SCORE_IDEAL_IMAGES = 10
 RECENCY_HALFLIFE_DAYS = 90
 REVIEW_COUNT_FOR_MAX_SCORE = 50
-
-# --- REMOVED: Backend geocoding function is no longer needed. ---
-# This is now handled by the frontend to prevent blocking API calls.
 
 
 class StandardResultsSetPagination(PageNumberPagination):
@@ -130,10 +114,9 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         "average_rating",
         "total_reviews",
         "relevance_score",
-        "rank",  # --- ADDED: Allow ordering by search rank ---
+        "rank",
     ]
     ordering = ["-createdAt"]
-
     lookup_field = "pk"
 
     def get_serializer_class(self):
@@ -142,10 +125,6 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         return super().get_serializer_class()
 
     def get_object(self):
-        """
-        Overrides the default `get_object` to allow lookup by either the
-        numeric primary key (pk) or the SEO-friendly slug.
-        """
         queryset = self.filter_queryset(self.get_queryset())
         identifier = self.kwargs.get(self.lookup_field)
         if identifier.isdigit():
@@ -156,9 +135,6 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         self.check_object_permissions(self.request, obj)
         return obj
 
-    # --- MODIFIED: Added Caching to the retrieve method ---
-    # Caches the class detail page for 15 minutes. Varies by authentication
-    # to handle the 'is_favorited' field correctly for different users.
     @method_decorator(cache_page(60 * 15))
     @method_decorator(vary_on_headers("Authorization"))
     def retrieve(self, request, *args, **kwargs):
@@ -188,7 +164,6 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         .values("price")[:1],
         output_field=DecimalField(max_digits=10, decimal_places=2),
     )
-
     MIN_COURSE_PRICE_SUBQUERY = Subquery(
         Schedule.objects.filter(
             option__classId=OuterRef("pk"),
@@ -239,19 +214,16 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     ).order_by("date", "time"),
                 )
             )
-
         return queryset.distinct()
 
     def _calculate_relevance_score(self, queryset):
         days_old = Extract(Now() - F("createdAt"), "epoch") / Value(86400.0)
-
         image_score_numerator = Log(
             10, F("image_count") - Value(QUALITY_SCORE_BASE_IMAGES) + 1
         )
         image_score_denominator = Log(
             10, Value(QUALITY_SCORE_IDEAL_IMAGES - QUALITY_SCORE_BASE_IMAGES) + 1
         )
-
         image_score = Case(
             When(image_count__gte=QUALITY_SCORE_IDEAL_IMAGES, then=Value(1.0)),
             When(
@@ -264,37 +236,30 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             default=Value(0.0),
             output_field=FloatField(),
         )
-
         description_score = Log(10, Length("description") + 1) / Log(
             10, Value(QUALITY_SCORE_MAX_DESCRIPTION_LEN + 1)
         )
-
         quality_score = ExpressionWrapper(
             (description_score + image_score) / 2.0,
             output_field=FloatField(),
         )
-
         rating_score = ExpressionWrapper(
             F("average_rating") / Value(5.0), output_field=FloatField()
         )
-
         review_count_score = ExpressionWrapper(
             Log(10, F("review_count") + 1)
             / Log(10, Value(REVIEW_COUNT_FOR_MAX_SCORE + 1)),
             output_field=FloatField(),
         )
-
         newness_score = ExpressionWrapper(
             Power(2, -days_old / Value(RECENCY_HALFLIFE_DAYS)),
             output_field=FloatField(),
         )
-
         featured_multiplier = Case(
             When(businessId__featured=True, then=Value(W_FEATURED)),
             default=Value(1.0),
             output_field=FloatField(),
         )
-
         relevance_score = ExpressionWrapper(
             (
                 (Value(W_QUALITY) * quality_score)
@@ -305,21 +270,18 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             * featured_multiplier,
             output_field=FloatField(),
         )
-
         return queryset.annotate(relevance_score=relevance_score)
 
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()
         queryset = self._calculate_relevance_score(queryset)
         queryset = queryset.order_by("-relevance_score", "-createdAt")
-
         page = self.paginate_queryset(queryset)
         if page is not None:
             serializer = self.get_serializer(
                 page, many=True, context={"request": request}
             )
             return self.get_paginated_response(serializer.data)
-
         serializer = self.get_serializer(
             queryset, many=True, context={"request": request}
         )
@@ -359,12 +321,15 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=["get"], permission_classes=[AllowAny])
     def search(self, request):
         try:
+            # --- ADDED: Comprehensive logging of incoming query parameters ---
+            logger.debug(f"Public class search initiated with params: {request.query_params}")
+
             req_lat_str = request.query_params.get("lat")
             req_lng_str = request.query_params.get("lng")
             req_radius_km_str = request.query_params.get("radius")
-            # --- REMOVED: `location_search` is no longer used for backend geocoding ---
-            # location_search_text = request.query_params.get("location_search")
             keyword_query_text = request.query_params.get("keyword")
+            location_search_text = request.query_params.get("location_search")
+            tag_filter = request.query_params.get("tag")
 
             search_lat, search_lng = None, None
             if req_lat_str and req_lng_str:
@@ -374,30 +339,57 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     logger.warning(
                         f"Invalid geo params: lat='{req_lat_str}', lng='{req_lng_str}'"
                     )
-
-            # --- REMOVED: Backend geocoding block ---
-
+            
             queryset = self.get_queryset()
+            logger.debug(f"Initial queryset count: {queryset.count()}")
 
-            # --- MODIFIED: Integrated Full-Text Search ---
+            if location_search_text:
+                location_parts = [part.strip() for part in location_search_text.split(',') if part.strip()]
+                city_query = Q()
+                province_query = Q()
+                
+                if len(location_parts) > 0:
+                    city_query = Q(businessId__businessCity__icontains=location_parts[0])
+                
+                if len(location_parts) > 1:
+                    province_query = Q(businessId__businessState__icontains=location_parts[1])
+                
+                if city_query and province_query:
+                    queryset = queryset.filter(city_query & province_query)
+                elif city_query:
+                    queryset = queryset.filter(city_query)
+                logger.debug(f"Queryset count after location search ('{location_search_text}'): {queryset.count()}")
+
+
             if keyword_query_text:
-                # Use 'websearch' for parsing queries like "pottery class" or "art -paint"
                 search_query = SearchQuery(
                     keyword_query_text, search_type="websearch", config="english"
                 )
                 queryset = queryset.annotate(
                     rank=SearchRank(F("search_vector"), search_query)
                 ).filter(search_vector=search_query)
+                logger.debug(f"Queryset count after keyword search ('{keyword_query_text}'): {queryset.count()}")
             else:
-                # Annotate with a null rank if no keyword is provided for consistent ordering
                 queryset = queryset.annotate(rank=Value(0.0, output_field=FloatField()))
 
+            # --- FIX: Corrected tag filtering logic and added logging ---
+            if tag_filter:
+                normalized_tag = tag_filter.lower()
+                logger.debug(f"Filtering by normalized tag: '{normalized_tag}'")
+                
+                # This is the corrected line. It checks if the string exists in the JSON array.
+                queryset = queryset.filter(options__tags__contains=normalized_tag)
+                
+                logger.debug(f"Queryset count after tag filter: {queryset.count()}")
+            
             category_key = request.query_params.get("category_key")
             subcategory_key = request.query_params.get("subcategory_key")
             if category_key and category_key.lower() != "all":
                 queryset = queryset.filter(category__key=category_key)
                 if subcategory_key:
                     queryset = queryset.filter(subcategory__key=subcategory_key)
+                logger.debug(f"Queryset count after category filter: {queryset.count()}")
+
 
             price_max_str = request.query_params.get("price_max")
             if price_max_str:
@@ -411,13 +403,13 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                             & Q(min_course_price__isnull=True)
                         )
                     )
+                    logger.debug(f"Queryset count after price filter: {queryset.count()}")
                 except InvalidOperation:
                     logger.warning(f"Invalid price_max: {price_max_str}")
 
             req_date_str = request.query_params.get("date")
             req_participants_str = request.query_params.get("participants")
             time_preferences = request.query_params.getlist("time_preference")
-
             if (
                 req_date_str
                 or (req_participants_str and req_participants_str.isdigit())
@@ -438,7 +430,6 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     instance_filters &= Q(
                         options__schedules__instances__date__gte=timezone.now().date()
                     )
-
                 if time_preferences:
                     time_ranges = {
                         "Morning (6am-12pm)": (time(6, 0), time(11, 59, 59)),
@@ -457,7 +448,6 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                             )
                     if time_range_filters:
                         instance_filters &= time_range_filters
-
                 if (
                     req_participants_str
                     and req_participants_str.isdigit()
@@ -468,22 +458,19 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                             req_participants_str
                         )
                     )
-
                 queryset = queryset.filter(instance_filters).distinct()
+                logger.debug(f"Queryset count after availability filters: {queryset.count()}")
 
             if search_lat is not None and search_lng is not None:
                 queryset = queryset.exclude(
                     Q(latitude__isnull=True) | Q(longitude__isnull=True)
                 )
-
                 db_lat = F("latitude")
                 db_lng = F("longitude")
-
                 lat_r = Radians(db_lat)
                 lng_r = Radians(db_lng)
                 search_lat_r = Radians(Value(search_lat, output_field=FloatField()))
                 search_lng_r = Radians(Value(search_lng, output_field=FloatField()))
-
                 d_lng = lng_r - search_lng_r
                 d_lat = lat_r - search_lat_r
                 a = Power(Sin(d_lat / 2), 2) + Cos(search_lat_r) * Cos(lat_r) * Power(
@@ -491,9 +478,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 )
                 c = 2 * ATan2(Power(a, 0.5), Power(1 - a, 0.5))
                 distance_expr = ExpressionWrapper(6371 * c, output_field=FloatField())
-
                 queryset = queryset.annotate(distance=distance_expr)
-
                 search_radius_km = DEFAULT_SEARCH_RADIUS_KM
                 if (
                     req_radius_km_str
@@ -501,16 +486,12 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     and float(req_radius_km_str) > 0
                 ):
                     search_radius_km = float(req_radius_km_str)
-
                 queryset = queryset.filter(distance__lte=search_radius_km)
-
+                logger.debug(f"Queryset count after distance filter: {queryset.count()}")
+                
             queryset = self._calculate_relevance_score(queryset)
-
-            # --- MODIFIED: Enhanced sorting logic with Full-Text Search Rank ---
             sort_by = request.query_params.get("sort_by", "relevance")
             if sort_by == "relevance":
-                # If a keyword search was performed, prioritize the text match rank.
-                # Otherwise, fall back to the general relevance score.
                 if keyword_query_text:
                     queryset = queryset.order_by(
                         "-rank", "-relevance_score", "-createdAt"
@@ -537,26 +518,24 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 queryset = queryset.order_by("-review_count", "-average_rating")
             elif sort_by == "newest":
                 queryset = queryset.order_by("-createdAt")
-
+            
+            logger.debug(f"Final queryset count before pagination: {queryset.count()}")
             page = self.paginate_queryset(queryset)
             if page is not None:
                 serializer = self.get_serializer(
                     page, many=True, context={"request": request}
                 )
                 return self.get_paginated_response(serializer.data)
-
             serializer = self.get_serializer(
                 queryset, many=True, context={"request": request}
             )
             return Response({"results": serializer.data})
-
         except Exception as e:
             logger.error(f"Public class search error: {str(e)}", exc_info=True)
             return Response(
                 {"error": "An error occurred during search."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-
 
 class PublicScheduleViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [AllowAny]
@@ -572,13 +551,11 @@ class PublicScheduleViewSet(viewsets.ReadOnlyModelViewSet):
         option_id_str = request.query_params.get("option_id")
         start_date_str = request.query_params.get("start_date")
         end_date_str = request.query_params.get("end_date")
-
         if not all([option_id_str, start_date_str, end_date_str]):
             return Response(
                 {"error": "'option_id', 'start_date', and 'end_date' are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
         try:
             option_id = int(option_id_str)
             start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
@@ -588,7 +565,6 @@ class PublicScheduleViewSet(viewsets.ReadOnlyModelViewSet):
                 {"error": "Invalid option_id or date format. Use YYYY-MM-DD."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
         try:
             option = get_object_or_404(
                 ClassOption.objects.select_related("classId__businessId"),
@@ -602,7 +578,6 @@ class PublicScheduleViewSet(viewsets.ReadOnlyModelViewSet):
                 {"error": "Class option not found or is not available."},
                 status=status.HTTP_404_NOT_FOUND,
             )
-
         instances_in_range = (
             ScheduleInstance.objects.filter(
                 schedule__option_id=option_id,
@@ -625,7 +600,6 @@ class PublicScheduleViewSet(viewsets.ReadOnlyModelViewSet):
             )
             .order_by("date", "time")
         )
-
         availability_by_date = {}
         for instance in instances_in_range:
             available_spots = (
@@ -635,7 +609,6 @@ class PublicScheduleViewSet(viewsets.ReadOnlyModelViewSet):
                 date_str = instance.date.isoformat()
                 if date_str not in availability_by_date:
                     availability_by_date[date_str] = []
-
                 availability_by_date[date_str].append(
                     {
                         "time": instance.time.strftime("%H:%M:%S"),
@@ -645,5 +618,4 @@ class PublicScheduleViewSet(viewsets.ReadOnlyModelViewSet):
                         "duration": instance.duration,
                     }
                 )
-
         return Response(availability_by_date)

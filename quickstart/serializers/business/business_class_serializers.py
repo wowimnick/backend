@@ -550,8 +550,6 @@ class ManagedClassSerializer(serializers.ModelSerializer):
                         f"During class update (ID: {instance.pk}), could not parse coordinates: '{coordinates_str}'. Error: {e}. Existing coordinates will be preserved."
                     )
 
-            validated_data.pop("coordinates", None)
-
         return super().update(instance, validated_data)
 
 
