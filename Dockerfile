@@ -11,18 +11,23 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=on
 WORKDIR /home/django/app
 
 # Install system dependencies
+# MODIFIED: Added gdal-bin and libgdal-dev for geospatial support
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
     jq \
     curl \
     supervisor \
+    gdal-bin \
+    libgdal-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the requirements file
 COPY requirements.txt .
 
 # Install Python dependencies
+# The psycopg2 and GDAL python packages will now build correctly
+# because libpq-dev and libgdal-dev are installed.
 RUN pip install -r requirements.txt
 
 # Create a non-root user for security
