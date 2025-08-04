@@ -9,6 +9,10 @@ import sys
 from datetime import timedelta
 from celery.schedules import crontab
 from pathlib import Path
+if os.name == 'nt': # This checks if the OS is Windows ('nt')
+    GDAL_LIBRARY_PATH = r'C:\OSGeo4W\bin\gdal311.dll' 
+    GEOS_LIBRARY_PATH = r'C:\OSGeo4W\bin\geos_c.dll'
+    PROJ_LIBRARY_PATH = r'C:\OSGeo4W\bin\proj_9.dll'
 
 # --- Environment Loading ---
 # For containerized environments (like Docker), environment variables are passed
@@ -109,6 +113,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "django.contrib.sitemaps",
+    "django.contrib.gis",
     "corsheaders",
     "rest_framework",
     "rest_framework.authtoken",
