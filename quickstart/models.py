@@ -4,6 +4,8 @@ import math
 import random
 import string
 import pytz
+from django.contrib.gis.db import models as gis_models
+from django.contrib.postgres.indexes import GistIndex
 from django.db import transaction
 from django.conf import settings
 from django.db import models
@@ -833,11 +835,11 @@ class ClassesMain(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="active")
     location = models.CharField(max_length=255)
     coordinates = models.CharField(max_length=50)
-    latitude = models.DecimalField(
-        max_digits=10, decimal_places=8, null=True, blank=True, db_index=True
-    )
-    longitude = models.DecimalField(
-        max_digits=11, decimal_places=8, null=True, blank=True, db_index=True
+    point = gis_models.PointField(
+        srid=4326, # Standard GPS coordinate system
+        null=True, 
+        blank=True,
+        help_text="Represents the geographic location (longitude, latitude)."
     )
     saltLocation = models.BooleanField(default=False)
     studentContactEmail = models.EmailField(null=True, blank=True)
@@ -884,6 +886,7 @@ class ClassesMain(models.Model):
             models.Index(fields=["status"]),
             models.Index(fields=["slug"]),
             GinIndex(fields=["search_vector"]),
+            GistIndex(fields=["point"]),
         ]
         permissions = [
             ("change_class_status", "Can change class status"),
@@ -895,6 +898,36 @@ class ClassesMain(models.Model):
     def __str__(self):
         return self.title
 
+class GeographicBoundary(models.Model):
+    """
+    Stores geographic polygon boundaries for known areas like cities and municipalities.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    # The unique identifier from Statistics Canada (e.g., 3520005 for Toronto)
+    csuid = models.CharField(max_length=10, unique=True, db_index=True)
+    
+    # The official name of the area (e.g., "Toronto", "Newmarket")
+    name = models.CharField(max_length=100, db_index=True)
+    
+    # The type of boundary
+    boundary_type = models.CharField(max_length=50, default="Census Subdivision")
+    
+    # The province the area belongs to (e.g., "Ontario")
+    province = models.CharField(max_length=50)
+    
+    # The all-important geometry field to store the polygon shape.
+    geom = gis_models.MultiPolygonField(srid=4326)
+
+    def __str__(self):
+        return f"{self.name}, {self.province}"
+
+    class Meta:
+        verbose_name_plural = "Geographic Boundaries"
+        # Add a GiST index on the geometry field for blazing-fast spatial queries
+        indexes = [
+            GistIndex(fields=['geom']),
+        ]
 
 # --- Signal Handlers to Update Search Vector for ClassesMain ---
 def get_classesmain_search_vector(instance: ClassesMain):

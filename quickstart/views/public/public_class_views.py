@@ -48,18 +48,17 @@ from django.views.decorators.vary import vary_on_headers
 from django.utils import timezone
 from decimal import Decimal, InvalidOperation
 import logging
-import requests
 from urllib.parse import quote
 from datetime import (
     datetime,
     time,
-    date as datetime_date,
 )
 
 from quickstart.models import (
     ClassImage,
     ClassesMain,
     ClassOption,
+    GeographicBoundary,
     Reviews,
     Booking,
     Schedule,
@@ -70,7 +69,9 @@ from quickstart.serializers import (
     ScheduleSerializer,
     PublicClassDetailSerializer,
 )
-from ..utils import haversine_distance
+from django.contrib.gis.geos import Point
+from django.contrib.gis.db.models.functions import Distance
+from django.contrib.gis.measure import D  # D is for Distance object
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,49 @@ QUALITY_SCORE_IDEAL_IMAGES = 10
 RECENCY_HALFLIFE_DAYS = 90
 REVIEW_COUNT_FOR_MAX_SCORE = 50
 
+CANADIAN_PROVINCES = {
+    "alberta": "AB",
+    "british columbia": "BC", 
+    "manitoba": "MB",
+    "new brunswick": "NB",
+    "newfoundland and labrador": "NL",
+    "nova scotia": "NS",
+    "ontario": "ON",
+    "prince edward island": "PE",
+    "quebec": "QC",
+    "saskatchewan": "SK",
+    # Territories
+    "northwest territories": "NT",
+    "nunavut": "NU",
+    "yukon": "YT",
+}
+
+PROVINCE_ABBREVIATIONS = {v: k for k, v in CANADIAN_PROVINCES.items()}
+
+# Create comprehensive set of all province identifiers
+ALL_PROVINCE_NAMES = set(CANADIAN_PROVINCES.keys()) | set(PROVINCE_ABBREVIATIONS.keys())
+
+def normalize_province_name(location_text):
+    """
+    Normalize province names/abbreviations to full province names for consistent searching.
+    Handles cases like "ON, Canada" -> "ontario"
+    """
+    if not location_text:
+        return None
+    
+    # Clean the input - remove "Canada" and extra whitespace
+    cleaned = location_text.replace(", Canada", "").replace(",Canada", "").strip()
+    cleaned_lower = cleaned.lower()
+    
+    # Check if it's a province abbreviation
+    if cleaned.upper() in PROVINCE_ABBREVIATIONS:
+        return PROVINCE_ABBREVIATIONS[cleaned.upper()]
+    
+    # Check if it's already a full province name
+    if cleaned_lower in CANADIAN_PROVINCES:
+        return cleaned_lower
+    
+    return None
 
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 12
@@ -318,118 +362,130 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-    @action(detail=False, methods=["get"], permission_classes=[AllowAny])
     def search(self, request):
+        """
+        Handles class searches with a hybrid approach:
+        - Uses precise polygon boundaries for known city/area searches.
+        - Handles province-wide searches.
+        - Falls back to a radius search for specific addresses or landmarks.
+        """
         try:
-            # --- ADDED: Comprehensive logging of incoming query parameters ---
             logger.debug(f"Public class search initiated with params: {request.query_params}")
 
+            # --- 1. Parameter Extraction ---
             req_lat_str = request.query_params.get("lat")
             req_lng_str = request.query_params.get("lng")
+            location_param_text = request.query_params.get("location") or request.query_params.get("location_search", "")
+            search_name = location_param_text.split(',')[0].strip()
+            search_name_lower = search_name.lower()
             req_radius_km_str = request.query_params.get("radius")
             keyword_query_text = request.query_params.get("keyword")
-            location_search_text = request.query_params.get("location_search")
             tag_filter = request.query_params.get("tag")
+            category_key = request.query_params.get("category_key")
+            subcategory_key = request.query_params.get("subcategory_key")
+            price_max_str = request.query_params.get("price_max")
+            req_date_str = request.query_params.get("date")
+            req_participants_str = request.query_params.get("participants")
+            time_preferences = request.query_params.getlist("time_preference")
+            sort_by = request.query_params.get("sort_by", "relevance")
 
-            search_lat, search_lng = None, None
-            if req_lat_str and req_lng_str:
-                try:
-                    search_lat, search_lng = float(req_lat_str), float(req_lng_str)
-                except (ValueError, TypeError):
-                    logger.warning(
-                        f"Invalid geo params: lat='{req_lat_str}', lng='{req_lng_str}'"
-                    )
-            
             queryset = self.get_queryset()
-            logger.debug(f"Initial queryset count: {queryset.count()}")
+            user_location_point = None
+            is_province_search = False
 
-            if location_search_text:
-                location_parts = [part.strip() for part in location_search_text.split(',') if part.strip()]
-                city_query = Q()
-                province_query = Q()
-                
-                if len(location_parts) > 0:
-                    city_query = Q(businessId__businessCity__icontains=location_parts[0])
-                
-                if len(location_parts) > 1:
-                    province_query = Q(businessId__businessState__icontains=location_parts[1])
-                
-                if city_query and province_query:
-                    queryset = queryset.filter(city_query & province_query)
-                elif city_query:
-                    queryset = queryset.filter(city_query)
-                logger.debug(f"Queryset count after location search ('{location_search_text}'): {queryset.count()}")
+            # --- 2. Geographic Search Logic ---
+            boundary = None
 
+            # --- MODIFICATION: Enhanced province detection ---
+            normalized_province = normalize_province_name(location_param_text)
+            
+            if normalized_province:
+                is_province_search = True
+                logger.info(f"Performing province-wide search for: '{normalized_province.title()}'")
 
+                province_abbr = CANADIAN_PROVINCES.get(normalized_province, "").upper()
+                province_full_title = normalized_province.title()
+                province_q = Q(businessId__businessState__iexact=province_full_title)
+                if province_abbr:
+                    province_q |= Q(businessId__businessState__iexact=province_abbr)
+
+                queryset = queryset.filter(province_q)
+
+                # Set user location point if coordinates are provided (for sorting/distance)
+                if req_lat_str and req_lng_str:
+                    try:
+                        user_location_point = Point(float(req_lng_str), float(req_lat_str), srid=4326)
+                    except (ValueError, TypeError):
+                        user_location_point = None
+
+            elif search_name:
+                # PATH A: KNOWN AREA (POLYGON SEARCH) - Only if not a province search
+                boundary = GeographicBoundary.objects.filter(
+                    Q(name__iexact=search_name) | Q(name__istartswith=f"{search_name} (")
+                ).first()
+
+            if boundary:
+                logger.info(f"Performing precise boundary search for: '{boundary.name}' using its stored polygon.")
+                queryset = queryset.filter(point__within=boundary.geom)
+                if req_lat_str and req_lng_str:
+                    try:
+                        user_location_point = Point(float(req_lng_str), float(req_lat_str), srid=4326)
+                    except (ValueError, TypeError):
+                        user_location_point = None
+
+            elif req_lat_str and req_lng_str and not is_province_search:
+                # PATH B: SPECIFIC POINT (RADIUS SEARCH) - Only if other methods fail and not province search
+                try:
+                    user_location_point = Point(float(req_lng_str), float(req_lat_str), srid=4326)
+                    search_radius_km = float(req_radius_km_str) if req_radius_km_str and req_radius_km_str.replace('.', '', 1).isdigit() else 25.0
+                    logger.info(f"Performing radius search: {search_radius_km}km around a specific point.")
+                    queryset = queryset.filter(
+                        point__distance_lte=(user_location_point, D(km=search_radius_km))
+                    )
+                except (ValueError, TypeError):
+                    logger.warning(f"Invalid geo params for radius search: lat='{req_lat_str}', lng='{req_lng_str}'")
+                    user_location_point = None
+
+            # --- 3. Standard Field Filtering ---
             if keyword_query_text:
-                search_query = SearchQuery(
-                    keyword_query_text, search_type="websearch", config="english"
-                )
+                search_query = SearchQuery(keyword_query_text, search_type="websearch", config="english")
                 queryset = queryset.annotate(
                     rank=SearchRank(F("search_vector"), search_query)
                 ).filter(search_vector=search_query)
-                logger.debug(f"Queryset count after keyword search ('{keyword_query_text}'): {queryset.count()}")
             else:
                 queryset = queryset.annotate(rank=Value(0.0, output_field=FloatField()))
 
-            # --- FIX: Corrected tag filtering logic and added logging ---
             if tag_filter:
-                normalized_tag = tag_filter.lower()
-                logger.debug(f"Filtering by normalized tag: '{normalized_tag}'")
-                
-                # This is the corrected line. It checks if the string exists in the JSON array.
-                queryset = queryset.filter(options__tags__contains=normalized_tag)
-                
-                logger.debug(f"Queryset count after tag filter: {queryset.count()}")
-            
-            category_key = request.query_params.get("category_key")
-            subcategory_key = request.query_params.get("subcategory_key")
+                queryset = queryset.filter(options__tags__contains=tag_filter.lower())
+
             if category_key and category_key.lower() != "all":
                 queryset = queryset.filter(category__key=category_key)
                 if subcategory_key:
                     queryset = queryset.filter(subcategory__key=subcategory_key)
-                logger.debug(f"Queryset count after category filter: {queryset.count()}")
 
-
-            price_max_str = request.query_params.get("price_max")
             if price_max_str:
                 try:
                     price_max_decimal = Decimal(price_max_str)
                     queryset = queryset.filter(
-                        Q(min_session_price__lte=price_max_decimal)
-                        | Q(min_course_price__lte=price_max_decimal)
-                        | (
-                            Q(min_session_price__isnull=True)
-                            & Q(min_course_price__isnull=True)
-                        )
+                        Q(min_session_price__lte=price_max_decimal) |
+                        Q(min_course_price__lte=price_max_decimal) |
+                        (Q(min_session_price__isnull=True) & Q(min_course_price__isnull=True))
                     )
-                    logger.debug(f"Queryset count after price filter: {queryset.count()}")
                 except InvalidOperation:
-                    logger.warning(f"Invalid price_max: {price_max_str}")
+                    logger.warning(f"Invalid price_max value: {price_max_str}")
 
-            req_date_str = request.query_params.get("date")
-            req_participants_str = request.query_params.get("participants")
-            time_preferences = request.query_params.getlist("time_preference")
-            if (
-                req_date_str
-                or (req_participants_str and req_participants_str.isdigit())
-                or time_preferences
-            ):
+            # --- 4. Availability Filtering ---
+            if req_date_str or (req_participants_str and req_participants_str.isdigit()) or time_preferences:
                 instance_filters = Q(options__schedules__instances__status="scheduled")
                 if req_date_str:
                     try:
                         target_date = datetime.strptime(req_date_str, "%Y-%m-%d").date()
-                        instance_filters &= Q(
-                            options__schedules__instances__date=target_date
-                        )
+                        instance_filters &= Q(options__schedules__instances__date=target_date)
                     except ValueError:
-                        instance_filters &= Q(
-                            options__schedules__instances__date__gte=timezone.now().date()
-                        )
+                        instance_filters &= Q(options__schedules__instances__date__gte=timezone.now().date())
                 else:
-                    instance_filters &= Q(
-                        options__schedules__instances__date__gte=timezone.now().date()
-                    )
+                    instance_filters &= Q(options__schedules__instances__date__gte=timezone.now().date())
+                
                 if time_preferences:
                     time_ranges = {
                         "Morning (6am-12pm)": (time(6, 0), time(11, 59, 59)),
@@ -440,96 +496,50 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     for pref in time_preferences:
                         if pref in time_ranges:
                             start_time, end_time = time_ranges[pref]
-                            time_range_filters |= Q(
-                                options__schedules__instances__time__range=(
-                                    start_time,
-                                    end_time,
-                                )
-                            )
+                            time_range_filters |= Q(options__schedules__instances__time__range=(start_time, end_time))
                     if time_range_filters:
                         instance_filters &= time_range_filters
-                if (
-                    req_participants_str
-                    and req_participants_str.isdigit()
-                    and int(req_participants_str) > 0
-                ):
-                    instance_filters &= Q(
-                        options__schedules__instances__max_participants__gte=int(
-                            req_participants_str
-                        )
-                    )
-                queryset = queryset.filter(instance_filters).distinct()
-                logger.debug(f"Queryset count after availability filters: {queryset.count()}")
-
-            if search_lat is not None and search_lng is not None:
-                queryset = queryset.exclude(
-                    Q(latitude__isnull=True) | Q(longitude__isnull=True)
-                )
-                db_lat = F("latitude")
-                db_lng = F("longitude")
-                lat_r = Radians(db_lat)
-                lng_r = Radians(db_lng)
-                search_lat_r = Radians(Value(search_lat, output_field=FloatField()))
-                search_lng_r = Radians(Value(search_lng, output_field=FloatField()))
-                d_lng = lng_r - search_lng_r
-                d_lat = lat_r - search_lat_r
-                a = Power(Sin(d_lat / 2), 2) + Cos(search_lat_r) * Cos(lat_r) * Power(
-                    Sin(d_lng / 2), 2
-                )
-                c = 2 * ATan2(Power(a, 0.5), Power(1 - a, 0.5))
-                distance_expr = ExpressionWrapper(6371 * c, output_field=FloatField())
-                queryset = queryset.annotate(distance=distance_expr)
-                search_radius_km = DEFAULT_SEARCH_RADIUS_KM
-                if (
-                    req_radius_km_str
-                    and req_radius_km_str.replace(".", "", 1).isdigit()
-                    and float(req_radius_km_str) > 0
-                ):
-                    search_radius_km = float(req_radius_km_str)
-                queryset = queryset.filter(distance__lte=search_radius_km)
-                logger.debug(f"Queryset count after distance filter: {queryset.count()}")
                 
+                if req_participants_str and req_participants_str.isdigit() and int(req_participants_str) > 0:
+                    instance_filters &= Q(options__schedules__instances__max_participants__gte=int(req_participants_str))
+                
+                queryset = queryset.filter(instance_filters).distinct()
+
+            # --- 5. Annotation and Sorting ---
             queryset = self._calculate_relevance_score(queryset)
-            sort_by = request.query_params.get("sort_by", "relevance")
-            if sort_by == "relevance":
-                if keyword_query_text:
-                    queryset = queryset.order_by(
-                        "-rank", "-relevance_score", "-createdAt"
-                    )
-                else:
-                    queryset = queryset.order_by("-relevance_score", "-createdAt")
-            elif sort_by == "distance" and search_lat is not None:
-                queryset = queryset.order_by(F("distance").asc(nulls_last=True))
+            
+            if user_location_point:
+                queryset = queryset.annotate(distance=Distance("point", user_location_point))
+
+            # --- MODIFICATION: Do not sort by distance if it's a wide province search without a user point ---
+            if sort_by == "distance" and user_location_point:
+                queryset = queryset.order_by("distance")
             elif sort_by == "price_asc":
-                queryset = queryset.order_by(
-                    Coalesce(F("min_session_price"), F("min_course_price")).asc(
-                        nulls_last=True
-                    )
-                )
+                queryset = queryset.order_by(F("min_session_price").asc(nulls_last=True), F("min_course_price").asc(nulls_last=True))
             elif sort_by == "price_desc":
-                queryset = queryset.order_by(
-                    Coalesce(F("min_session_price"), F("min_course_price")).desc(
-                        nulls_first=True
-                    )
-                )
+                queryset = queryset.order_by(F("min_session_price").desc(nulls_first=True), F("min_course_price").desc(nulls_first=True))
             elif sort_by == "rating":
                 queryset = queryset.order_by("-average_rating", "-review_count")
             elif sort_by == "reviews":
                 queryset = queryset.order_by("-review_count", "-average_rating")
             elif sort_by == "newest":
                 queryset = queryset.order_by("-createdAt")
-            
+            else: # Default sort is 'relevance'
+                order_fields = ["-relevance_score", "-createdAt"]
+                if keyword_query_text:
+                    order_fields.insert(0, "-rank")
+                queryset = queryset.order_by(*order_fields)
+
+            # --- 6. Pagination and Response ---
             logger.debug(f"Final queryset count before pagination: {queryset.count()}")
             page = self.paginate_queryset(queryset)
             if page is not None:
-                serializer = self.get_serializer(
-                    page, many=True, context={"request": request}
-                )
+                serializer = self.get_serializer(page, many=True, context={"request": request})
                 return self.get_paginated_response(serializer.data)
-            serializer = self.get_serializer(
-                queryset, many=True, context={"request": request}
-            )
-            return Response({"results": serializer.data})
+            
+            serializer = self.get_serializer(queryset, many=True, context={"request": request})
+            return Response(serializer.data)
+
         except Exception as e:
             logger.error(f"Public class search error: {str(e)}", exc_info=True)
             return Response(
