@@ -713,7 +713,7 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                     datetime.combine(datetime_date.min, start_time_obj)
                     + timedelta(minutes=inst.duration)
                 ).time()
-                time_str = f"{start_time_obj.strftime('%-I:%M %p')} - {end_time_obj.strftime('%-I:%M %p')}"
+                time_str = f"{start_time_obj.strftime('%I:%M %p').lstrip('0')} - {end_time_obj.strftime('%I:%M %p').lstrip('0')}"
                 date_str = inst.date.strftime("%a, %b %d")
 
                 upcoming_classes_data.append(
