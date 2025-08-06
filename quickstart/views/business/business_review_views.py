@@ -14,6 +14,7 @@ from datetime import timedelta, datetime
 from django.utils import timezone
 import logging
 
+from quickstart.views.business.business_booking_views import BusinessBookingPagination
 from quickstart.models import Reviews, BusinessInfo
 from quickstart.serializers.business.business_review_serializers import (
     BusinessReviewSerializer,
@@ -49,6 +50,7 @@ class CanManageOwnBusinessReviews(BasePermission):
 class BusinessReviewViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = BusinessReviewSerializer
     permission_classes = [IsAuthenticated, CanManageOwnBusinessReviews]
+    pagination_class = BusinessBookingPagination
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = [
         "comment",
@@ -144,7 +146,6 @@ class BusinessReviewViewSet(viewsets.ReadOnlyModelViewSet):
 
         responded_count = reviews_qs.filter(
             business_response__isnull=False,
-            business_response__exact=False,
             business_response__gt="",
         ).count()
         response_rate = (

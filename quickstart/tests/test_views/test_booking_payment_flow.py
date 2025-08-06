@@ -524,7 +524,7 @@ class PaymentFlowTests(APITestCase):
         self.assertEqual(Payment.objects.count(), 1)
         print("✅ PASSED: Webhook correctly confirms booking and is idempotent.")
 
-    @patch("quickstart.views.payments.ProcessBookingWebhook._attempt_stripe_refund")
+    @patch("quickstart.payments.views.ProcessBookingWebhook._attempt_stripe_refund")
     @patch("stripe.Webhook.construct_event")
     def test_webhook_refunds_on_booking_failure(
         self, mock_construct_event, mock_refund
