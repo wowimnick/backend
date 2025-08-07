@@ -144,11 +144,14 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
         )
         serializer.is_valid(raise_exception=True)
         try:
-            booking = serializer.save()
-            response_serializer = StudentBookingDetailSerializer(
-                booking, context={"request": request}
-            )
-            return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+            with transaction.atomic():
+                booking = serializer.save()
+                response_serializer = StudentBookingDetailSerializer(
+                    booking, context={"request": request}
+                )
+                return Response(
+                    response_serializer.data, status=status.HTTP_201_CREATED
+                )
         except ValidationError as e:
             return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:

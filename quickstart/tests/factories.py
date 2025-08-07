@@ -60,7 +60,6 @@ class BlogCategoryFactory(DjangoModelFactory):
 class BlogPostFactory(DjangoModelFactory):
     class Meta:
         model = BlogPost
-        django_get_or_create = ("slug",)
 
     title = factory.Faker("sentence", nb_words=5)
     slug = factory.LazyAttribute(lambda o: slugify(o.title))

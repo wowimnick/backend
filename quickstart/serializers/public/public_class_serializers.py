@@ -146,26 +146,40 @@ class PublicClassSerializer(serializers.ModelSerializer):
     Serializer for the PUBLIC LIST VIEW of classes. Lean and performant.
     It does NOT include schedules to keep the payload small.
     """
+
     # --- Existing fields ---
     options = PublicClassOptionSerializer(many=True, read_only=True)
     images = PublicClassImageSerializer(many=True, read_only=True)
     average_rating = serializers.FloatField(read_only=True)
     review_count = serializers.IntegerField(read_only=True)
-    category_name = serializers.CharField(source="category.name", read_only=True, allow_null=True)
-    subcategory_name = serializers.CharField(source="subcategory.name", read_only=True, allow_null=True)
-    category_key = serializers.CharField(source="category.key", read_only=True, allow_null=True)
-    subcategory_key = serializers.CharField(source="subcategory.key", read_only=True, allow_null=True)
-    business_timezone = serializers.CharField(source="businessId.business_timezone", read_only=True)
-    business_name = serializers.CharField(source="businessId.businessName", read_only=True, allow_null=True)
-    min_session_price = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
-    min_course_price = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    category_name = serializers.CharField(
+        source="category.name", read_only=True, allow_null=True
+    )
+    subcategory_name = serializers.CharField(
+        source="subcategory.name", read_only=True, allow_null=True
+    )
+    category_key = serializers.CharField(
+        source="category.key", read_only=True, allow_null=True
+    )
+    subcategory_key = serializers.CharField(
+        source="subcategory.key", read_only=True, allow_null=True
+    )
+    business_timezone = serializers.CharField(
+        source="businessId.business_timezone", read_only=True
+    )
+    business_name = serializers.CharField(
+        source="businessId.businessName", read_only=True, allow_null=True
+    )
+    min_session_price = serializers.DecimalField(
+        max_digits=10, decimal_places=2, read_only=True
+    )
+    min_course_price = serializers.DecimalField(
+        max_digits=10, decimal_places=2, read_only=True
+    )
 
     # --- Methods for dynamic fields ---
     coordinates = serializers.SerializerMethodField(read_only=True)
     is_favorited = serializers.SerializerMethodField()
-    
-    # --- NEW: Add distance to the serializer output ---
-    distance = serializers.SerializerMethodField()
 
     class Meta:
         model = ClassesMain
@@ -182,7 +196,6 @@ class PublicClassSerializer(serializers.ModelSerializer):
             "category_key",
             "subcategory_key",
             "coordinates",
-            "distance",  # <-- Added distance here
             "saltLocation",
             "createdAt",
             "options",
@@ -204,25 +217,19 @@ class PublicClassSerializer(serializers.ModelSerializer):
         try:
             # A GEOS Point object has .y for latitude and .x for longitude
             lat, lng = obj.point.y, obj.point.x
-            
+
             if obj.saltLocation:
                 lat_salt = uniform(-0.0005, 0.0005)
                 lng_salt = uniform(-0.0005, 0.0005)
                 lat += lat_salt
                 lng += lng_salt
-                
+
             return f"{lat:.8f},{lng:.8f}"
         except (ValueError, TypeError):
-            logger.warning(f"Invalid numeric coordinates for Class {obj.classId} from point object.")
+            logger.warning(
+                f"Invalid numeric coordinates for Class {obj.classId} from point object."
+            )
             return None
-    
-    def get_distance(self, obj):
-        # This method safely retrieves the 'distance' annotation from the queryset.
-        # If the annotation doesn't exist (e.g., not a geo-search), it returns None.
-        if hasattr(obj, 'distance') and obj.distance is not None:
-            # The 'distance' annotation is a Distance object, we need its value in km
-            return round(obj.distance.km, 2)
-        return None
 
     def get_is_favorited(self, obj):
         request = self.context.get("request")
@@ -237,8 +244,11 @@ class PublicClassDetailSerializer(PublicClassSerializer):
     It inherits everything from the list serializer and overrides the `options`
     field to use the new serializer that INCLUDES schedules.
     """
+
     options = PublicClassOptionWithSchedulesSerializer(many=True, read_only=True)
-    initial_reviews = PublicReviewSerializer(many=True, read_only=True, source="reviews")
+    initial_reviews = PublicReviewSerializer(
+        many=True, read_only=True, source="reviews"
+    )
 
     class Meta(PublicClassSerializer.Meta):
         # Inherit all fields from the parent and add the new one

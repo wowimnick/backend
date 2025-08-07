@@ -3,6 +3,7 @@ from datetime import timedelta
 import math
 import random
 import string
+from django.contrib.gis.geos import Point
 import pytz
 from django.contrib.gis.db import models as gis_models
 from django.contrib.postgres.indexes import GistIndex
@@ -836,10 +837,10 @@ class ClassesMain(models.Model):
     location = models.CharField(max_length=255)
     coordinates = models.CharField(max_length=50)
     point = gis_models.PointField(
-        srid=4326, # Standard GPS coordinate system
-        null=True, 
+        srid=4326,  # Standard GPS coordinate system
+        null=True,
         blank=True,
-        help_text="Represents the geographic location (longitude, latitude)."
+        help_text="Represents the geographic location (longitude, latitude).",
     )
     saltLocation = models.BooleanField(default=False)
     studentContactEmail = models.EmailField(null=True, blank=True)
@@ -872,9 +873,25 @@ class ClassesMain(models.Model):
         self.slug = slug
 
     def save(self, *args, **kwargs):
-        """Override save to generate a slug if one doesn't exist."""
+        """Override save to generate a slug and update the GIS point field."""
+
+        if self.coordinates:
+            try:
+                lat_str, lng_str = self.coordinates.split(",")
+                lat = float(lat_str.strip())
+                lng = float(lng_str.strip())
+                self.point = Point(lng, lat, srid=4326)
+            except (ValueError, TypeError, IndexError) as e:
+                self.point = None
+                logger.warning(
+                    f"Could not parse coordinates string '{self.coordinates}' for Class {self.pk}. Error: {e}"
+                )
+        else:
+            self.point = None
+
         if not self.slug:
             self._generate_unique_slug()
+
         super().save(*args, **kwargs)
 
     class Meta:
@@ -898,24 +915,26 @@ class ClassesMain(models.Model):
     def __str__(self):
         return self.title
 
+
 class GeographicBoundary(models.Model):
     """
     Stores geographic polygon boundaries for known areas like cities and municipalities.
     """
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    
+
     # The unique identifier from Statistics Canada (e.g., 3520005 for Toronto)
     csuid = models.CharField(max_length=10, unique=True, db_index=True)
-    
+
     # The official name of the area (e.g., "Toronto", "Newmarket")
     name = models.CharField(max_length=100, db_index=True)
-    
+
     # The type of boundary
     boundary_type = models.CharField(max_length=50, default="Census Subdivision")
-    
+
     # The province the area belongs to (e.g., "Ontario")
     province = models.CharField(max_length=50)
-    
+
     # The all-important geometry field to store the polygon shape.
     geom = gis_models.MultiPolygonField(srid=4326)
 
@@ -926,8 +945,9 @@ class GeographicBoundary(models.Model):
         verbose_name_plural = "Geographic Boundaries"
         # Add a GiST index on the geometry field for blazing-fast spatial queries
         indexes = [
-            GistIndex(fields=['geom']),
+            GistIndex(fields=["geom"]),
         ]
+
 
 # --- Signal Handlers to Update Search Vector for ClassesMain ---
 def get_classesmain_search_vector(instance: ClassesMain):
@@ -1121,12 +1141,14 @@ class ClassOption(models.Model):
     @property
     def parent_class_description(self):
         return self.classId.description
-    
+
     def save(self, *args, **kwargs):
         # Ensure tags are stored as a lowercase list of strings
         if isinstance(self.tags, list):
-            self.tags = [str(tag).lower() for tag in self.tags if tag] # Convert to string, lowercase, and remove empty
-        
+            self.tags = [
+                str(tag).lower() for tag in self.tags if tag
+            ]  # Convert to string, lowercase, and remove empty
+
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -1474,8 +1496,10 @@ class Booking(models.Model):
     booking_group_id = models.UUIDField(null=True, blank=True)
     schedule_instance = models.ForeignKey(
         "ScheduleInstance",
-        on_delete=models.CASCADE,
-        related_name="bookings",  # Use string if defined later
+        on_delete=models.SET_NULL,
+        related_name="bookings",
+        null=True,
+        blank=True,
     )
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="bookings"
@@ -2072,15 +2096,20 @@ class BlogPost(models.Model):
         word_count = len(self.content.split())
         self.read_time = math.ceil(word_count / 230)  # Average reading speed
 
-        # Auto-generate slug if it's not set
         if not self.slug:
             self.slug = django_slugify(self.title)
-            # Ensure slug is unique
-            original_slug = self.slug
-            counter = 1
-            while BlogPost.objects.filter(slug=self.slug).exists():
-                self.slug = f"{original_slug}-{counter}"
-                counter += 1
+
+        # Ensure slug is unique
+        original_slug = self.slug
+        queryset = BlogPost.objects.all()
+        if self.pk:
+            queryset = queryset.exclude(pk=self.pk)
+
+        counter = 1
+        # Check for uniqueness and append a counter if needed
+        while queryset.filter(slug=self.slug).exists():
+            self.slug = f"{original_slug}-{counter}"
+            counter += 1
 
         super().save(*args, **kwargs)
 

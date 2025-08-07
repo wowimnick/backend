@@ -318,7 +318,7 @@ class StripeConnectView(views.APIView):
                         "payouts_enabled": account.payouts_enabled,
                         "type": account.type,
                     },
-                    "requirements": account.requirements,
+                    "requirements": dict(account.requirements),
                     "is_onboarding_complete": is_onboarding_complete,
                 }
             )

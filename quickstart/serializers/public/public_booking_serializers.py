@@ -4,10 +4,10 @@ import uuid
 from django.conf import settings
 from rest_framework import serializers
 from django.utils import timezone
+from django.db import transaction
 
 
 from rest_framework.exceptions import ValidationError as DRFValidationError
-from django.db import transaction
 
 
 from quickstart.models import (
@@ -45,38 +45,32 @@ class BookingCreateSerializer(serializers.Serializer):
 
         if not slot_id:
             raise DRFValidationError("Slot ID is required for the first selected slot.")
-
         try:
+            # We will validate existence here, but the race-condition-proof check happens in validate()
             instance = ScheduleInstance.objects.select_related(
-                "schedule",
-                "schedule__option",
-                "schedule__option__classId__businessId",
+                "schedule__option__classId"
             ).get(id=slot_id)
-
-            if instance.status != "scheduled":
-                raise DRFValidationError("This session is not available for booking.")
-
-            if instance.date < timezone.now().date():
-                raise DRFValidationError("Cannot book past sessions.")
-
-            self.context["validated_instance"] = instance
+            self.context["initial_instance"] = instance
             return value
-
         except ScheduleInstance.DoesNotExist:
             raise DRFValidationError("Invalid schedule instance ID.")
         except (ValueError, TypeError):
             raise DRFValidationError("Invalid slot ID format.")
 
     def validate(self, data):
-        instance = self.context.get("validated_instance")
-        if not instance:
-            raise DRFValidationError(
-                "Schedule instance validation failed unexpectedly. Please ensure selectedSlots are valid."
-            )
-
+        """
+        Validates booking data and uses a database lock to prevent race conditions.
+        """
         participants_count = data.get("participants", 1)
         participant_details = data.get("participant_details", [])
+        initial_instance = self.context.get("initial_instance")
 
+        if not initial_instance:
+            raise DRFValidationError(
+                {"selectedSlots": "Valid schedule instance not found."}
+            )
+
+        # --- Participant Details Validation ---
         if participants_count > 0:
             if not isinstance(participant_details, list):
                 raise DRFValidationError({"participant_details": "Must be a list."})
@@ -110,32 +104,62 @@ class BookingCreateSerializer(serializers.Serializer):
                             }
                         )
 
-        if not instance.can_accommodate(participants_count):
-            raise DRFValidationError(
-                {"participants": "Not enough spots available for the selected session."}
-            )
-
-        if instance.schedule.option.booking_type == "Full Course":
-            future_instances = ScheduleInstance.objects.filter(
-                schedule=instance.schedule, date__gte=instance.date, status="scheduled"
-            ).order_by("date")
-
-            if not future_instances.exists():
-                raise DRFValidationError(
-                    {
-                        "selectedSlots": "No future sessions found for this course starting from the selected date."
-                    }
-                )
-
-            self.context["future_course_instances"] = future_instances
-
-            for future_instance_item in future_instances:
-                if not future_instance_item.can_accommodate(participants_count):
-                    raise DRFValidationError(
-                        {
-                            "participants": f"Not enough spots available for the course session on {future_instance_item.date}. Course cannot be booked with {participants_count} participants."
-                        }
+        # --- FIX: Implement Database Lock for Race Condition Prevention ---
+        instances_to_book = []
+        try:
+            # The transaction.atomic() block was moved to the view to ensure the lock is held until creation.
+            # Lock the specific ScheduleInstance row(s) for the duration of this transaction.
+            # Any other transaction trying to lock the same row will be forced to wait.
+            if initial_instance.schedule.option.booking_type == "Full Course":
+                # Lock all future instances of the course
+                locked_instances = list(
+                    ScheduleInstance.objects.select_for_update().filter(
+                        schedule=initial_instance.schedule,
+                        date__gte=initial_instance.date,
+                        status="scheduled",
                     )
+                )
+                if not locked_instances:
+                    raise DRFValidationError(
+                        "No available future sessions found for this course."
+                    )
+                instances_to_book = locked_instances
+            else:
+                # Lock just the single selected instance
+                locked_instance = ScheduleInstance.objects.select_for_update().get(
+                    id=initial_instance.id
+                )
+                instances_to_book = [locked_instance]
+
+            # Now that we have a lock, we can safely perform all availability checks.
+            for instance in instances_to_book:
+                if instance.status != "scheduled":
+                    raise DRFValidationError(
+                        f"The session on {instance.date} is no longer available for booking."
+                    )
+                if instance.date < timezone.now().date():
+                    raise DRFValidationError(
+                        f"Cannot book past session on {instance.date}."
+                    )
+                if not instance.can_accommodate(participants_count):
+                    raise DRFValidationError(
+                        f"Not enough spots available for the session on {instance.date}. "
+                        f"Requested: {participants_count}, Available: {instance.available_spots}."
+                    )
+
+        except ScheduleInstance.DoesNotExist:
+            raise DRFValidationError(
+                "The selected session was booked by someone else just now. Please try another session."
+            )
+        except Exception as e:
+            logger.error(f"Error during booking validation lock: {e}", exc_info=True)
+            raise  # Re-raise the original exception (likely DRFValidationError)
+
+        # Store the locked and validated instances in the context for the create() method.
+        self.context["validated_instance"] = instances_to_book[0]
+        if initial_instance.schedule.option.booking_type == "Full Course":
+            self.context["future_course_instances"] = instances_to_book
+
         return data
 
     def create(self, validated_data):
@@ -156,63 +180,63 @@ class BookingCreateSerializer(serializers.Serializer):
         snapshotted_refund_percent = class_option.cancellationRefundPercentage
 
         try:
-            with transaction.atomic():
-                if booking_type == "Full Course":
-                    booking_group_id = uuid.uuid4()
-                    course_instances = self.context.get("future_course_instances")
-                    if not course_instances:
-                        raise DRFValidationError(
-                            "Course instances not found during creation (serializer.create)."
-                        )
-
-                    bookings = []
-                    total_course_price = Decimal("0.00")
-
-                    for instance_item in course_instances:
-                        instance_price = instance_item.price * participants_count
-                        total_course_price += instance_price
-
-                        booking = Booking(
-                            schedule_instance=instance_item,
-                            user=user,
-                            booking_group_id=booking_group_id,
-                            participants=participants_count,
-                            participant_details=participant_details_data,
-                            notes=notes,
-                            amount_paid=instance_price,
-                            status="pending",
-                            payment_status="pending",
-                            enrollment_type=enrollment_type,
-                            cancellation_policy=snapshotted_policy,
-                            cancellation_refund_percentage=snapshotted_refund_percent,
-                        )
-                        bookings.append(booking)
-
-                    created_bookings = Booking.objects.bulk_create(bookings)
-                    logger.info(
-                        f"BookingCreateSerializer: Pending Course Booking created (Group: {booking_group_id}) for User {user.email}. Total Price: {total_course_price}"
+            # The transaction is now handled in the view to cover the whole process
+            if booking_type == "Full Course":
+                booking_group_id = uuid.uuid4()
+                course_instances = self.context.get("future_course_instances")
+                if not course_instances:
+                    raise DRFValidationError(
+                        "Course instances not found during creation (serializer.create)."
                     )
 
-                    return created_bookings[0] if created_bookings else None
-                else:
-                    single_session_price = price_per_instance * participants_count
-                    booking = Booking.objects.create(
-                        schedule_instance=initial_instance,
+                bookings = []
+                total_course_price = Decimal("0.00")
+
+                for instance_item in course_instances:
+                    instance_price = instance_item.price * participants_count
+                    total_course_price += instance_price
+
+                    booking = Booking(
+                        schedule_instance=instance_item,
                         user=user,
+                        booking_group_id=booking_group_id,
                         participants=participants_count,
                         participant_details=participant_details_data,
                         notes=notes,
-                        amount_paid=single_session_price,
+                        amount_paid=instance_price.quantize(Decimal("0.01")),
                         status="pending",
                         payment_status="pending",
                         enrollment_type=enrollment_type,
                         cancellation_policy=snapshotted_policy,
                         cancellation_refund_percentage=snapshotted_refund_percent,
                     )
-                    logger.info(
-                        f"BookingCreateSerializer: Pending Single Session Booking created (ID: {booking.id}) for User {user.email}. Price: {single_session_price}"
-                    )
-                    return booking
+                    bookings.append(booking)
+
+                created_bookings = Booking.objects.bulk_create(bookings)
+                logger.info(
+                    f"BookingCreateSerializer: Pending Course Booking created (Group: {booking_group_id}) for User {user.email}. Total Price: {total_course_price}"
+                )
+
+                return created_bookings[0] if created_bookings else None
+            else:
+                single_session_price = price_per_instance * participants_count
+                booking = Booking.objects.create(
+                    schedule_instance=initial_instance,
+                    user=user,
+                    participants=participants_count,
+                    participant_details=participant_details_data,
+                    notes=notes,
+                    amount_paid=single_session_price.quantize(Decimal("0.01")),
+                    status="pending",
+                    payment_status="pending",
+                    enrollment_type=enrollment_type,
+                    cancellation_policy=snapshotted_policy,
+                    cancellation_refund_percentage=snapshotted_refund_percent,
+                )
+                logger.info(
+                    f"BookingCreateSerializer: Pending Single Session Booking created (ID: {booking.id}) for User {user.email}. Price: {single_session_price}"
+                )
+                return booking
 
         except Exception as e:
             logger.error(

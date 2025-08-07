@@ -381,6 +381,7 @@ class MyBusinessOverviewView(APIView):
                     schedule__option__classId__businessId=business,
                     date__range=[today_utc_date, upcoming_seven_days_end_date],
                     status="scheduled",
+                    schedule__option__classId__status="active",
                 )
                 .select_related("schedule__option__classId")
                 .annotate(
@@ -904,7 +905,10 @@ class MyBusinessProfileView(generics.RetrieveUpdateDestroyAPIView):
                 )
 
                 if future_instances_to_delete.exists():
-                    deleted_count, _ = future_instances_to_delete.delete()
+                    deleted_count = 0
+                    for instance_to_delete in future_instances_to_delete:
+                        instance_to_delete.delete()
+                        deleted_count += 1
                     logger.info(
                         f"Cleaned up {deleted_count} future schedule instances for deactivated business {business_id}."
                     )

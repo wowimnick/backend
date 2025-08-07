@@ -219,8 +219,6 @@ class PublicClassViewSetTest(APITestCase):
             title="Active Yoga Class",
             description="A class for testing.",
             coordinates="45.4215,-75.6972",  # Ottawa, ON
-            latitude=45.4215,
-            longitude=-75.6972,
             category=self.category,
         )
         ReviewFactory.create_batch(5, classId=self.active_class, rating=5)
@@ -317,8 +315,6 @@ class PublicClassViewSetTest(APITestCase):
         ClassesMainFactory(
             title="Far Away Class",
             coordinates="34.0522,-118.2437",
-            latitude=34.0522,
-            longitude=-118.2437,
             category=self.category,
         )  # Los Angeles
 
@@ -511,4 +507,4 @@ class PublicScheduleViewSetTest(APITestCase):
 
         response = self.client.get(url, query_params)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data, {})  # Expect an empty JSON object
+        self.assertEqual(response.data, {})

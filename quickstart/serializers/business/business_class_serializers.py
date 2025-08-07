@@ -3,6 +3,7 @@ import json
 import os
 from django.conf import settings
 from rest_framework.exceptions import PermissionDenied
+from django.contrib.gis.geos import Point
 from rest_framework import serializers
 from django.db.models.functions import Coalesce
 from django.db.models import Q, Sum
@@ -605,26 +606,25 @@ class ClassCreateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         """
         Custom create method to handle conversion of category/subcategory keys
-        and to parse coordinates into latitude and longitude.
+        and to correctly parse coordinates into the GIS point field.
         """
         category_key = validated_data.pop("category_key")
         subcategory_key = validated_data.pop("subcategory_key", None)
 
+        # Keep the coordinates string, as the model has a field for it.
         coordinates_str = validated_data.get("coordinates")
+        point = None  # Initialize point as None
+
         if coordinates_str:
             try:
-                lat_str, lng_str = map(str.strip, coordinates_str.split(","))
-                validated_data["latitude"] = Decimal(lat_str)
-                validated_data["longitude"] = Decimal(lng_str)
-            except (ValueError, InvalidOperation):
+                # Parse the coordinates but don't add them back to validated_data
+                lng_str, lat_str = map(str.strip, coordinates_str.split(","))
+                # Create a GIS Point object. Note: It's (longitude, latitude)
+                point = Point(float(lng_str), float(lat_str), srid=4326)
+            except (ValueError, TypeError):
                 logger.warning(
-                    f"Could not parse coordinates on create: '{coordinates_str}'. Lat/Lng will not be set."
+                    f"Could not parse coordinates on create: '{coordinates_str}'. Point will not be set."
                 )
-                validated_data["latitude"] = None
-                validated_data["longitude"] = None
-        else:
-            validated_data["latitude"] = None
-            validated_data["longitude"] = None
 
         try:
             category = ClassCategory.objects.get(key=category_key)
@@ -648,6 +648,9 @@ class ClassCreateSerializer(serializers.ModelSerializer):
 
         validated_data["category"] = category
         validated_data["subcategory"] = subcategory
+
+        # Manually add the created point to the validated_data for creation
+        validated_data["point"] = point
 
         instance = ClassesMain.objects.create(**validated_data)
         return instance

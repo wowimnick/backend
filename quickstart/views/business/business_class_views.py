@@ -507,12 +507,15 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                 )
 
                 if future_instances_to_delete.exists():
-                    # Step 3: Delete the identified future instances.
-                    # The custom .delete() method on the ScheduleInstance model will handle
-                    # cancelling any associated bookings and marking them for refund.
-                    deleted_count, _ = future_instances_to_delete.delete()
+                    # --- MODIFIED LOGIC ---
+                    # Iterate to ensure the model's custom .delete() method is called for each instance,
+                    # which properly handles cancelling associated bookings.
+                    deleted_count = 0
+                    for instance_to_delete in future_instances_to_delete:
+                        instance_to_delete.delete()  # This now calls the correct model method
+                        deleted_count += 1
                     logger.info(
-                        f"Successfully deleted {deleted_count} future schedule instances for suspended class '{class_title}' (ID: {class_pk})."
+                        f"Successfully deleted {deleted_count} future schedule instances for suspended class '{instance.title}' (ID: {instance.pk})."
                     )
                 else:
                     logger.info(
