@@ -13,10 +13,8 @@ import pytz  # For timezone choices
 
 from quickstart.models import (
     BusinessInfo,
-    ClassCategory,
     ClassesMain,
-    Reviews,
-    CustomUser,
+    Discount,
     Booking,
     VerificationRequest,
     Role,
@@ -953,3 +951,149 @@ class BusinessStatsSerializer(serializers.ModelSerializer):
             )
             .count()
         )
+
+
+class BusinessDiscountSerializer(serializers.ModelSerializer):
+    """
+    Serializer for business owners/managers to manage their discounts and coupons.
+    """
+
+    usage_count = serializers.IntegerField(read_only=True)
+    business_name = serializers.CharField(
+        source="business.businessName", read_only=True
+    )
+    target_class_name = serializers.CharField(
+        source="target_class.title", read_only=True
+    )
+    target_class_option_name = serializers.CharField(
+        source="target_class_option.classId.title", read_only=True
+    )
+
+    class Meta:
+        model = Discount
+        fields = [
+            "id",
+            "business",
+            "business_name",
+            "name",
+            "code",
+            "discount_type",
+            "value",
+            "scope",
+            "target_class",
+            "target_class_name",
+            "target_schedule_group_name",
+            "target_class_option",
+            "target_class_option_name",
+            "is_active",
+            "valid_from",
+            "valid_to",
+            "usage_limit",
+            "usage_count",
+            "usage_limit_per_user",
+            "min_purchase_amount",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = (
+            "id",
+            "business",
+            "business_name",
+            "usage_count",
+            "created_at",
+            "updated_at",
+            "target_class_name",
+            "target_class_option_name",
+        )
+        extra_kwargs = {
+            "name": {"required": True},
+            "discount_type": {"required": True},
+            "value": {"required": True},
+            "code": {
+                "validators": []
+            },  # Remove default unique validator to handle in .validate()
+        }
+
+    def validate_code(self, value):
+        if not value:
+            return None
+
+        value = value.upper().strip()
+
+        # Check for uniqueness within the business
+        business = (
+            self.context["request"].user.owned_businesses.first()
+            or self.context["request"].user.managed_businesses.first()
+        )
+        query = Discount.objects.filter(business=business, code=value)
+
+        # If we are updating an instance, exclude it from the uniqueness check
+        if self.instance:
+            query = query.exclude(pk=self.instance.pk)
+
+        if query.exists():
+            raise serializers.ValidationError(
+                "This coupon code is already in use for your business."
+            )
+        return value
+
+    def validate_value(self, value):
+        discount_type = self.initial_data.get("discount_type")
+        if discount_type == "percentage" and (value <= 0 or value > 100):
+            raise serializers.ValidationError(
+                "Percentage value must be between 1 and 100."
+            )
+        if value <= 0:
+            raise serializers.ValidationError("Discount value must be positive.")
+        return value
+
+    def validate(self, data):
+        scope = data.get("scope")
+
+        if scope == "class":
+            if not data.get("target_class"):
+                raise serializers.ValidationError(
+                    {"target_class": "An entire class must be selected for this scope."}
+                )
+            data["target_schedule_group_name"] = None
+            data["target_class_option"] = None
+
+        elif scope == "schedule_group":
+            if not data.get("target_schedule_group_name") or not data.get(
+                "target_class_option"
+            ):
+                raise serializers.ValidationError(
+                    {
+                        "target_schedule_group_name": "A schedule group name and class option are required for this scope.",
+                        "target_class_option": "A class option is required for this scope.",
+                    }
+                )
+            data["target_class"] = None
+
+        valid_from = data.get("valid_from")
+        valid_to = data.get("valid_to")
+        if valid_to and valid_from and valid_to < valid_from:
+            raise serializers.ValidationError(
+                {"valid_to": "'Valid to' date cannot be before 'Valid from' date."}
+            )
+
+        # Ensure the selected targets belong to the user's business
+        user = self.context["request"].user
+        business = user.owned_businesses.first() or user.managed_businesses.first()
+
+        if data.get("target_class") and data["target_class"].businessId != business:
+            raise serializers.ValidationError(
+                {"target_class": "This class does not belong to your business."}
+            )
+
+        if (
+            data.get("target_class_option")
+            and data["target_class_option"].classId.businessId != business
+        ):
+            raise serializers.ValidationError(
+                {
+                    "target_class_option": "This class option does not belong to your business."
+                }
+            )
+
+        return data

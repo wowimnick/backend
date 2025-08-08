@@ -429,6 +429,10 @@ class Command(BaseCommand):
                     "group": business_users_group,
                     "description": "Create/edit classes, options, schedules for own business",
                 },
+                "manage_own_business_discounts": {
+                    "group": business_users_group,
+                    "description": "Create, edit, and manage discounts and coupons for own business",
+                },
                 "manage_own_schedule_instances": {
                     "group": business_users_group,
                     "description": "Manage instances (attendance, cancel) for own classes",

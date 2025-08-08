@@ -17,6 +17,7 @@ from .business.business_management_serializers import (
     BusinessStatsSerializer,
     BusinessRegistrationSerializer,
     BusinessDashboardOverviewSerializer,
+    BusinessDiscountSerializer,
     colors,
 )
 
@@ -108,6 +109,7 @@ __all__ = [
     "PublicSubcategorySerializer",
     "BusinessContactInfoSerializer",
     "ScheduleGroupActionSerializer",
+    "BusinessDiscountSerializer",
     "colors",
     # Class Serializers
     "ClassImageSerializer",
