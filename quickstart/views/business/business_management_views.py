@@ -15,6 +15,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from django.utils import timezone
 from django.db.models.functions import Coalesce
+from decimal import Decimal
 from django.db.models import (
     Q,
     Sum,
@@ -29,7 +30,7 @@ from django.db.models import (
 from rest_framework.views import APIView
 from datetime import timedelta
 from datetime import datetime
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.exceptions import (
     PermissionDenied,
     NotFound,
@@ -48,6 +49,7 @@ from quickstart.models import (
     Schedule,
     ScheduleInstance,
     Payment,
+    Discount,
 )
 
 from .revenue_analytics_views import RevenueAnalyticsView
@@ -57,6 +59,7 @@ from quickstart.serializers import (
     BusinessRegistrationSerializer,
     BusinessDashboardOverviewSerializer,
     CustomUserDetailsSerializer,
+    BusinessDiscountSerializer,
     colors,
 )
 
@@ -64,6 +67,7 @@ from quickstart.utils.permissions import (
     CanAccessBusinessDashboard,
     CanManageOwnBusinessProfile,
     CanDeleteOwnBusinessProfile,
+    IsVerifiedAndActiveBusinessOwnerOrManager,
 )
 
 logger = logging.getLogger(__name__)
@@ -927,3 +931,163 @@ class MyBusinessProfileView(generics.RetrieveUpdateDestroyAPIView):
                     "detail": "Failed to deactivate business profile due to a server error."
                 }
             )
+
+
+class BusinessDiscountViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for Business Users to manage their own Discounts and Coupons.
+    """
+
+    serializer_class = BusinessDiscountSerializer
+    permission_classes = [IsAuthenticated, IsVerifiedAndActiveBusinessOwnerOrManager]
+
+    def get_queryset(self):
+        """Filter queryset to only discounts belonging to the user's associated business."""
+        user = self.request.user
+        business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
+        if not business:
+            return Discount.objects.none()
+        return (
+            Discount.objects.filter(business=business)
+            .select_related("business", "target_class", "target_class_option__classId")
+            .order_by("-created_at")
+        )
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
+        if not business:
+            raise PermissionDenied(
+                "You must be associated with a business to create a discount."
+            )
+
+        # The serializer's validate method already checks if targets belong to the business.
+        serializer.save(business=business)
+        logger.info(
+            f"Discount '{serializer.instance.name}' created for business '{business.businessName}' by user {user.email}"
+        )
+
+    @action(detail=True, methods=["patch"], url_path="toggle-active")
+    def toggle_active(self, request, pk=None):
+        """Toggle the active status of a discount."""
+        discount = self.get_object()
+        new_status = not discount.is_active
+        discount.is_active = new_status
+        discount.save(update_fields=["is_active"])
+        logger.info(
+            f"Discount '{discount.name}' (ID: {discount.pk}) status toggled to {new_status} by {request.user.email}"
+        )
+        return Response(
+            {"status": "success", "is_active": new_status}, status=status.HTTP_200_OK
+        )
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="validate-coupon",
+        permission_classes=[AllowAny],  # Anyone can attempt to validate a coupon
+    )
+    def validate_coupon(self, request, *args, **kwargs):
+        code = request.data.get("code")
+        option_id = request.data.get("option_id")
+        base_amount_str = request.data.get("base_amount")
+
+        if not all([code, option_id, base_amount_str]):
+            raise DRFValidationError(
+                "`code`, `option_id`, and `base_amount` are required."
+            )
+
+        try:
+            base_amount = Decimal(base_amount_str)
+            option = ClassOption.objects.select_related("classId").get(
+                optionId=option_id
+            )
+            business = option.classId.businessId
+            coupon_code_upper = code.strip().upper()
+        except (ClassOption.DoesNotExist, ValueError, TypeError):
+            raise DRFValidationError("Invalid option ID or amount.")
+
+        try:
+            discount = Discount.objects.get(business=business, code=coupon_code_upper)
+        except Discount.DoesNotExist:
+            raise DRFValidationError({"detail": "This coupon code is not valid."})
+
+        # --- Validation Checks ---
+        if not discount.is_active:
+            raise DRFValidationError({"detail": "This coupon is currently inactive."})
+
+        now = timezone.now()
+        if discount.valid_from and now < discount.valid_from:
+            raise DRFValidationError({"detail": "This coupon is not yet active."})
+        if discount.valid_to and now > discount.valid_to:
+            raise DRFValidationError({"detail": "This coupon has expired."})
+
+        if discount.usage_limit is not None:
+            # CORRECTED: Changed 'discount_applied' to 'discounts'
+            current_usage = Booking.objects.filter(discounts=discount).count()
+            if current_usage >= discount.usage_limit:
+                raise DRFValidationError(
+                    {"detail": "This coupon has reached its usage limit."}
+                )
+
+        if request.user.is_authenticated and discount.usage_limit_per_user is not None:
+            # CORRECTED: Changed 'discount_applied' to 'discounts'
+            user_usage = Booking.objects.filter(
+                discounts=discount, user=request.user
+            ).count()
+            if user_usage >= discount.usage_limit_per_user:
+                raise DRFValidationError(
+                    {
+                        "detail": "You have already used this coupon the maximum number of times."
+                    }
+                )
+
+        if (
+            discount.min_purchase_amount is not None
+            and base_amount < discount.min_purchase_amount
+        ):
+            raise DRFValidationError(
+                {
+                    "detail": f"A minimum purchase of ${discount.min_purchase_amount:.2f} is required to use this coupon."
+                }
+            )
+
+        # Scope Validation
+        if discount.scope == "class" and discount.target_class != option.classId:
+            raise DRFValidationError(
+                {"detail": "This coupon is not valid for the selected class."}
+            )
+        elif discount.scope == "schedule_group":
+            # Note: Frontend needs to pass schedule_group_name if this is used
+            schedule_group_name_from_request = request.data.get("schedule_group_name")
+            if (
+                discount.target_class_option != option
+                or discount.target_schedule_group_name
+                != schedule_group_name_from_request
+            ):
+                raise DRFValidationError(
+                    {"detail": "This coupon is not valid for the selected session."}
+                )
+
+        # --- Calculate Discount ---
+        calculated_discount = Decimal("0.00")
+        if discount.discount_type == "percentage":
+            calculated_discount = (
+                base_amount * (discount.value / Decimal(100))
+            ).quantize(Decimal("0.01"))
+        elif discount.discount_type == "fixed_amount":
+            calculated_discount = discount.value
+
+        # Ensure discount doesn't exceed base amount
+        calculated_discount = min(base_amount, calculated_discount)
+
+        return Response(
+            {
+                "id": discount.id,
+                "code": discount.code,
+                "name": discount.name,
+                "discount_type": discount.discount_type,
+                "value": float(discount.value),
+                "calculated_discount_amount": float(calculated_discount),
+            }
+        )

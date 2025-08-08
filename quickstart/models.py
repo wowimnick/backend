@@ -19,7 +19,17 @@ from django.contrib.postgres.search import SearchVectorField
 from django.contrib.postgres.search import SearchVector
 from django.contrib.postgres.indexes import GinIndex
 from django.core.exceptions import ValidationError
-from django.db.models import Count, Case, When, DecimalField, Sum, JSONField, Avg, Value
+from django.db.models import (
+    Count,
+    Case,
+    When,
+    DecimalField,
+    Sum,
+    JSONField,
+    Avg,
+    Value,
+    F,
+)
 from django.db.models.functions import Coalesce
 from django.contrib.contenttypes.fields import GenericForeignKey
 from decimal import Decimal
@@ -1537,6 +1547,9 @@ class Booking(models.Model):
         db_index=True,
         help_text="Tracks the payout status for this specific booking.",
     )
+    discounts = models.ManyToManyField(
+        "Discount", through="AppliedDiscount", related_name="bookings"
+    )
 
     booking_date = models.DateTimeField(auto_now_add=True)
     participants = models.IntegerField(
@@ -1616,6 +1629,190 @@ class Booking(models.Model):
             ),
             ("cancel_business_booking", "Can cancel bookings within own business"),
         ]
+
+
+class Discount(models.Model):
+    """
+    Represents a discount or a coupon that can be applied to bookings.
+    - If 'code' is null, it's an automatic discount.
+    - If 'code' has a value, it's a coupon that must be entered by the user.
+    """
+
+    class DiscountType(models.TextChoices):
+        PERCENTAGE = "percentage", "Percentage"
+        FIXED_AMOUNT = "fixed_amount", "Fixed Amount"
+
+    class DiscountScope(models.TextChoices):
+        CLASS = "class", "Entire Class"
+        SCHEDULE_GROUP = "schedule_group", "Specific Schedule Group"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        BusinessInfo, on_delete=models.CASCADE, related_name="discounts"
+    )
+    name = models.CharField(
+        max_length=150, help_text="Internal name for this discount/coupon."
+    )
+    code = models.CharField(
+        max_length=50,
+        unique=True,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="The code customers enter to get the discount. Leave blank for automatic discounts.",
+    )
+
+    discount_type = models.CharField(max_length=20, choices=DiscountType.choices)
+    value = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="The value of the discount (e.g., 20.00 for 20% or 10.00 for $10).",
+    )
+
+    scope = models.CharField(
+        max_length=20,
+        choices=DiscountScope.choices,
+        default=DiscountScope.CLASS,
+        help_text="What this discount applies to.",
+    )
+    target_class = models.ForeignKey(
+        ClassesMain,
+        on_delete=models.CASCADE,
+        related_name="discounts",
+        null=True,
+        blank=True,
+    )
+    target_schedule_group_name = models.CharField(
+        max_length=100,
+        null=True,
+        blank=True,
+        help_text="Matches the 'name' field on a Schedule. Required if scope is 'Specific Schedule Group'.",
+    )
+    target_class_option = models.ForeignKey(
+        ClassOption,
+        on_delete=models.CASCADE,
+        related_name="discounts",
+        null=True,
+        blank=True,
+        help_text="The class option for the schedule group. Required if scope is 'Specific Schedule Group'.",
+    )
+
+    is_active = models.BooleanField(default=True, db_index=True)
+    valid_from = models.DateTimeField(default=timezone.now)
+    valid_to = models.DateTimeField(
+        null=True, blank=True, help_text="Leave blank for no expiration date."
+    )
+
+    usage_limit = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Max number of times this can be used in total.",
+    )
+    usage_count = models.PositiveIntegerField(default=0, editable=False)
+    usage_limit_per_user = models.PositiveIntegerField(
+        default=1,
+        null=True,
+        blank=True,
+        help_text="How many times a single user can use this. Leave blank for unlimited.",
+    )
+
+    min_purchase_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="The minimum booking total required to use this discount.",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return (
+            f"{self.name} ({self.code or 'Automatic'}) for {self.business.businessName}"
+        )
+
+    def clean(self):
+        if self.code:
+            self.code = self.code.upper().strip()
+        if self.discount_type == self.DiscountType.PERCENTAGE and self.value > 100:
+            raise ValidationError("Percentage value cannot be greater than 100.")
+        if self.scope == self.DiscountScope.CLASS and not self.target_class:
+            raise ValidationError(
+                "A 'target_class' must be specified for a class-scoped discount."
+            )
+        if self.scope == self.DiscountScope.SCHEDULE_GROUP and not (
+            self.target_schedule_group_name and self.target_class_option
+        ):
+            raise ValidationError(
+                "Both 'target_schedule_group_name' and 'target_class_option' are required for schedule group discounts."
+            )
+        if self.valid_to and self.valid_from > self.valid_to:
+            raise ValidationError("'Valid to' date must be after 'Valid from' date.")
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
+
+    def is_valid(self, user=None, booking_total=None):
+        """
+        Checks all conditions to see if the discount is currently valid.
+        Returns (True, "Success") or (False, "Error message").
+        """
+        if not self.is_active:
+            return (False, "This coupon is no longer active.")
+        if self.valid_from > timezone.now():
+            return (False, "This coupon is not yet active.")
+        if self.valid_to and self.valid_to < timezone.now():
+            return (False, "This coupon has expired.")
+        if self.usage_limit is not None and self.usage_count >= self.usage_limit:
+            return (False, "This coupon has reached its usage limit.")
+        if (
+            self.min_purchase_amount is not None
+            and booking_total is not None
+            and booking_total < self.min_purchase_amount
+        ):
+            return (
+                False,
+                f"A minimum purchase of ${self.min_purchase_amount} is required.",
+            )
+
+        if user and self.usage_limit_per_user is not None:
+            user_usage = self.bookings.filter(user=user).count()
+            if user_usage >= self.usage_limit_per_user:
+                return (
+                    False,
+                    "You have already used this coupon the maximum number of times.",
+                )
+
+        return (True, "Valid")
+
+    def redeem(self):
+        """
+        Atomically increments the usage count. Should be called within a transaction.
+        """
+        if self.usage_limit is not None:
+            # Using F expression ensures atomic update and avoids race conditions
+            Discount.objects.filter(pk=self.pk).update(usage_count=F("usage_count") + 1)
+            self.refresh_from_db(fields=["usage_count"])  # Refresh the instance
+
+
+class AppliedDiscount(models.Model):
+    """
+    A through model to link a Booking to a Discount, storing the
+    exact amount saved at the time of booking.
+    """
+
+    booking = models.ForeignKey(Booking, on_delete=models.CASCADE)
+    discount = models.ForeignKey(
+        Discount, on_delete=models.PROTECT
+    )  # Protect discount from deletion if used
+    amount_saved = models.DecimalField(max_digits=10, decimal_places=2)
+    applied_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "applied_discounts"
+        unique_together = ("booking", "discount")
 
 
 class Payment(models.Model):

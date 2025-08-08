@@ -12,6 +12,7 @@ from .business.business_management_views import (
     register_business,
     get_user_businesses,
     MyBusinessOverviewView,
+    BusinessDiscountViewSet,
 )
 
 from .public.public_business_views import (
@@ -84,6 +85,7 @@ __all__ = [
     "PublicBusinessInfoViewSet",
     "MyBusinessOverviewView",
     "NotificationViewSet",
+    "BusinessDiscountViewSet",
     # Blog Views
     "PublicBlogPostViewSet",
     "PublicBlogCategoryViewSet",

@@ -92,6 +92,7 @@ from quickstart.views import (
     AllCategoriesForBusinessViewSet,
     PublicBlogPostViewSet,
     PublicBlogCategoryViewSet,
+    BusinessDiscountViewSet,
 )
 
 # =============================================================================
@@ -118,6 +119,9 @@ public_router.register(
 business_management_router = DefaultRouter()
 business_management_router.register(
     r"classes", BusinessClassViewSet, basename="business-class"
+)
+business_management_router.register(
+    r"discounts", BusinessDiscountViewSet, basename="business-discount"
 )
 business_management_router.register(
     r"reviews", BusinessReviewViewSet, basename="business-review"
