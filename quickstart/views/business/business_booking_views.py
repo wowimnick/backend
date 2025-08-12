@@ -129,6 +129,7 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
         "schedule_instance__schedule__option__classId__title",
         "schedule_instance__schedule__option__classId__title",  # Corrected from option.title
         "id",
+        "user_facing_reference",
     ]
     ordering_fields = [
         "schedule_instance__date",

@@ -60,6 +60,7 @@ class BusinessReviewViewSet(viewsets.ReadOnlyModelViewSet):
         "classId__title",
         "rating",
         "status",
+        "booking__user_facing_reference",
     ]
     ordering_fields = [
         "createdAt",

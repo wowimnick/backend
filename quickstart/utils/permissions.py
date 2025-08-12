@@ -255,3 +255,21 @@ class CanProcessVerificationRequests(BasePermission):
     def has_permission(self, request, view):
         # Also check if the object exists and maybe belongs to the expected scope if needed
         return request.user.has_perm("quickstart.process_verificationrequest")
+
+
+class IsBusinessOwnerOrManager(BasePermission):
+    """
+    Allows access only to users who are registered as an owner or manager of any BusinessInfo object.
+    This is a LIST-LEVEL permission check.
+    """
+
+    message = "You must be a business owner or manager to access this resource."
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not (user and user.is_authenticated):
+            return False
+
+        # The key check: Does a business exist where this user is the owner or a manager?
+        # This runs for any request to the view (list, summary, etc.)
+        return BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).exists()

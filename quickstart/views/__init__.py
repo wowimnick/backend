@@ -61,6 +61,8 @@ from .business.business_notification_views import (
     NotificationViewSet,
 )
 
+from .business.business_payout_views import BusinessPayoutViewSet
+
 from .public.public_review_views import (
     ReviewSubmission,
     ClassReviews,
@@ -86,6 +88,7 @@ __all__ = [
     "MyBusinessOverviewView",
     "NotificationViewSet",
     "BusinessDiscountViewSet",
+    "BusinessPayoutViewSet",
     # Blog Views
     "PublicBlogPostViewSet",
     "PublicBlogCategoryViewSet",
