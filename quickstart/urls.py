@@ -93,6 +93,7 @@ from quickstart.views import (
     PublicBlogPostViewSet,
     PublicBlogCategoryViewSet,
     BusinessDiscountViewSet,
+    BusinessPayoutViewSet,
 )
 
 # =============================================================================
@@ -134,6 +135,9 @@ business_management_router.register(
 )
 business_management_router.register(
     r"schedules", BusinessScheduleViewSet, basename="business-schedule"
+)
+business_management_router.register(
+    r"payouts", BusinessPayoutViewSet, basename="business-payout"
 )
 business_management_router.register(
     r"schedule-instances",

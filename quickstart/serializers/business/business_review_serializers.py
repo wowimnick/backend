@@ -1,3 +1,5 @@
+import os
+from django.conf import settings
 from rest_framework import serializers
 from quickstart.models import Reviews, CustomUser, Booking, ClassesMain
 
@@ -18,13 +20,15 @@ class BusinessReviewUserSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
-    def get_avatar_thumb_url(self, obj):  # ADDED method
+    def get_avatar_thumb_url(self, obj):
         if obj.avatar and hasattr(obj.avatar, "name") and obj.avatar.name:
             original_path = obj.avatar.name
             if not original_path.startswith("originals/"):
                 return None
-            resized_path = original_path.replace("originals/", "public/thumb/", 1)
-            return f"/{resized_path}"
+
+            base_path = os.path.splitext(original_path)[0]
+            resized_path = base_path.replace("originals/", "public/thumb/", 1) + ".webp"
+            return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
         return None
 
 

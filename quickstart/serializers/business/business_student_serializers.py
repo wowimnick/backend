@@ -1,4 +1,5 @@
 from decimal import Decimal
+import os
 from django.conf import settings
 from rest_framework import serializers
 from quickstart.models import (
@@ -33,11 +34,18 @@ class BusinessStudentNoteSerializer(serializers.ModelSerializer):
         ]
 
     def get_author_avatar_thumb_url(self, obj):
-        if obj.author and obj.author.avatar and hasattr(obj.author.avatar, "name"):
+        if (
+            obj.author
+            and obj.author.avatar
+            and hasattr(obj.author.avatar, "name")
+            and obj.author.avatar.name
+        ):
             original_path = obj.author.avatar.name
             if not original_path.startswith("originals/"):
                 return None
-            resized_path = original_path.replace("originals/", "public/thumb/", 1)
+
+            base_path = os.path.splitext(original_path)[0]
+            resized_path = base_path.replace("originals/", "public/thumb/", 1) + ".webp"
             return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
         return None
 
@@ -126,10 +134,12 @@ class BusinessStudentProfileSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_avatar_thumb_url(self, obj):
-        if obj.avatar and hasattr(obj.avatar, "name"):
+        if obj.avatar and hasattr(obj.avatar, "name") and obj.avatar.name:
             original_path = obj.avatar.name
             if not original_path.startswith("originals/"):
                 return None
-            resized_path = original_path.replace("originals/", "public/thumb/", 1)
+
+            base_path = os.path.splitext(original_path)[0]
+            resized_path = base_path.replace("originals/", "public/thumb/", 1) + ".webp"
             return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
         return None

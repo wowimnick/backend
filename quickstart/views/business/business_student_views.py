@@ -98,6 +98,7 @@ class BusinessStudentViewSet(viewsets.ReadOnlyModelViewSet):
         "completed_bookings_count",
         "last_booking_date_this_business",
         "total_spent_this_business",
+        "bookings__user_facing_reference",
     ]
     ordering = ["last_name", "first_name"]
     http_method_names = ["get", "post", "head", "options"]

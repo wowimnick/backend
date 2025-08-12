@@ -91,6 +91,7 @@ class AdminPaymentViewSet(viewsets.ModelViewSet):
         "booking__user__first_name",
         "booking__user__last_name",
         "booking__id",  # Search by booking ID
+        "booking__user_facing_reference",
         "booking__schedule_instance__schedule__option__classId__title",  # Search class name
         "booking__schedule_instance__schedule__option__classId__businessId__businessName",  # Search business name
     ]

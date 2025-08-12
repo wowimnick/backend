@@ -1,0 +1,78 @@
+# quickstart/serializers/business/business_payout_serializers.py
+from rest_framework import serializers
+from decimal import Decimal
+from quickstart.models import Payout, Booking  # Import Booking
+
+
+class PayoutBookingSerializer(serializers.ModelSerializer):
+    """
+    Serializer for displaying booking details within an expanded payout row.
+    """
+
+    user_name = serializers.CharField(source="user.get_full_name", read_only=True)
+    class_name = serializers.CharField(
+        source="schedule_instance.schedule.option.classId.title", read_only=True
+    )
+    session_date = serializers.DateField(
+        source="schedule_instance.date", read_only=True
+    )
+    net_amount_for_payout = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Booking
+        fields = [
+            "user_facing_reference",
+            "user_name",
+            "class_name",
+            "session_date",
+            "net_amount_for_payout",
+        ]
+
+    def get_net_amount_for_payout(self, obj):
+        # This mirrors the calculation logic from the payout task
+        payment = obj.payments.first()
+        if payment:
+            service_fee = payment.service_fee_amount or Decimal("0.00")
+            return obj.amount_paid - service_fee
+        return obj.amount_paid  # Fallback, though a payment should exist
+
+
+class BusinessPayoutSerializer(serializers.ModelSerializer):
+    """
+    Serializer for the Payout model for business user consumption.
+    """
+
+    # This now uses the efficient annotation from the viewset
+    booking_count = serializers.IntegerField(source="booking_count_agg", read_only=True)
+    amount_display = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Payout
+        fields = [
+            "id",
+            "stripe_transfer_id",
+            "amount",
+            "currency",
+            "status",
+            "arrival_date",
+            "created_at",
+            "booking_count",
+            "amount_display",
+        ]
+
+    def get_amount_display(self, obj):
+        return f"${obj.amount:,.2f} {obj.currency.upper()}"
+
+
+class PayoutSummarySerializer(serializers.Serializer):
+    """
+    Serializer for the aggregated payout summary data.
+    """
+
+    pending_payout_amount = serializers.DecimalField(max_digits=10, decimal_places=2)
+    last_payout_amount = serializers.DecimalField(max_digits=10, decimal_places=2)
+    last_payout_date = serializers.DateField(allow_null=True)
+    payouts_enabled = serializers.BooleanField()
+    stripe_account_status = serializers.CharField()
+    stripe_account_id = serializers.CharField(allow_blank=True, allow_null=True)
+    currency = serializers.CharField(max_length=3)
