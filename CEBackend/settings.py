@@ -154,6 +154,10 @@ MIDDLEWARE = [
     "quickstart.monitoring.middleware.MetricsMiddleware",
 ]
 
+# Conditionally enable Silk for performance profiling, but not during tests.
+if "test" not in sys.argv:
+    MIDDLEWARE.insert(2, "silk.middleware.SilkyMiddleware")
+
 
 # --- Database (PostgreSQL) ---
 DATABASES = {
@@ -451,7 +455,7 @@ SILKY_META = True
 SILKY_INTERCEPT_PERCENT = 100
 SILKY_MAX_RECORDED_REQUESTS = 10000
 SILKY_MAX_RECORDED_REQUESTS_CHECK_PERCENT = 10
-SILKY_IGNORE_PATHS = ["/api/admin/metrics/"]
+SILKY_IGNORE_PATHS = ["/api/admin/metrics/", "/api/classes/search/"]
 
 
 # --- Custom App Settings ---
