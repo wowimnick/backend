@@ -588,8 +588,13 @@ class ProcessBookingWebhook(APIView):
                 update_fields.extend(["receipt_url", "receipt_number"])
 
                 billing_details_obj = getattr(charge_details, "billing_details", None)
-                if billing_details_obj and hasattr(billing_details_obj, "to_dict"):
-                    payment_record.billing_details = billing_details_obj.to_dict()
+                if billing_details_obj:
+                    # The billing_details object from Stripe is dict-like.
+                    # The previous use of .to_dict() caused a DataError because it
+                    # unexpectedly returned a string.
+                    # By converting the StripeObject to a standard dict, we ensure
+                    # it's in a format the Django JSONField can safely serialize.
+                    payment_record.billing_details = dict(billing_details_obj)
                     update_fields.append("billing_details")
 
                 if update_fields:
