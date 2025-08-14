@@ -264,12 +264,23 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
 
     def _calculate_relevance_score(self, queryset):
         days_old = Extract(Now() - F("createdAt"), "epoch") / Value(86400.0)
+
+        # Fix: Add explicit type casting to ensure consistent numeric types
         image_score_numerator = Log(
-            10, F("image_count") - Value(QUALITY_SCORE_BASE_IMAGES) + 1
+            10,
+            Cast(F("image_count"), IntegerField())
+            - Cast(Value(QUALITY_SCORE_BASE_IMAGES), IntegerField())
+            + Cast(Value(1), IntegerField()),
         )
         image_score_denominator = Log(
-            10, Value(QUALITY_SCORE_IDEAL_IMAGES - QUALITY_SCORE_BASE_IMAGES) + 1
+            10,
+            Cast(
+                Value(QUALITY_SCORE_IDEAL_IMAGES - QUALITY_SCORE_BASE_IMAGES),
+                IntegerField(),
+            )
+            + Cast(Value(1), IntegerField()),
         )
+
         image_score = Case(
             When(image_count__gte=QUALITY_SCORE_IDEAL_IMAGES, then=Value(1.0)),
             When(
@@ -282,30 +293,41 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             default=Value(0.0),
             output_field=FloatField(),
         )
-        description_score = Log(10, Length("description") + 1) / Log(
-            10, Value(QUALITY_SCORE_MAX_DESCRIPTION_LEN + 1)
-        )
+
+        description_score = Log(
+            10, Length("description") + Cast(Value(1), IntegerField())
+        ) / Log(10, Cast(Value(QUALITY_SCORE_MAX_DESCRIPTION_LEN + 1), IntegerField()))
+
         quality_score = ExpressionWrapper(
             (description_score + image_score) / 2.0,
             output_field=FloatField(),
         )
+
         rating_score = ExpressionWrapper(
             F("average_rating") / Value(5.0), output_field=FloatField()
         )
+
         review_count_score = ExpressionWrapper(
-            Log(10, F("review_count") + 1)
-            / Log(10, Value(REVIEW_COUNT_FOR_MAX_SCORE + 1)),
+            Log(
+                10,
+                Cast(F("review_count"), IntegerField())
+                + Cast(Value(1), IntegerField()),
+            )
+            / Log(10, Cast(Value(REVIEW_COUNT_FOR_MAX_SCORE + 1), IntegerField())),
             output_field=FloatField(),
         )
+
         newness_score = ExpressionWrapper(
             Power(2, -days_old / Value(RECENCY_HALFLIFE_DAYS)),
             output_field=FloatField(),
         )
+
         featured_multiplier = Case(
             When(businessId__featured=True, then=Value(W_FEATURED)),
             default=Value(1.0),
             output_field=FloatField(),
         )
+
         relevance_score = ExpressionWrapper(
             (
                 (Value(W_QUALITY) * quality_score)
@@ -316,6 +338,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             * featured_multiplier,
             output_field=FloatField(),
         )
+
         return queryset.annotate(relevance_score=relevance_score)
 
     def list(self, request, *args, **kwargs):
