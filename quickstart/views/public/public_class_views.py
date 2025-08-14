@@ -263,26 +263,34 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         return queryset.distinct()
 
     def _calculate_relevance_score(self, queryset):
-        days_old = Extract(Now() - F("createdAt"), "epoch") / Value(86400.0)
+        # Cast all numeric operations to explicit types for psycopg3 compatibility
+        days_old = ExpressionWrapper(
+            Extract(Now() - F("createdAt"), "epoch")
+            / Cast(Value(86400.0), FloatField()),
+            output_field=FloatField(),
+        )
 
         # Fix: Add explicit type casting to ensure consistent numeric types
         image_score_numerator = Log(
-            10,
-            Cast(F("image_count"), IntegerField())
-            - Cast(Value(QUALITY_SCORE_BASE_IMAGES), IntegerField())
-            + Cast(Value(1), IntegerField()),
+            Cast(Value(10), FloatField()),
+            Cast(F("image_count"), FloatField())
+            - Cast(Value(QUALITY_SCORE_BASE_IMAGES), FloatField())
+            + Cast(Value(1), FloatField()),
         )
         image_score_denominator = Log(
-            10,
+            Cast(Value(10), FloatField()),
             Cast(
                 Value(QUALITY_SCORE_IDEAL_IMAGES - QUALITY_SCORE_BASE_IMAGES),
-                IntegerField(),
+                FloatField(),
             )
-            + Cast(Value(1), IntegerField()),
+            + Cast(Value(1), FloatField()),
         )
 
         image_score = Case(
-            When(image_count__gte=QUALITY_SCORE_IDEAL_IMAGES, then=Value(1.0)),
+            When(
+                image_count__gte=QUALITY_SCORE_IDEAL_IMAGES,
+                then=Cast(Value(1.0), FloatField()),
+            ),
             When(
                 image_count__gt=QUALITY_SCORE_BASE_IMAGES,
                 then=ExpressionWrapper(
@@ -290,50 +298,66 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     output_field=FloatField(),
                 ),
             ),
-            default=Value(0.0),
+            default=Cast(Value(0.0), FloatField()),
             output_field=FloatField(),
         )
 
-        description_score = Log(
-            10, Length("description") + Cast(Value(1), IntegerField())
-        ) / Log(10, Cast(Value(QUALITY_SCORE_MAX_DESCRIPTION_LEN + 1), IntegerField()))
+        description_score = ExpressionWrapper(
+            Log(
+                Cast(Value(10), FloatField()),
+                Length("description") + Cast(Value(1), FloatField()),
+            )
+            / Log(
+                Cast(Value(10), FloatField()),
+                Cast(Value(QUALITY_SCORE_MAX_DESCRIPTION_LEN + 1), FloatField()),
+            ),
+            output_field=FloatField(),
+        )
 
         quality_score = ExpressionWrapper(
-            (description_score + image_score) / 2.0,
+            (description_score + image_score) / Cast(Value(2.0), FloatField()),
             output_field=FloatField(),
         )
 
         rating_score = ExpressionWrapper(
-            F("average_rating") / Value(5.0), output_field=FloatField()
+            F("average_rating") / Cast(Value(5.0), FloatField()),
+            output_field=FloatField(),
         )
 
         review_count_score = ExpressionWrapper(
             Log(
-                10,
-                Cast(F("review_count"), IntegerField())
-                + Cast(Value(1), IntegerField()),
+                Cast(Value(10), FloatField()),
+                Cast(F("review_count"), FloatField()) + Cast(Value(1), FloatField()),
             )
-            / Log(10, Cast(Value(REVIEW_COUNT_FOR_MAX_SCORE + 1), IntegerField())),
+            / Log(
+                Cast(Value(10), FloatField()),
+                Cast(Value(REVIEW_COUNT_FOR_MAX_SCORE + 1), FloatField()),
+            ),
             output_field=FloatField(),
         )
 
         newness_score = ExpressionWrapper(
-            Power(2, -days_old / Value(RECENCY_HALFLIFE_DAYS)),
+            Power(
+                Cast(Value(2), FloatField()),
+                Cast(Value(-1), FloatField())
+                * days_old
+                / Cast(Value(RECENCY_HALFLIFE_DAYS), FloatField()),
+            ),
             output_field=FloatField(),
         )
 
         featured_multiplier = Case(
-            When(businessId__featured=True, then=Value(W_FEATURED)),
-            default=Value(1.0),
+            When(businessId__featured=True, then=Cast(Value(W_FEATURED), FloatField())),
+            default=Cast(Value(1.0), FloatField()),
             output_field=FloatField(),
         )
 
         relevance_score = ExpressionWrapper(
             (
-                (Value(W_QUALITY) * quality_score)
-                + (Value(W_RATING) * rating_score)
-                + (Value(W_REVIEW_COUNT) * review_count_score)
-                + (Value(W_NEWNESS) * newness_score)
+                (Cast(Value(W_QUALITY), FloatField()) * quality_score)
+                + (Cast(Value(W_RATING), FloatField()) * rating_score)
+                + (Cast(Value(W_REVIEW_COUNT), FloatField()) * review_count_score)
+                + (Cast(Value(W_NEWNESS), FloatField()) * newness_score)
             )
             * featured_multiplier,
             output_field=FloatField(),
