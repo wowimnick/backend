@@ -1,0 +1,47 @@
+{# templates/emails/business_payout_initiated.html #}
+{% extends "emails/base_email.html" %}
+{% load i18n tz %}
+{% block title %}
+    {% trans "Your Payout is On Its Way!" %}
+{% endblock title %}
+{% block content %}
+    <h1>{% trans "Payout Initiated" %}</h1>
+    <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
+    <p>
+        Great news! A payout of <strong>${{ payout.amount|floatformat:2 }} {{ payout.currency|upper }}</strong> has been sent to your connected Stripe account.
+    </p>
+    <div style="background-color: #f9fafb;
+                border: 1px solid #e5e7eb;
+                border-radius: 8px;
+                padding: 16px;
+                margin: 20px 0">
+        <p style="margin-bottom: 6px;">
+            <strong>{% trans "Amount:" %}</strong> ${{ payout.amount|floatformat:2 }} {{ payout.currency|upper }}
+        </p>
+        <p style="margin-bottom: 6px;">
+            <strong>{% trans "Status:" %}</strong> {{ payout.get_status_display }}
+        </p>
+        <p style="margin-bottom: 0;">
+            <strong>{% trans "Expected Arrival:" %}</strong> {{ payout.arrival_date|date:"F j, Y" }}
+        </p>
+    </div>
+    <p>
+        Please note that it can sometimes take a few business days for the funds to be reflected in your bank account after the arrival date, depending on your bank's processing times.
+    </p>
+    <table role="presentation"
+           border="0"
+           cellpadding="0"
+           cellspacing="0"
+           width="100%">
+        <tr>
+            <td align="center" class="button-td">
+                <a href="{{ dashboard_url }}" target="_blank" class="button">{% trans 'View Payouts' %}</a>
+            </td>
+        </tr>
+    </table>
+    <p>
+        {% trans "Thanks," %}
+        <br />
+        {% trans "The ClassEasily Team" %}
+    </p>
+{% endblock content %}

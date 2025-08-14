@@ -1,0 +1,32 @@
+{# templates/emails/user_request_for_review.html #}
+{% extends "emails/base_email.html" %}
+{% load i18n %}
+{% block title %}
+    How was your class experience?
+{% endblock title %}
+{% block content %}
+    <h1>How was your experience?</h1>
+    <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
+    <p>
+        We hope you enjoyed your recent class, <strong>{{ related_data.class_title }}</strong>, with {{ related_data.business_name }}.
+    </p>
+    <p>
+        Your feedback is valuable to both the business and other students in the ClassEasily community. Would you take a moment to share your experience?
+    </p>
+    <table role="presentation"
+           border="0"
+           cellpadding="0"
+           cellspacing="0"
+           width="100%">
+        <tr>
+            <td align="center" class="button-td">
+                <a href="{{ review_url }}" target="_blank" class="button">Leave a Review</a>
+            </td>
+        </tr>
+    </table>
+    <p>
+        Thank you for helping our community grow!
+        <br />
+        The ClassEasily Team
+    </p>
+{% endblock content %}

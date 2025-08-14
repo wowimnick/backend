@@ -1,0 +1,50 @@
+{# templates/emails/business_performance_summary.html #}
+{% extends "emails/base_email.html" %}
+{% load i18n %}
+{% block title %}
+    Your {{ period }} Performance Summary
+{% endblock title %}
+{% block content %}
+    <h1>Your {{ period }} Performance Summary</h1>
+    <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
+    <p>
+        Here's a look at how your business performed on ClassEasily from <strong>{{ summary.start_date }}</strong> to <strong>{{ summary.end_date }}</strong>.
+    </p>
+    <div style="background-color: #f9fafb;
+                border: 1px solid #e5e7eb;
+                border-radius: 8px;
+                padding: 16px;
+                margin: 20px 0">
+        <h2 style="font-size: 18px;
+                   font-weight: 600;
+                   color: #111827;
+                   margin-top: 0;
+                   margin-bottom: 12px">{{ period }} Highlights:</h2>
+        <p style="margin-bottom: 6px;">
+            <strong>Total Revenue:</strong> ${{ summary.total_revenue }}
+        </p>
+        <p style="margin-bottom: 6px;">
+            <strong>New Bookings:</strong> {{ summary.new_bookings }}
+        </p>
+        <p style="margin-bottom: 0;">
+            <strong>Unique Students:</strong> {{ summary.unique_students }}
+        </p>
+    </div>
+    <p>Dive deeper into your analytics and discover more insights on your dashboard.</p>
+    <table role="presentation"
+           border="0"
+           cellpadding="0"
+           cellspacing="0"
+           width="100%">
+        <tr>
+            <td align="center" class="button-td">
+                <a href="{{ dashboard_url }}" target="_blank" class="button">View Full Analytics</a>
+            </td>
+        </tr>
+    </table>
+    <p>
+        Keep up the great work!
+        <br />
+        The ClassEasily Team
+    </p>
+{% endblock content %}

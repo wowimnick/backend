@@ -1,55 +1,75 @@
 {# templates/emails/booking_reminder_user.html #}
-{# Context required: user (CustomUser), booking (Booking object), class_details_url (string), related_data (dict), recipient_email (string) #}
 {% extends "emails/base_email.html" %}
 {% load i18n tz %}
-
-{% block title %}{% trans "Reminder: Your Class is Soon!" %}{% endblock %}
-
+{% block title %}
+    {% trans "Reminder: Your Class is Soon!" %}
+{% endblock title %}
 {% block content %}
     <h1>{% trans "Friendly Reminder!" %}</h1>
     <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
-    
     <p>
         Just a friendly reminder that your class, <strong>{{ related_data.class_title|default:"[Class Title]" }}</strong>, is coming up soon!
     </p>
-
-    <div style="background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin: 20px 0;">
-        <h2 style="font-size: 18px; font-weight: 600; color: #111827; margin-top: 0; margin-bottom: 12px;">{% trans "Class Details:" %}</h2>
-        <p style="margin-bottom: 6px;"><strong>{% trans "Class:" %}</strong> {{ related_data.class_title|default:"N/A" }}</p>
-        <p style="margin-bottom: 6px;"><strong>{% trans "Date:" %}</strong> {{ booking.schedule_instance.date|date:"l, F j, Y" }}</p>
-        <p style="margin-bottom: 6px;"><strong>{% trans "Time:" %}</strong> {{ booking.schedule_instance.time|time:"P" }}</p>
-        <p style="margin-bottom: 6px;"><strong>{% trans "Business:" %}</strong> {{ related_data.business_name|default:"N/A" }}</p>
-        <p style="margin-bottom: 0;"><strong>{% trans "Participants in this Booking:" %}</strong> {{ booking.participants }}</p>
-        
-        {# Participant Information (Optional to list all names in reminder) #}
+    <div style="background-color: #f9fafb;
+                border: 1px solid #e5e7eb;
+                border-radius: 8px;
+                padding: 16px;
+                margin: 20px 0">
+        <h2 style="font-size: 18px;
+                   font-weight: 600;
+                   color: #111827;
+                   margin-top: 0;
+                   margin-bottom: 12px">{% trans "Class Details:" %}</h2>
+        <p style="margin-bottom: 6px;">
+            <strong>{% trans "Class:" %}</strong> {{ related_data.class_title|default:"N/A" }}
+        </p>
+        <p style="margin-bottom: 6px;">
+            <strong>{% trans "Date:" %}</strong> {{ booking.schedule_instance.date|date:"l, F j, Y" }}
+        </p>
+        <p style="margin-bottom: 6px;">
+            <strong>{% trans "Time:" %}</strong> {{ booking.schedule_instance.time|time:"P" }}
+        </p>
+        <p style="margin-bottom: 6px;">
+            <strong>{% trans "Business:" %}</strong> {{ related_data.business_name|default:"N/A" }}
+        </p>
+        <p style="margin-bottom: 0;">
+            <strong>{% trans "Participants in this Booking:" %}</strong> {{ booking.participants }}
+        </p>
         {% if booking.participants > 1 and booking.participant_details %}
-            <p style="margin-top: 6px; margin-bottom:0; font-size:0.9em; color:#555;">
+            <p style="margin-top: 6px;
+                      margin-bottom: 0;
+                      font-size: 0.9em;
+                      color: #555">
                 {% trans "Booked for:" %}
                 {% for participant in booking.participant_details %}
-                    {{ participant.name|default:"Unnamed Participant" }}{% if not forloop.last %}, {% endif %}
+                    {{ participant.name|default:"Unnamed Participant" }}
+                    {% if not forloop.last %},{% endif %}
                 {% endfor %}
             </p>
         {% endif %}
     </div>
-
-    <p>{% trans "Please check the class details for location, required materials, and any other important information." %}</p>
-
-    <!-- Button to View Class -->
-    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+    <p>
+        {% trans "Please check the class details for location, required materials, and any other important information." %}
+    </p>
+    <table role="presentation"
+           border="0"
+           cellpadding="0"
+           cellspacing="0"
+           width="100%">
         <tr>
             <td align="center" class="button-td">
-                <a href="{{ class_details_url }}" target="_blank" class="button">
-                    {% trans 'View Class Details' %}
-                </a>
+                <a href="{{ class_details_url }}" target="_blank" class="button">{% trans 'View Class Details' %}</a>
             </td>
         </tr>
     </table>
-
-    <p>{% trans "We look forward to seeing you there!" %}<br>{% trans "The ClassEasily Team" %}</p>
-{% endblock %}
-
+    <p>
+        {% trans "We look forward to seeing you there!" %}
+        <br />
+        {% trans "The ClassEasily Team" %}
+    </p>
+{% endblock content %}
 {% block footer_recipient %}
     {% if recipient_email and recipient_email != "N/A" %}
         <p>Reminder sent to {{ recipient_email }}. Booking ID: {{ booking.id }}</p>
     {% endif %}
-{% endblock %}
+{% endblock footer_recipient %}

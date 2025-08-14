@@ -2,14 +2,16 @@
 {% load i18n %}
 <!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    {# Use a block for the title so specific emails can set it #}
-    <title>{% block title %}{% trans "Notification from ClassEasily" %}{% endblock %}</title>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>
+      {% block title %}
+        {% trans "Notification from ClassEasily" %}
+      {% endblock title %}
+    </title>
     <style type="text/css">
-      /* --- Paste the EXACT CSS Styles from your examples here --- */
       body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
       table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
       img { -ms-interpolation-mode: bicubic; border: 0; height: auto; line-height: 100%; outline: none; text-decoration: none; }
@@ -17,7 +19,6 @@
       body { height: 100% !important; margin: 0 !important; padding: 0 !important; width: 100% !important; background-color: #f3f4f6; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
       .container { max-width: 600px; margin: 24px auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; border-collapse: collapse; width: 100%; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05); }
       .header { padding: 32px 0; text-align: center; border-bottom: 1px solid #f3f4f6; background-color: #ffffff; }
-      /* Ensure logo image has display: block for better compatibility */
       .header img { max-height: 48px; display: block; margin: 0 auto; border: 0; }
       .content-wrapper { padding: 40px 24px; background-color: #ffffff; color: #374151; line-height: 1.6; font-size: 16px; }
       .content-wrapper h1 { font-size: 24px; font-weight: 600; color: #111827; margin: 0 0 16px 0; text-align: left; }
@@ -39,64 +40,75 @@
         .button { padding: 10px 20px; font-size: 15px; }
         .content-wrapper h1 { font-size: 22px; }
       }
-      /* --- End of styles --- */
     </style>
-</head>
-<body style="margin: 0 !important; padding: 0 !important; background-color: #f3f4f6;">
-    <!-- Outlook Container -->
-    <!--[if mso | IE]>
-    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="600" align="center" style="width:600px;">
-        <tr>
-        <td style="line-height:0px;font-size:0px;mso-line-height-rule:exactly;">
-    <![endif]-->
-
-    <div class="container" style="max-width: 600px; margin: 24px auto; background-color: #ffffff; border-radius: 8px; overflow: hidden;">
-        <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
-            <tbody>
-                <!-- Header (Shared) -->
-                <tr>
-                    <td align="center" class="header">
-                        {# Use the correct and accessible logo URL #}
-                        <img src="https://i.imgur.com/nX3IuE2.png" alt="ClassEasily Logo" style="max-height: 48px; display: block; margin: 0 auto; border: 0;">
-                    </td>
-                </tr>
-
-                <!-- Content (Variable Part) -->
-                <tr>
-                    <td class="content-wrapper" style="padding: 40px 24px; background-color: #ffffff; color: #374151; line-height: 1.6; font-size: 16px;">
-                        {# Define blocks for the content that will change #}
-                        {% block content %}
-                            {# Default content if not overridden #}
-                            <p>{% trans "This is a notification from ClassEasily." %}</p>
-                        {% endblock %}
-                    </td>
-                </tr>
-
-                <!-- Footer (Shared) -->
-                <tr>
-                    <td align="center" class="footer" style="padding: 24px 0; background-color: #f9fafb; text-align: center; font-size: 14px; color: #6b7280; border-top: 1px solid #f3f4f6;">
-                        {# Ensure recipient_email context variable is used here #}
-                        {% block footer_recipient %}
-                            {% if recipient_email and recipient_email != "N/A" %} {# Check if recipient_email context exists and is valid #}
-                                <p>{% blocktrans %}This email was sent to {{ recipient_email }}.{% endblocktrans %}</p>
-                            {% endif %}
-                        {% endblock %}
-                        <div class="footer-links" style="margin: 16px 0; padding: 0 16px; line-height: 1;">
-                            {# Make URLs dynamic if they change #}
-                            <a href="{{ settings.FRONTEND_BASE_URL }}/help" target="_blank" class="footer-link">Help Center</a>
-                            <a href="{{ settings.FRONTEND_BASE_URL }}/terms" target="_blank" class="footer-link">Terms & Policies</a>
-                        </div>
-                        <p>© {% now "Y" %} ClassEasily. All rights reserved.</p>
-                    </td>
-                </tr>
-            </tbody>
-        </table>
+  </head>
+  <body style="margin: 0 !important;
+               padding: 0 !important;
+               background-color: #f3f4f6">
+    <div class="container"
+         style="max-width: 600px;
+                margin: 24px auto;
+                background-color: #ffffff;
+                border-radius: 8px;
+                overflow: hidden">
+      <table role="presentation"
+             border="0"
+             cellpadding="0"
+             cellspacing="0"
+             width="100%">
+        <tbody>
+          <tr>
+            <td align="center" class="header">
+              <img src="https://i.imgur.com/nX3IuE2.png"
+                   alt="ClassEasily Logo"
+                   style="max-height: 48px;
+                          display: block;
+                          margin: 0 auto;
+                          border: 0" />
+            </td>
+          </tr>
+          <tr>
+            <td class="content-wrapper"
+                style="padding: 40px 24px;
+                       background-color: #ffffff;
+                       color: #374151;
+                       line-height: 1.6;
+                       font-size: 16px">
+              {% block content %}
+                <p>{% trans "This is a notification from ClassEasily." %}</p>
+              {% endblock content %}
+            </td>
+          </tr>
+          <tr>
+            <td align="center"
+                class="footer"
+                style="padding: 24px 0;
+                       background-color: #f9fafb;
+                       text-align: center;
+                       font-size: 14px;
+                       color: #6b7280;
+                       border-top: 1px solid #f3f4f6">
+              {% block footer_recipient %}
+                {% if recipient_email and recipient_email != "N/A" %}
+                  <p>{% blocktrans %}This email was sent to {{ recipient_email }}.{% endblocktrans %}</p>
+                {% endif %}
+              {% endblock footer_recipient %}
+              <div class="footer-links"
+                   style="margin: 16px 0;
+                          padding: 0 16px;
+                          line-height: 1">
+                <a href="{{ settings.FRONTEND_BASE_URL }}/my-tickets"
+                   target="_blank"
+                   class="footer-link">Help Center</a>
+                <a href="{{ settings.FRONTEND_BASE_URL }}/terms-of-service"
+                   target="_blank"
+                   class="footer-link">Terms & Policies</a>
+              </div>
+              <p>© {% now "Y" %} ClassEasily. All rights reserved.</p>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
-
-    <!--[if mso | IE]>
-        </td>
-      </tr>
-    </table>
-    <![endif]-->
-</body>
+  </body>
 </html>

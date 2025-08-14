@@ -1,0 +1,30 @@
+{# templates/emails/business_class_nearing_full.html #}
+{% extends "emails/base_email.html" %}
+{% load i18n tz %}
+{% block title %}
+    Your Class is Almost Full!
+{% endblock title %}
+{% block content %}
+    <h1>Your Class is Almost Full!</h1>
+    <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
+    <p>
+        Great news! Your class, <strong>{{ class_title }}</strong>, scheduled for <strong>{{ class_date|date:"F j, Y" }} at {{ class_time|time:"P" }}</strong> is now {{ occupancy_percentage }}% full.
+    </p>
+    <p>There are only a few spots left. Consider sharing on social media to fill the remaining seats!</p>
+    <table role="presentation"
+           border="0"
+           cellpadding="0"
+           cellspacing="0"
+           width="100%">
+        <tr>
+            <td align="center" class="button-td">
+                <a href="{{ manage_class_url }}" target="_blank" class="button">Manage Class</a>
+            </td>
+        </tr>
+    </table>
+    <p>
+        Keep up the momentum!
+        <br />
+        The ClassEasily Team
+    </p>
+{% endblock content %}

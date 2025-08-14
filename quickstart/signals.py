@@ -3,12 +3,15 @@ import logging
 from django.dispatch import receiver
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.db.models import Sum, Value, IntegerField
+from django.db.models.functions import Coalesce
 
 from allauth.account.signals import email_changed
 
 from django.db.models.signals import pre_save, post_save
 from django.dispatch import receiver
 from django.contrib.contenttypes.models import ContentType
+from django.utils import timezone
 from django.core.cache import cache
 from .models import (
     Booking,
@@ -19,20 +22,49 @@ from .models import (
     CustomUser,
     ClassesMain,
     ClassOption,
+    Schedule,
+    ScheduleInstance,
+    Payout,
 )
 
 try:
     # UTILS: Make sure this import is correct based on your structure
-    from .utils.email_utils import send_account_security_email
+    from .utils.email_utils import (
+        send_account_security_email,
+        send_class_nearing_full_email,
+        send_bulk_templated_emails,
+        send_favorited_class_new_dates_email,
+        send_payout_initiated_email,
+    )
 except ImportError:
     # Updated logging message for clarity
     logging.getLogger(__name__).error(
-        "Failed to import send_account_security_email from .utils.email_utils. Security emails will not be sent."
+        "Failed to import email utility functions from .utils.email_utils."
     )
 
     def send_account_security_email(*args, **kwargs):
         logging.getLogger(__name__).warning("Dummy send_account_security_email called.")
         pass  # Do nothing if import fails
+
+    def send_class_nearing_full_email(*args, **kwargs):
+        logging.getLogger(__name__).warning(
+            "Dummy send_class_nearing_full_email called."
+        )
+        pass
+
+    def send_bulk_templated_emails(*args, **kwargs):
+        logging.getLogger(__name__).warning("Dummy send_bulk_templated_emails called.")
+        pass
+
+    def send_favorited_class_new_dates_email(*args, **kwargs):
+        logging.getLogger(__name__).warning(
+            "Dummy send_favorited_class_new_dates_email called."
+        )
+        pass
+
+    def send_payout_initiated_email(*args, **kwargs):
+        logging.getLogger(__name__).warning("Dummy send_payout_initiated_email called.")
+        pass
 
 
 logger = logging.getLogger(__name__)
@@ -491,4 +523,148 @@ def student_review_response_notification(sender, instance, created, **kwargs):
         _increment_user_unread_count(student_user.pk)
         logger.info(
             f"Review response notification created for student {student_user.email} for review {instance.reviewId}"
+        )
+
+
+@receiver(post_save, sender=Booking)
+def check_class_capacity_notification(sender, instance: Booking, created, **kwargs):
+    """
+    Sends an email to the business if a class is nearing full capacity
+    after a new booking is confirmed.
+    """
+    if instance.status != "confirmed" or not (
+        "status" in (kwargs.get("update_fields") or {"status"}) or created
+    ):
+        return
+
+    try:
+        schedule_instance = instance.schedule_instance
+        if schedule_instance.date < timezone.now().date():
+            return
+
+        confirmed_participants = Booking.objects.filter(
+            schedule_instance=schedule_instance, status="confirmed"
+        ).aggregate(
+            total=Coalesce(Sum("participants"), Value(0), output_field=IntegerField())
+        )[
+            "total"
+        ]
+
+        occupancy_percentage = 0
+        if schedule_instance.max_participants > 0:
+            occupancy_percentage = (
+                confirmed_participants / schedule_instance.max_participants
+            ) * 100
+
+        if occupancy_percentage < 80:
+            return
+
+        cache_key = (
+            f"cap_notif_sent_{schedule_instance.id}_{int(occupancy_percentage/10)}"
+        )
+        if cache.get(cache_key):
+            return
+
+        business = schedule_instance.schedule.option.classId.businessId
+        recipients = {business.owner} | set(business.managers.all())
+
+        for recipient in recipients:
+            if recipient and recipient.email:
+                send_class_nearing_full_email(
+                    business_user=recipient,
+                    schedule_instance=schedule_instance,
+                    occupancy_percentage=occupancy_percentage,
+                )
+
+        cache.set(cache_key, True, timeout=86400)
+        logger.info(
+            f"Class capacity email notification sent for instance {schedule_instance.id}."
+        )
+
+    except Exception as e:
+        logger.error(
+            f"Error in check_class_capacity_notification signal for booking {instance.id}: {e}",
+            exc_info=True,
+        )
+
+
+@receiver(post_save, sender=Schedule)
+def notify_users_of_new_schedule(sender, instance: Schedule, created, **kwargs):
+    """
+    After a new Schedule is created, find users who have favorited the parent
+    class and send them a bulk email notification.
+    """
+    if not created:
+        return
+
+    try:
+        is_future_schedule = False
+        today = timezone.now().date()
+        if instance.option.booking_type == "Full Course":
+            if instance.start_date and instance.start_date >= today:
+                is_future_schedule = True
+        else:  # Single Session
+            if instance.date and instance.date >= today:
+                is_future_schedule = True
+
+        if not is_future_schedule:
+            return
+
+        class_main = instance.option.classId
+        users_who_favorited = class_main.favorited_by.all()
+
+        if not users_who_favorited.exists():
+            return
+
+        email_data_list = [
+            {
+                "recipient_list": [user.email],
+                "template_name": "emails/user_favorited_class_new_dates.html",
+                "context": {
+                    "user": user,
+                    "class_main": class_main,
+                    "new_schedule": instance,
+                    "class_url": f"{settings.FRONTEND_BASE_URL}/classes/{class_main.slug or class_main.classId}",
+                },
+                "subject": f"New Dates Available for a Class You Like: {class_main.title}",
+            }
+            for user in users_who_favorited
+            if user.email
+        ]
+
+        if email_data_list:
+            send_bulk_templated_emails(email_data_list)
+            logger.info(
+                f"Queued {len(email_data_list)} 'favorite class new dates' emails for class {class_main.classId}."
+            )
+
+    except Exception as e:
+        logger.error(
+            f"Error in notify_users_of_new_schedule signal for schedule {instance.id}: {e}",
+            exc_info=True,
+        )
+
+
+@receiver(post_save, sender=Payout)
+def send_payout_notification(sender, instance: Payout, created, **kwargs):
+    """
+    Sends a notification to business owner/managers when a Payout record is created.
+    """
+    if not created:
+        return
+
+    try:
+        business = instance.business
+        recipients = {business.owner} | set(business.managers.all())
+
+        for user in recipients:
+            if user and user.email:
+                send_payout_initiated_email(business_user=user, payout=instance)
+
+        logger.info(f"Queued payout initiated emails for Payout ID {instance.id}")
+
+    except Exception as e:
+        logger.error(
+            f"Error in send_payout_notification signal for Payout {instance.id}: {e}",
+            exc_info=True,
         )
