@@ -89,7 +89,7 @@ REVIEW_COUNT_FOR_MAX_SCORE = 50
 
 CANADIAN_PROVINCES = {
     "alberta": "AB",
-    "british columbia": "BC", 
+    "british columbia": "BC",
     "manitoba": "MB",
     "new brunswick": "NB",
     "newfoundland and labrador": "NL",
@@ -109,6 +109,7 @@ PROVINCE_ABBREVIATIONS = {v: k for k, v in CANADIAN_PROVINCES.items()}
 # Create comprehensive set of all province identifiers
 ALL_PROVINCE_NAMES = set(CANADIAN_PROVINCES.keys()) | set(PROVINCE_ABBREVIATIONS.keys())
 
+
 def normalize_province_name(location_text):
     """
     Normalize province names/abbreviations to full province names for consistent searching.
@@ -116,20 +117,21 @@ def normalize_province_name(location_text):
     """
     if not location_text:
         return None
-    
+
     # Clean the input - remove "Canada" and extra whitespace
     cleaned = location_text.replace(", Canada", "").replace(",Canada", "").strip()
     cleaned_lower = cleaned.lower()
-    
+
     # Check if it's a province abbreviation
     if cleaned.upper() in PROVINCE_ABBREVIATIONS:
         return PROVINCE_ABBREVIATIONS[cleaned.upper()]
-    
+
     # Check if it's already a full province name
     if cleaned_lower in CANADIAN_PROVINCES:
         return cleaned_lower
-    
+
     return None
+
 
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 12
@@ -262,12 +264,29 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
 
     def _calculate_relevance_score(self, queryset):
         days_old = Extract(Now() - F("createdAt"), "epoch") / Value(86400.0)
+
+        # --- CORRECTED: Explicitly wrap numeric literals with Value() ---
         image_score_numerator = Log(
-            10, F("image_count") - Value(QUALITY_SCORE_BASE_IMAGES) + 1
+            Value(10), F("image_count") - Value(QUALITY_SCORE_BASE_IMAGES) + Value(1)
         )
-        image_score_denominator = Log(
-            10, Value(QUALITY_SCORE_IDEAL_IMAGES - QUALITY_SCORE_BASE_IMAGES) + 1
+        image_score_denominator_value = (
+            QUALITY_SCORE_IDEAL_IMAGES - QUALITY_SCORE_BASE_IMAGES
+        ) + 1
+        image_score_denominator = Log(Value(10), Value(image_score_denominator_value))
+
+        description_score_denominator_value = QUALITY_SCORE_MAX_DESCRIPTION_LEN + 1
+        description_score = Log(Value(10), Length("description") + Value(1)) / Log(
+            Value(10), Value(description_score_denominator_value)
         )
+
+        review_count_score_denominator_value = REVIEW_COUNT_FOR_MAX_SCORE + 1
+        review_count_score = ExpressionWrapper(
+            Log(Value(10), F("review_count") + Value(1))
+            / Log(Value(10), Value(review_count_score_denominator_value)),
+            output_field=FloatField(),
+        )
+        # --- END CORRECTION ---
+
         image_score = Case(
             When(image_count__gte=QUALITY_SCORE_IDEAL_IMAGES, then=Value(1.0)),
             When(
@@ -280,23 +299,16 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             default=Value(0.0),
             output_field=FloatField(),
         )
-        description_score = Log(10, Length("description") + 1) / Log(
-            10, Value(QUALITY_SCORE_MAX_DESCRIPTION_LEN + 1)
-        )
+
         quality_score = ExpressionWrapper(
-            (description_score + image_score) / 2.0,
+            (description_score + image_score) / Value(2.0),
             output_field=FloatField(),
         )
         rating_score = ExpressionWrapper(
             F("average_rating") / Value(5.0), output_field=FloatField()
         )
-        review_count_score = ExpressionWrapper(
-            Log(10, F("review_count") + 1)
-            / Log(10, Value(REVIEW_COUNT_FOR_MAX_SCORE + 1)),
-            output_field=FloatField(),
-        )
         newness_score = ExpressionWrapper(
-            Power(2, -days_old / Value(RECENCY_HALFLIFE_DAYS)),
+            Power(Value(2.0), -days_old / Value(RECENCY_HALFLIFE_DAYS)),
             output_field=FloatField(),
         )
         featured_multiplier = Case(
@@ -370,13 +382,17 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         - Falls back to a radius search for specific addresses or landmarks.
         """
         try:
-            logger.debug(f"Public class search initiated with params: {request.query_params}")
+            logger.debug(
+                f"Public class search initiated with params: {request.query_params}"
+            )
 
             # --- 1. Parameter Extraction ---
             req_lat_str = request.query_params.get("lat")
             req_lng_str = request.query_params.get("lng")
-            location_param_text = request.query_params.get("location") or request.query_params.get("location_search", "")
-            search_name = location_param_text.split(',')[0].strip()
+            location_param_text = request.query_params.get(
+                "location"
+            ) or request.query_params.get("location_search", "")
+            search_name = location_param_text.split(",")[0].strip()
             search_name_lower = search_name.lower()
             req_radius_km_str = request.query_params.get("radius")
             keyword_query_text = request.query_params.get("keyword")
@@ -398,10 +414,12 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
 
             # --- MODIFICATION: Enhanced province detection ---
             normalized_province = normalize_province_name(location_param_text)
-            
+
             if normalized_province:
                 is_province_search = True
-                logger.info(f"Performing province-wide search for: '{normalized_province.title()}'")
+                logger.info(
+                    f"Performing province-wide search for: '{normalized_province.title()}'"
+                )
 
                 province_abbr = CANADIAN_PROVINCES.get(normalized_province, "").upper()
                 province_full_title = normalized_province.title()
@@ -414,41 +432,64 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 # Set user location point if coordinates are provided (for sorting/distance)
                 if req_lat_str and req_lng_str:
                     try:
-                        user_location_point = Point(float(req_lng_str), float(req_lat_str), srid=4326)
+                        user_location_point = Point(
+                            float(req_lng_str), float(req_lat_str), srid=4326
+                        )
                     except (ValueError, TypeError):
                         user_location_point = None
 
             elif search_name:
                 # PATH A: KNOWN AREA (POLYGON SEARCH) - Only if not a province search
                 boundary = GeographicBoundary.objects.filter(
-                    Q(name__iexact=search_name) | Q(name__istartswith=f"{search_name} (")
+                    Q(name__iexact=search_name)
+                    | Q(name__istartswith=f"{search_name} (")
                 ).first()
 
             if boundary:
-                logger.info(f"Performing precise boundary search for: '{boundary.name}' using its stored polygon.")
+                logger.info(
+                    f"Performing precise boundary search for: '{boundary.name}' using its stored polygon."
+                )
                 queryset = queryset.filter(point__within=boundary.geom)
                 if req_lat_str and req_lng_str:
                     try:
-                        user_location_point = Point(float(req_lng_str), float(req_lat_str), srid=4326)
+                        user_location_point = Point(
+                            float(req_lng_str), float(req_lat_str), srid=4326
+                        )
                     except (ValueError, TypeError):
                         user_location_point = None
 
             elif req_lat_str and req_lng_str and not is_province_search:
                 # PATH B: SPECIFIC POINT (RADIUS SEARCH) - Only if other methods fail and not province search
                 try:
-                    user_location_point = Point(float(req_lng_str), float(req_lat_str), srid=4326)
-                    search_radius_km = float(req_radius_km_str) if req_radius_km_str and req_radius_km_str.replace('.', '', 1).isdigit() else 25.0
-                    logger.info(f"Performing radius search: {search_radius_km}km around a specific point.")
+                    user_location_point = Point(
+                        float(req_lng_str), float(req_lat_str), srid=4326
+                    )
+                    search_radius_km = (
+                        float(req_radius_km_str)
+                        if req_radius_km_str
+                        and req_radius_km_str.replace(".", "", 1).isdigit()
+                        else 25.0
+                    )
+                    logger.info(
+                        f"Performing radius search: {search_radius_km}km around a specific point."
+                    )
                     queryset = queryset.filter(
-                        point__distance_lte=(user_location_point, D(km=search_radius_km))
+                        point__distance_lte=(
+                            user_location_point,
+                            D(km=search_radius_km),
+                        )
                     )
                 except (ValueError, TypeError):
-                    logger.warning(f"Invalid geo params for radius search: lat='{req_lat_str}', lng='{req_lng_str}'")
+                    logger.warning(
+                        f"Invalid geo params for radius search: lat='{req_lat_str}', lng='{req_lng_str}'"
+                    )
                     user_location_point = None
 
             # --- 3. Standard Field Filtering ---
             if keyword_query_text:
-                search_query = SearchQuery(keyword_query_text, search_type="websearch", config="english")
+                search_query = SearchQuery(
+                    keyword_query_text, search_type="websearch", config="english"
+                )
                 queryset = queryset.annotate(
                     rank=SearchRank(F("search_vector"), search_query)
                 ).filter(search_vector=search_query)
@@ -467,25 +508,38 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 try:
                     price_max_decimal = Decimal(price_max_str)
                     queryset = queryset.filter(
-                        Q(min_session_price__lte=price_max_decimal) |
-                        Q(min_course_price__lte=price_max_decimal) |
-                        (Q(min_session_price__isnull=True) & Q(min_course_price__isnull=True))
+                        Q(min_session_price__lte=price_max_decimal)
+                        | Q(min_course_price__lte=price_max_decimal)
+                        | (
+                            Q(min_session_price__isnull=True)
+                            & Q(min_course_price__isnull=True)
+                        )
                     )
                 except InvalidOperation:
                     logger.warning(f"Invalid price_max value: {price_max_str}")
 
             # --- 4. Availability Filtering ---
-            if req_date_str or (req_participants_str and req_participants_str.isdigit()) or time_preferences:
+            if (
+                req_date_str
+                or (req_participants_str and req_participants_str.isdigit())
+                or time_preferences
+            ):
                 instance_filters = Q(options__schedules__instances__status="scheduled")
                 if req_date_str:
                     try:
                         target_date = datetime.strptime(req_date_str, "%Y-%m-%d").date()
-                        instance_filters &= Q(options__schedules__instances__date=target_date)
+                        instance_filters &= Q(
+                            options__schedules__instances__date=target_date
+                        )
                     except ValueError:
-                        instance_filters &= Q(options__schedules__instances__date__gte=timezone.now().date())
+                        instance_filters &= Q(
+                            options__schedules__instances__date__gte=timezone.now().date()
+                        )
                 else:
-                    instance_filters &= Q(options__schedules__instances__date__gte=timezone.now().date())
-                
+                    instance_filters &= Q(
+                        options__schedules__instances__date__gte=timezone.now().date()
+                    )
+
                 if time_preferences:
                     time_ranges = {
                         "Morning (6am-12pm)": (time(6, 0), time(11, 59, 59)),
@@ -496,35 +550,56 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     for pref in time_preferences:
                         if pref in time_ranges:
                             start_time, end_time = time_ranges[pref]
-                            time_range_filters |= Q(options__schedules__instances__time__range=(start_time, end_time))
+                            time_range_filters |= Q(
+                                options__schedules__instances__time__range=(
+                                    start_time,
+                                    end_time,
+                                )
+                            )
                     if time_range_filters:
                         instance_filters &= time_range_filters
-                
-                if req_participants_str and req_participants_str.isdigit() and int(req_participants_str) > 0:
-                    instance_filters &= Q(options__schedules__instances__max_participants__gte=int(req_participants_str))
-                
+
+                if (
+                    req_participants_str
+                    and req_participants_str.isdigit()
+                    and int(req_participants_str) > 0
+                ):
+                    instance_filters &= Q(
+                        options__schedules__instances__max_participants__gte=int(
+                            req_participants_str
+                        )
+                    )
+
                 queryset = queryset.filter(instance_filters).distinct()
 
             # --- 5. Annotation and Sorting ---
             queryset = self._calculate_relevance_score(queryset)
-            
+
             if user_location_point:
-                queryset = queryset.annotate(distance=Distance("point", user_location_point))
+                queryset = queryset.annotate(
+                    distance=Distance("point", user_location_point)
+                )
 
             # --- MODIFICATION: Do not sort by distance if it's a wide province search without a user point ---
             if sort_by == "distance" and user_location_point:
                 queryset = queryset.order_by("distance")
             elif sort_by == "price_asc":
-                queryset = queryset.order_by(F("min_session_price").asc(nulls_last=True), F("min_course_price").asc(nulls_last=True))
+                queryset = queryset.order_by(
+                    F("min_session_price").asc(nulls_last=True),
+                    F("min_course_price").asc(nulls_last=True),
+                )
             elif sort_by == "price_desc":
-                queryset = queryset.order_by(F("min_session_price").desc(nulls_first=True), F("min_course_price").desc(nulls_first=True))
+                queryset = queryset.order_by(
+                    F("min_session_price").desc(nulls_first=True),
+                    F("min_course_price").desc(nulls_first=True),
+                )
             elif sort_by == "rating":
                 queryset = queryset.order_by("-average_rating", "-review_count")
             elif sort_by == "reviews":
                 queryset = queryset.order_by("-review_count", "-average_rating")
             elif sort_by == "newest":
                 queryset = queryset.order_by("-createdAt")
-            else: # Default sort is 'relevance'
+            else:  # Default sort is 'relevance'
                 order_fields = ["-relevance_score", "-createdAt"]
                 if keyword_query_text:
                     order_fields.insert(0, "-rank")
@@ -534,10 +609,14 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             logger.debug(f"Final queryset count before pagination: {queryset.count()}")
             page = self.paginate_queryset(queryset)
             if page is not None:
-                serializer = self.get_serializer(page, many=True, context={"request": request})
+                serializer = self.get_serializer(
+                    page, many=True, context={"request": request}
+                )
                 return self.get_paginated_response(serializer.data)
-            
-            serializer = self.get_serializer(queryset, many=True, context={"request": request})
+
+            serializer = self.get_serializer(
+                queryset, many=True, context={"request": request}
+            )
             return Response(serializer.data)
 
         except Exception as e:
@@ -546,6 +625,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 {"error": "An error occurred during search."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
 
 class PublicScheduleViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [AllowAny]
