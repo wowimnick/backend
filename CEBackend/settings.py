@@ -154,10 +154,6 @@ MIDDLEWARE = [
     "quickstart.monitoring.middleware.MetricsMiddleware",
 ]
 
-# Conditionally enable Silk for performance profiling, but not during tests.
-if "test" not in sys.argv:
-    MIDDLEWARE.insert(2, "silk.middleware.SilkyMiddleware")
-
 
 # --- Database (PostgreSQL) ---
 DATABASES = {
