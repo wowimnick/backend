@@ -70,7 +70,12 @@ from quickstart.serializers import (
     PublicClassDetailSerializer,
 )
 from django.contrib.gis.geos import Point
-from django.contrib.gis.db.models.functions import Distance
+
+# --- MODIFICATION START ---
+# Added GeomFromText to the imports to explicitly handle geometry conversion.
+from django.contrib.gis.db.models.functions import Distance, GeomFromText
+
+# --- MODIFICATION END ---
 from django.contrib.gis.measure import D  # D is for Distance object
 
 logger = logging.getLogger(__name__)
@@ -263,15 +268,34 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         return queryset.distinct()
 
     def _calculate_relevance_score(self, queryset):
-        days_old = Extract(Now() - F("createdAt"), "epoch") / Value(86400.0)
+        # Cast all numeric operations to explicit types for psycopg3 compatibility
+        days_old = ExpressionWrapper(
+            Extract(Now() - F("createdAt"), "epoch")
+            / Cast(Value(86400.0), FloatField()),
+            output_field=FloatField(),
+        )
+
+        # Fix: Add explicit type casting to ensure consistent numeric types
         image_score_numerator = Log(
-            10, F("image_count") - Value(QUALITY_SCORE_BASE_IMAGES) + 1
+            Cast(Value(10), FloatField()),
+            Cast(F("image_count"), FloatField())
+            - Cast(Value(QUALITY_SCORE_BASE_IMAGES), FloatField())
+            + Cast(Value(1), FloatField()),
         )
         image_score_denominator = Log(
-            10, Value(QUALITY_SCORE_IDEAL_IMAGES - QUALITY_SCORE_BASE_IMAGES) + 1
+            Cast(Value(10), FloatField()),
+            Cast(
+                Value(QUALITY_SCORE_IDEAL_IMAGES - QUALITY_SCORE_BASE_IMAGES),
+                FloatField(),
+            )
+            + Cast(Value(1), FloatField()),
         )
+
         image_score = Case(
-            When(image_count__gte=QUALITY_SCORE_IDEAL_IMAGES, then=Value(1.0)),
+            When(
+                image_count__gte=QUALITY_SCORE_IDEAL_IMAGES,
+                then=Cast(Value(1.0), FloatField()),
+            ),
             When(
                 image_count__gt=QUALITY_SCORE_BASE_IMAGES,
                 then=ExpressionWrapper(
@@ -279,43 +303,71 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     output_field=FloatField(),
                 ),
             ),
-            default=Value(0.0),
+            default=Cast(Value(0.0), FloatField()),
             output_field=FloatField(),
         )
-        description_score = Log(10, Length("description") + 1) / Log(
-            10, Value(QUALITY_SCORE_MAX_DESCRIPTION_LEN + 1)
+
+        description_score = ExpressionWrapper(
+            Log(
+                Cast(Value(10), FloatField()),
+                Length("description") + Cast(Value(1), FloatField()),
+            )
+            / Log(
+                Cast(Value(10), FloatField()),
+                Cast(Value(QUALITY_SCORE_MAX_DESCRIPTION_LEN + 1), FloatField()),
+            ),
+            output_field=FloatField(),
         )
+
         quality_score = ExpressionWrapper(
-            (description_score + image_score) / 2.0,
+            (description_score + image_score) / Cast(Value(2.0), FloatField()),
             output_field=FloatField(),
         )
+
         rating_score = ExpressionWrapper(
-            F("average_rating") / Value(5.0), output_field=FloatField()
+            F("average_rating") / Cast(Value(5.0), FloatField()),
+            output_field=FloatField(),
         )
+
         review_count_score = ExpressionWrapper(
-            Log(10, F("review_count") + 1)
-            / Log(10, Value(REVIEW_COUNT_FOR_MAX_SCORE + 1)),
+            Log(
+                Cast(Value(10), FloatField()),
+                Cast(F("review_count"), FloatField()) + Cast(Value(1), FloatField()),
+            )
+            / Log(
+                Cast(Value(10), FloatField()),
+                Cast(Value(REVIEW_COUNT_FOR_MAX_SCORE + 1), FloatField()),
+            ),
             output_field=FloatField(),
         )
+
         newness_score = ExpressionWrapper(
-            Power(2, -days_old / Value(RECENCY_HALFLIFE_DAYS)),
+            Power(
+                Cast(Value(2), FloatField()),
+                Cast(Value(-1), FloatField())
+                * days_old
+                / Cast(Value(RECENCY_HALFLIFE_DAYS), FloatField()),
+            ),
             output_field=FloatField(),
         )
+
         featured_multiplier = Case(
-            When(businessId__featured=True, then=Value(W_FEATURED)),
-            default=Value(1.0),
+            When(businessId__featured=True, then=Cast(Value(W_FEATURED), FloatField())),
+            default=Cast(Value(1.0), FloatField()),
             output_field=FloatField(),
         )
+
         relevance_score = ExpressionWrapper(
             (
-                (Value(W_QUALITY) * quality_score)
-                + (Value(W_RATING) * rating_score)
-                + (Value(W_REVIEW_COUNT) * review_count_score)
-                + (Value(W_NEWNESS) * newness_score)
+                (Cast(Value(W_QUALITY), FloatField()) * quality_score)
+                + (Cast(Value(W_RATING), FloatField()) * rating_score)
+                + (Cast(Value(W_REVIEW_COUNT), FloatField()) * review_count_score)
+                + (Cast(Value(W_NEWNESS), FloatField()) * newness_score)
             )
             * featured_multiplier,
             output_field=FloatField(),
         )
+
         return queryset.annotate(relevance_score=relevance_score)
 
     def list(self, request, *args, **kwargs):
@@ -565,10 +617,20 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             # --- 5. Annotation and Sorting ---
             queryset = self._calculate_relevance_score(queryset)
 
+            # --- MODIFICATION START ---
+            # This block is modified to work correctly with psycopg2-binary.
             if user_location_point:
-                queryset = queryset.annotate(
-                    distance=Distance("point", user_location_point)
+                # FIX for psycopg2: Explicitly convert the Point object to a geometry
+                # expression using GeomFromText. This prevents psycopg2 from incorrectly
+                # serializing the Python Point object into an invalid SQL string.
+                # We use the point's Well-Known Text (WKT) representation and SRID.
+                point_expression = GeomFromText(
+                    user_location_point.wkt, srid=user_location_point.srid
                 )
+                queryset = queryset.annotate(
+                    distance=Distance("point", point_expression)
+                )
+            # --- MODIFICATION END ---
 
             # --- MODIFICATION: Do not sort by distance if it's a wide province search without a user point ---
             if sort_by == "distance" and user_location_point:
