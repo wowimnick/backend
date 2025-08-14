@@ -70,12 +70,7 @@ from quickstart.serializers import (
     PublicClassDetailSerializer,
 )
 from django.contrib.gis.geos import Point
-
-# --- MODIFICATION START ---
-# Added GeomFromText to the imports to explicitly handle geometry conversion.
-from django.contrib.gis.db.models.functions import Distance, GeomFromText
-
-# --- MODIFICATION END ---
+from django.contrib.gis.db.models.functions import Distance
 from django.contrib.gis.measure import D  # D is for Distance object
 
 logger = logging.getLogger(__name__)
@@ -454,7 +449,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             # --- 2. Geographic Search Logic ---
             boundary = None
 
-            # --- MODIFICATION: Enhanced province detection ---
+            # --- Enhanced province detection ---
             normalized_province = normalize_province_name(location_param_text)
 
             if normalized_province:
@@ -474,10 +469,15 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 # Set user location point if coordinates are provided (for sorting/distance)
                 if req_lat_str and req_lng_str:
                     try:
-                        user_location_point = Point(
-                            float(req_lng_str), float(req_lat_str), srid=4326
+                        lng = float(req_lng_str)
+                        lat = float(req_lat_str)
+                        user_location_point = Point(lng, lat, srid=4326)
+                        user_location_point.srid = 4326  # Ensure SRID is set
+                        logger.debug(
+                            f"Created user location point for province search: {user_location_point.wkt}"
                         )
-                    except (ValueError, TypeError):
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Invalid coordinates for province search: {e}")
                         user_location_point = None
 
             elif search_name:
@@ -491,41 +491,61 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 logger.info(
                     f"Performing precise boundary search for: '{boundary.name}' using its stored polygon."
                 )
-                queryset = queryset.filter(point__within=boundary.geom)
-                if req_lat_str and req_lng_str:
-                    try:
-                        user_location_point = Point(
-                            float(req_lng_str), float(req_lat_str), srid=4326
-                        )
-                    except (ValueError, TypeError):
-                        user_location_point = None
 
-            elif req_lat_str and req_lng_str and not is_province_search:
-                # PATH B: SPECIFIC POINT (RADIUS SEARCH) - Only if other methods fail and not province search
                 try:
-                    user_location_point = Point(
-                        float(req_lng_str), float(req_lat_str), srid=4326
-                    )
-                    search_radius_km = (
-                        float(req_radius_km_str)
-                        if req_radius_km_str
-                        and req_radius_km_str.replace(".", "", 1).isdigit()
-                        else 25.0
-                    )
-                    logger.info(
-                        f"Performing radius search: {search_radius_km}km around a specific point."
-                    )
-                    queryset = queryset.filter(
-                        point__distance_lte=(
-                            user_location_point,
-                            D(km=search_radius_km),
+                    # Ensure the boundary geometry is valid and has correct SRID
+                    if boundary.geom:
+                        # Method 1: Try direct boundary filtering
+                        queryset = queryset.filter(point__within=boundary.geom)
+                        logger.debug(
+                            f"Successfully applied boundary filter using direct method"
                         )
-                    )
-                except (ValueError, TypeError):
-                    logger.warning(
-                        f"Invalid geo params for radius search: lat='{req_lat_str}', lng='{req_lng_str}'"
-                    )
-                    user_location_point = None
+                    else:
+                        logger.warning(
+                            f"Boundary '{boundary.name}' has no geometry, skipping boundary filter"
+                        )
+                        boundary = None
+
+                except Exception as boundary_error:
+                    logger.error(f"Error applying boundary filter: {boundary_error}")
+                    # If boundary filtering fails, fall back to a radius search around the center
+                    try:
+                        if req_lat_str and req_lng_str:
+                            user_location_point = Point(
+                                float(req_lng_str), float(req_lat_str), srid=4326
+                            )
+                            search_radius_km = 25.0  # Default radius for city searches
+                            logger.info(
+                                f"Boundary filter failed, falling back to {search_radius_km}km radius search"
+                            )
+                            queryset = queryset.filter(
+                                point__distance_lte=(
+                                    user_location_point,
+                                    D(km=search_radius_km),
+                                )
+                            )
+                        else:
+                            logger.warning(
+                                "No coordinates available for radius fallback"
+                            )
+                            boundary = None
+                    except Exception as fallback_error:
+                        logger.error(f"Radius fallback also failed: {fallback_error}")
+                        boundary = None
+
+                # Set user location point for distance calculation if coordinates are provided
+                if req_lat_str and req_lng_str and not user_location_point:
+                    try:
+                        lng = float(req_lng_str)
+                        lat = float(req_lat_str)
+                        user_location_point = Point(lng, lat, srid=4326)
+                        user_location_point.srid = 4326
+                        logger.debug(
+                            f"Created user location point for boundary search: {user_location_point.wkt}"
+                        )
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Invalid coordinates for boundary search: {e}")
+                        user_location_point = None
 
             # --- 3. Standard Field Filtering ---
             if keyword_query_text:
@@ -617,22 +637,91 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             # --- 5. Annotation and Sorting ---
             queryset = self._calculate_relevance_score(queryset)
 
-            # --- MODIFICATION START ---
-            # This block is modified to work correctly with psycopg2-binary.
+            # Fixed distance annotation
             if user_location_point:
-                # FIX for psycopg2: Explicitly convert the Point object to a geometry
-                # expression using GeomFromText. This prevents psycopg2 from incorrectly
-                # serializing the Python Point object into an invalid SQL string.
-                # We use the point's Well-Known Text (WKT) representation and SRID.
-                point_expression = GeomFromText(
-                    user_location_point.wkt, srid=user_location_point.srid
-                )
-                queryset = queryset.annotate(
-                    distance=Distance("point", point_expression)
-                )
-            # --- MODIFICATION END ---
+                try:
+                    # Validate the point first
+                    if user_location_point.valid:
+                        point_wkt = user_location_point.wkt
 
-            # --- MODIFICATION: Do not sort by distance if it's a wide province search without a user point ---
+                        # Try multiple distance calculation methods in order of preference
+                        distance_methods = [
+                            # Method 1: ST_Distance with geography cast (most accurate for lat/lng)
+                            {
+                                "sql": "ST_Distance(point::geography, ST_GeomFromText(%s, 4326)::geography)",
+                                "name": "geography_distance",
+                            },
+                            # Method 2: ST_DWithin with geography (if ST_Distance doesn't work)
+                            {
+                                "sql": "ST_Distance(ST_Transform(point, 3857), ST_Transform(ST_GeomFromText(%s, 4326), 3857))",
+                                "name": "projected_distance",
+                            },
+                            # Method 3: Basic ST_Distance (least accurate but most compatible)
+                            {
+                                "sql": "ST_Distance(point, ST_GeomFromText(%s, 4326))",
+                                "name": "basic_distance",
+                            },
+                        ]
+
+                        distance_added = False
+                        for method in distance_methods:
+                            try:
+                                # Test the method with a simple query first
+                                test_queryset = queryset.extra(
+                                    select={"test_distance": method["sql"]},
+                                    select_params=[point_wkt],
+                                )
+                                # Try to execute a count to test if the SQL works
+                                test_count = test_queryset[:1].count()
+
+                                # If no error, use this method
+                                queryset = queryset.extra(
+                                    select={"distance": method["sql"]},
+                                    select_params=[point_wkt],
+                                )
+                                distance_added = True
+                                logger.debug(
+                                    f"Successfully added distance annotation using method: {method['name']}"
+                                )
+                                break
+
+                            except Exception as method_error:
+                                logger.warning(
+                                    f"Distance method '{method['name']}' failed: {method_error}"
+                                )
+                                continue
+
+                        if not distance_added:
+                            logger.warning(
+                                "All distance calculation methods failed, falling back to Django's Distance function"
+                            )
+                            # Fallback to Django's built-in Distance function
+                            try:
+                                queryset = queryset.annotate(
+                                    distance=Distance("point", user_location_point)
+                                )
+                                logger.debug(
+                                    "Successfully added distance annotation using Django's Distance function"
+                                )
+                            except Exception as django_error:
+                                logger.error(
+                                    f"Django Distance function also failed: {django_error}"
+                                )
+                                user_location_point = None
+
+                    else:
+                        logger.warning(
+                            "User location point is invalid, skipping distance annotation"
+                        )
+                        user_location_point = None
+
+                except Exception as e:
+                    logger.error(
+                        f"Error adding distance annotation: {e}", exc_info=True
+                    )
+                    user_location_point = None
+
+            # Sorting logic
             if sort_by == "distance" and user_location_point:
                 queryset = queryset.order_by("distance")
             elif sort_by == "price_asc":
@@ -658,7 +747,15 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 queryset = queryset.order_by(*order_fields)
 
             # --- 6. Pagination and Response ---
-            logger.debug(f"Final queryset count before pagination: {queryset.count()}")
+            try:
+                queryset_count = queryset.count()
+                logger.debug(
+                    f"Final queryset count before pagination: {queryset_count}"
+                )
+            except Exception as e:
+                logger.error(f"Error counting queryset: {e}", exc_info=True)
+                # If count fails, try to continue without it
+
             page = self.paginate_queryset(queryset)
             if page is not None:
                 serializer = self.get_serializer(
