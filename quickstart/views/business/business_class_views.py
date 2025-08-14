@@ -1,5 +1,6 @@
 from datetime import timedelta
 from decimal import Decimal
+from django.conf import settings
 from rest_framework import viewsets, status, filters, generics, permissions
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -40,6 +41,8 @@ from rest_framework.permissions import AllowAny
 from quickstart.serializers.admin.class_management.class_management_serializers import (
     AdminClassCategorySerializer,
 )
+
+from quickstart.utils.email_utils import send_booking_cancelled_by_other_email
 
 from quickstart.models import (
     BusinessInfo,
@@ -88,7 +91,7 @@ class PublicCategoryViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Provides a list of ALL public class categories. For each category,
     it only includes subcategories that contain at least one class.
-    MODIFIED: This endpoint is now cached for 1 hour for performance.
+    MODIFIED: This endpoint is now cached for 15 minutes for performance.
     """
 
     permission_classes = [AllowAny]
@@ -112,7 +115,7 @@ class PublicCategoryViewSet(viewsets.ReadOnlyModelViewSet):
         )
 
     # --- ADDED: Caching decorator for the list view ---
-    @method_decorator(cache_page(60 * 60))  # Cache for 1 hour
+    @method_decorator(cache_page(60 * 15))  # Cache for 15 minutes
     @method_decorator(vary_on_headers("Authorization"))
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
@@ -123,7 +126,7 @@ class AllCategoriesForBusinessViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Provides a complete, unpaginated list of all categories and their subcategories.
     This is specifically for use in business-facing forms.
-    MODIFIED: This endpoint is now cached for 1 hour for performance.
+    MODIFIED: This endpoint is now cached for 15 minutes for performance.
     """
 
     permission_classes = [IsAuthenticated]
@@ -143,7 +146,7 @@ class AllCategoriesForBusinessViewSet(viewsets.ReadOnlyModelViewSet):
         )
 
     # --- ADDED: Caching decorator for the list view ---
-    @method_decorator(cache_page(60 * 60))  # Cache for 1 hour
+    @method_decorator(cache_page(60 * 15))  # Cache for 15 minutes
     @method_decorator(vary_on_headers("Authorization"))
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
@@ -498,18 +501,44 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                 )
 
                 # Step 2: Find all future, scheduled instances associated with this class.
-                # This is the crucial new logic.
                 today = timezone.now().date()
                 future_instances_to_delete = ScheduleInstance.objects.filter(
                     schedule__option__classId=instance,
                     date__gte=today,
-                    status="scheduled",  # Only target instances that are currently active.
+                    status="scheduled",
                 )
 
                 if future_instances_to_delete.exists():
-                    # --- MODIFIED LOGIC ---
-                    # Iterate to ensure the model's custom .delete() method is called for each instance,
-                    # which properly handles cancelling associated bookings.
+                    # --- START: ADDED EMAIL NOTIFICATION LOGIC ---
+                    # Find all confirmed bookings associated with these future instances
+                    bookings_to_cancel = Booking.objects.filter(
+                        schedule_instance__in=future_instances_to_delete,
+                        status="confirmed",
+                    ).select_related("user")
+
+                    cancellation_reason = (
+                        f"The class '{class_title}' is no longer available."
+                    )
+                    contact_info = settings.NOTIFICATION_SETTINGS.get(
+                        "reply_to", "support@classeasily.com"
+                    )
+
+                    for booking in bookings_to_cancel:
+                        try:
+                            send_booking_cancelled_by_other_email(
+                                user=booking.user,
+                                booking=booking,
+                                cancelled_by="the business",
+                                reason=cancellation_reason,
+                                contact_info=contact_info,
+                            )
+                        except Exception as email_error:
+                            logger.error(
+                                f"Failed to send class suspension cancellation email for booking {booking.id}: {email_error}",
+                                exc_info=True,
+                            )
+                    # --- END: ADDED EMAIL NOTIFICATION LOGIC ---
+
                     deleted_count = 0
                     for instance_to_delete in future_instances_to_delete:
                         instance_to_delete.delete()  # This now calls the correct model method
@@ -527,7 +556,6 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                 f"Error during deactivation and cleanup for class {class_pk}: {str(e)}",
                 exc_info=True,
             )
-            # Raise a DRF validation error to provide clear feedback to the client.
             raise DRFValidationError(
                 f"Could not deactivate the class and its schedules due to an error: {str(e)}"
             )

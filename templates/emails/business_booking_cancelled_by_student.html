@@ -1,29 +1,48 @@
 {# templates/emails/business_booking_cancelled_by_student.html #}
-{# Context required: business_user (owner/manager CustomUser), booking (Booking object), dashboard_booking_url (string), related_data (dict), recipient_email (string) #}
 {% extends "emails/base_email.html" %}
 {% load i18n tz %}
-
-{% block title %}{% trans "Booking Cancellation Notice" %}{% endblock %}
-
+{% block title %}
+    {% trans "Booking Cancellation Notice" %}
+{% endblock title %}
 {% block content %}
     <h1>{% trans "A Student Cancelled Their Booking" %}</h1>
-    <p>{% blocktrans with first_name=business_user.first_name|default:"Business Owner/Manager" %}Hi {{ first_name }},{% endblocktrans %}</p>
-    
+    <p>
+        {% blocktrans with first_name=business_user.first_name|default:"Business Owner/Manager" %}Hi {{ first_name }},{% endblocktrans %}
+    </p>
     {% with student_name=booking.user.get_full_name|default:"A student" class_title=related_data.class_title|default:"your class" %}
-    <p>{% blocktrans %}Please note that <strong>{{ student_name }}</strong> has cancelled their booking for <strong>{{ class_title }}</strong>.{% endblocktrans %}</p>
+        <p>
+            {% blocktrans %}Please note that <strong>{{ student_name }}</strong> has cancelled their booking for <strong>{{ class_title }}</strong>.{% endblocktrans %}
+        </p>
     {% endwith %}
-
-    <div style="background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin: 20px 0;">
-        <h2 style="font-size: 18px; font-weight: 600; color: #111827; margin-top: 0; margin-bottom: 12px;">{% trans "Cancelled Booking Details:" %}</h2>
-        <p style="margin-bottom: 6px;"><strong>{% trans "Booker Name:" %}</strong> {{ booking.user.get_full_name|default:"N/A" }}</p> {# Changed to "Booker Name" #}
-        <p style="margin-bottom: 6px;"><strong>{% trans "Booker Email:" %}</strong> {{ booking.user.email }}</p> {# Changed to "Booker Email" #}
-        <p style="margin-bottom: 6px;"><strong>{% trans "Original Date:" %}</strong> {{ booking.schedule_instance.date|date:"l, F j, Y" }}</p>
-        <p style="margin-bottom: 6px;"><strong>{% trans "Original Time:" %}</strong> {{ booking.schedule_instance.time|time:"P" }}</p>
-        <p style="margin-bottom: 0;"><strong>{% trans "Total Participants Cancelled:" %}</strong> {{ booking.participants }}</p>
-
-        {# Display Participant Names if more than one, or if different from booker #}
+    <div style="background-color: #f9fafb;
+                border: 1px solid #e5e7eb;
+                border-radius: 8px;
+                padding: 16px;
+                margin: 20px 0">
+        <h2 style="font-size: 18px;
+                   font-weight: 600;
+                   color: #111827;
+                   margin-top: 0;
+                   margin-bottom: 12px">{% trans "Cancelled Booking Details:" %}</h2>
+        <p style="margin-bottom: 6px;">
+            <strong>{% trans "Booker Name:" %}</strong> {{ booking.user.get_full_name|default:"N/A" }}
+        </p>
+        <p style="margin-bottom: 6px;">
+            <strong>{% trans "Booker Email:" %}</strong> {{ booking.user.email }}
+        </p>
+        <p style="margin-bottom: 6px;">
+            <strong>{% trans "Original Date:" %}</strong> {{ booking.schedule_instance.date|date:"l, F j, Y" }}
+        </p>
+        <p style="margin-bottom: 6px;">
+            <strong>{% trans "Original Time:" %}</strong> {{ booking.schedule_instance.time|time:"P" }}
+        </p>
+        <p style="margin-bottom: 0;">
+            <strong>{% trans "Total Participants Cancelled:" %}</strong> {{ booking.participants }}
+        </p>
         {% if booking.participant_details and booking.participants > 0 %}
-            <p style="margin-bottom: 2px;"><strong>{% trans "Participant Names in Cancelled Booking:" %}</strong></p>
+            <p style="margin-bottom: 2px;">
+                <strong>{% trans "Participant Names in Cancelled Booking:" %}</strong>
+            </p>
             <ul style="margin-top: 0; margin-bottom: 6px; padding-left: 20px;">
                 {% for participant in booking.participant_details %}
                     <li>{{ participant.name|default:"Unnamed Participant" }}</li>
@@ -31,25 +50,28 @@
             </ul>
         {% endif %}
     </div>
-
-    <p>{% trans "The spot(s) for this session may now be available for others to book. You can view the updated schedule and booking details on your dashboard." %}</p>
-
-    <!-- Button to Booking -->
-    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+    <p>
+        {% trans "The spot(s) for this session may now be available for others to book. You can view the updated schedule and booking details on your dashboard." %}
+    </p>
+    <table role="presentation"
+           border="0"
+           cellpadding="0"
+           cellspacing="0"
+           width="100%">
         <tr>
             <td align="center" class="button-td">
-                <a href="{{ dashboard_booking_url }}" target="_blank" class="button">
-                    {% trans 'View Bookings' %}
-                </a>
+                <a href="{{ dashboard_booking_url }}" target="_blank" class="button">{% trans 'View Bookings' %}</a>
             </td>
         </tr>
     </table>
-
-    <p>{% trans "Regards," %}<br>{% trans "The ClassEasily Team" %}</p>
-{% endblock %}
-
+    <p>
+        {% trans "Regards," %}
+        <br />
+        {% trans "The ClassEasily Team" %}
+    </p>
+{% endblock content %}
 {% block footer_recipient %}
     {% if recipient_email and recipient_email != "N/A" %}
         <p>Cancellation notice sent to {{ recipient_email }} regarding Booking ID: {{ booking.id }}</p>
     {% endif %}
-{% endblock %}
+{% endblock footer_recipient %}

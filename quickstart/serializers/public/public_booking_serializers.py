@@ -1,4 +1,5 @@
 from decimal import Decimal
+import json
 import os
 import uuid
 from django.conf import settings
@@ -162,90 +163,102 @@ class BookingCreateSerializer(serializers.Serializer):
 
         return data
 
-    def create(self, validated_data):
-        user = self.context["request"].user
-        initial_instance = self.context["validated_instance"]
-        participants_count = validated_data["participants"]
-        participant_details_data = validated_data.get("participant_details", [])
-        notes = validated_data.get("notes", "")
 
-        price_per_instance = initial_instance.price
-        class_option = initial_instance.schedule.option
-        booking_type = class_option.booking_type
-        enrollment_type = (
-            "Full Course" if booking_type == "Full Course" else "Single Session"
-        )
+def create(self, validated_data):
+    user = self.context["request"].user
+    initial_instance = self.context["validated_instance"]
+    participants_count = validated_data["participants"]
+    participant_details_data = validated_data.get("participant_details", [])
+    notes = validated_data.get("notes", "")
 
-        snapshotted_policy = class_option.cancellationPolicy
-        snapshotted_refund_percent = class_option.cancellationRefundPercentage
-
+    # FIX: Ensure participant_details is properly serializable for psycopg3
+    # Convert to plain Python objects and ensure JSON serialization works
+    if participant_details_data:
         try:
-            # The transaction is now handled in the view to cover the whole process
-            if booking_type == "Full Course":
-                booking_group_id = uuid.uuid4()
-                course_instances = self.context.get("future_course_instances")
-                if not course_instances:
-                    raise DRFValidationError(
-                        "Course instances not found during creation (serializer.create)."
-                    )
+            # Ensure it's JSON serializable and convert back to plain Python objects
+            participant_details_json = json.dumps(participant_details_data)
+            participant_details_data = json.loads(participant_details_json)
+        except (TypeError, ValueError) as e:
+            logger.error(f"Error serializing participant_details: {e}")
+            participant_details_data = []
 
-                bookings = []
-                total_course_price = Decimal("0.00")
+    price_per_instance = initial_instance.price
+    class_option = initial_instance.schedule.option
+    booking_type = class_option.booking_type
+    enrollment_type = (
+        "Full Course" if booking_type == "Full Course" else "Single Session"
+    )
 
-                for instance_item in course_instances:
-                    instance_price = instance_item.price * participants_count
-                    total_course_price += instance_price
+    snapshotted_policy = class_option.cancellationPolicy
+    snapshotted_refund_percent = class_option.cancellationRefundPercentage
 
-                    booking = Booking(
-                        schedule_instance=instance_item,
-                        user=user,
-                        booking_group_id=booking_group_id,
-                        participants=participants_count,
-                        participant_details=participant_details_data,
-                        notes=notes,
-                        amount_paid=instance_price.quantize(Decimal("0.01")),
-                        status="pending",
-                        payment_status="pending",
-                        enrollment_type=enrollment_type,
-                        cancellation_policy=snapshotted_policy,
-                        cancellation_refund_percentage=snapshotted_refund_percent,
-                    )
-                    bookings.append(booking)
-
-                created_bookings = Booking.objects.bulk_create(bookings)
-                logger.info(
-                    f"BookingCreateSerializer: Pending Course Booking created (Group: {booking_group_id}) for User {user.email}. Total Price: {total_course_price}"
+    try:
+        # The transaction is now handled in the view to cover the whole process
+        if booking_type == "Full Course":
+            booking_group_id = uuid.uuid4()
+            course_instances = self.context.get("future_course_instances")
+            if not course_instances:
+                raise DRFValidationError(
+                    "Course instances not found during creation (serializer.create)."
                 )
 
-                return created_bookings[0] if created_bookings else None
-            else:
-                single_session_price = price_per_instance * participants_count
-                booking = Booking.objects.create(
-                    schedule_instance=initial_instance,
+            bookings = []
+            total_course_price = Decimal("0.00")
+
+            for instance_item in course_instances:
+                instance_price = instance_item.price * participants_count
+                total_course_price += instance_price
+
+                booking = Booking(
+                    schedule_instance=instance_item,
                     user=user,
+                    booking_group_id=booking_group_id,
                     participants=participants_count,
-                    participant_details=participant_details_data,
+                    participant_details=participant_details_data,  # Now properly serializable
                     notes=notes,
-                    amount_paid=single_session_price.quantize(Decimal("0.01")),
+                    amount_paid=instance_price.quantize(Decimal("0.01")),
                     status="pending",
                     payment_status="pending",
                     enrollment_type=enrollment_type,
                     cancellation_policy=snapshotted_policy,
                     cancellation_refund_percentage=snapshotted_refund_percent,
                 )
-                logger.info(
-                    f"BookingCreateSerializer: Pending Single Session Booking created (ID: {booking.id}) for User {user.email}. Price: {single_session_price}"
-                )
-                return booking
+                bookings.append(booking)
 
-        except Exception as e:
-            logger.error(
-                f"Error creating booking (serializer.create) for user {user.email}: {str(e)}",
-                exc_info=True,
+            created_bookings = Booking.objects.bulk_create(bookings)
+            logger.info(
+                f"BookingCreateSerializer: Pending Course Booking created (Group: {booking_group_id}) for User {user.email}. Total Price: {total_course_price}"
             )
-            raise DRFValidationError(
-                {"error": "Failed to create booking. Please try again."}
+
+            return created_bookings[0] if created_bookings else None
+        else:
+            single_session_price = price_per_instance * participants_count
+            booking = Booking.objects.create(
+                schedule_instance=initial_instance,
+                user=user,
+                participants=participants_count,
+                participant_details=participant_details_data,  # Now properly serializable
+                notes=notes,
+                amount_paid=single_session_price.quantize(Decimal("0.01")),
+                status="pending",
+                payment_status="pending",
+                enrollment_type=enrollment_type,
+                cancellation_policy=snapshotted_policy,
+                cancellation_refund_percentage=snapshotted_refund_percent,
             )
+            logger.info(
+                f"BookingCreateSerializer: Pending Single Session Booking created (ID: {booking.id}) for User {user.email}. Price: {single_session_price}"
+            )
+            return booking
+
+    except Exception as e:
+        logger.error(
+            f"Error creating booking (serializer.create) for user {user.email}: {str(e)}",
+            exc_info=True,
+        )
+        raise DRFValidationError(
+            {"error": "Failed to create booking. Please try again."}
+        )
 
 
 class BookingDetailSerializer(serializers.ModelSerializer):

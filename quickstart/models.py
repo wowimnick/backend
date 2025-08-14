@@ -125,7 +125,6 @@ class VerificationRequest(models.Model):
 
     def save(self, *args, **kwargs):
         # Determine if status is changing. _original_status is set in __init__ for existing objects.
-        # For new objects, we don't need to compare as there's no previous status to sync.
         status_changed = (
             hasattr(self, "_original_status")
             and self._original_status is not None
@@ -135,8 +134,23 @@ class VerificationRequest(models.Model):
         super().save(*args, **kwargs)  # Save the VerificationRequest first
 
         if self.business and status_changed:
+            update_fields_for_business = ["verificationStatus"]
             self.business.verificationStatus = self.status
-            self.business.save(update_fields=["verificationStatus"])
+
+            if self.status == "verified":
+                # If the request is approved, automatically activate the business.
+                self.business.isActive = True
+                update_fields_for_business.append("isActive")
+            else:
+                # For any other status (e.g., 'rejected', 'pending'), ensure the business is not active.
+                self.business.isActive = False
+                update_fields_for_business.append("isActive")
+
+            logger.info(
+                f"Syncing VerificationRequest status for Business {self.business.businessId}. "
+                f"New verificationStatus: '{self.status}', New isActive status: {self.business.isActive}."
+            )
+            self.business.save(update_fields=update_fields_for_business)
 
         # Update _original_status after save to reflect the new current state for subsequent saves
         self._original_status = self.status

@@ -9,10 +9,11 @@ import sys
 from datetime import timedelta
 from celery.schedules import crontab
 from pathlib import Path
-if os.name == 'nt': # This checks if the OS is Windows ('nt')
-    GDAL_LIBRARY_PATH = r'C:\OSGeo4W\bin\gdal311.dll' 
-    GEOS_LIBRARY_PATH = r'C:\OSGeo4W\bin\geos_c.dll'
-    PROJ_LIBRARY_PATH = r'C:\OSGeo4W\bin\proj_9.dll'
+
+if os.name == "nt":  # This checks if the OS is Windows ('nt')
+    GDAL_LIBRARY_PATH = r"C:\OSGeo4W\bin\gdal311.dll"
+    GEOS_LIBRARY_PATH = r"C:\OSGeo4W\bin\geos_c.dll"
+    PROJ_LIBRARY_PATH = r"C:\OSGeo4W\bin\proj_9.dll"
 
 # --- Environment Loading ---
 # For containerized environments (like Docker), environment variables are passed
@@ -153,11 +154,6 @@ MIDDLEWARE = [
     "quickstart.monitoring.middleware.MetricsMiddleware",
 ]
 
-# Conditionally enable Silk for performance profiling, but not during tests.
-if "test" not in sys.argv:
-    MIDDLEWARE.insert(2, "silk.middleware.SilkyMiddleware")
-
-
 # --- Database (PostgreSQL) ---
 DATABASES = {
     "default": {
@@ -205,14 +201,13 @@ else:
     }
 
 
-# --- Celery Configuration ---
+# --- Enhanced Celery Configuration for Rate Limiting ---
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/1")
 CELERY_RESULT_BACKEND = os.environ.get(
     "CELERY_RESULT_BACKEND", "redis://localhost:6379/2"
 )
 
 CELERY_BROKER_TRANSPORT_OPTIONS = {
-    # The hash tag "{celery}" ensures all keys go to the same slot.
     "global_keyprefix": "{celery}:",
     # Makes fanout (broadcast) operations cluster-safe.
     "fanout_prefix": False,
@@ -221,10 +216,9 @@ CELERY_BROKER_TRANSPORT_OPTIONS = {
     "ack_emulation": False,
 }
 
-# This setting is CRITICAL for ElastiCache Serverless to prevent CROSSSLOT errors by disabling worker discovery.
 CELERY_WORKER_ENABLE_REMOTE_CONTROL = False
 
-# Enable SSL for secure Redis connections ('rediss://')
+# Enable SSL for secure Redis connections
 if CELERY_BROKER_URL.startswith("rediss://"):
     CELERY_BROKER_USE_SSL = {"ssl_cert_reqs": ssl.CERT_NONE}
     CELERY_REDIS_BACKEND_USE_SSL = {"ssl_cert_reqs": ssl.CERT_NONE}
@@ -238,25 +232,41 @@ CELERY_TASK_SEND_SENT_EVENT = False
 CELERY_TASK_TRACK_STARTED = False
 
 CELERY_BEAT_SCHEDULE = {
-    # Runs daily at 2:00 AM UTC.
-    # Marks past confirmed bookings as 'completed'.
     "update-completed-bookings-daily": {
-        "task": "tasks.update_completed_booking_status",
+        "task": "quickstart.tasks.update_completed_booking_status",
         "schedule": crontab(hour=2, minute=0),
     },
-    # Runs daily at 3:00 AM UTC, after the status update.
-    # Processes payouts for classes that were completed the previous day.
     "process-payouts-daily": {
-        "task": "tasks.process_daily_payouts",
+        "task": "quickstart.tasks.process_daily_payouts",
         "schedule": crontab(hour=3, minute=0),
-        # You can add args if your task needs them, but ours doesn't.
-        # 'args': (),
     },
-    # Runs daily at 4:00 AM UTC, after payouts are processed.
     "process-refunds-daily": {
-        "task": "tasks.process_daily_refunds",
+        "task": "quickstart.tasks.process_daily_refunds",
         "schedule": crontab(hour=4, minute=0),
     },
+    "send-daily-review-requests": {
+        "task": "quickstart.tasks.user_tasks.send_pending_review_requests",
+        "schedule": crontab(hour=5, minute=0),  # Every day at 5 AM UTC
+    },
+    "send-weekly-performance-summaries": {
+        "task": "quickstart.tasks.business_tasks.send_weekly_performance_summaries",
+        "schedule": crontab(
+            day_of_week="monday", hour=8, minute=0
+        ),  # Every Monday at 8 AM UTC
+    },
+    "send-hourly-booking-reminders": {
+        "task": "quickstart.tasks.booking_tasks.send_upcoming_booking_reminders",
+        "schedule": crontab(minute=0, hour="*"),  # Run at the start of every hour
+    },
+}
+
+
+# Email-specific settings
+EMAIL_RATE_LIMIT_SETTINGS = {
+    "RESEND_RATE_LIMIT": 2,  # requests per second
+    "BATCH_SIZE": 10,  # emails per batch for bulk sending
+    "RETRY_DELAY": 60,  # seconds to wait before retrying rate-limited requests
+    "MAX_SUBJECT_LENGTH": 1900,  # characters (buffer below 2000 limit)
 }
 
 # --- Authentication Backends ---
@@ -440,7 +450,7 @@ SILKY_META = True
 SILKY_INTERCEPT_PERCENT = 100
 SILKY_MAX_RECORDED_REQUESTS = 10000
 SILKY_MAX_RECORDED_REQUESTS_CHECK_PERCENT = 10
-SILKY_IGNORE_PATHS = ["/api/admin/metrics/"]
+SILKY_IGNORE_PATHS = ["/api/admin/metrics/", "/api/classes/search/"]
 
 
 # --- Custom App Settings ---

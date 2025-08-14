@@ -35,14 +35,8 @@ def _get_and_assign_permissions(role, permissions_map):
 )
 class AdminBookingPaymentTests(APITestCase):
     def setUp(self):
-        # FIX: The patch target was incorrect. The task is defined in the
-        # 'quickstart.tasks.search_tasks' module, so we patch it at its source.
-        self.mock_task = patch(
-            "quickstart.tasks.search_tasks.update_search_vector_for_business"
-        )
-        self.mock_update_search_vector = self.mock_task.start()
-        self.addCleanup(self.mock_task.stop)
-
+        # FIX: The patch was targeting a non-existent signal and was not used
+        # by the tests in this class. It has been removed to resolve the AttributeError.
         self.admin_role = RoleFactory(name="Admin", hierarchy_level=80)
         _get_and_assign_permissions(
             self.admin_role,

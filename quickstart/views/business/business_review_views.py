@@ -20,7 +20,7 @@ from quickstart.serializers.business.business_review_serializers import (
     BusinessReviewSerializer,
 )
 
-# from ...utils.email_utils import send_review_response_notification_email # Placeholder
+from quickstart.utils.email_utils import send_review_response_notification_email
 
 logger = logging.getLogger(__name__)
 
@@ -270,13 +270,17 @@ class BusinessReviewViewSet(viewsets.ReadOnlyModelViewSet):
         review.save(update_fields=update_fields)
         logger.info(f"Business user {request.user.email} responded to Review {pk}.")
 
-        # Placeholder for sending email notification to the student
-        # if review.userId and review.business_response:
-        #     try:
-        #         send_review_response_notification_email(review.userId, review)
-        #         logger.info(f"Review response notification email task initiated for review {pk} to user {review.userId.email}.")
-        #     except Exception as email_error:
-        #         logger.error(f"Failed to send review response notification for review {pk}: {email_error}", exc_info=True)
+        if review.userId and review.business_response:
+            try:
+                send_review_response_notification_email(review.userId, review)
+                logger.info(
+                    f"Review response notification email task initiated for review {pk} to user {review.userId.email}."
+                )
+            except Exception as email_error:
+                logger.error(
+                    f"Failed to send review response notification for review {pk}: {email_error}",
+                    exc_info=True,
+                )
 
         serializer = self.get_serializer(review)
         return Response(serializer.data)
