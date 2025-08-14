@@ -550,7 +550,9 @@ class ProcessBookingWebhook(APIView):
                     if payment_intent.payment_method_types
                     else "card"
                 ),
-                metadata={"original_stripe_metadata": metadata},
+                metadata={
+                    "original_stripe_metadata": dict(metadata) if metadata else {}
+                },
             )
 
             if charge_details:
@@ -584,12 +586,20 @@ class ProcessBookingWebhook(APIView):
                 )
                 update_fields.extend(["receipt_url", "receipt_number"])
 
+                # FIX: Properly serialize billing_details for psycopg3 compatibility
                 billing_details_obj = getattr(charge_details, "billing_details", None)
-                # FIX: Explicitly convert the StripeObject to a standard Python dict
-                # to ensure compatibility with the JSONField and database driver (psycopg3).
                 if billing_details_obj:
-                    payment_record.billing_details = dict(billing_details_obj)
-                    update_fields.append("billing_details")
+                    try:
+                        # Convert Stripe object to plain Python dict and ensure JSON serializability
+                        billing_dict = dict(billing_details_obj)
+                        # Test JSON serialization and deserialization to ensure compatibility
+                        billing_json = json.dumps(billing_dict)
+                        payment_record.billing_details = json.loads(billing_json)
+                        update_fields.append("billing_details")
+                    except (TypeError, ValueError, json.JSONDecodeError) as e:
+                        logger.warning(f"Failed to serialize billing_details: {e}")
+                        payment_record.billing_details = {}
+                        update_fields.append("billing_details")
 
                 if update_fields:
                     payment_record.save(update_fields=update_fields)
