@@ -245,13 +245,14 @@ class StripeConnectView(views.APIView):
                 f"GET Endpoint: Current DB status is '{business.stripe_account_status}'."
             )
 
-            # --- DETAILED LOGGING OF INCOMING STRIPE DATA ---
-            requirements = account.get("requirements", {})
-            disabled_reason = account.get("disabled_reason")
+            # FIX: Use attribute access, which is compatible with both the real Stripe object
+            # and the MagicMock used in testing.
+            requirements = getattr(account, "requirements", {})
+            disabled_reason = getattr(account, "disabled_reason", None)
 
-            currently_due = requirements.get("currently_due", [])
-            eventually_due = requirements.get("eventually_due", [])
-            pending_verification = requirements.get("pending_verification", [])
+            currently_due = getattr(requirements, "currently_due", [])
+            eventually_due = getattr(requirements, "eventually_due", [])
+            pending_verification = getattr(requirements, "pending_verification", [])
 
             logger.info(
                 f"GET Endpoint: Stripe Data | charges_enabled: {account.charges_enabled}"
@@ -270,21 +271,19 @@ class StripeConnectView(views.APIView):
                 f"GET Endpoint: Stripe Data | pending_verification: {pending_verification}"
             )
             logger.info(f"GET Endpoint: Stripe Data | eventually_due: {eventually_due}")
-            # --- END OF DETAILED LOGGING ---
 
             new_platform_status = "unlinked"
             is_onboarding_complete = False
-
             if (
                 account.charges_enabled
                 and account.payouts_enabled
                 and not currently_due
                 and not eventually_due
-                and not disabled_reason
+                and disabled_reason is None
             ):
                 new_platform_status = "active"
                 is_onboarding_complete = True
-            elif disabled_reason or currently_due:
+            elif disabled_reason is not None or currently_due:
                 new_platform_status = "restricted"
             elif pending_verification:
                 new_platform_status = "pending"

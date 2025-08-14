@@ -2,8 +2,8 @@
 from celery import shared_task
 from django.utils import timezone
 from datetime import timedelta
-from ..models import Booking, Reviews
-from ..utils.email_utils import send_request_for_review_email
+from quickstart.models import Booking, Reviews
+from quickstart.utils.email_utils import send_request_for_review_email
 import logging
 
 logger = logging.getLogger(__name__)

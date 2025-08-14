@@ -4,8 +4,8 @@ from django.utils import timezone
 from datetime import timedelta
 from django.core.cache import cache
 
-from ..models import Booking
-from ..utils.email_utils import send_booking_reminder_email
+from quickstart.models import Booking
+from quickstart.utils.email_utils import send_booking_reminder_email
 import logging
 
 logger = logging.getLogger(__name__)

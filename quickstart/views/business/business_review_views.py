@@ -20,7 +20,7 @@ from quickstart.serializers.business.business_review_serializers import (
     BusinessReviewSerializer,
 )
 
-from ...utils.email_utils import send_review_response_notification_email
+from quickstart.utils.email_utils import send_review_response_notification_email
 
 logger = logging.getLogger(__name__)
 

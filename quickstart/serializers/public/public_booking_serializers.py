@@ -5,6 +5,9 @@ from django.conf import settings
 from rest_framework import serializers
 from django.utils import timezone
 from django.db import transaction
+from django.db.models import Sum, Q, Value
+from django.db.models.functions import Coalesce
+from datetime import timedelta
 
 
 from rest_framework.exceptions import ValidationError as DRFValidationError
@@ -104,12 +107,10 @@ class BookingCreateSerializer(serializers.Serializer):
                             }
                         )
 
-        # --- FIX: Implement Database Lock for Race Condition Prevention ---
+        # --- FIX: Implement Database Lock and Enhanced Availability Check for Race Condition Prevention ---
         instances_to_book = []
         try:
-            # The transaction.atomic() block was moved to the view to ensure the lock is held until creation.
-            # Lock the specific ScheduleInstance row(s) for the duration of this transaction.
-            # Any other transaction trying to lock the same row will be forced to wait.
+            # The view should wrap this call in transaction.atomic()
             if initial_instance.schedule.option.booking_type == "Full Course":
                 # Lock all future instances of the course
                 locked_instances = list(
@@ -141,10 +142,33 @@ class BookingCreateSerializer(serializers.Serializer):
                     raise DRFValidationError(
                         f"Cannot book past session on {instance.date}."
                     )
-                if not instance.can_accommodate(participants_count):
+
+                # --- FIX: Replaced weak can_accommodate check with robust, atomic validation ---
+                # This check now runs inside a database transaction with a row-level lock.
+
+                # 1. Get total confirmed participants
+                confirmed_participants = Booking.objects.filter(
+                    schedule_instance=instance, status="confirmed"
+                ).aggregate(total=Coalesce(Sum("participants"), 0))["total"]
+
+                # 2. Get total participants from recent pending bookings (e.g., last 15 mins)
+                # This prevents two users from booking the same spot simultaneously before payment.
+                fifteen_minutes_ago = timezone.now() - timedelta(minutes=15)
+                recent_pending_participants = Booking.objects.filter(
+                    schedule_instance=instance,
+                    status="pending",
+                    booking_date__gte=fifteen_minutes_ago,
+                ).aggregate(total=Coalesce(Sum("participants"), 0))["total"]
+
+                total_reserved_spots = (
+                    confirmed_participants + recent_pending_participants
+                )
+                available_spots = instance.max_participants - total_reserved_spots
+
+                if participants_count > available_spots:
                     raise DRFValidationError(
                         f"Not enough spots available for the session on {instance.date}. "
-                        f"Requested: {participants_count}, Available: {instance.available_spots}."
+                        f"Requested: {participants_count}, Available: {available_spots}."
                     )
 
         except ScheduleInstance.DoesNotExist:
@@ -153,7 +177,7 @@ class BookingCreateSerializer(serializers.Serializer):
             )
         except Exception as e:
             logger.error(f"Error during booking validation lock: {e}", exc_info=True)
-            raise  # Re-raise the original exception (likely DRFValidationError)
+            raise  # Re-raise the original exception
 
         # Store the locked and validated instances in the context for the create() method.
         self.context["validated_instance"] = instances_to_book[0]

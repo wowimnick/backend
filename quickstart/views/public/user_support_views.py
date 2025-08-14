@@ -84,11 +84,10 @@ class TicketCreateSerializer(serializers.ModelSerializer):
         fields = ("subject", "category", "priority", "description")
 
     def create(self, validated_data):
-        user = self.context["request"].user
-        ticket = SupportTicket.objects.create(user=user, **validated_data)
+        ticket = SupportTicket.objects.create(**validated_data)
         TicketMessage.objects.create(
             ticket=ticket,
-            sender=user,
+            sender=validated_data["user"],  # Use the user from the validated data
             sender_type="user",
             text=validated_data["description"],
         )

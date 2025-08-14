@@ -554,21 +554,46 @@ class ProcessBookingWebhook(APIView):
             )
 
             if charge_details:
-                card_details = charge_details.get("payment_method_details", {}).get(
-                    "card"
-                )
-                if card_details:
-                    payment_record.card_brand = card_details.get("brand")
-                    payment_record.card_last4 = card_details.get("last4")
-                    payment_record.card_exp_month = card_details.get("exp_month")
-                    payment_record.card_exp_year = card_details.get("exp_year")
+                # FIX: Use attribute access for Stripe objects and handle nested structure
+                # This makes the code compatible with both the real Stripe object and MagicMock.
+                update_fields = []
 
-                payment_record.receipt_url = charge_details.get("receipt_url")
-                payment_record.receipt_number = charge_details.get("receipt_number")
-                payment_record.billing_details = (
-                    charge_details.get("billing_details") or {}
+                pm_details = getattr(charge_details, "payment_method_details", None)
+                if pm_details and getattr(pm_details, "type", None) == "card":
+                    card_obj = getattr(pm_details, "card", None)
+                    if card_obj:
+                        payment_record.card_brand = getattr(card_obj, "brand", None)
+                        payment_record.card_last4 = getattr(card_obj, "last4", None)
+                        payment_record.card_exp_month = getattr(
+                            card_obj, "exp_month", None
+                        )
+                        payment_record.card_exp_year = getattr(
+                            card_obj, "exp_year", None
+                        )
+                        update_fields.extend(
+                            [
+                                "card_brand",
+                                "card_last4",
+                                "card_exp_month",
+                                "card_exp_year",
+                            ]
+                        )
+
+                payment_record.receipt_url = getattr(
+                    charge_details, "receipt_url", None
                 )
-                payment_record.save()
+                payment_record.receipt_number = getattr(
+                    charge_details, "receipt_number", None
+                )
+                update_fields.extend(["receipt_url", "receipt_number"])
+
+                billing_details_obj = getattr(charge_details, "billing_details", None)
+                if billing_details_obj and hasattr(billing_details_obj, "to_dict"):
+                    payment_record.billing_details = billing_details_obj.to_dict()
+                    update_fields.append("billing_details")
+
+                if update_fields:
+                    payment_record.save(update_fields=update_fields)
 
             logger.info(
                 f"Booking Webhook - Created Payment record {payment_record.id} for PI {payment_intent.id}"

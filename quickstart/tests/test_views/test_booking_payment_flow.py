@@ -206,7 +206,7 @@ class BookingFlowTests(APITestCase):
         response = self.client.post(url, data, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("Cannot book past sessions", str(response.data))
+        self.assertIn("Cannot book past session", str(response.data))
         print("✅ PASSED: Booking correctly fails for a past class.")
 
     def test_student_can_view_own_bookings(self):
@@ -488,15 +488,19 @@ class PaymentFlowTests(APITestCase):
         mock_event.data.object = mock_payment_intent_object
         mock_construct_event.return_value = mock_event
 
-        # FIX: Create a more realistic mock for the charge object
+        # FIX: Create a more realistic mock for the charge object that mirrors
+        # the nested structure of the actual Stripe API response.
         mock_charge = MagicMock()
         mock_charge.receipt_url = "http://example.com/receipt"
         mock_charge.receipt_number = "test_receipt_123"
-        # This is the key fix: mock the nested structure
+        # This mocks the .to_dict() method call on the billing_details object
         mock_charge.billing_details.to_dict.return_value = {
             "name": "Test User",
             "email": "test@example.com",
+            "phone": "555-555-5555",
+            "address": {"city": "Testville", "country": "US"},
         }
+        # This mocks the deeply nested card details structure
         mock_charge.payment_method_details = MagicMock(
             type="card",
             card=MagicMock(brand="visa", last4="4242", exp_month=12, exp_year=2030),
@@ -514,10 +518,12 @@ class PaymentFlowTests(APITestCase):
         self.assertEqual(booking.status, "confirmed")
         payment = Payment.objects.get(stripe_payment_intent_id=payment_intent_id)
         self.assertEqual(payment.status, "succeeded")
-        # Check that the mocked billing details were saved
+        # Check that the mocked nested details were saved correctly
         self.assertEqual(payment.billing_details.get("name"), "Test User")
+        self.assertEqual(payment.card_brand, "visa")
+        self.assertEqual(payment.card_last4, "4242")
 
-        # Check idempotency
+        # Check idempotency: processing the same event again should not create new objects
         response_2 = self.client.post(url, data={}, format="json")
         self.assertEqual(response_2.status_code, status.HTTP_200_OK)
         self.assertEqual(Booking.objects.count(), 1)

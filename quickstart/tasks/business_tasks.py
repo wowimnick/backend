@@ -4,8 +4,8 @@ from datetime import timedelta
 from django.db.models import Sum, Count
 from decimal import Decimal
 
-from ..models import BusinessInfo, Booking
-from ..utils.email_utils import send_performance_summary_email
+from quickstart.models import BusinessInfo, Booking
+from quickstart.utils.email_utils import send_performance_summary_email
 import logging
 
 logger = logging.getLogger(__name__)
