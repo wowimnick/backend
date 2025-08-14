@@ -70,7 +70,12 @@ from quickstart.serializers import (
     PublicClassDetailSerializer,
 )
 from django.contrib.gis.geos import Point
-from django.contrib.gis.db.models.functions import Distance
+
+# --- MODIFICATION START ---
+# Added GeomFromText to the imports to explicitly handle geometry conversion.
+from django.contrib.gis.db.models.functions import Distance, GeomFromText
+
+# --- MODIFICATION END ---
 from django.contrib.gis.measure import D  # D is for Distance object
 
 logger = logging.getLogger(__name__)
@@ -612,10 +617,20 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             # --- 5. Annotation and Sorting ---
             queryset = self._calculate_relevance_score(queryset)
 
+            # --- MODIFICATION START ---
+            # This block is modified to work correctly with psycopg2-binary.
             if user_location_point:
-                queryset = queryset.annotate(
-                    distance=Distance("point", user_location_point)
+                # FIX for psycopg2: Explicitly convert the Point object to a geometry
+                # expression using GeomFromText. This prevents psycopg2 from incorrectly
+                # serializing the Python Point object into an invalid SQL string.
+                # We use the point's Well-Known Text (WKT) representation and SRID.
+                point_expression = GeomFromText(
+                    user_location_point.wkt, srid=user_location_point.srid
                 )
+                queryset = queryset.annotate(
+                    distance=Distance("point", point_expression)
+                )
+            # --- MODIFICATION END ---
 
             # --- MODIFICATION: Do not sort by distance if it's a wide province search without a user point ---
             if sort_by == "distance" and user_location_point:
