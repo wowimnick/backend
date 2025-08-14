@@ -554,30 +554,27 @@ class ProcessBookingWebhook(APIView):
             )
 
             if charge_details:
-                # FIX: Use attribute access for Stripe objects and handle nested structure
-                # This makes the code compatible with both the real Stripe object and MagicMock.
                 update_fields = []
-
-                pm_details = getattr(charge_details, "payment_method_details", None)
-                if pm_details and getattr(pm_details, "type", None) == "card":
-                    card_obj = getattr(pm_details, "card", None)
-                    if card_obj:
-                        payment_record.card_brand = getattr(card_obj, "brand", None)
-                        payment_record.card_last4 = getattr(card_obj, "last4", None)
-                        payment_record.card_exp_month = getattr(
-                            card_obj, "exp_month", None
-                        )
-                        payment_record.card_exp_year = getattr(
-                            card_obj, "exp_year", None
-                        )
-                        update_fields.extend(
-                            [
-                                "card_brand",
-                                "card_last4",
-                                "card_exp_month",
-                                "card_exp_year",
-                            ]
-                        )
+                card_details = getattr(
+                    getattr(charge_details, "payment_method_details", {}), "card", None
+                )
+                if card_details:
+                    payment_record.card_brand = getattr(card_details, "brand", None)
+                    payment_record.card_last4 = getattr(card_details, "last4", None)
+                    payment_record.card_exp_month = getattr(
+                        card_details, "exp_month", None
+                    )
+                    payment_record.card_exp_year = getattr(
+                        card_details, "exp_year", None
+                    )
+                    update_fields.extend(
+                        [
+                            "card_brand",
+                            "card_last4",
+                            "card_exp_month",
+                            "card_exp_year",
+                        ]
+                    )
 
                 payment_record.receipt_url = getattr(
                     charge_details, "receipt_url", None
@@ -588,8 +585,10 @@ class ProcessBookingWebhook(APIView):
                 update_fields.extend(["receipt_url", "receipt_number"])
 
                 billing_details_obj = getattr(charge_details, "billing_details", None)
-                if billing_details_obj and hasattr(billing_details_obj, "to_dict"):
-                    payment_record.billing_details = billing_details_obj.to_dict()
+                # FIX: Explicitly convert the StripeObject to a standard Python dict
+                # to ensure compatibility with the JSONField and database driver (psycopg3).
+                if billing_details_obj:
+                    payment_record.billing_details = dict(billing_details_obj)
                     update_fields.append("billing_details")
 
                 if update_fields:
