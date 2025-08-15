@@ -3,7 +3,7 @@ import logging
 from django.dispatch import receiver
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.db.models import Sum, Value, IntegerField
+from django.db.models import Sum, Value, IntegerField, Q
 from django.db.models.functions import Coalesce
 
 from allauth.account.signals import email_changed
@@ -12,6 +12,10 @@ from django.db.models.signals import pre_save, post_save
 from django.dispatch import receiver
 from django.contrib.contenttypes.models import ContentType
 from django.utils import timezone
+
+
+from django.contrib.auth.models import Permission
+
 from django.core.cache import cache
 from .models import (
     Booking,
@@ -23,7 +27,7 @@ from .models import (
     ClassesMain,
     ClassOption,
     Schedule,
-    ScheduleInstance,
+    VerificationRequest,
     Payout,
 )
 
@@ -33,7 +37,6 @@ try:
         send_account_security_email,
         send_class_nearing_full_email,
         send_bulk_templated_emails,
-        send_favorited_class_new_dates_email,
         send_payout_initiated_email,
     )
 except ImportError:
@@ -54,12 +57,6 @@ except ImportError:
 
     def send_bulk_templated_emails(*args, **kwargs):
         logging.getLogger(__name__).warning("Dummy send_bulk_templated_emails called.")
-        pass
-
-    def send_favorited_class_new_dates_email(*args, **kwargs):
-        logging.getLogger(__name__).warning(
-            "Dummy send_favorited_class_new_dates_email called."
-        )
         pass
 
     def send_payout_initiated_email(*args, **kwargs):
@@ -594,6 +591,8 @@ def notify_users_of_new_schedule(sender, instance: Schedule, created, **kwargs):
     After a new Schedule is created, find users who have favorited the parent
     class and send them a bulk email notification.
     """
+    from .utils.email_utils import send_favorited_class_new_dates_email
+
     if not created:
         return
 
@@ -616,27 +615,24 @@ def notify_users_of_new_schedule(sender, instance: Schedule, created, **kwargs):
         if not users_who_favorited.exists():
             return
 
-        email_data_list = [
-            {
-                "recipient_list": [user.email],
-                "template_name": "emails/user_favorited_class_new_dates.html",
-                "context": {
-                    "user": user,
-                    "class_main": class_main,
-                    "new_schedule": instance,
-                    "class_url": f"{settings.FRONTEND_BASE_URL}/classes/{class_main.slug or class_main.classId}",
-                },
-                "subject": f"New Dates Available for a Class You Like: {class_main.title}",
-            }
-            for user in users_who_favorited
-            if user.email
-        ]
+        # --- MODIFIED BLOCK ---
+        # The complex email_data_list and call to send_bulk_templated_emails has been replaced
+        # with a simple loop that calls the correct, direct email utility function.
 
-        if email_data_list:
-            send_bulk_templated_emails(email_data_list)
+        sent_count = 0
+        for user in users_who_favorited:
+            if user.email:
+                # This is the correct, direct utility function to use.
+                send_favorited_class_new_dates_email(
+                    user=user, class_main=class_main, new_schedule=instance
+                )
+                sent_count += 1
+
+        if sent_count > 0:
             logger.info(
-                f"Queued {len(email_data_list)} 'favorite class new dates' emails for class {class_main.classId}."
+                f"Queued {sent_count} 'favorite class new dates' emails for class {class_main.classId}."
             )
+        # --- END MODIFIED BLOCK ---
 
     except Exception as e:
         logger.error(
@@ -666,5 +662,62 @@ def send_payout_notification(sender, instance: Payout, created, **kwargs):
     except Exception as e:
         logger.error(
             f"Error in send_payout_notification signal for Payout {instance.id}: {e}",
+            exc_info=True,
+        )
+
+
+@receiver(post_save, sender=VerificationRequest)
+def notify_admins_on_new_verification(sender, instance, created, **kwargs):
+    """
+    Sends a notification to admins when a new verification request is created.
+    """
+    from .utils.email_utils import send_admin_new_verification_request_email
+
+    # Only run this logic when a VerificationRequest is first created.
+    if not created:
+        return
+
+    logger.info(
+        f"Signal 'notify_admins_on_new_verification' triggered for VerificationRequest ID: {instance.id}"
+    )
+
+    try:
+        # This logic is copied directly from your verification_views.py
+        content_type = ContentType.objects.get_for_model(VerificationRequest)
+        admin_perm_codename = "process_verificationrequest"
+        admin_perm = Permission.objects.get(
+            content_type=content_type, codename=admin_perm_codename
+        )
+
+        admin_users = (
+            User.objects.filter(
+                Q(is_superuser=True)
+                | Q(groups__permissions=admin_perm)
+                | Q(user_permissions=admin_perm)
+            )
+            .filter(is_active=True, email__isnull=False)
+            .exclude(email="")
+            .distinct()
+        )
+        admin_emails = list(admin_users.values_list("email", flat=True))
+
+        if admin_emails:
+            # Call the email utility function
+            send_admin_new_verification_request_email(admin_emails, instance)
+            logger.info(
+                f"Admin notification queued via SIGNAL for new verification request {instance.id} to {len(admin_emails)} admins."
+            )
+        else:
+            logger.warning(
+                f"SIGNAL: No active admin users found with '{admin_perm_codename}' permission to notify about verification {instance.id}"
+            )
+
+    except Permission.DoesNotExist:
+        logger.error(
+            f"SIGNAL CRITICAL: Permission '{admin_perm_codename}' not found. Cannot notify admins about new verification request."
+        )
+    except Exception as e:
+        logger.error(
+            f"SIGNAL ERROR: Failed to send admin notification email for new verification {instance.id}: {e}",
             exc_info=True,
         )

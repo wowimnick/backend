@@ -245,17 +245,17 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": crontab(hour=4, minute=0),
     },
     "send-daily-review-requests": {
-        "task": "quickstart.tasks.user_tasks.send_pending_review_requests",
+        "task": "quickstart.tasks.send_pending_review_requests",
         "schedule": crontab(hour=5, minute=0),  # Every day at 5 AM UTC
     },
     "send-weekly-performance-summaries": {
-        "task": "quickstart.tasks.business_tasks.send_weekly_performance_summaries",
+        "task": "quickstart.tasks.end_weekly_performance_summaries",
         "schedule": crontab(
             day_of_week="monday", hour=8, minute=0
         ),  # Every Monday at 8 AM UTC
     },
     "send-hourly-booking-reminders": {
-        "task": "quickstart.tasks.booking_tasks.send_upcoming_booking_reminders",
+        "task": "quickstart.tasks.send_upcoming_booking_reminders",
         "schedule": crontab(minute=0, hour="*"),  # Run at the start of every hour
     },
 }

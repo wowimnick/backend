@@ -1,4 +1,4 @@
-# Create a new file: views/user/favorite_views.py
+# quickstart/views/user/favorite_views.py
 import logging
 from decimal import Decimal
 
@@ -12,6 +12,7 @@ from django.db.models import (
     IntegerField,
 )
 from django.db.models.functions import Coalesce
+from django.utils import timezone  # FIX: Import timezone
 
 from rest_framework import generics, permissions
 from rest_framework.pagination import PageNumberPagination
@@ -30,7 +31,30 @@ class FavoritesPagination(PageNumberPagination):
     max_page_size = 48
 
 
-# Consider refactoring these into a Manager method on ClassesMain later for DRYness
+# FIX: Replaced the single min_price subquery with the more specific ones
+# from the public class view to ensure consistency with the serializer.
+MIN_SESSION_PRICE_SUBQUERY = Subquery(
+    Schedule.objects.filter(
+        option__classId=OuterRef("pk"),
+        option__booking_type="Single Session",
+        date__gte=timezone.now().date(),
+    )
+    .order_by("price")
+    .values("price")[:1],
+    output_field=DecimalField(max_digits=10, decimal_places=2),
+)
+
+MIN_COURSE_PRICE_SUBQUERY = Subquery(
+    Schedule.objects.filter(
+        option__classId=OuterRef("pk"),
+        option__booking_type="Full Course",
+        end_date__gte=timezone.now().date(),
+    )
+    .order_by("price")
+    .values("price")[:1],
+    output_field=DecimalField(max_digits=10, decimal_places=2),
+)
+
 AVERAGE_RATING_SUBQUERY = Subquery(
     Reviews.objects.filter(classId=OuterRef("pk"), status="approved")
     .values("classId")
@@ -44,14 +68,6 @@ REVIEW_COUNT_SUBQUERY = Subquery(
     .annotate(count=Count("reviewId"))
     .values("count")[:1],
     output_field=IntegerField(),
-)
-MIN_PRICE_SUBQUERY = Subquery(
-    Schedule.objects.filter(
-        option__classId=OuterRef("pk"),
-    )
-    .order_by("price")
-    .values("price")[:1],
-    output_field=DecimalField(max_digits=10, decimal_places=2),
 )
 
 
@@ -85,10 +101,12 @@ class MyFavoritesListView(generics.ListAPIView):
                 businessId__verificationStatus="verified",
             )
             .annotate(
-                # Apply the same annotations as the public view for consistency
+                # FIX: Changed annotations to provide min_session_price and
+                # min_course_price, which the PublicClassSerializer expects.
                 average_rating=Coalesce(AVERAGE_RATING_SUBQUERY, Value(Decimal("0.0"))),
                 review_count=Coalesce(REVIEW_COUNT_SUBQUERY, Value(0)),
-                min_price=Coalesce(MIN_PRICE_SUBQUERY, None),
+                min_session_price=Coalesce(MIN_SESSION_PRICE_SUBQUERY, None),
+                min_course_price=Coalesce(MIN_COURSE_PRICE_SUBQUERY, None),
             )
             .order_by("-favorited_by_records__createdAt")
         )  # Order by when the user favorited it
