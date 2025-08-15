@@ -181,8 +181,6 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         self.check_object_permissions(self.request, obj)
         return obj
 
-    @method_decorator(cache_page(60 * 15))
-    @method_decorator(vary_on_headers("Authorization"))
     def retrieve(self, request, *args, **kwargs):
         return super().retrieve(request, *args, **kwargs)
 

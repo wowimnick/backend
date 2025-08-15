@@ -87,12 +87,16 @@ def send_transactional_email_task(self, **kwargs):
         if isinstance(to_recipients, str):
             to_recipients = [to_recipients]
 
+        # --- MODIFIED BLOCK ---
+        # The key for the sender's email is changed from "from" to "from_email"
+        # to avoid Python's reserved keyword conflict.
         params = {
-            "from": kwargs.get("from", settings.DEFAULT_FROM_EMAIL),
+            "from": kwargs.get("from_email", settings.DEFAULT_FROM_EMAIL),
             "to": to_recipients,
             "subject": kwargs.get("subject", "Notification from ClassEasily"),
             "html": kwargs.get("html", ""),
         }
+        # --- END MODIFIED BLOCK ---
 
         # Add optional parameters if present
         if kwargs.get("text"):
@@ -103,6 +107,7 @@ def send_transactional_email_task(self, **kwargs):
             params["reply_to"] = kwargs["reply_to"]
 
         # Log the email parameters for debugging (without sensitive data)
+        # Updated to use the correct key for the 'from' field in logging.
         logger.debug(
             f"Sending email with params: to={params['to']}, subject='{params['subject'][:50]}...', from={params['from']}"
         )
@@ -167,13 +172,16 @@ def send_email_task(self, recipient_list, subject, message, from_email=None, **k
     """
     html_message = kwargs.get("html_message", message)
 
+    # --- MODIFIED ---
+    # Changed the keyword argument from "from" to "from_email".
     return send_transactional_email_task.delay(
         to=recipient_list,
         subject=subject,
         html=html_message,
         text=message,
-        **{"from": from_email or settings.DEFAULT_FROM_EMAIL},
+        from_email=from_email or settings.DEFAULT_FROM_EMAIL,
     )
+    # --- END MODIFIED ---
 
 
 # Batch email sending for multiple emails with automatic rate limiting

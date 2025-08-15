@@ -257,10 +257,10 @@ def send_templated_email(
         # FIX: Use correct parameter names that match the task signature
         task_kwargs = {
             "subject": subject,
-            "html": html_content,  # Changed from html_content to html
-            "to": recipient_list,  # Changed from to_list to to
-            "from": from_email
-            or settings.DEFAULT_FROM_EMAIL,  # Changed from from_email to from
+            "html": html_content,
+            "to": recipient_list,
+            "from_email": from_email
+            or settings.DEFAULT_FROM_EMAIL,  # FIX: Changed "from" to "from_email"
         }
 
         # Add attachments if provided
@@ -693,7 +693,7 @@ def send_admin_new_verification_request_email(
         f"Preparing new verification request notification email for request {verification_request.id} to admins: {admin_recipient_list}"
     )
 
-    verification_url = f"{settings.FRONTEND_BASE_URL}/admin/user-management"
+    verification_url = f"{settings.FRONTEND_BASE_URL}/admin/business-verification"
 
     context = {
         "verification_request": verification_request,
