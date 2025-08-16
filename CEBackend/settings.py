@@ -68,7 +68,6 @@ CORS_EXPOSE_HEADERS = ["Content-Type", "X-CSRFToken"]
 IS_DEPLOYED_ENV = os.environ.get("DJANGO_ENV") in ["staging", "prod"]
 COOKIE_DOMAIN = ".classeasily.com" if IS_DEPLOYED_ENV else None
 
-# Secure cookie settings for deployed environments
 SESSION_COOKIE_DOMAIN = COOKIE_DOMAIN
 SESSION_COOKIE_SECURE = IS_DEPLOYED_ENV
 CSRF_COOKIE_DOMAIN = COOKIE_DOMAIN

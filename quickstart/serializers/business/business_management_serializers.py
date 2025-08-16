@@ -393,7 +393,6 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
         max_digits=3, decimal_places=1, read_only=True
     )
 
-    # MODIFIED: Accept an S3 key string for updates
     businessImage = serializers.CharField(
         source="businessImage_s3_key", write_only=True, required=False, allow_null=True
     )
@@ -410,13 +409,13 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = BusinessInfo
-        # MODIFIED: 'businessImage' is now write-only
+        # MODIFIED: Added businessCity, businessState, and businessZipCode to fields
         fields = [
             "businessId",
             "businessName",
             "businessType",
             "businessDescription",
-            "businessImage",  # This is the write-only field
+            "businessImage",
             "business_image_medium_url",
             "website",
             "business_timezone",
@@ -426,6 +425,9 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "studentContactEmail",
             "studentContactPhone",
             "businessAddress",
+            "businessCity",  # ADDED
+            "businessState",  # ADDED
+            "businessZipCode",  # ADDED
             "latitude",
             "longitude",
             "showExactLocation",
@@ -483,6 +485,10 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "tags_keywords": {"required": False, "allow_null": True},
             "founding_year": {"required": False, "allow_null": True},
             "businessAddress": {"required": False, "allow_blank": True},
+            # MODIFIED: Added kwargs for the new location fields to make them writeable
+            "businessCity": {"required": False, "allow_blank": True},
+            "businessState": {"required": False, "allow_blank": True},
+            "businessZipCode": {"required": False, "allow_blank": True},
             "latitude": {"required": False, "allow_null": True},
             "longitude": {"required": False, "allow_null": True},
             "openingTime": {"required": False, "allow_null": True},
