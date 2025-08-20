@@ -374,7 +374,12 @@ class BulkScheduleCreateSerializer(serializers.Serializer):
             )
         user = request.user
         option = data["option"]
-        business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
+
+        business = BusinessInfo.objects.filter(
+            Q(owner=user)
+            | Q(staff_members__user=user, staff_members__status="accepted")
+        ).first()
+
         if not business or option.classId.businessId != business:
             raise PermissionDenied(
                 "You do not have permission to create schedules for this class option."

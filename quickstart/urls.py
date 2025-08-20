@@ -94,6 +94,10 @@ from quickstart.views import (
     PublicBlogCategoryViewSet,
     BusinessDiscountViewSet,
     BusinessPayoutViewSet,
+    BusinessStaffViewSet,
+    AcceptStaffInvitationView,
+    BusinessRoleViewSet,
+    ValidateInvitationTokenView,
 )
 
 # =============================================================================
@@ -123,6 +127,12 @@ business_management_router.register(
 )
 business_management_router.register(
     r"discounts", BusinessDiscountViewSet, basename="business-discount"
+)
+business_management_router.register(
+    r"staff", BusinessStaffViewSet, basename="business-staff"
+)
+business_management_router.register(
+    r"roles", BusinessRoleViewSet, basename="business-role"
 )
 business_management_router.register(
     r"reviews", BusinessReviewViewSet, basename="business-review"
@@ -309,6 +319,16 @@ urlpatterns = [
         "business-stats/",
         BusinessDashboardViewSet.as_view({"get": "list"}),
         name="business-stats-list",
+    ),
+    path(
+        "business/validate-invitation/",
+        ValidateInvitationTokenView.as_view(),
+        name="validate-staff-invitation",
+    ),
+    path(
+        "business/accept-invitation/",
+        AcceptStaffInvitationView.as_view(),
+        name="accept-staff-invitation",
     ),
     path(
         "my-business/overview/",

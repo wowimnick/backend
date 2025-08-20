@@ -16,6 +16,7 @@ from CEBackend.celery import app as celery_app
 
 from ..models import (
     Booking,
+    BusinessStaff,
     CustomUser,
     Reviews,
     SupportTicket,
@@ -299,6 +300,34 @@ def send_templated_email(
             f"⚠️ A fallback email was sent to {recipient_list} due to a template rendering error. Task ID: {task_result.id}"
         )
         return task_result
+
+
+def send_business_staff_invitation_email(invitation: BusinessStaff):
+    """Sends an invitation email to a new potential staff member."""
+    if not invitation or not invitation.invited_email:
+        logger.warning(
+            "Attempted to send staff invitation with invalid invitation object."
+        )
+        return
+
+    logger.info(f"Preparing staff invitation email for {invitation.invited_email}")
+
+    accept_url = f"{settings.FRONTEND_BASE_URL}/join-business?token={invitation.invitation_token}"
+
+    context = {
+        "inviter_name": invitation.invited_by.get_full_name(),
+        "business_name": invitation.business.businessName,
+        "role_name": invitation.role.name,
+        "accept_url": accept_url,
+        "recipient_email": invitation.invited_email,
+    }
+
+    send_templated_email(
+        recipient_list=[invitation.invited_email],
+        template_name="emails/business_staff_invitation.html",
+        context=context,
+        subject=f"You're invited to join {invitation.business.businessName} on ClassEasily",
+    )
 
 
 def send_bulk_templated_emails(email_data_list, delay_between_batches=1.0):

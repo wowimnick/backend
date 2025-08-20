@@ -59,31 +59,7 @@ from quickstart.utils.email_utils import send_booking_cancelled_by_other_email
 import logging
 
 logger = logging.getLogger(__name__)
-
-
-# --- Permissions and Pagination (Assumed to be defined as before) ---
-class CanViewOwnBusinessBookings(BasePermission):
-    message = "You do not have permission to view bookings for this business."
-
-    def has_permission(self, request, view):
-        user = request.user
-        if not user or not user.is_authenticated:
-            return False
-        has_base_perm = user.has_perm("quickstart.view_own_business_bookings")
-        has_business = BusinessInfo.objects.filter(
-            Q(owner=user) | Q(managers=user)
-        ).exists()
-        return has_base_perm and has_business
-
-    def has_object_permission(self, request, view, obj):  # obj is Booking instance
-        user = request.user
-        business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
-        if not business:
-            return False
-        try:
-            return obj.schedule_instance.schedule.option.classId.businessId == business
-        except AttributeError:
-            return False
+from quickstart.utils.permissions import CanViewOwnBusinessBookings
 
 
 class CanManageOwnBusinessBookings(BasePermission):
@@ -97,12 +73,18 @@ class CanManageOwnBusinessBookings(BasePermission):
         return (
             user.has_perm("quickstart.view_own_business_bookings")
             and user.has_perm("quickstart.cancel_business_booking")
-            and BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).exists()
+            and BusinessInfo.objects.filter(
+                Q(owner=user)
+                | Q(staff_members__user=user, staff_members__status="accepted")
+            ).first()
         )
 
     def has_object_permission(self, request, view, obj):  # obj is Booking instance
         user = request.user
-        business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
+        business = BusinessInfo.objects.filter(
+            Q(owner=user)
+            | Q(staff_members__user=user, staff_members__status="accepted")
+        ).first()
         if not business:
             return False
         try:
@@ -150,9 +132,10 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
     def get_business_context(self):
         user = self.request.user
         try:
-            business = BusinessInfo.objects.filter(owner=user).first()
-            if not business:
-                business = BusinessInfo.objects.filter(managers=user).first()
+            business = BusinessInfo.objects.filter(
+                Q(owner=user)
+                | Q(staff_members__user=user, staff_members__status="accepted")
+            ).first()
             if not business:
                 raise PermissionDenied(
                     "You are not associated with an active business."
@@ -162,17 +145,34 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
             raise PermissionDenied("You are not associated with a business.")
 
     def get_queryset(self):
-        business = self.get_business_context()
-        queryset = Booking.objects.filter(
-            schedule_instance__schedule__option__classId__businessId=business
-        ).select_related(
-            "schedule_instance__schedule__option__classId__businessId",
-            "schedule_instance__schedule__option__classId",
-            "schedule_instance__schedule__option",
-            "user",
+        """
+        This view returns a list of all bookings for the business
+        associated with the currently authenticated user (owner or staff).
+        """
+        user = self.request.user
+
+        business = BusinessInfo.objects.filter(
+            Q(owner=user)
+            | Q(staff_members__user=user, staff_members__status="accepted")
+        ).first()
+
+        if not business:
+            logger.warning(
+                f"User {user.email} tried to access business bookings but is not associated with any business."
+            )
+            return Booking.objects.none()
+
+        # Filter bookings to only those that belong to the user's business.
+        return (
+            Booking.objects.filter(
+                schedule_instance__schedule__option__classId__businessId=business
+            )
+            .select_related(
+                "user",
+                "schedule_instance__schedule__option__classId",
+            )
+            .order_by("-booking_date")
         )
-        queryset = self._apply_business_filters(queryset, self.request)
-        return queryset.distinct()
 
     def _apply_business_filters(self, queryset, request):
         status_param = request.query_params.get("status")

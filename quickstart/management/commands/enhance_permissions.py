@@ -28,7 +28,6 @@ class Command(BaseCommand):
             "socialaccount",
             "authtoken",
             "token_blacklist",
-            # Add other third-party apps if needed
         ]
 
         # Get content types to exclude based on app labels
@@ -37,11 +36,14 @@ class Command(BaseCommand):
         with transaction.atomic():
             # --- Create/Update Permission Groups ---
             self.stdout.write("Creating/Updating Permission Groups...")
+
+            # --- PLATFORM ADMIN GROUPS (For main admin panel) ---
             user_group, _ = PermissionGroup.objects.update_or_create(
                 name="User Management",
                 defaults={
                     "description": "Permissions related to user accounts and roles",
                     "sort_order": 1,
+                    "ui_category": None,  # Ensure this is not a business UI group
                 },
             )
             business_group, _ = PermissionGroup.objects.update_or_create(
@@ -49,42 +51,39 @@ class Command(BaseCommand):
                 defaults={
                     "description": "Permissions related to platform-wide business administration",
                     "sort_order": 2,
-                },  # Renamed for clarity
+                    "ui_category": None,
+                },
             )
             class_group, _ = PermissionGroup.objects.update_or_create(
                 name="Class Admin",
                 defaults={
                     "description": "Permissions related to platform-wide class/category administration",
                     "sort_order": 3,
-                },  # Renamed for clarity
+                    "ui_category": None,
+                },
             )
             booking_group, _ = PermissionGroup.objects.update_or_create(
                 name="Booking Admin",
                 defaults={
                     "description": "Permissions related to platform-wide booking administration",
                     "sort_order": 4,
-                },  # Renamed for clarity
+                    "ui_category": None,
+                },
             )
             payout_group, _ = PermissionGroup.objects.update_or_create(
                 name="Payout Admin",
                 defaults={
                     "description": "Permissions related to business payouts and financial transfers.",
-                    "sort_order": 5,  # Adjust sort order as needed
+                    "sort_order": 5,
+                    "ui_category": None,
                 },
             )
             notification_group, _ = PermissionGroup.objects.update_or_create(
                 name="Notification Management",
                 defaults={
                     "description": "Permissions related to notifications and segments",
-                    "sort_order": 5,
-                },
-            )
-            # NEW Group for Business User Permissions
-            business_users_group, _ = PermissionGroup.objects.update_or_create(
-                name="Business User",
-                defaults={
-                    "description": "Permissions related to managing one's own business",
                     "sort_order": 6,
+                    "ui_category": None,
                 },
             )
             content_group, _ = PermissionGroup.objects.update_or_create(
@@ -92,6 +91,7 @@ class Command(BaseCommand):
                 defaults={
                     "description": "Permissions related to managing blog posts, categories, and other site content.",
                     "sort_order": 7,
+                    "ui_category": None,
                 },
             )
             system_group, _ = PermissionGroup.objects.update_or_create(
@@ -99,10 +99,31 @@ class Command(BaseCommand):
                 defaults={
                     "description": "Permissions related to system settings, moderation, and administration",
                     "sort_order": 99,
+                    "ui_category": None,
                 },
             )
+
+            # --- NEW: BUSINESS UI GROUPS (for Role Editor Tabs) ---
+            self.stdout.write("Creating/Updating Business UI Permission Groups...")
+            biz_profile_staff_group, _ = PermissionGroup.objects.update_or_create(
+                name="Profile & Staff",
+                defaults={"sort_order": 10, "ui_category": "business_role_editor"},
+            )
+            biz_classes_schedule_group, _ = PermissionGroup.objects.update_or_create(
+                name="Classes & Schedule",
+                defaults={"sort_order": 11, "ui_category": "business_role_editor"},
+            )
+            biz_finance_analytics_group, _ = PermissionGroup.objects.update_or_create(
+                name="Finance & Analytics",
+                defaults={"sort_order": 12, "ui_category": "business_role_editor"},
+            )
+            biz_student_engagement_group, _ = PermissionGroup.objects.update_or_create(
+                name="Student Engagement",
+                defaults={"sort_order": 13, "ui_category": "business_role_editor"},
+            )
+
             # --- Define Explicit Descriptions & Custom Permissions ---
-            # This dictionary is now the ONLY source for which permissions get enhanced.
+            # This dictionary is the ONLY source for which permissions get enhanced.
             descriptions = {
                 # --- User Management (Platform Admins) ---
                 "view_customuser": {
@@ -424,75 +445,6 @@ class Command(BaseCommand):
                     "description": "Delete notification attachments",
                     "is_sensitive": True,
                 },
-                # --- Business User Permissions (Assigned to Business Roles) ---
-                "manage_own_classes": {
-                    "group": business_users_group,
-                    "description": "Create/edit classes, options, schedules for own business",
-                },
-                "manage_own_business_discounts": {
-                    "group": business_users_group,
-                    "description": "Create, edit, and manage discounts and coupons for own business",
-                },
-                "manage_own_schedule_instances": {
-                    "group": business_users_group,
-                    "description": "Manage instances (attendance, cancel) for own classes",
-                },
-                "view_own_business_bookings": {
-                    "group": business_users_group,
-                    "description": "View bookings for own business",
-                },
-                "manage_own_business_profile": {
-                    "group": business_users_group,
-                    "description": "Edit own business profile details",
-                },
-                "manage_business_staff": {
-                    "group": business_users_group,
-                    "description": "Manage staff (instructors, managers) for own business",
-                },
-                "access_business_dashboard": {
-                    "group": business_users_group,
-                    "description": "Access the dashboard for managing their own business",
-                },
-                "view_business_revenue_analytics": {
-                    "group": business_users_group,
-                    "description": "View revenue analytics for own business",
-                },
-                "export_business_revenue_data": {
-                    "group": business_users_group,
-                    "description": "Export revenue data for own business",
-                },
-                "view_business_students": {
-                    "group": business_users_group,
-                    "description": "View students associated with own business",
-                },
-                "view_own_business_reviews": {
-                    "group": business_users_group,
-                    "description": "View reviews for own business",
-                },
-                "add_business_review_response": {
-                    "group": business_users_group,
-                    "description": "Add response to reviews for own business",
-                },
-                "add_studentnote": {
-                    "group": business_users_group,
-                    "description": "Add notes to students associated with own business",
-                },
-                "view_studentnote": {
-                    "group": business_users_group,
-                    "description": "View notes for students associated with own business",
-                },
-                "mark_booking_attendance": {
-                    "group": business_users_group,
-                    "description": "Mark attendance for bookings in own business",
-                },
-                "view_own_booking_analytics": {
-                    "group": business_users_group,
-                    "description": "View booking analytics for own business",
-                },
-                "cancel_business_booking": {
-                    "group": business_users_group,
-                    "description": "Cancel bookings within own business (e.g., requested by student)",
-                },
                 # --- Payout Admin (Platform Admins) ---
                 "access_payout_admin": {
                     "group": payout_group,
@@ -527,6 +479,21 @@ class Command(BaseCommand):
                     "description": "Delete a payout record (Use with extreme caution)",
                     "is_sensitive": True,
                     "requires_mfa": True,
+                },
+                # --- Content Management (Platform Admins) ---
+                "manage_blog_posts": {
+                    "group": content_group,
+                    "description": "Can create, edit, publish, and delete blog posts.",
+                    "is_sensitive": True,
+                },
+                "manage_blog_categories": {
+                    "group": content_group,
+                    "description": "Can create, edit, and delete blog categories.",
+                    "is_sensitive": True,
+                },
+                "access_blog_admin": {
+                    "group": content_group,
+                    "description": "General access to the Blog Management section in the admin panel.",
                 },
                 # --- System & Moderation (Platform Admins) ---
                 "access_admin_dashboard": {
@@ -624,22 +591,9 @@ class Command(BaseCommand):
                     "description": "Delete any support ticket",
                     "is_sensitive": True,
                 },
-                "reply_any_support_ticket": {
-                    "group": system_group,
-                    "description": "Reply to any support ticket (Admin/Agent)",
-                },
                 "assign_support_ticket": {
                     "group": system_group,
                     "description": "Assign any support ticket to an agent",
-                },
-                "change_ticket_status": {
-                    "group": system_group,
-                    "description": "Change ticket status (e.g., resolve, close)",
-                    "is_sensitive": True,
-                },
-                "view_assignable_agents": {
-                    "group": system_group,
-                    "description": "Can view the list of assignable support agents",
                 },
                 "view_support_ticket_stats": {
                     "group": system_group,
@@ -654,41 +608,87 @@ class Command(BaseCommand):
                     "group": system_group,
                     "description": "General access to Support Ticket Administration",
                 },
-                "view_permissiongroup": {
-                    "group": system_group,
-                    "description": "View permission groups (Admin)",
+                # --- UPDATED: Business User Permissions (Assigned to new UI Groups) ---
+                "access_business_dashboard": {
+                    "group": biz_profile_staff_group,
+                    "description": "Grants basic access to the business dashboard. Required for all staff members.",
                 },
-                "view_enhancedpermission": {
-                    "group": system_group,
-                    "description": "View enhanced permission details (Admin)",
+                "manage_own_business_profile": {
+                    "group": biz_profile_staff_group,
+                    "description": "Allows user to edit the main business profile details, including name, description, contact info, and images.",
                 },
-                # --- Content Management ---
-                "manage_blog_posts": {
-                    "group": content_group,
-                    "description": "Can create, edit, publish, and delete blog posts.",
+                "manage_business_staff": {
+                    "group": biz_profile_staff_group,
+                    "description": "Allows user to invite new staff, remove existing staff, and change their assigned roles.",
                     "is_sensitive": True,
                 },
-                "manage_blog_categories": {
-                    "group": content_group,
-                    "description": "Can create, edit, and delete blog categories.",
+                "manage_business_roles": {
+                    "group": biz_profile_staff_group,
+                    "description": "Can create, edit, and delete staff roles and assign permissions.",
                     "is_sensitive": True,
                 },
-                "access_blog_admin": {
-                    "group": content_group,
-                    "description": "General access to the Blog Management section in the admin panel.",
+                "manage_own_classes": {
+                    "group": biz_classes_schedule_group,
+                    "description": "Full control over creating and editing classes, class options, pricing, and recurring schedules.",
+                },
+                "manage_own_schedule_instances": {
+                    "group": biz_classes_schedule_group,
+                    "description": "Allows user to manage individual class sessions, such as canceling a single session or marking attendance.",
+                },
+                "manage_own_business_discounts": {
+                    "group": biz_classes_schedule_group,
+                    "description": "Allows user to create, edit, and manage discounts and coupon codes for their business.",
+                },
+                "view_business_revenue_analytics": {
+                    "group": biz_finance_analytics_group,
+                    "description": "Allows user to view detailed revenue reports, sales trends, and payout information.",
+                },
+                "export_business_revenue_data": {
+                    "group": biz_finance_analytics_group,
+                    "description": "Allows user to export financial and revenue data for accounting purposes.",
+                },
+                "view_own_booking_analytics": {
+                    "group": biz_finance_analytics_group,
+                    "description": "Allows user to view analytics related to booking trends, popular classes, and student attendance.",
+                },
+                "view_own_business_bookings": {
+                    "group": biz_student_engagement_group,
+                    "description": "Allows user to see a list of all current and past bookings for the business.",
+                },
+                "cancel_business_booking": {
+                    "group": biz_student_engagement_group,
+                    "description": "Allows user to cancel a student's booking on their behalf.",
+                },
+                "view_business_students": {
+                    "group": biz_student_engagement_group,
+                    "description": "Allows user to view the list of students who have booked classes with the business.",
+                },
+                "view_studentnote": {
+                    "group": biz_student_engagement_group,
+                    "description": "Allows user to view private notes about students, left by other staff members.",
+                },
+                "add_studentnote": {
+                    "group": biz_student_engagement_group,
+                    "description": "Allows user to add private notes to a student's profile for internal reference.",
+                },
+                "view_own_business_reviews": {
+                    "group": biz_student_engagement_group,
+                    "description": "Allows user to read all reviews submitted by students for the business's classes.",
+                },
+                "add_business_review_response": {
+                    "group": biz_student_engagement_group,
+                    "description": "Allows user to write and publish public responses to student reviews.",
                 },
             }
 
             # --- Enhance Permissions ---
             self.stdout.write("Enhancing explicitly defined permissions...")
-            # 1. Delete all existing enhanced permissions
             deleted_count, _ = EnhancedPermission.objects.all().delete()
             if deleted_count > 0:
                 self.stdout.write(
                     f"Deleted {deleted_count} existing enhanced permissions."
                 )
 
-            # 2. Get permissions EXCLUDING those from irrelevant apps
             relevant_permissions = Permission.objects.exclude(
                 content_type__in=excluded_content_types
             )
@@ -699,10 +699,10 @@ class Command(BaseCommand):
             enhanced_count = 0
             processed_codenames = set()
 
-            # 3. Process ONLY the permissions explicitly defined in the 'descriptions' dictionary
             for codename, attrs in descriptions.items():
+                if codename in processed_codenames:
+                    continue  # Avoid processing duplicates
                 try:
-                    # Find the permission object, ensuring it wasn't excluded by app label
                     perm = relevant_permissions.get(codename=codename)
                     EnhancedPermission.objects.create(
                         permission=perm,
@@ -711,50 +711,29 @@ class Command(BaseCommand):
                         is_sensitive=attrs.get("is_sensitive", False),
                         requires_mfa=attrs.get("requires_mfa", False),
                     )
-                    processed_codenames.add(codename)  # Mark as processed
+                    processed_codenames.add(codename)
                     enhanced_count += 1
                 except Permission.DoesNotExist:
-                    # This permission might be from an excluded app or misspelled in the dict
                     self.stdout.write(
                         self.style.WARNING(
-                            f"Skipping: Permission '{codename}' listed in descriptions not found among relevant permissions or is excluded by app."
+                            f"Skipping: Permission '{codename}' not found among relevant permissions."
                         )
                     )
                 except Permission.MultipleObjectsReturned:
                     self.stdout.write(
                         self.style.ERROR(
-                            f"DUPLICATE CODENAME '{codename}' found. Please clean up permissions in django.contrib.auth.models.Permission."
-                        )
-                    )
-                except KeyError as e:
-                    self.stdout.write(
-                        self.style.ERROR(
-                            f"Configuration Error: Missing attribute {e} for permission '{codename}' in descriptions dict."
+                            f"DUPLICATE CODENAME '{codename}' found. Please clean up permissions."
                         )
                     )
                 except Exception as e:
                     self.stdout.write(
                         self.style.ERROR(
-                            f"Error processing explicit permission '{codename}': {e}"
+                            f"Error processing permission '{codename}': {e}"
                         )
                     )
 
             self.stdout.write(
                 f"Successfully processed and enhanced {enhanced_count} explicitly defined permissions."
             )
-            # We no longer loop through remaining permissions. All others are ignored.
-
-            # Optional: Log which potentially relevant permissions were ignored
-            ignored_perms = relevant_permissions.exclude(
-                codename__in=processed_codenames
-            )
-            ignored_count = ignored_perms.count()
-            if ignored_count > 0:
-                self.stdout.write(
-                    f"Ignored {ignored_count} other default permissions (not explicitly defined in descriptions)."
-                )
-                # You could print them if needed for debugging:
-                # for p in ignored_perms:
-                #     print(f"  - Ignored: {p.content_type.app_label}.{p.codename}")
 
         self.stdout.write(self.style.SUCCESS("Permission enhancement complete."))

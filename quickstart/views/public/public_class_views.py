@@ -409,6 +409,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+    @action(detail=False, methods=["get"], url_path="search")
     def search(self, request):
         """
         Handles class searches with a hybrid approach:
@@ -446,8 +447,6 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
 
             # --- 2. Geographic Search Logic ---
             boundary = None
-
-            # --- MODIFICATION: Enhanced province detection ---
             normalized_province = normalize_province_name(location_param_text)
 
             if normalized_province:
@@ -455,16 +454,12 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 logger.info(
                     f"Performing province-wide search for: '{normalized_province.title()}'"
                 )
-
                 province_abbr = CANADIAN_PROVINCES.get(normalized_province, "").upper()
                 province_full_title = normalized_province.title()
                 province_q = Q(businessId__businessState__iexact=province_full_title)
                 if province_abbr:
                     province_q |= Q(businessId__businessState__iexact=province_abbr)
-
                 queryset = queryset.filter(province_q)
-
-                # Set user location point if coordinates are provided (for sorting/distance)
                 if req_lat_str and req_lng_str:
                     try:
                         user_location_point = Point(
@@ -474,7 +469,6 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                         user_location_point = None
 
             elif search_name:
-                # PATH A: KNOWN AREA (POLYGON SEARCH) - Only if not a province search
                 boundary = GeographicBoundary.objects.filter(
                     Q(name__iexact=search_name)
                     | Q(name__istartswith=f"{search_name} (")
@@ -494,7 +488,6 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                         user_location_point = None
 
             elif req_lat_str and req_lng_str and not is_province_search:
-                # PATH B: SPECIFIC POINT (RADIUS SEARCH) - Only if other methods fail and not province search
                 try:
                     user_location_point = Point(
                         float(req_lng_str), float(req_lat_str), srid=4326
@@ -553,13 +546,13 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 except InvalidOperation:
                     logger.warning(f"Invalid price_max value: {price_max_str}")
 
-            # --- 4. Availability Filtering ---
-            if (
-                req_date_str
-                or (req_participants_str and req_participants_str.isdigit())
-                or time_preferences
-            ):
+            # --- 4. Availability Filtering (THE FIX) ---
+            # Only trigger availability filters if a date or time preference is explicitly provided.
+            apply_availability_filters = bool(req_date_str or time_preferences)
+
+            if apply_availability_filters:
                 instance_filters = Q(options__schedules__instances__status="scheduled")
+
                 if req_date_str:
                     try:
                         target_date = datetime.strptime(req_date_str, "%Y-%m-%d").date()
@@ -567,10 +560,12 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                             options__schedules__instances__date=target_date
                         )
                     except ValueError:
+                        # If date is invalid, fall back to future dates
                         instance_filters &= Q(
                             options__schedules__instances__date__gte=timezone.now().date()
                         )
                 else:
+                    # If no date but other availability filters exist, default to future dates
                     instance_filters &= Q(
                         options__schedules__instances__date__gte=timezone.now().date()
                     )
@@ -594,6 +589,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     if time_range_filters:
                         instance_filters &= time_range_filters
 
+                # The participant filter is now correctly nested and only applies when filtering by schedule
                 if (
                     req_participants_str
                     and req_participants_str.isdigit()
@@ -615,7 +611,6 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     distance=Distance("point", user_location_point)
                 )
 
-            # --- MODIFICATION: Do not sort by distance if it's a wide province search without a user point ---
             if sort_by == "distance" and user_location_point:
                 queryset = queryset.order_by("distance")
             elif sort_by == "price_asc":

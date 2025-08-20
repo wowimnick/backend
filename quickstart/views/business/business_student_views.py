@@ -59,10 +59,16 @@ class CanViewBusinessStudents(BasePermission):
         user = request.user
         if not user or not user.is_authenticated:
             return False
-        return (
-            user.has_perm("quickstart.view_business_students")
-            and BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).exists()
-        )
+
+        # MODIFIED: This logic now correctly checks for staff membership.
+        # It ensures the user not only has the permission but is also a member of a business.
+        has_permission_codename = user.has_perm("quickstart.view_business_students")
+        is_business_member = BusinessInfo.objects.filter(
+            Q(owner=user)
+            | Q(staff_members__user=user, staff_members__status="accepted")
+        ).exists()
+
+        return has_permission_codename and is_business_member
 
 
 class CanManageBusinessStudentNotes(BasePermission):
@@ -72,6 +78,7 @@ class CanManageBusinessStudentNotes(BasePermission):
         user = request.user
         if not user or not user.is_authenticated:
             return False
+        # This check is fine as it only relies on the permission codename.
         return user.has_perm("quickstart.view_studentnote") or user.has_perm(
             "quickstart.add_studentnote"
         )
@@ -107,7 +114,8 @@ class BusinessStudentViewSet(viewsets.ReadOnlyModelViewSet):
         user = self.request.user
         try:
             business = BusinessInfo.objects.filter(
-                Q(owner=user) | Q(managers=user)
+                Q(owner=user)
+                | Q(staff_members__user=user, staff_members__status="accepted")
             ).first()
             if not business:
                 raise PermissionDenied("User not associated with any managed business.")

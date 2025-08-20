@@ -36,7 +36,8 @@ class BusinessPayoutViewSet(viewsets.ReadOnlyModelViewSet):
         user = self.request.user
         try:
             business = BusinessInfo.objects.filter(
-                Q(owner=user) | Q(managers=user)
+                Q(owner=user)
+                | Q(staff_members__user=user, staff_members__status="accepted")
             ).first()
             if not business:
                 raise PermissionDenied(

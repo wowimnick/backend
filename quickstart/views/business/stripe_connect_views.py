@@ -30,7 +30,10 @@ class StripeConnectView(views.APIView):
     def get_business_object(self, request):
         user = request.user
         business = (
-            BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user))
+            BusinessInfo.objects.filter(
+                Q(owner=user)
+                | Q(staff_members__user=user, staff_members__status="accepted")
+            )
             .distinct()
             .first()
         )

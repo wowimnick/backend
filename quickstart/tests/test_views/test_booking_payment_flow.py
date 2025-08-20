@@ -493,8 +493,8 @@ class PaymentFlowTests(APITestCase):
         mock_charge = MagicMock()
         mock_charge.receipt_url = "http://example.com/receipt"
         mock_charge.receipt_number = "test_receipt_123"
-        # This mocks the .to_dict() method call on the billing_details object
-        mock_charge.billing_details.to_dict.return_value = {
+        # This mocks the billing_details object itself to be dict-like, matching the view's implementation.
+        mock_charge.billing_details = {
             "name": "Test User",
             "email": "test@example.com",
             "phone": "555-555-5555",

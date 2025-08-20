@@ -1,3 +1,5 @@
+# quickstart/tests/test_views/test_business_management_views.py
+
 from rest_framework.test import APITestCase
 from rest_framework import status
 from django.urls import reverse
@@ -5,7 +7,7 @@ from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 import json
 
-from quickstart.models import BusinessInfo
+from quickstart.models import BusinessInfo, BusinessRole, BusinessStaff
 from quickstart.tests.factories import (
     UserFactory,
     BusinessInfoFactory,
@@ -162,43 +164,6 @@ class BusinessManagementTests(APITestCase):
         )
         print("✅ PASSED: Owner can update their business profile.")
 
-    def test_random_user_cannot_view_business_profile(self):
-        """
-        GET /api/my-business/profile/ - A non-owner/manager cannot access the profile view.
-        """
-        print("\n--- Running: test_random_user_cannot_view_business_profile ---")
-        BusinessInfoFactory(owner=self.user)  # A business exists
-        self.client.force_authenticate(
-            user=self.other_user
-        )  # Authenticate as someone else
-        url = reverse("my-business-profile")
-
-        response = self.client.get(url)
-        # It will raise a 404 because the get_object query finds nothing for this user.
-        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
-        print("✅ PASSED: Random user cannot view another's business profile.")
-
-    def test_owner_can_update_own_business_profile(self):
-        """
-        PATCH /api/my-business/profile/ - An owner can update their business profile.
-        """
-        print("\n--- Running: test_owner_can_update_own_business_profile ---")
-        business = BusinessInfoFactory(owner=self.user)
-        self.client.force_authenticate(user=self.user)
-        url = reverse("my-business-profile")
-
-        update_data = {
-            "businessName": "Updated Name Fitness",
-            "tags_keywords": json.dumps(["cardio", "weights"]),
-        }
-        response = self.client.patch(url, update_data, format="multipart")
-
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        business.refresh_from_db()
-        self.assertEqual(business.businessName, "Updated Name Fitness")
-        self.assertEqual(business.tags_keywords, ["cardio", "weights"])
-        print("✅ PASSED: Owner can update their business profile.")
-
     def test_owner_can_view_dashboard(self):
         """
         GET /api/my-business/overview/ - An owner can view their business dashboard.
@@ -234,9 +199,20 @@ class BusinessManagementTests(APITestCase):
         print("\n--- Running: test_removed_manager_cannot_access_dashboard ---")
         business = BusinessInfoFactory(owner=self.user)
         manager_user = UserFactory()
-        business.managers.add(manager_user)
-        manager_user.user_permissions.add(
-            Permission.objects.get(codename="access_business_dashboard")
+
+        # CORRECTED: Create a BusinessRole and a BusinessStaff instance
+        manager_role = BusinessRole.objects.create(
+            business=business, name="Test Manager Role"
+        )
+        dashboard_perm = Permission.objects.get(codename="access_business_dashboard")
+        manager_role.permissions.add(dashboard_perm)
+        manager_user.user_permissions.add(dashboard_perm)
+
+        staff_profile = BusinessStaff.objects.create(
+            business=business,
+            user=manager_user,
+            role=manager_role,
+            status="accepted",
         )
 
         # 1. Verify manager CAN access
@@ -245,8 +221,8 @@ class BusinessManagementTests(APITestCase):
         response_allowed = self.client.get(url)
         self.assertEqual(response_allowed.status_code, status.HTTP_200_OK)
 
-        # 2. Remove manager from the business
-        business.managers.remove(manager_user)
+        # 2. Remove manager from the business by deleting their staff profile
+        staff_profile.delete()
 
         # 3. Verify manager CANNOT access anymore
         response_denied = self.client.get(url)
