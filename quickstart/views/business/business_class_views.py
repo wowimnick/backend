@@ -73,7 +73,7 @@ from quickstart.serializers import (
 
 from quickstart.utils.permissions import (
     CanManageOwnClasses,
-    IsVerifiedAndActiveBusinessOwnerOrManager,
+    IsVerifiedAndActiveBusinessMember,
 )
 
 
@@ -209,8 +209,10 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         """Filter queryset to only classes belonging to the user's associated business."""
         user = self.request.user
-        business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
-
+        business = BusinessInfo.objects.filter(
+            Q(owner=user)
+            | Q(staff_members__user=user, staff_members__status="accepted")
+        ).first()
         if not business:
             logger.warning(
                 f"User {user.email} lacks associated business for BusinessClassViewSet."
@@ -244,7 +246,10 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
         """Associate the new class with the user's business and handle images/options from S3 keys."""
         user = self.request.user
         request_data = self.request.data
-        business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
+        business = BusinessInfo.objects.filter(
+            Q(owner=user)
+            | Q(staff_members__user=user, staff_members__status="accepted")
+        ).first()
         if not business:
             raise PermissionDenied(
                 "You must be associated with a business to create a class."
@@ -569,7 +574,10 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
         Used to pre-fill forms like the class creation contact step.
         """
         user = request.user
-        business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
+        business = BusinessInfo.objects.filter(
+            Q(owner=user)
+            | Q(staff_members__user=user, staff_members__status="accepted")
+        ).first()
         if not business:
             raise NotFound("No active business profile found for this user.")
 
@@ -643,7 +651,10 @@ class BusinessClassOptionDetail(generics.RetrieveUpdateDestroyAPIView):
     def get_queryset(self):
         user = self.request.user
         class_pk = self.kwargs.get("pk")
-        business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
+        business = BusinessInfo.objects.filter(
+            Q(owner=user)
+            | Q(staff_members__user=user, staff_members__status="accepted")
+        ).first()
         if not business:
             return ClassOption.objects.none()
         # Ensure the class_pk belongs to the business as well
@@ -691,7 +702,10 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
+        business = BusinessInfo.objects.filter(
+            Q(owner=user)
+            | Q(staff_members__user=user, staff_members__status="accepted")
+        ).first()
         if not business:
             return Schedule.objects.none()
 
@@ -723,7 +737,10 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         option = serializer.validated_data.get("option")
         user = self.request.user
-        business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
+        business = BusinessInfo.objects.filter(
+            Q(owner=user)
+            | Q(staff_members__user=user, staff_members__status="accepted")
+        ).first()
         if not business or not option or option.classId.businessId != business:
             raise PermissionDenied(
                 "Cannot create schedule for an option not belonging to your business."
@@ -868,7 +885,10 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
         Fails if any schedule in the group has confirmed bookings.
         """
         user = request.user
-        business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
+        business = BusinessInfo.objects.filter(
+            Q(owner=user)
+            | Q(staff_members__user=user, staff_members__status="accepted")
+        ).first()
         if not business:
             raise PermissionDenied("User is not associated with any business.")
 
@@ -953,7 +973,10 @@ class BusinessScheduleInstanceViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
+        business = BusinessInfo.objects.filter(
+            Q(owner=user)
+            | Q(staff_members__user=user, staff_members__status="accepted")
+        ).first()
         if not business:
             return ScheduleInstance.objects.none()
         queryset = (

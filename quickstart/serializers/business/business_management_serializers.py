@@ -80,7 +80,8 @@ class RecentActivitySerializer(serializers.Serializer):
 class MetricsContainerSerializer(serializers.Serializer):
     total_students = MetricSerializer()
     active_classes = MetricSerializer()
-    monthly_revenue = MetricSerializer()
+    # MODIFIED: Made the monthly_revenue field optional.
+    monthly_revenue = MetricSerializer(required=False)
     average_rating = MetricSerializer()
 
 
@@ -1023,20 +1024,25 @@ class BusinessDiscountSerializer(serializers.ModelSerializer):
     def validate_code(self, value):
         if not value:
             return None
-
         value = value.upper().strip()
 
-        # Check for uniqueness within the business
-        business = (
-            self.context["request"].user.owned_businesses.first()
-            or self.context["request"].user.managed_businesses.first()
-        )
-        query = Discount.objects.filter(business=business, code=value)
+        business = BusinessInfo.objects.filter(
+            Q(owner=self.context["request"].user)
+            | Q(
+                staff_members__user=self.context["request"].user,
+                staff_members__status="accepted",
+            )
+        ).first()
 
-        # If we are updating an instance, exclude it from the uniqueness check
+        if not business:
+            # This should ideally not happen if view permissions are correct, but it's a safe check.
+            raise serializers.ValidationError(
+                "You are not associated with a business to create coupons for."
+            )
+
+        query = Discount.objects.filter(business=business, code=value)
         if self.instance:
             query = query.exclude(pk=self.instance.pk)
-
         if query.exists():
             raise serializers.ValidationError(
                 "This coupon code is already in use for your business."
@@ -1085,7 +1091,15 @@ class BusinessDiscountSerializer(serializers.ModelSerializer):
 
         # Ensure the selected targets belong to the user's business
         user = self.context["request"].user
-        business = user.owned_businesses.first() or user.managed_businesses.first()
+        business = BusinessInfo.objects.filter(
+            Q(owner=user)
+            | Q(staff_members__user=user, staff_members__status="accepted")
+        ).first()
+
+        if not business:
+            raise serializers.ValidationError(
+                "Could not determine your business context."
+            )
 
         if data.get("target_class") and data["target_class"].businessId != business:
             raise serializers.ValidationError(

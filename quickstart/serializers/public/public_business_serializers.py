@@ -32,6 +32,9 @@ class PublicBusinessInfoSerializer(serializers.ModelSerializer):
     )
 
     business_image_medium_url = serializers.SerializerMethodField()
+    partner_tier_name = serializers.CharField(
+        source="partner_tier.name", read_only=True, allow_null=True
+    )
 
     class Meta:
         model = BusinessInfo
@@ -56,6 +59,7 @@ class PublicBusinessInfoSerializer(serializers.ModelSerializer):
             "contact_privacy",
             "founding_year",
             "createdAt",
+            "partner_tier_name",
         ]
         read_only_fields = fields
 

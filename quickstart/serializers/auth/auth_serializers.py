@@ -18,7 +18,7 @@ from allauth.account.utils import (
 from django.utils.http import urlsafe_base64_encode
 from django.utils.encoding import force_bytes
 from django.contrib.sites.shortcuts import get_current_site
-from quickstart.models import Role, ClassesMain, BusinessInfo
+from quickstart.models import BusinessStaff, Role, ClassesMain, BusinessInfo
 from django.contrib.auth.tokens import default_token_generator
 import logging
 from allauth.account.forms import ResetPasswordForm
@@ -50,7 +50,6 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
     avatar_medium_url = serializers.SerializerMethodField()
     avatar_original_url = serializers.SerializerMethodField()
 
-    # MODIFIED: This field is now for accepting the S3 key during an update.
     avatar = serializers.CharField(write_only=True, required=False, allow_null=True)
     role = RoleNestedSerializer(read_only=True, allow_null=True)
     favorited_ids = serializers.PrimaryKeyRelatedField(
@@ -75,7 +74,7 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
             "state",
             "address",
             "zipCode",
-            "avatar",  # This is now the write-only s3_key field
+            "avatar",
             "avatar_thumb_url",
             "avatar_medium_url",
             "avatar_original_url",
@@ -102,23 +101,18 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
     def _get_avatar_url(self, obj, size=None):
         if not obj.avatar or not hasattr(obj.avatar, "name") or not obj.avatar.name:
             return None
-        if not getattr(settings, "CLOUDFRONT_DOMAIN", None):
+        if not getattr(settings, "CLOUDFONT_DOMAIN", None):
             logger.warning("CLOUDFRONT_DOMAIN is not configured.")
-            # Fallback to standard URL if no CloudFront
             return obj.avatar.url
 
         original_path = obj.avatar.name
-        # The key from S3 might already be the full path.
         if "originals/" not in original_path:
-            # This might happen if the key is already modified. Be defensive.
             return f"{settings.CLOUDFRONT_DOMAIN}/{original_path}"
 
         if size:
-            # Replace the extension with .webp and the directory
             base_name, _ = os.path.splitext(original_path.replace("originals/", "", 1))
             final_path = f"public/{size}/{base_name}.webp"
         else:
-            # For original, just return the direct S3 URL or a CloudFront URL to the original
             final_path = original_path
 
         return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
@@ -132,37 +126,77 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
     def get_avatar_original_url(self, obj):
         if not obj.avatar or not hasattr(obj.avatar, "name") or not obj.avatar.name:
             return None
-        # This should point to the original file in the originals/ bucket via CloudFront
         return f"{settings.CLOUDFRONT_DOMAIN}/{obj.avatar.name}"
 
     def get_permissions(self, user):
+        # MODIFIED: Combine base permissions with business role permissions
         if not user or not user.is_authenticated:
             return []
-        return list(user.get_all_permissions())
+
+        # Start with the user's base permissions (from their global role)
+        base_permissions = set(user.get_all_permissions())
+
+        # Now, check for a business staff role
+        business_staff_entry = (
+            BusinessStaff.objects.filter(user=user, status="accepted")
+            .select_related("role")
+            .prefetch_related("role__permissions")
+            .first()
+        )
+
+        if business_staff_entry and business_staff_entry.role:
+            business_permissions = {
+                f"{perm.content_type.app_label}.{perm.codename}"
+                for perm in business_staff_entry.role.permissions.all()
+            }
+            # Combine the two sets for the final list
+            base_permissions.update(business_permissions)
+
+        return list(base_permissions)
 
     def get_has_business(self, user):
         if not user or not user.is_authenticated:
             return False
-        return BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).exists()
+        # A user has a business if they own one OR are an accepted staff member
+        return (
+            BusinessInfo.objects.filter(owner=user).exists()
+            or BusinessStaff.objects.filter(user=user, status="accepted").exists()
+        )
 
     def update(self, instance, validated_data):
-        # MODIFIED: Handle the avatar as an S3 key string
         avatar_s3_key = validated_data.pop("avatar", "NOT_PROVIDED")
-
         instance = super().update(instance, validated_data)
-
-        # 'avatar_s3_key' will be None if the client sends avatar: null
         if avatar_s3_key is None:
             if instance.avatar:
                 instance.avatar.delete(save=False)
             instance.avatar = None
-        # 'avatar_s3_key' will be a string if a new key is provided
         elif avatar_s3_key != "NOT_PROVIDED":
-            # Just assign the key. Django's FileField will store the string path.
             instance.avatar = avatar_s3_key
-
         instance.save()
         return instance
+
+    def to_representation(self, instance):
+        # MODIFIED: Override to show the business role if it exists
+        representation = super().to_representation(instance)
+
+        # Find the user's active business staff role
+        business_staff_entry = (
+            BusinessStaff.objects.filter(user=instance, status="accepted")
+            .select_related("role")
+            .first()
+        )
+
+        if business_staff_entry and business_staff_entry.role:
+            # If they have a business role, serialize it and replace the global role in the output
+            business_role = business_staff_entry.role
+            representation["role"] = {
+                "id": business_role.id,  # Note: this is the BusinessRole ID
+                "name": business_role.name,
+                "color": "#64748b",  # Business roles don't have colors, provide a default or add to model
+                "hierarchy_level": 100,  # Business roles have higher precedence
+            }
+
+        return representation
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):

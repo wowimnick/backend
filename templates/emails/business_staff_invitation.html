@@ -1,0 +1,36 @@
+{# templates/emails/business_staff_invitation.html #}
+{% extends "emails/base_email.html" %}
+{% load i18n %}
+{% block title %}
+    {% blocktrans with business_name=business_name %}Invitation to join {{ business_name }}{% endblocktrans %}
+{% endblock title %}
+{% block content %}
+    <h1>{% trans "You're Invited!" %}</h1>
+    <p>{% blocktrans %}Hello,{% endblocktrans %}</p>
+    <p>
+        {% blocktrans with inviter_name=inviter_name business_name=business_name role_name=role_name %}
+        <strong>{{ inviter_name }}</strong> has invited you to join <strong>{{ business_name }}</strong> on ClassEasily as a <strong>{{ role_name }}</strong>.
+        {% endblocktrans %}
+    </p>
+    <p>
+        {% trans "To accept this invitation, please click the button below. If you don't have a ClassEasily account yet, you will be prompted to create one first." %}
+    </p>
+    <table role="presentation"
+           border="0"
+           cellpadding="0"
+           cellspacing="0"
+           width="100%">
+        <tr>
+            <td align="center" class="button-td">
+                {# --- THE CHANGE IS HERE --- #}
+                <a href="{{ accept_url }}" target="_blank" class="button">{% trans 'Accept Invitation' %}</a>
+            </td>
+        </tr>
+    </table>
+    <p>{% trans "If you were not expecting this invitation, you can safely ignore this email." %}</p>
+    <p>
+        {% trans "Best regards," %}
+        <br />
+        {% trans "The ClassEasily Team" %}
+    </p>
+{% endblock content %}

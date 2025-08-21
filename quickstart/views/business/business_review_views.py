@@ -33,14 +33,23 @@ class CanManageOwnBusinessReviews(BasePermission):
         user = request.user
         if not user or not user.is_authenticated:
             return False
-        return (
-            user.has_perm("quickstart.view_own_business_reviews")
-            and BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).exists()
-        )
+
+        # CORRECTED: This query now correctly checks for staff membership
+        has_permission_codename = user.has_perm("quickstart.view_own_business_reviews")
+        is_business_member = BusinessInfo.objects.filter(
+            Q(owner=user)
+            | Q(staff_members__user=user, staff_members__status="accepted")
+        ).exists()
+
+        return has_permission_codename and is_business_member
 
     def has_object_permission(self, request, view, obj):  # obj is the Review instance
         user = request.user
-        business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
+        # CORRECTED: This query now correctly finds the business for a staff member
+        business = BusinessInfo.objects.filter(
+            Q(owner=user)
+            | Q(staff_members__user=user, staff_members__status="accepted")
+        ).first()
         if not business:
             return False
         return obj.classId and obj.classId.businessId == business
@@ -77,7 +86,8 @@ class BusinessReviewViewSet(viewsets.ReadOnlyModelViewSet):
         user = self.request.user
         try:
             business = BusinessInfo.objects.filter(
-                Q(owner=user) | Q(managers=user)
+                Q(owner=user)
+                | Q(staff_members__user=user, staff_members__status="accepted")
             ).first()
             if not business:
                 raise PermissionDenied("User not associated with any managed business.")

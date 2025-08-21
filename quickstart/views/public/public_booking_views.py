@@ -142,10 +142,26 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(
             data=request.data, context={"request": request}
         )
-        serializer.is_valid(raise_exception=True)
         try:
+            # Wrap validation and creation in a single atomic transaction.
+            # This ensures that select_for_update() in the serializer works correctly to prevent race conditions.
             with transaction.atomic():
-                booking = serializer.save()
+                serializer.is_valid(raise_exception=True)
+
+                # Now that validation (including the lock and availability check) has passed,
+                # we can safely create the booking.
+                booking = Booking.objects.create(
+                    user=request.user,
+                    schedule_instance=serializer.context["validated_instance"],
+                    participants=serializer.validated_data["participants"],
+                    participant_details=serializer.validated_data.get(
+                        "participant_details", []
+                    ),
+                    notes=serializer.validated_data.get("notes", ""),
+                    amount_paid=0,
+                    status="pending",
+                    payment_status="pending",
+                )
                 response_serializer = StudentBookingDetailSerializer(
                     booking, context={"request": request}
                 )
@@ -153,6 +169,7 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
                     response_serializer.data, status=status.HTTP_201_CREATED
                 )
         except ValidationError as e:
+            # Catch the validation error raised by is_valid()
             return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             logger.error(f"Unexpected error creating booking: {e}", exc_info=True)

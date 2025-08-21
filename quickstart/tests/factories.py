@@ -4,6 +4,7 @@ from django.utils import timezone
 from datetime import date, time, timedelta
 from decimal import Decimal
 from django.utils.text import slugify
+from django.core.exceptions import ValidationError
 
 from quickstart.models import (
     CustomUser,
@@ -12,6 +13,7 @@ from quickstart.models import (
     ClassSubcategory,
     ClassesMain,
     ClassOption,
+    PartnerTier,
     Payment,
     Schedule,
     ScheduleInstance,
@@ -91,6 +93,32 @@ class ClassSubcategoryFactory(DjangoModelFactory):
     key = factory.LazyAttribute(lambda o: o.name.lower())
 
 
+class PartnerTierFactory(DjangoModelFactory):
+    class Meta:
+        model = PartnerTier
+        django_get_or_create = ("name",)
+
+    name = factory.Faker("word")
+    fee_percentage = Decimal("13.00")
+    is_default = False
+
+    # This ensures our model's validation is respected by the factory
+    @factory.post_generation
+    def clean(self, create, extracted, **kwargs):
+        if create:
+            try:
+                self.clean()
+            except ValidationError:
+                # If a default already exists, just unset this one
+                if (
+                    PartnerTier.objects.filter(is_default=True)
+                    .exclude(pk=self.pk)
+                    .exists()
+                ):
+                    self.is_default = False
+                    self.save()
+
+
 class BusinessInfoFactory(DjangoModelFactory):
     class Meta:
         model = BusinessInfo
@@ -112,6 +140,9 @@ class BusinessInfoFactory(DjangoModelFactory):
     privacyAccepted = True
     verificationStatus = "verified"
     isActive = True
+
+    partner_tier = factory.SubFactory(PartnerTierFactory)
+
     business_timezone = "UTC"
     stripe_account_id = factory.Sequence(lambda n: f"acct_test_{n}")
     stripe_account_status = "active"

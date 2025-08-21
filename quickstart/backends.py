@@ -1,58 +1,91 @@
 from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth import get_user_model
 
+# MODIFIED: Import the BusinessStaff model
+from quickstart.models import BusinessStaff
+
 UserModel = get_user_model()
+
 
 class RolePermissionBackend(ModelBackend):
     """
-    Authenticates against settings.AUTH_USER_MODEL and checks permissions
-    assigned via the custom 'role' attribute.
+    MODIFIED: Authenticates against the user model and checks permissions from BOTH
+    the user's global role and their active business staff role.
     """
 
     def has_perm(self, user_obj, perm, obj=None):
         """
-        Returns True if the user has the specified permission through their role.
-        Also respects is_superuser and explicit user permissions via inheritance.
+        Returns True if the user has the specified permission.
+        This now checks in the following order:
+        1. Superuser / explicit user permissions (via super()).
+        2. Permissions from the user's global role (e.g., 'Student').
+        3. Permissions from the user's active business role.
         """
-        # First, let the default ModelBackend handle is_active, is_superuser,
-        # and directly assigned user permissions. If it grants permission, we're done.
+        # 1. Default checks for superuser, is_active, and direct user perms
         if super().has_perm(user_obj, perm, obj=obj):
             return True
 
-        # If the default backend didn't grant permission, and the user is inactive
-        # or anonymous, they definitely don't have permission.
         if not user_obj.is_active or user_obj.is_anonymous:
             return False
 
-        # Now, check permissions assigned via the user's custom Role
-        # Check if user_obj has the 'role' attribute and it's not None
-        if not hasattr(user_obj, 'role') or user_obj.role is None:
-            return False
-
-        # Check if the role has the required permission
-        # Assumes 'perm' is in the format 'app_label.codename'
+        # Split perm into app_label and codename
         try:
-            app_label, codename = perm.split('.')
+            app_label, codename = perm.split(".")
         except ValueError:
-            # Invalid permission format
             return False
 
-        # Check if the permission exists within the role's permissions set
-        # This is the core check against your custom Role model
-        if user_obj.role.permissions.filter(content_type__app_label=app_label, codename=codename).exists():
-            return True
+        # 2. Check the user's global role
+        if hasattr(user_obj, "role") and user_obj.role:
+            if user_obj.role.permissions.filter(
+                content_type__app_label=app_label, codename=codename
+            ).exists():
+                return True
 
-        # If permission not found in role, deny
+        # 3. MODIFIED: Check the user's active business role
+        try:
+            staff_entry = BusinessStaff.objects.select_related("role").get(
+                user=user_obj, status="accepted"
+            )
+            if (
+                staff_entry.role
+                and staff_entry.role.permissions.filter(
+                    content_type__app_label=app_label, codename=codename
+                ).exists()
+            ):
+                return True
+        except BusinessStaff.DoesNotExist:
+            # The user is not a staff member of any business, so we just fall through.
+            pass
+
+        # If no permission was found in any of the checks, deny.
         return False
 
-    # We don't necessarily need to override authenticate() or get_user()
-    # unless we change how users log in. We primarily care about has_perm here.
-    # Inheriting from ModelBackend keeps the standard user lookup functional.
-
     def get_all_permissions(self, user_obj, obj=None):
-        if not user_obj.is_active or user_obj.is_anonymous or not hasattr(user_obj, 'role') or user_obj.role is None:
+        """
+        MODIFIED: Returns a set of all permissions from the user's global role
+        AND their active business staff role.
+        """
+        if not user_obj.is_active or user_obj.is_anonymous:
             return set()
+
         perms = set()
-        for p in user_obj.role.permissions.select_related('content_type'):
-             perms.add(f"{p.content_type.app_label}.{p.codename}")
+
+        # Get perms from the global role
+        if hasattr(user_obj, "role") and user_obj.role:
+            for p in user_obj.role.permissions.select_related("content_type"):
+                perms.add(f"{p.content_type.app_label}.{p.codename}")
+
+        # MODIFIED: Get perms from the active business role and add them to the set
+        try:
+            staff_entry = (
+                BusinessStaff.objects.select_related("role")
+                .prefetch_related("role__permissions__content_type")
+                .get(user=user_obj, status="accepted")
+            )
+            if staff_entry.role:
+                for p in staff_entry.role.permissions.all():
+                    perms.add(f"{p.content_type.app_label}.{p.codename}")
+        except BusinessStaff.DoesNotExist:
+            pass
+
         return perms

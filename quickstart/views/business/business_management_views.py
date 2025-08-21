@@ -67,7 +67,7 @@ from quickstart.utils.permissions import (
     CanAccessBusinessDashboard,
     CanManageOwnBusinessProfile,
     CanDeleteOwnBusinessProfile,
-    IsVerifiedAndActiveBusinessOwnerOrManager,
+    IsVerifiedAndActiveBusinessMember,
 )
 
 logger = logging.getLogger(__name__)
@@ -251,10 +251,14 @@ def get_user_businesses(request):
     user = request.user
     # Fetch businesses this user owns or manages
     businesses = (
-        BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user))
+        BusinessInfo.objects.filter(
+            Q(owner=user)
+            | Q(staff_members__user=user, staff_members__status="accepted")
+        )
         .distinct()
         .select_related("owner")
         .order_by("businessName")
+        .first()
     )  # Optimization and ordering
 
     # Use the standard serializer, sensitive data is handled by context/permissions elsewhere
@@ -268,8 +272,13 @@ class MyBusinessOverviewView(APIView):
     permission_classes = [IsAuthenticated, CanAccessBusinessDashboard]
 
     def get_business_for_user(self, user):
-        businesses = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user))
-        count = businesses.count()
+        businesses_qs = BusinessInfo.objects.filter(
+            Q(owner=user)
+            | Q(staff_members__user=user, staff_members__status="accepted")
+        )
+
+        # Now, we can safely call .count() on the QuerySet
+        count = businesses_qs.count()
         if count == 0:
             raise PermissionDenied(
                 "No business profile associated with this user found."
@@ -281,7 +290,9 @@ class MyBusinessOverviewView(APIView):
             raise PermissionDenied(
                 "Error: Multiple business associations found. Please contact support."
             )
-        return businesses.first()
+
+        # After the checks are done, we return the single object from the QuerySet
+        return businesses_qs.first()
 
     def get(self, request, *args, **kwargs):
         user = request.user
@@ -294,6 +305,9 @@ class MyBusinessOverviewView(APIView):
         now_utc = timezone.now()
         today_utc_date = now_utc.date()
 
+        # --- Permission Check for Sensitive Data ---
+        can_view_revenue = user.has_perm("quickstart.view_business_revenue_analytics")
+
         # --- Date Range Setup ---
         seven_days_ago_utc_date = today_utc_date - timedelta(days=6)
         thirty_days_ago_utc_dt_start_of_day = (now_utc - timedelta(days=29)).replace(
@@ -304,29 +318,33 @@ class MyBusinessOverviewView(APIView):
         prev_month_start = prev_month_end.replace(day=1)
 
         # --- Revenue Metrics ---
-        revenue_view = RevenueAnalyticsView()
-        # This part remains as it calls a dedicated, complex view. Optimizing it further would require caching.
-        try:
-            current_month_start_dt_aware = timezone.make_aware(
-                datetime.combine(current_month_start, datetime.min.time()), pytz.utc
-            )
-            current_revenue_metrics = revenue_view.calculate_metrics(
-                business, current_month_start_dt_aware, now_utc
-            )
-            monthly_revenue = {
-                "value": current_revenue_metrics["total_gross_revenue"],
-                "change": current_revenue_metrics["revenue_growth"],
-            }
-            revenue_trend_data = revenue_view.get_revenue_trends(
-                business, thirty_days_ago_utc_dt_start_of_day, now_utc
-            )
-        except Exception as e:
-            logger.error(
-                f"Error calculating revenue/trends for overview (Business {pk}): {e}",
-                exc_info=True,
-            )
-            monthly_revenue = {"value": 0, "change": 0}
-            revenue_trend_data = []
+        monthly_revenue = None  # Initialize to None
+        revenue_trend_data = []  # Initialize to empty list
+
+        if can_view_revenue:
+            revenue_view = RevenueAnalyticsView()
+            try:
+                current_month_start_dt_aware = timezone.make_aware(
+                    datetime.combine(current_month_start, datetime.min.time()), pytz.utc
+                )
+                current_revenue_metrics = revenue_view.calculate_metrics(
+                    business, current_month_start_dt_aware, now_utc
+                )
+                monthly_revenue = {
+                    "value": current_revenue_metrics["total_gross_revenue"],
+                    "change": current_revenue_metrics["revenue_growth"],
+                }
+                revenue_trend_data = revenue_view.get_revenue_trends(
+                    business, thirty_days_ago_utc_dt_start_of_day, now_utc
+                )
+            except Exception as e:
+                logger.error(
+                    f"Error calculating revenue/trends for overview (Business {pk}): {e}",
+                    exc_info=True,
+                )
+                # Fallback for authorized user if an error occurs
+                monthly_revenue = {"value": 0, "change": 0}
+                revenue_trend_data = []
 
         # --- PERFORMANCE FIX: More efficient student count ---
         try:
@@ -497,21 +515,24 @@ class MyBusinessOverviewView(APIView):
                         "type": "booking",
                     }
                 )
-            recent_payments = Payment.objects.filter(
-                booking__schedule_instance__schedule__option__classId__businessId=business,
-                status="succeeded",
-                created_at__gte=three_days_ago_utc,
-            ).order_by("-created_at")[:3]
-            for payment in recent_payments:
-                recent_activity_data.append(
-                    {
-                        "timestamp": payment.created_at.isoformat(),
-                        "message": f"Payment received: ${payment.amount:.2f}",
-                        "icon": "DollarSign",
-                        "color": colors.get("chart", {}).get("green", "#10b981"),
-                        "type": "payment",
-                    }
-                )
+
+            # Conditionally include payment activity based on permission
+            if can_view_revenue:
+                recent_payments = Payment.objects.filter(
+                    booking__schedule_instance__schedule__option__classId__businessId=business,
+                    status="succeeded",
+                    created_at__gte=three_days_ago_utc,
+                ).order_by("-created_at")[:3]
+                for payment in recent_payments:
+                    recent_activity_data.append(
+                        {
+                            "timestamp": payment.created_at.isoformat(),
+                            "message": f"Payment received: ${payment.amount:.2f}",
+                            "icon": "DollarSign",
+                            "color": colors.get("chart", {}).get("green", "#10b981"),
+                            "type": "payment",
+                        }
+                    )
             recent_reviews = (
                 Reviews.objects.filter(
                     classId__businessId=business,
@@ -578,19 +599,23 @@ class MyBusinessOverviewView(APIView):
             # Add more checks if needed, e.g., first booking received (more complex to track here)
         }
 
-        payload = {
-            "metrics": {
-                "total_students": total_students,
-                "active_classes": {
-                    "value": business.classes.filter(status="active").count(),
-                    "change": 0,
-                },
-                "monthly_revenue": monthly_revenue,
-                "average_rating": {
-                    "value": float(business.average_rating or 0.0),
-                    "change": 0.0,
-                },
+        metrics_payload = {
+            "total_students": total_students,
+            "active_classes": {
+                "value": business.classes.filter(status="active").count(),
+                "change": 0,
             },
+            "average_rating": {
+                "value": float(business.average_rating or 0.0),
+                "change": 0.0,
+            },
+        }
+        # Only add revenue data to the payload if the user has permission
+        if can_view_revenue and monthly_revenue is not None:
+            metrics_payload["monthly_revenue"] = monthly_revenue
+
+        payload = {
+            "metrics": metrics_payload,
             "today_snapshot": today_snapshot_data,
             "revenue_trend": revenue_trend_data,
             "upcoming_classes": upcoming_classes_data,
@@ -620,7 +645,10 @@ class BusinessDashboardViewSet(viewsets.ReadOnlyModelViewSet):
         Ensures users only see stats for businesses they own or manage.
         """
         user = self.request.user
-        return BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).distinct()
+        return BusinessInfo.objects.filter(
+            Q(owner=user)
+            | Q(staff_members__user=user, staff_members__status="accepted")
+        ).first()
 
     @action(detail=True, methods=["get"])
     def dashboard_stats(self, request, pk=None):
@@ -772,21 +800,21 @@ class MyBusinessProfileView(generics.RetrieveUpdateDestroyAPIView):
         Ensures the user owns or manages the business.
         """
         user = self.request.user
-        # Using filter().first() is robust for cases where a user might accidentally be linked to multiple.
-        # The CanManageOwnBusinessProfile permission should ideally enforce the "own or manage" logic too.
+
+        # CORRECTED: This query now correctly checks for staff membership
         business = (
-            BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user))
+            BusinessInfo.objects.filter(
+                Q(owner=user)
+                | Q(staff_members__user=user, staff_members__status="accepted")
+            )
             .select_related("owner")
-            .prefetch_related("managers")
+            .prefetch_related("staff_members__user")  # Updated prefetch
             .first()
         )
 
         if not business:
             raise NotFound("No business profile associated with this user found.")
 
-        # `self.check_object_permissions` is automatically called by DRF for detail views (like RetrieveUpdateDestroyAPIView)
-        # if the view has `permission_classes` and the permissions implement `has_object_permission`.
-        # Your CanManageOwnBusinessProfile should implement has_object_permission.
         return business
 
     def get_permissions(self):
@@ -939,12 +967,15 @@ class BusinessDiscountViewSet(viewsets.ModelViewSet):
     """
 
     serializer_class = BusinessDiscountSerializer
-    permission_classes = [IsAuthenticated, IsVerifiedAndActiveBusinessOwnerOrManager]
+    permission_classes = [IsAuthenticated, IsVerifiedAndActiveBusinessMember]
 
     def get_queryset(self):
         """Filter queryset to only discounts belonging to the user's associated business."""
         user = self.request.user
-        business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
+        business = BusinessInfo.objects.filter(
+            Q(owner=user)
+            | Q(staff_members__user=user, staff_members__status="accepted")
+        ).first()
         if not business:
             return Discount.objects.none()
         return (
@@ -955,7 +986,10 @@ class BusinessDiscountViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         user = self.request.user
-        business = BusinessInfo.objects.filter(Q(owner=user) | Q(managers=user)).first()
+        business = BusinessInfo.objects.filter(
+            Q(owner=user)
+            | Q(staff_members__user=user, staff_members__status="accepted")
+        ).first()
         if not business:
             raise PermissionDenied(
                 "You must be associated with a business to create a discount."

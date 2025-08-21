@@ -19,6 +19,8 @@ from django.contrib.auth.models import Permission
 from django.core.cache import cache
 from .models import (
     Booking,
+    BusinessRole,
+    BusinessStaff,
     Reviews,
     Payment,
     Notification,
@@ -720,4 +722,56 @@ def notify_admins_on_new_verification(sender, instance, created, **kwargs):
         logger.error(
             f"SIGNAL ERROR: Failed to send admin notification email for new verification {instance.id}: {e}",
             exc_info=True,
+        )
+
+
+@receiver(post_save, sender=BusinessInfo)
+def create_default_business_role(sender, instance, created, **kwargs):
+    """
+    When a new business is created, automatically create a default 'Owner' role
+    for them with all available business-level permissions.
+    """
+    if created:
+        # List of all codenames for permissions a business owner can assign
+        business_permission_codenames = [
+            "manage_own_classes",
+            "manage_own_schedule_instances",
+            "view_own_business_bookings",
+            "manage_own_business_profile",
+            "manage_business_staff",
+            "view_business_revenue_analytics",
+            "export_business_revenue_data",
+            "view_business_students",
+            "add_studentnote",
+            "view_studentnote",
+            "view_own_booking_analytics",
+            "cancel_business_booking",
+            "view_own_business_reviews",
+            "add_business_review_response",
+            "manage_own_business_discounts",
+        ]
+
+        # Fetch all the relevant permission objects in one query
+        permissions = Permission.objects.filter(
+            codename__in=business_permission_codenames
+        )
+
+        # Create the new BusinessRole
+        owner_role = BusinessRole.objects.create(
+            business=instance,
+            name="Business Owner",
+            description="Full access to manage this business.",
+        )
+
+        # Assign all the permissions to this new role
+        owner_role.permissions.set(permissions)
+
+        # Automatically assign the business owner to this role
+        BusinessStaff.objects.create(
+            business=instance,
+            user=instance.owner,
+            role=owner_role,
+            status="accepted",  # The owner is automatically accepted
+            invited_email=instance.owner.email,
+            invited_by=instance.owner,
         )

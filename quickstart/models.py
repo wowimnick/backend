@@ -49,6 +49,13 @@ class PermissionGroup(models.Model):
     name = models.CharField(max_length=100)
     description = models.TextField(blank=True)
     sort_order = models.IntegerField(default=0)
+    ui_category = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        db_index=True,
+        help_text="A category key for specific UIs, e.g., 'business_role_editor'.",
+    )
 
     def __str__(self):
         return self.name
@@ -467,6 +474,14 @@ class BusinessInfo(models.Model):
         related_name="owned_businesses",
     )
     businessName = models.CharField(max_length=100)
+    partner_tier = models.ForeignKey(
+        "PartnerTier",
+        on_delete=models.SET_NULL,  # Use SET_NULL to avoid deleting a business if a tier is deleted
+        null=True,
+        blank=True,
+        related_name="businesses",
+        help_text="The partnership tier for this business, which determines their platform fee.",
+    )
     CONTACT_PRIVACY_CHOICES = [
         ("on_booking", "Show After Booking"),
         ("public", "Show Publicly"),
@@ -666,6 +681,10 @@ class BusinessInfo(models.Model):
                 "Can toggle the featured status for any business",
             ),
             (
+                "manage_business_staff",
+                "Can invite, remove, and manage staff for own business",
+            ),
+            (
                 "view_business_metrics",
                 "Can view aggregated business management statistics",
             ),
@@ -685,10 +704,6 @@ class BusinessInfo(models.Model):
             ),
             ("view_own_business_bookings", "Can view bookings for own business"),
             ("manage_own_business_profile", "Can edit own business profile details"),
-            (
-                "manage_business_staff",
-                "Can manage staff (instructors, managers) for own business",
-            ),
             (
                 "access_business_dashboard",
                 "Can access the dashboard for managing their own business",
@@ -713,7 +728,168 @@ class BusinessInfo(models.Model):
                 "view_studentnote",
                 "Can view notes for students associated with own business",
             ),
+            ("manage_business_roles", "Can create, edit, and manage staff roles"),
+            ("manage_own_business_discounts", "Can create, edit, and manage discounts"),
         ]
+
+
+class PartnerTier(models.Model):
+    """
+    Defines different partnership tiers with specific platform fee percentages.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(
+        max_length=100,
+        unique=True,
+        help_text="The public name of the tier (e.g., 'Founding Partner', 'Premium Partner').",
+    )
+    description = models.TextField(
+        blank=True, help_text="Internal description of who this tier is for."
+    )
+
+    # The platform fee for this tier, stored as a percentage (e.g., 10.5 for 10.5%)
+    fee_percentage = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal("13.00"),
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+        help_text="The platform fee percentage for this tier (e.g., enter 10 for 10%).",
+    )
+
+    is_default = models.BooleanField(
+        default=False,
+        help_text="Set this to True for the standard, default tier that new businesses are assigned to. Only one tier should be the default.",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.name} ({self.fee_percentage}%)"
+
+    def clean(self):
+        # Ensure only one tier can be the default at any time
+        if self.is_default:
+            default_tiers = PartnerTier.objects.filter(is_default=True).exclude(
+                pk=self.pk
+            )
+            if default_tiers.exists():
+                raise ValidationError(
+                    "Another tier is already marked as the default. Please disable it first."
+                )
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
+
+    class Meta:
+        db_table = "partner_tiers"
+        ordering = ["fee_percentage", "name"]
+
+
+class BusinessRole(models.Model):
+    """A role created and managed BY a business owner for THEIR own staff."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        BusinessInfo, on_delete=models.CASCADE, related_name="custom_roles"
+    )
+    name = models.CharField(max_length=100)
+    description = models.TextField(blank=True)
+    permissions = models.ManyToManyField(
+        Permission,
+        blank=True,
+        # IMPORTANT: Limit choices to only business-relevant permissions
+        limit_choices_to={
+            "content_type__app_label": "quickstart",
+            "codename__in": [
+                "manage_own_classes",
+                "manage_own_schedule_instances",
+                "view_own_business_bookings",
+                "manage_own_business_profile",
+                "manage_business_staff",
+                "manage_business_roles",
+                "view_business_revenue_analytics",
+                "export_business_revenue_data",
+                "view_business_students",
+                "add_studentnote",
+                "view_studentnote",
+                "view_own_booking_analytics",
+                "cancel_business_booking",
+                "view_own_business_reviews",
+                "add_business_review_response",
+                "manage_own_business_discounts",
+                "access_business_dashboard",
+            ],
+        },
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        # A role name must be unique within a single business
+        unique_together = ("business", "name")
+        db_table = "business_roles"
+        ordering = ["name"]
+
+    def __str__(self):
+        return f"{self.name} ({self.business.businessName})"
+
+
+class BusinessStaff(models.Model):
+    """
+    Intermediary model to connect a User to a Business with a specific Role
+    and track their invitation status.
+    """
+
+    class StaffStatus(models.TextChoices):
+        PENDING = "pending", "Pending"
+        ACCEPTED = "accepted", "Accepted"
+        DECLINED = "declined", "Declined"  # For future use
+        REVOKED = "revoked", "Revoked"  # For future use
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="staff_roles",
+        null=True,  # Null until the invitation is accepted
+        blank=True,
+    )
+    business = models.ForeignKey(
+        BusinessInfo, on_delete=models.CASCADE, related_name="staff_members"
+    )
+    # This is the key: each staff member gets a specific role within the business.
+    role = models.ForeignKey(BusinessRole, on_delete=models.PROTECT)
+
+    status = models.CharField(
+        max_length=10, choices=StaffStatus.choices, default=StaffStatus.PENDING
+    )
+
+    # For the invitation process
+    invited_email = models.EmailField(db_index=True)  # Store the email that was invited
+    invitation_token = models.UUIDField(
+        default=uuid.uuid4, editable=False, unique=True, null=True
+    )
+    invited_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="sent_invitations",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        user_email = self.user.email if self.user else self.invited_email
+        return f"{user_email} as {self.role.name} for {self.business.businessName} ({self.status})"
+
+    class Meta:
+        # A user can only have one role per business
+        unique_together = (("business", "user"), ("business", "invited_email"))
+        db_table = "business_staff"
+        ordering = ["-created_at"]
 
 
 class StudentNote(models.Model):
@@ -737,6 +913,7 @@ class StudentNote(models.Model):
         indexes = [
             models.Index(fields=["user", "business"]),
         ]
+        default_permissions = ()
 
 
 class ClassImage(models.Model):
@@ -1475,7 +1652,12 @@ class ScheduleInstance(models.Model):
 
     @property
     def current_bookings(self):
-        return self.bookings.filter(status="confirmed").aggregate(
+        """
+        Calculates current occupancy by summing participants from both 'confirmed'
+        and 'pending' bookings. This is crucial to prevent race conditions where
+        multiple users could attempt to book the final available spot simultaneously.
+        """
+        return self.bookings.filter(status__in=["confirmed", "pending"]).aggregate(
             total_participants=Coalesce(Sum("participants"), 0)
         )["total_participants"]
 
@@ -2165,6 +2347,7 @@ class SupportTicket(models.Model):
             ("export_support_ticket_data", "Can export support ticket data"),
             ("view_assignable_agents", "Can view list of assignable support agents"),
         ]
+        default_permissions = ()
 
 
 class TicketMessage(models.Model):
