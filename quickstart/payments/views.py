@@ -131,7 +131,7 @@ class CreatePaymentIntentView(APIView):
 
                 except Discount.DoesNotExist:
                     logger.warning(
-                        f"Discount ID {applied_discount_id} not found for business {option.classId.businessId.id}. Ignoring."
+                        f"Discount ID {applied_discount_id} not found for business {option.classId.businessId.businessId}. Ignoring."
                     )
                 except DRFValidationError as e:
                     logger.warning(
