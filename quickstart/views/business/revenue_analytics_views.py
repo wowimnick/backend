@@ -132,7 +132,7 @@ class RevenueAnalyticsView(views.APIView):
             default_tier = PartnerTier.objects.get(is_default=True)
             if business:
                 logger.warning(
-                    f"Business {business.id} was missing a partner tier. Fell back to default tier '{default_tier.name}'."
+                    f"Business {business.businessId} was missing a partner tier. Fell back to default tier '{default_tier.name}'."
                 )
             return default_tier.fee_percentage / Decimal("100.0")
         except PartnerTier.DoesNotExist:
