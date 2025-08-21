@@ -474,6 +474,14 @@ class BusinessInfo(models.Model):
         related_name="owned_businesses",
     )
     businessName = models.CharField(max_length=100)
+    partner_tier = models.ForeignKey(
+        "PartnerTier",
+        on_delete=models.SET_NULL,  # Use SET_NULL to avoid deleting a business if a tier is deleted
+        null=True,
+        blank=True,
+        related_name="businesses",
+        help_text="The partnership tier for this business, which determines their platform fee.",
+    )
     CONTACT_PRIVACY_CHOICES = [
         ("on_booking", "Show After Booking"),
         ("public", "Show Publicly"),
@@ -723,6 +731,60 @@ class BusinessInfo(models.Model):
             ("manage_business_roles", "Can create, edit, and manage staff roles"),
             ("manage_own_business_discounts", "Can create, edit, and manage discounts"),
         ]
+
+
+class PartnerTier(models.Model):
+    """
+    Defines different partnership tiers with specific platform fee percentages.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(
+        max_length=100,
+        unique=True,
+        help_text="The public name of the tier (e.g., 'Founding Partner', 'Premium Partner').",
+    )
+    description = models.TextField(
+        blank=True, help_text="Internal description of who this tier is for."
+    )
+
+    # The platform fee for this tier, stored as a percentage (e.g., 10.5 for 10.5%)
+    fee_percentage = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal("13.00"),
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+        help_text="The platform fee percentage for this tier (e.g., enter 10 for 10%).",
+    )
+
+    is_default = models.BooleanField(
+        default=False,
+        help_text="Set this to True for the standard, default tier that new businesses are assigned to. Only one tier should be the default.",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.name} ({self.fee_percentage}%)"
+
+    def clean(self):
+        # Ensure only one tier can be the default at any time
+        if self.is_default:
+            default_tiers = PartnerTier.objects.filter(is_default=True).exclude(
+                pk=self.pk
+            )
+            if default_tiers.exists():
+                raise ValidationError(
+                    "Another tier is already marked as the default. Please disable it first."
+                )
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
+
+    class Meta:
+        db_table = "partner_tiers"
+        ordering = ["fee_percentage", "name"]
 
 
 class BusinessRole(models.Model):

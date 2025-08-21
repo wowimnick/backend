@@ -1,3 +1,5 @@
+# quickstart/views/business/revenue_analytics_views.py
+
 from decimal import Decimal
 from rest_framework import views, status
 from rest_framework.response import Response
@@ -18,14 +20,14 @@ from django.db.models import (
     OuterRef,
     Min,
     DateTimeField,
-    DateField,  # Added DateTimeField, DateField
+    DateField,
 )
 from django.db.models.functions import (
     TruncDate,
     ExtractMonth,
     ExtractYear,
     Coalesce,
-    TruncHour,  # Added TruncHour
+    TruncHour,
 )
 from django.utils import timezone
 from datetime import datetime, timedelta, date as datetime_date
@@ -41,6 +43,7 @@ from quickstart.models import (
     ClassOption,
     ClassesMain,
     CustomUser,
+    PartnerTier,  # Import PartnerTier
 )
 
 logger = logging.getLogger(__name__)
@@ -50,10 +53,14 @@ class RevenueAnalyticsView(views.APIView):
     permission_classes = [IsAuthenticated]
 
     def get_business(self, user):
-        business = BusinessInfo.objects.filter(
-            Q(owner=user)
-            | Q(staff_members__user=user, staff_members__status="accepted")
-        ).first()
+        business = (
+            BusinessInfo.objects.filter(
+                Q(owner=user)
+                | Q(staff_members__user=user, staff_members__status="accepted")
+            )
+            .select_related("partner_tier")
+            .first()
+        )  # Use select_related for efficiency
         return business
 
     def get_date_range(self, request):
@@ -104,7 +111,7 @@ class RevenueAnalyticsView(views.APIView):
         first_course_booking_ids = Subquery(
             Booking.objects.filter(
                 booking_group_id=OuterRef("booking_group_id"),
-                schedule_instance__schedule__option__classId__businessId=business,  # Ensure subquery is also scoped
+                schedule_instance__schedule__option__classId__businessId=business,
                 booking_date__range=[start_date, end_date],
                 payment_status="paid",
             )
@@ -115,6 +122,24 @@ class RevenueAnalyticsView(views.APIView):
             Q(booking_group_id__isnull=True) | Q(id=first_course_booking_ids)
         )
         return valid_bookings_qs
+
+    def _get_fee_rate_for_business(self, business):
+        """Helper to get the fee rate from the business's tier with fallbacks."""
+        if business and business.partner_tier:
+            return business.partner_tier.fee_percentage / Decimal("100.0")
+
+        try:
+            default_tier = PartnerTier.objects.get(is_default=True)
+            if business:
+                logger.warning(
+                    f"Business {business.id} was missing a partner tier. Fell back to default tier '{default_tier.name}'."
+                )
+            return default_tier.fee_percentage / Decimal("100.0")
+        except PartnerTier.DoesNotExist:
+            logger.error(
+                "CRITICAL: No default PartnerTier is configured. Using hardcoded 13% fee."
+            )
+            return Decimal("0.13")
 
     def calculate_metrics(self, business, start_date, end_date, class_id=None):
         current_period_qs = self.get_valid_bookings_queryset(
@@ -178,7 +203,8 @@ class RevenueAnalyticsView(views.APIView):
         elif current_total_gross_revenue > 0 and previous_total_gross_revenue == 0:
             revenue_growth = 100.0
 
-        platform_fee_rate = Decimal("0.13")  # 13%
+        platform_fee_rate = self._get_fee_rate_for_business(business)
+
         estimated_platform_fees = float(
             current_aggregates["total_gross_revenue_decimal"] * platform_fee_rate
         )
@@ -211,7 +237,6 @@ class RevenueAnalyticsView(views.APIView):
 
         trends_qs = (
             valid_bookings_qs.annotate(
-                # Convert UTC booking_date to business's local date for grouping
                 local_booking_date_trunc=TruncDate(
                     F("booking_date"), tzinfo=business_pytz
                 )
@@ -238,7 +263,8 @@ class RevenueAnalyticsView(views.APIView):
             }
             current_scan_local_date += timedelta(days=1)
 
-        platform_fee_rate = Decimal("0.13")
+        platform_fee_rate = self._get_fee_rate_for_business(business)
+
         for entry in trends_qs:
             date_iso = entry["local_booking_date_trunc"].isoformat()
             gross_rev = entry["gross_revenue_decimal"]
@@ -257,9 +283,7 @@ class RevenueAnalyticsView(views.APIView):
         ]
         return formatted_trends
 
-    def get_class_revenue(
-        self, business, start_date, end_date, class_id_filter=None
-    ):  # Renamed class_id
+    def get_class_revenue(self, business, start_date, end_date, class_id_filter=None):
         valid_bookings_qs = self.get_valid_bookings_queryset(
             business, start_date, end_date, class_id_filter
         )
@@ -286,7 +310,7 @@ class RevenueAnalyticsView(views.APIView):
             )
         )
 
-        platform_fee_rate = Decimal("0.13")
+        platform_fee_rate = self._get_fee_rate_for_business(business)
         result = []
         for item in class_revenue_data:
             class_id = item["schedule_instance__schedule__option__classId"]
@@ -301,18 +325,14 @@ class RevenueAnalyticsView(views.APIView):
                         "net_revenue": float(
                             gross_rev * (Decimal("1.0") - platform_fee_rate)
                         ),
-                        "type": "class",  # For frontend differentiation if needed
+                        "type": "class",
                     }
                 )
         return result
 
-    # Placeholder for Revenue by Booking Type (Single Session vs Full Course)
     def get_revenue_by_booking_type(
         self, business, start_date, end_date, class_id=None
     ):
-        # This method is a placeholder and would need real implementation
-        # if "Recurring Revenue" or distinct "Revenue by Booking Type" charts are desired.
-        # For now, it returns a structure indicating it's under construction.
         return [
             {"type": "Single Session Revenue", "revenue": "Under Construction"},
             {"type": "Full Course Revenue", "revenue": "Under Construction"},
@@ -331,7 +351,7 @@ class RevenueAnalyticsView(views.APIView):
         try:
             start_date_utc, end_date_utc = self.get_date_range(request)
             class_id_filter = request.query_params.get("class_id")
-            if class_id_filter and not class_id_filter.isdigit():  # Basic validation
+            if class_id_filter and not class_id_filter.isdigit():
                 raise ValidationError("Invalid class_id format.")
             class_id_filter = int(class_id_filter) if class_id_filter else None
 
@@ -352,9 +372,9 @@ class RevenueAnalyticsView(views.APIView):
                 "business_id": business.businessId,
                 "business_name": business.businessName,
                 "metrics": metrics,
-                "revenue_trends": trends,  # Now includes gross, net, fees per day/month
-                "class_revenue": class_revenue_breakdown,  # Now includes gross, net, fees per class
-                "revenue_by_booking_type": revenue_by_booking_type,  # Placeholder
+                "revenue_trends": trends,
+                "class_revenue": class_revenue_breakdown,
+                "revenue_by_booking_type": revenue_by_booking_type,
             }
             return Response(data, status=status.HTTP_200_OK)
         except ValidationError as e:
@@ -383,7 +403,7 @@ class RevenueAnalyticsView(views.APIView):
             start_date_utc, end_date_utc = self.get_date_range(request)
             class_id_filter = request.query_params.get("class_id")
             if class_id_filter and not class_id_filter.isdigit():
-                class_id_filter = None  # Ignore invalid
+                class_id_filter = None
 
             response = HttpResponse(content_type="text/csv")
             filename = f"{business.businessName.replace(' ', '_')}_revenue_report_{start_date_utc.strftime('%Y%m%d')}_{end_date_utc.strftime('%Y%m%d')}.csv"
@@ -413,13 +433,17 @@ class RevenueAnalyticsView(views.APIView):
             metrics = self.calculate_metrics(
                 business, start_date_utc, end_date_utc, class_id_filter
             )
+
+            fee_percentage = self._get_fee_rate_for_business(business) * 100
+            fee_percentage_text = f"{fee_percentage:.0f}%"
+
             writer.writerow(["Key Metrics", "Value"])
             writer.writerow(
                 ["Total Gross Revenue", f"${metrics['total_gross_revenue']:.2f}"]
             )
             writer.writerow(
                 [
-                    "Estimated Platform Fees (13%)",
+                    f"Estimated Platform Fees ({fee_percentage_text})",
                     f"${metrics['estimated_platform_fees']:.2f}",
                 ]
             )
@@ -439,7 +463,7 @@ class RevenueAnalyticsView(views.APIView):
             trends = self.get_revenue_trends(
                 business, start_date_utc, end_date_utc, class_id_filter
             )
-            trend_title = "Daily Revenue Detail"  # Since trends now include net/fees
+            trend_title = "Daily Revenue Detail"
             writer.writerow([trend_title])
             writer.writerow(
                 [

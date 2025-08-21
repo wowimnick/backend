@@ -15,7 +15,8 @@ from quickstart.models import (
     CustomUser,
     Booking,
     Discount,
-    AppliedDiscount,  # Import the AppliedDiscount model
+    AppliedDiscount,
+    PartnerTier,  # Import the AppliedDiscount model
     Payment,
     ScheduleInstance,
 )
@@ -433,6 +434,9 @@ class ProcessBookingWebhook(APIView):
                     f"Invalid payment metadata or related object not found: {e}"
                 )
 
+            # Get the business object to check for founding partner status
+            business = initial_instance.schedule.option.classId.businessId
+
             discount_to_apply = None
             if applied_discount_id_str:
                 try:
@@ -476,7 +480,26 @@ class ProcessBookingWebhook(APIView):
                     )
 
             total_amount_from_stripe = Decimal(payment_intent.amount_received) / 100
-            service_fee_rate = getattr(settings, "SERVICE_FEE_RATE", Decimal("0.13"))
+
+            if business.partner_tier:
+                fee_percentage = business.partner_tier.fee_percentage
+            else:
+                # Fallback to the default tier if for some reason a business doesn't have one
+                try:
+                    default_tier = PartnerTier.objects.get(is_default=True)
+                    fee_percentage = default_tier.fee_percentage
+                    logger.warning(
+                        f"Business {business.id} was missing a partner tier. Fell back to default tier '{default_tier.name}'."
+                    )
+                except PartnerTier.DoesNotExist:
+                    # Critical fallback if no default is configured
+                    logger.error(
+                        "CRITICAL: No default PartnerTier is configured in the database. Using hardcoded 13% fee."
+                    )
+                    fee_percentage = Decimal("13.00")
+
+            service_fee_rate = fee_percentage / Decimal("100.0")
+
             calculated_service_fee = (
                 total_amount_from_stripe * service_fee_rate
             ).quantize(Decimal("0.01"))
@@ -615,7 +638,8 @@ class ProcessBookingWebhook(APIView):
                 )
 
             try:
-                business_info_obj = initial_instance.schedule.option.classId.businessId
+                # The business object is already fetched above
+                business_info_obj = business
                 if business_info_obj and business_info_obj.newBookingNotification:
                     recipients = {business_info_obj.owner} | set(
                         business_info_obj.managers.all()
