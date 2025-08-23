@@ -68,7 +68,9 @@ class UserReviewSerializer(serializers.ModelSerializer):
         original_path = obj.avatar.name
         if not original_path.startswith("originals/"):
             return None
-        resized_path = original_path.replace("originals/", "public/thumb/", 1)
+        # Remove original extension and add .webp
+        base_path, _ = os.path.splitext(original_path)
+        resized_path = base_path.replace("originals/", "public/thumb/", 1) + ".webp"
         return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
 
 
