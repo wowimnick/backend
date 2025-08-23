@@ -859,8 +859,7 @@ class BusinessStaff(models.Model):
     business = models.ForeignKey(
         BusinessInfo, on_delete=models.CASCADE, related_name="staff_members"
     )
-    # This is the key: each staff member gets a specific role within the business.
-    role = models.ForeignKey(BusinessRole, on_delete=models.PROTECT)
+    role = models.ForeignKey(BusinessRole, on_delete=models.CASCADE)
 
     status = models.CharField(
         max_length=10, choices=StaffStatus.choices, default=StaffStatus.PENDING
