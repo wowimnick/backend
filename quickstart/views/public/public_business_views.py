@@ -57,16 +57,14 @@ class PublicBusinessInfoViewSet(viewsets.ReadOnlyModelViewSet):
     # --- DEFINE get_queryset method ---
     def get_queryset(self):
         """
-        Returns a queryset containing only active and verified businesses.
-        Applies the default ordering.
+        Optimized to pre-fetch related partner_tier data using select_related()
+        to prevent N+1 query problems.
         """
-        logger.debug("Fetching public business info queryset (active & verified)")
-        # FIX: Removed .select_related("classCategory") because the 'classCategory' field does not exist on the BusinessInfo model.
-        # This was the direct cause of the FieldError crash.
-        queryset = BusinessInfo.objects.filter(
-            isActive=True, verificationStatus="verified"
+        return (
+            BusinessInfo.objects.filter(isActive=True, verificationStatus="verified")
+            .select_related("partner_tier")
+            .order_by("-featured", "businessName")
         )
-        return queryset
 
     @action(detail=True, methods=["get"], permission_classes=[IsAuthenticated])
     def contact_details(self, request, pk=None):
