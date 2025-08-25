@@ -178,6 +178,94 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+    @action(detail=True, methods=["get"], url_path="cancellation-info")
+    def cancellation_info(self, request, pk=None):
+        """
+        Provides details about the cancellation policy and eligibility for a specific booking.
+        Uses the policy snapshotted at the time of booking.
+        """
+        booking = self.get_object()
+
+        # --- Validation ---
+        if booking.status != "confirmed":
+            raise ValidationError(
+                {
+                    "detail": f'Cannot get cancellation info for a booking with status "{booking.status}".'
+                }
+            )
+
+        try:
+            # --- Get necessary objects and timezone ---
+            schedule_instance = booking.schedule_instance
+            business_tz_str = (
+                schedule_instance.schedule.option.classId.businessId.business_timezone
+            )
+            business_tz = pytz.timezone(business_tz_str)
+
+            # --- Localize instance start time and current time ---
+            instance_datetime_local = datetime.combine(
+                schedule_instance.date, schedule_instance.time
+            )
+            instance_datetime_aware = business_tz.localize(instance_datetime_local)
+            now_aware = timezone.now().astimezone(business_tz)
+
+            # --- Determine cancellability ---
+            can_cancel = instance_datetime_aware > now_aware
+
+            # --- Determine refund eligibility based on the SNAPSHOTTED policy ---
+            is_eligible_for_refund = False
+            policy_key = booking.cancellation_policy
+            policy_hours_map = {"flexible": 1, "24h": 24, "48h": 48, "72h": 72}
+            required_hours = policy_hours_map.get(policy_key, 0)
+
+            deadline_aware = instance_datetime_aware - timedelta(hours=required_hours)
+
+            if can_cancel and policy_key != "strict":
+                if now_aware < deadline_aware:
+                    is_eligible_for_refund = True
+
+            # --- Generate human-readable policy description ---
+            policy_descriptions = {
+                "flexible": f"Full refund if you cancel at least 1 hour before the class starts.",
+                "24h": "Full refund if you cancel at least 24 hours before the class starts.",
+                "48h": "Full refund if you cancel at least 48 hours before the class starts.",
+                "72h": "Full refund if you cancel at least 72 hours before the class starts.",
+                "strict": "This booking is non-refundable and cannot be cancelled for a refund.",
+            }
+            policy_description = policy_descriptions.get(
+                policy_key, "Standard cancellation policy applies."
+            )
+
+            # --- Construct response payload ---
+            response_data = {
+                "can_cancel": can_cancel,
+                "is_eligible_for_refund": is_eligible_for_refund,
+                "policy_key": policy_key,
+                "policy_description": policy_description,
+                "refund_percentage": (
+                    booking.cancellation_refund_percentage
+                    if is_eligible_for_refund
+                    else 0
+                ),
+                "cancellation_deadline_utc": (
+                    deadline_aware.astimezone(pytz.utc).isoformat()
+                    if policy_key != "strict"
+                    else None
+                ),
+            }
+
+            return Response(response_data, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.error(
+                f"Error fetching cancellation info for booking {pk}: {e}",
+                exc_info=True,
+            )
+            return Response(
+                {"error": "An error occurred while retrieving cancellation details."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
     @action(detail=True, methods=["post"], url_path="cancel")
     def student_cancel(self, request, pk=None):
         """
