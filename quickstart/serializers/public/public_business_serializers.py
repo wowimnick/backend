@@ -1,3 +1,5 @@
+# In quickstart/serializers/public/public_business_serializers.py
+
 import os
 from django.conf import settings
 from rest_framework import serializers
@@ -17,6 +19,7 @@ class BusinessContactDetailSerializer(serializers.ModelSerializer):
             "studentContactPhone",
             "studentContactEmail",
             "website",
+            "businessUnit",  # Added businessUnit
         ]
         read_only_fields = fields
 
@@ -30,7 +33,6 @@ class PublicBusinessInfoSerializer(serializers.ModelSerializer):
     totalReviews = serializers.IntegerField(
         source="total_reviews_count", read_only=True
     )
-
     business_image_medium_url = serializers.SerializerMethodField()
     partner_tier_name = serializers.CharField(
         source="partner_tier.name", read_only=True, allow_null=True
@@ -38,6 +40,7 @@ class PublicBusinessInfoSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = BusinessInfo
+        # MODIFIED: Replaced openingTime/closingTime with businessHours and added businessUnit
         fields = [
             "businessId",
             "businessName",
@@ -47,10 +50,11 @@ class PublicBusinessInfoSerializer(serializers.ModelSerializer):
             "website",
             "social_media_links",
             "business_timezone",
-            "openingTime",
-            "closingTime",
+            "businessHours",
             "studentContactPhone",
             "studentContactEmail",
+            "businessAddress",
+            "businessUnit",
             "businessCity",
             "businessState",
             "totalReviews",
@@ -67,30 +71,16 @@ class PublicBusinessInfoSerializer(serializers.ModelSerializer):
         """
         Constructs a public CloudFront URL for a resized WebP image.
         """
-
         if obj.businessImage and obj.businessImage.name:
             original_path = obj.businessImage.name
-
             if not original_path.startswith("originals/"):
                 return None
-
-            # 1. Get the base path of the original image, without its extension
-            base_path, _ = os.path.splitext(
-                original_path
-            )  # e.g., "originals/path/image.png" -> "originals/path/image"
-
-            # 2. Replace the path prefix
-            # e.g., "originals/path/image" -> "public/thumb/path/image"
+            base_path, _ = os.path.splitext(original_path)
             resized_base_path = base_path.replace(
                 "originals/", f"public/{size_name}/", 1
             )
-
-            # 3. Add the correct .webp extension
             final_path = resized_base_path + ".webp"
-
-            # 4. Construct the full URL
             return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
-
         return None
 
     def get_business_image_medium_url(self, obj):
@@ -101,15 +91,14 @@ class PublicBusinessInfoSerializer(serializers.ModelSerializer):
         Modify the serialized data before it's returned.
         This is where we'll remove sensitive contact info based on privacy settings.
         """
-        # Get the default serialized representation
         representation = super().to_representation(instance)
-
-        # Check the privacy setting on the model instance
         if instance.contact_privacy != "public":
             representation.pop("studentContactPhone", None)
             representation.pop("studentContactEmail", None)
             representation.pop("website", None)
-
+            representation.pop(
+                "businessUnit", None
+            )  # Also hide unit if contact is private
         return representation
 
     def get_average_rating(self, obj):

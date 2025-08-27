@@ -66,7 +66,6 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
             "username",
             "first_name",
             "last_name",
-            "birth_date",
             "bio",
             "phone_number",
             "country",
@@ -79,7 +78,6 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
             "avatar_medium_url",
             "avatar_original_url",
             "role",
-            "user_timezone",
             "favorited_ids",
             "permissions",
             "has_business",
@@ -216,11 +214,13 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
 class CustomRegisterSerializer(RegisterSerializer):
     first_name = serializers.CharField(required=True, max_length=150)
     last_name = serializers.CharField(required=True, max_length=150)
-    birth_date = serializers.DateField(required=True)
     phone_number = serializers.CharField(required=True, max_length=20)
     bio = serializers.CharField(required=False, allow_blank=True)
     avatar = serializers.ImageField(required=False, allow_null=True)
-    user_timezone = serializers.CharField(required=True, max_length=50)
+    # ADDED: Explicitly define the user_timezone field to accept it from the frontend
+    user_timezone = serializers.CharField(
+        required=False, max_length=50, allow_blank=True
+    )
 
     def validate(self, data):
         email = data.get("email", "").lower()
@@ -241,13 +241,11 @@ class CustomRegisterSerializer(RegisterSerializer):
             {
                 "first_name": self.validated_data.get("first_name", ""),
                 "last_name": self.validated_data.get("last_name", ""),
-                "birth_date": self.validated_data.get("birth_date", None),
                 "phone_number": self.validated_data.get("phone_number", ""),
                 "bio": self.validated_data.get("bio", ""),
                 "avatar": self.validated_data.get("avatar", None),
-                "user_timezone": self.validated_data.get(
-                    "user_timezone", "America/Toronto"
-                ),
+                # ADDED: Pass the timezone through the cleaned data
+                "user_timezone": self.validated_data.get("user_timezone", "UTC"),
             }
         )
         return data
@@ -256,11 +254,11 @@ class CustomRegisterSerializer(RegisterSerializer):
         user = super().save(request)
         user.first_name = self.validated_data.get("first_name", "")
         user.last_name = self.validated_data.get("last_name", "")
-        user.birth_date = self.validated_data.get("birth_date", None)
         user.phone_number = self.validated_data.get("phone_number", "")
         user.bio = self.validated_data.get("bio", "")
         user.avatar = self.validated_data.get("avatar", None)
-        user.user_timezone = self.validated_data.get("user_timezone", "America/Toronto")
+        # ADDED: Set the timezone on the user model before saving
+        user.user_timezone = self.validated_data.get("user_timezone", "UTC")
 
         if not user.role:
             try:
