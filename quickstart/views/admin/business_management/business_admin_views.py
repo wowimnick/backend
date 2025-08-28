@@ -24,9 +24,10 @@ from django.db.models.functions import (
 )
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import FloatField, IntegerField, BooleanField, DateTimeField
+from django.contrib.gis.db.models.functions import Centroid
 from django.utils import timezone
 from datetime import datetime, timedelta
-from rest_framework import viewsets, status, filters
+from rest_framework import viewsets, status, filters, generics
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import (
@@ -46,11 +47,15 @@ from quickstart.models import (
     ClassesMain,
     Payment,
     Reviews,
+    GeographicBoundary,
 )
 from quickstart.serializers.admin.business_management.admin_business_serializers import (
     AdminBusinessDetailSerializer,
     AdminBusinessListSerializer,
+    GeographicBoundaryDataSerializer,
 )
+
+from ..class_management.class_management_views import CanAccessClassAdmin
 
 try:
     from quickstart.views.admin.user_management.user_admin_views import user_can_manage
@@ -970,3 +975,104 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
         }
         cleaned_province = str(province).strip().lower()
         return region_map.get(cleaned_province, "Other")
+
+
+class AdminGeographicalDataView(generics.ListAPIView):
+    """
+    Provides aggregated geographical data for the Canadian distribution map,
+    powered by PostGIS.
+
+    Supports two modes via query parameter `view`:
+    - `choropleth` (default): Aggregates data by province boundary.
+    - `bubble`: Aggregates data by city, providing a centroid for mapping.
+    """
+
+    permission_classes = [CanAccessClassAdmin]
+    serializer_class = GeographicBoundaryDataSerializer
+
+    def get_queryset_for_choropleth(self):
+        """
+        Groups all businesses by the province they fall into.
+        This query is faster and suitable for coloring entire provinces.
+        """
+        # Subquery to get total revenue for each business
+        business_revenue = BusinessInfo.objects.annotate(
+            revenue=Coalesce(
+                Sum(
+                    "classes__options__schedules__instances__bookings__payments__amount",
+                    filter=Q(
+                        classes__options__schedules__instances__bookings__payments__status="succeeded"
+                    ),
+                ),
+                Decimal("0.0"),
+            )
+        ).values("businessId", "revenue")
+
+        # We can't do a direct spatial join and group by province name easily with the ORM.
+        # Instead, we'll aggregate by the province string field on BusinessInfo, which is efficient.
+        province_aggregation = (
+            BusinessInfo.objects.filter(
+                isActive=True, latitude__isnull=False, longitude__isnull=False
+            )
+            .values("businessState")
+            .annotate(
+                province_full=F("businessState"),
+                count=Count("businessId"),
+                revenue=Sum(
+                    "bookings__payments__amount",
+                    filter=Q(bookings__payments__status="succeeded"),
+                ),
+                classes_count=Count("classes", distinct=True),
+            )
+            .order_by("businessState")
+        )
+
+        return province_aggregation
+
+    def get_queryset_for_bubble(self):
+        """
+        Groups businesses by city and calculates a geographic centroid for each city.
+        This is used to place bubbles on the map.
+        """
+        city_aggregation = (
+            BusinessInfo.objects.filter(
+                isActive=True, latitude__isnull=False, longitude__isnull=False
+            )
+            .values("businessCity", "businessState")
+            .annotate(
+                city=F("businessCity"),
+                province_full=F("businessState"),
+                count=Count("businessId"),
+                revenue=Coalesce(
+                    Sum(
+                        "bookings__payments__amount",
+                        filter=Q(bookings__payments__status="succeeded"),
+                    ),
+                    Decimal("0.0"),
+                ),
+                classes_count=Count("classes", distinct=True),
+                # PostGIS Function: Calculate the center point of all businesses in the city
+                centroid_coords=Centroid(F("point")),
+            )
+            .order_by("-count")
+        )
+
+        return city_aggregation
+
+    def list(self, request, *args, **kwargs):
+        # The frontend needs BOTH datasets: province totals for the choropleth
+        # and city-specific points for the bubbles. We'll return them together.
+
+        choropleth_data = list(self.get_queryset_for_choropleth())
+        bubble_data = list(self.get_queryset_for_bubble())
+
+        # Convert GIS Point object in bubble_data to a simple [lon, lat] list
+        for item in bubble_data:
+            if item.get("centroid_coords"):
+                point = item["centroid_coords"]
+                item["centroid"] = [point.x, point.y]
+                del item["centroid_coords"]  # Clean up the response
+            else:
+                item["centroid"] = None
+
+        return Response({"province_data": choropleth_data, "city_data": bubble_data})

@@ -47,8 +47,52 @@ class BusinessManagementTests(APITestCase):
             "businessName": "Test Fitness Studio",
             "businessType": "studio",
             "businessDescription": "A great place to work out and get fit. " * 10,
-            "openingTime": "09:00",
-            "closingTime": "21:00",
+            "businessHours": json.dumps(
+                [
+                    {
+                        "day": "Monday",
+                        "isOpen": True,
+                        "open": "09:00",
+                        "close": "21:00",
+                    },
+                    {
+                        "day": "Tuesday",
+                        "isOpen": True,
+                        "open": "09:00",
+                        "close": "21:00",
+                    },
+                    {
+                        "day": "Wednesday",
+                        "isOpen": True,
+                        "open": "09:00",
+                        "close": "21:00",
+                    },
+                    {
+                        "day": "Thursday",
+                        "isOpen": True,
+                        "open": "09:00",
+                        "close": "21:00",
+                    },
+                    {
+                        "day": "Friday",
+                        "isOpen": True,
+                        "open": "09:00",
+                        "close": "21:00",
+                    },
+                    {
+                        "day": "Saturday",
+                        "isOpen": True,
+                        "open": "10:00",
+                        "close": "18:00",
+                    },
+                    {
+                        "day": "Sunday",
+                        "isOpen": False,
+                        "open": "10:00",
+                        "close": "18:00",
+                    },
+                ]
+            ),
             "liabilityWaiver": True,
             "business_timezone": "America/New_York",
             "studentContactPhone": "+15551234567",

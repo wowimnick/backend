@@ -818,9 +818,10 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
 
                     schedules_to_create.append(
                         Schedule(
-                            name=data.get("name"),  # Pass the name to each new schedule
+                            name=data.get("name"),
                             option=option,
                             date=current_date,
+                            day=current_date.strftime("%a"),
                             time=time_val,
                             duration=data["duration"],
                             price=data["price"],
