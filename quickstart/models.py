@@ -322,7 +322,6 @@ class Role(models.Model):
 class CustomUser(AbstractUser):
     userId = models.AutoField(primary_key=True)
     email = models.EmailField(unique=True)
-    birth_date = models.DateField(null=True, blank=True)
     bio = models.TextField(null=True, blank=True)
     phone_number = models.CharField(max_length=100, blank=True)
     country = models.CharField(max_length=100)
@@ -524,6 +523,7 @@ class BusinessInfo(models.Model):
         choices=[
             ("email", "Email"),
             ("phone", "Phone"),
+            ("text", "Text Message"),
             ("both", "Both Email and Phone"),
         ],
     )
@@ -532,6 +532,7 @@ class BusinessInfo(models.Model):
     businessAddress = models.CharField(max_length=255)
     businessCity = models.CharField(max_length=100)
     businessState = models.CharField(max_length=100)
+    businessUnit = models.CharField(max_length=50, blank=True, null=True)
     businessZipCode = models.CharField(max_length=20)
     latitude = models.DecimalField(
         max_digits=10, decimal_places=8, null=True, blank=True
@@ -549,9 +550,7 @@ class BusinessInfo(models.Model):
     )
 
     # --- Simplified Booking Settings ---
-    openingTime = models.TimeField()
-    closingTime = models.TimeField()
-    # refundPolicy = models.CharField(...) # REMOVED
+    businessHours = JSONField(default=list, blank=True)
 
     # Notification fields
     newBookingNotification = models.BooleanField(default=True)
@@ -1035,6 +1034,7 @@ class ClassesMain(models.Model):
     ]
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="active")
     location = models.CharField(max_length=255)
+    unit_number = models.CharField(max_length=50, blank=True, null=True)
     coordinates = models.CharField(max_length=50)
     point = gis_models.PointField(
         srid=4326,  # Standard GPS coordinate system

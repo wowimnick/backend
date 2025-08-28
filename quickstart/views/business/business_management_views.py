@@ -276,8 +276,6 @@ class MyBusinessOverviewView(APIView):
             Q(owner=user)
             | Q(staff_members__user=user, staff_members__status="accepted")
         )
-
-        # Now, we can safely call .count() on the QuerySet
         count = businesses_qs.count()
         if count == 0:
             raise PermissionDenied(
@@ -290,8 +288,6 @@ class MyBusinessOverviewView(APIView):
             raise PermissionDenied(
                 "Error: Multiple business associations found. Please contact support."
             )
-
-        # After the checks are done, we return the single object from the QuerySet
         return businesses_qs.first()
 
     def get(self, request, *args, **kwargs):
@@ -304,11 +300,7 @@ class MyBusinessOverviewView(APIView):
         pk = business.pk
         now_utc = timezone.now()
         today_utc_date = now_utc.date()
-
-        # --- Permission Check for Sensitive Data ---
         can_view_revenue = user.has_perm("quickstart.view_business_revenue_analytics")
-
-        # --- Date Range Setup ---
         seven_days_ago_utc_date = today_utc_date - timedelta(days=6)
         thirty_days_ago_utc_dt_start_of_day = (now_utc - timedelta(days=29)).replace(
             hour=0, minute=0, second=0, microsecond=0
@@ -317,9 +309,8 @@ class MyBusinessOverviewView(APIView):
         prev_month_end = current_month_start - timedelta(days=1)
         prev_month_start = prev_month_end.replace(day=1)
 
-        # --- Revenue Metrics ---
-        monthly_revenue = None  # Initialize to None
-        revenue_trend_data = []  # Initialize to empty list
+        monthly_revenue = None
+        revenue_trend_data = []
 
         if can_view_revenue:
             revenue_view = RevenueAnalyticsView()
@@ -570,33 +561,35 @@ class MyBusinessOverviewView(APIView):
             business.businessCity,
             business.businessState,
             business.businessZipCode,
-            business.openingTime,
-            business.closingTime,
         ]
-        is_profile_complete = all(
-            field is not None and str(field).strip() != ""
-            for field in profile_fields_to_check
+        is_hours_complete = (
+            isinstance(business.businessHours, list)
+            and len(business.businessHours) > 0
+            and any(day.get("isOpen") for day in business.businessHours)
         )
 
-        # Check for at least one class (any status, as they might be drafting)
+        is_profile_complete = (
+            all(
+                field is not None and str(field).strip() != ""
+                for field in profile_fields_to_check
+            )
+            and is_hours_complete
+        )  # ADDED hours check
+
         has_created_class = ClassesMain.objects.filter(businessId=business).exists()
-        # Check for at least one option linked to any class of this business
         has_class_options = ClassOption.objects.filter(
             classId__businessId=business
         ).exists()
-        # Check for at least one active schedule linked to any option of this business
         has_schedules = Schedule.objects.filter(
             option__classId__businessId=business
         ).exists()
 
         setup_progress_data = {
-            "is_stripe_connected": business.stripe_account_status
-            == "active",  # Consider 'pending' as partially complete if needed
+            "is_stripe_connected": business.stripe_account_status == "active",
             "is_profile_complete": is_profile_complete,
             "has_created_class": has_created_class,
             "has_class_options": has_class_options,
             "has_schedules": has_schedules,
-            # Add more checks if needed, e.g., first booking received (more complex to track here)
         }
 
         metrics_payload = {

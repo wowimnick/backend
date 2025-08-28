@@ -30,7 +30,6 @@ class AuthAndProfileTests(APITestCase):
             "first_name": "New",
             "last_name": "User",
             # FIX: Add the newly required fields
-            "birth_date": "1990-01-01",
             "phone_number": "555-123-4567",
             "user_timezone": "UTC",
         }
@@ -54,7 +53,6 @@ class AuthAndProfileTests(APITestCase):
             "first_name": "Another",
             "last_name": "User",
             # FIX: Add the newly required fields
-            "birth_date": "1992-05-10",
             "phone_number": "555-789-1234",
             "user_timezone": "UTC",
         }

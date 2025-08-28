@@ -134,8 +134,17 @@ class BusinessInfoFactory(DjangoModelFactory):
     businessCity = factory.Faker("city")
     businessState = factory.Faker("state_abbr")
     businessZipCode = factory.Faker("zipcode")
-    openingTime = time(9, 0)
-    closingTime = time(17, 0)
+    businessHours = factory.LazyFunction(
+        lambda: [
+            {"day": "Monday", "isOpen": True, "open": "09:00", "close": "17:00"},
+            {"day": "Tuesday", "isOpen": True, "open": "09:00", "close": "17:00"},
+            {"day": "Wednesday", "isOpen": True, "open": "09:00", "close": "17:00"},
+            {"day": "Thursday", "isOpen": True, "open": "09:00", "close": "17:00"},
+            {"day": "Friday", "isOpen": True, "open": "09:00", "close": "17:00"},
+            {"day": "Saturday", "isOpen": False, "open": "09:00", "close": "17:00"},
+            {"day": "Sunday", "isOpen": False, "open": "09:00", "close": "17:00"},
+        ]
+    )
     termsAccepted = True
     privacyAccepted = True
     verificationStatus = "verified"

@@ -55,6 +55,7 @@ from quickstart.views.admin.user_management.verification_views import (
 )
 from quickstart.views.admin.user_management.audit_views import AuditLogViewSet
 from quickstart.views.admin.business_management.business_admin_views import (
+    AdminGeographicalDataView,
     BusinessAdminViewSet,
 )
 
@@ -396,6 +397,11 @@ urlpatterns = [
         "payments/create-payment-intent/",
         CreatePaymentIntentView.as_view(),
         name="create-payment-intent",
+    ),
+    path(
+        "admin/geographical-data/",
+        AdminGeographicalDataView.as_view(),
+        name="admin-geographical-data",
     ),
     path("health-check/", health_check, name="health-check"),
 ]

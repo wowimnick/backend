@@ -5,14 +5,35 @@ from django.conf import settings
 from rest_framework import serializers
 from ....models import BusinessInfo, ClassCategory
 from decimal import Decimal
+from rest_framework_gis.serializers import GeoFeatureModelSerializer
+from rest_framework import serializers
+from quickstart.models import GeographicBoundary
 
 
-# --- Helper Function ---
-def _split_string_to_list(data_string):
-    """Helper to split a comma-separated string into a list of strings."""
-    if data_string and isinstance(data_string, str):
-        return [item.strip() for item in data_string.split(",") if item.strip()]
-    return []
+class GeographicBoundaryDataSerializer(GeoFeatureModelSerializer):
+    """
+    Serializes GeographicBoundary model into a GeoJSON Feature,
+    including annotated business metrics.
+    """
+
+    # These fields are expected to be annotated onto the queryset in the view
+    business_count = serializers.IntegerField(read_only=True)
+    total_revenue = serializers.DecimalField(
+        max_digits=12, decimal_places=2, read_only=True
+    )
+
+    class Meta:
+        model = GeographicBoundary
+        geo_field = "geom"  # Specify the geometry field
+        fields = [
+            "id",
+            "csuid",
+            "name",
+            "province",
+            # Include the annotated fields
+            "business_count",
+            "total_revenue",
+        ]
 
 
 # --- Admin List Serializer ---
@@ -112,8 +133,7 @@ class AdminBusinessDetailSerializer(serializers.ModelSerializer):
             "business_image_medium_url",
             "businessDescription",
             "createdAt",
-            "openingTime",
-            "closingTime",
+            "businessHours",
             "liabilityWaiver",
             "studentContactPhone",
             "studentContactEmail",

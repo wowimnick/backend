@@ -71,6 +71,7 @@ class BusinessContactInfoSerializer(serializers.ModelSerializer):
             "studentContactEmail",
             "studentContactPhone",
             "businessAddress",
+            "businessUnit",
             "latitude",
             "longitude",
         ]
@@ -481,6 +482,7 @@ class ManagedClassSerializer(serializers.ModelSerializer):
             "category",
             "subcategory",
             "status",
+            "unit_number",
             "location",
             "coordinates",
             "saltLocation",
@@ -576,6 +578,7 @@ class ClassCreateSerializer(serializers.ModelSerializer):
             "category_key",
             "subcategory_key",
             "location",
+            "unit_number",
             "coordinates",
             "saltLocation",
             "studentContactEmail",

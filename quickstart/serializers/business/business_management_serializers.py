@@ -107,18 +107,16 @@ class BusinessDashboardOverviewSerializer(serializers.Serializer):
 
 
 class BusinessRegistrationSerializer(serializers.ModelSerializer):
-    # MODIFIED: Accept an S3 key instead of a file
     businessImage_s3_key = serializers.CharField(
         write_only=True, required=False, allow_blank=True, allow_null=True
     )
-
     latitude = serializers.DecimalField(
         max_digits=10, decimal_places=8, required=False, allow_null=True
     )
     longitude = serializers.DecimalField(
         max_digits=11, decimal_places=8, required=False, allow_null=True
     )
-
+    businessHours = serializers.CharField(write_only=True, required=True)
     classFormats = serializers.CharField(
         write_only=True, required=False, allow_blank=True
     )
@@ -126,7 +124,6 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
         write_only=True, required=False, allow_blank=True
     )
     ageGroups = serializers.CharField(write_only=True, required=False, allow_blank=True)
-
     website = serializers.URLField(required=False, allow_blank=True, allow_null=True)
     business_timezone = serializers.ChoiceField(
         choices=COMMON_TIMEZONE_CHOICES_SERIALIZER, required=True
@@ -144,20 +141,20 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
         help_text="JSON string of a list of keywords",
     )
     founding_year = serializers.IntegerField(required=False, allow_null=True)
-
     studentContactPhone = serializers.CharField(required=True)
+    businessUnit = serializers.CharField(
+        required=False, allow_blank=True, allow_null=True
+    )
 
     class Meta:
         model = BusinessInfo
-        # MODIFIED: Replaced 'businessImage' with 'businessImage_s3_key'
         fields = [
             # Step 0: Business Info
             "businessName",
             "businessType",
             "businessDescription",
-            "businessImage_s3_key",  # Changed
-            "openingTime",
-            "closingTime",
+            "businessImage_s3_key",
+            "businessHours",
             "liabilityWaiver",
             "website",
             "business_timezone",
@@ -171,6 +168,7 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
             "contact_privacy",
             # Step 2: Location
             "businessAddress",
+            "businessUnit",
             "businessCity",
             "businessState",
             "businessZipCode",
@@ -184,7 +182,6 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
             "termsAccepted",
             "privacyAccepted",
         ]
-        # MODIFIED: Removed 'businessImage' from extra_kwargs
         extra_kwargs = {
             "businessName": {"required": True},
             "businessType": {"required": True},
@@ -193,8 +190,7 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
                 "min_length": 250,
                 "max_length": 750,
             },
-            "openingTime": {"required": True},
-            "closingTime": {"required": True},
+            "businessHours": {"required": True},
             "liabilityWaiver": {"required": True},
             "website": {"required": False, "allow_blank": True, "allow_null": True},
             "business_timezone": {"required": True},
@@ -202,6 +198,11 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
             "preferredContact": {"required": True},
             "contact_privacy": {"required": True},
             "businessAddress": {"required": True},
+            "businessUnit": {
+                "required": False,
+                "allow_blank": True,
+                "allow_null": True,
+            },
             "businessCity": {"required": True},
             "businessState": {"required": True},
             "businessZipCode": {"required": True},
@@ -254,10 +255,46 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
                     {"studentContactEmail": "Invalid email address"}
                 )
 
-        if data.get("openingTime") and data.get("closingTime"):
-            if data["openingTime"] >= data["closingTime"]:
+        business_hours_str = data.get("businessHours")
+        if business_hours_str and isinstance(business_hours_str, str):
+            try:
+                hours_list = json.loads(business_hours_str)
+                if not isinstance(hours_list, list):
+                    raise DRFValidationError(
+                        {"businessHours": "Must be a list of day objects."}
+                    )
+                if not any(day.get("isOpen") for day in hours_list):
+                    raise DRFValidationError(
+                        {"businessHours": "At least one day must be marked as open."}
+                    )
+                for day_data in hours_list:
+                    if day_data.get("isOpen"):
+                        open_time_str = day_data.get("open")
+                        close_time_str = day_data.get("close")
+                        if not open_time_str or not close_time_str:
+                            raise DRFValidationError(
+                                {
+                                    "businessHours": f"Open and close times are required for {day_data.get('day')}."
+                                }
+                            )
+                        open_time = datetime.strptime(open_time_str, "%H:%M").time()
+                        close_time = datetime.strptime(close_time_str, "%H:%M").time()
+                        if open_time >= close_time:
+                            raise DRFValidationError(
+                                {
+                                    "businessHours": f"Closing time must be after opening time for {day_data.get('day')}."
+                                }
+                            )
+                data["businessHours"] = hours_list
+            except json.JSONDecodeError:
                 raise DRFValidationError(
-                    {"closingTime": "Closing time must be after opening time"}
+                    {"businessHours": "Invalid JSON format for business hours."}
+                )
+            except (ValueError, TypeError):
+                raise DRFValidationError(
+                    {
+                        "businessHours": "Invalid time format in business hours. Use HH:MM."
+                    }
                 )
 
         if not data.get("termsAccepted"):
@@ -323,24 +360,24 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         user = self.context["request"].user
 
-        # MODIFIED: Pop the S3 key and other JSON fields
         business_image_s3_key = validated_data.pop("businessImage_s3_key", None)
         classformats_data = validated_data.pop("classFormats", [])
         skilllevels_data = validated_data.pop("skillLevels", [])
         agegroups_data = validated_data.pop("ageGroups", [])
         tags_keywords_data = validated_data.pop("tags_keywords", [])
         social_media_data = validated_data.pop("social_media_links", {})
+        business_hours_data = validated_data.pop("businessHours", [])
 
         business = BusinessInfo.objects.create(
             owner=user,
             verificationStatus="pending",
-            # MODIFIED: Assign the S3 key directly to the image field
             businessImage=business_image_s3_key,
             classFormats=classformats_data,
             skillLevels=skilllevels_data,
             ageGroups=agegroups_data,
             tags_keywords=tags_keywords_data,
             social_media_links=social_media_data,
+            businessHours=business_hours_data,
             **validated_data,
         )
 
@@ -393,11 +430,9 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
     average_rating = serializers.DecimalField(
         max_digits=3, decimal_places=1, read_only=True
     )
-
     businessImage = serializers.CharField(
         source="businessImage_s3_key", write_only=True, required=False, allow_null=True
     )
-
     classFormats = serializers.ListField(
         child=serializers.CharField(), read_only=True, required=False
     )
@@ -407,10 +442,13 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
     ageGroups = serializers.ListField(
         child=serializers.CharField(), read_only=True, required=False
     )
+    businessUnit = serializers.CharField(
+        required=False, allow_blank=True, allow_null=True
+    )
+    businessHours = serializers.JSONField(required=False, allow_null=True)
 
     class Meta:
         model = BusinessInfo
-        # MODIFIED: Added businessCity, businessState, and businessZipCode to fields
         fields = [
             "businessId",
             "businessName",
@@ -426,14 +464,14 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "studentContactEmail",
             "studentContactPhone",
             "businessAddress",
-            "businessCity",  # ADDED
-            "businessState",  # ADDED
-            "businessZipCode",  # ADDED
+            "businessUnit",
+            "businessCity",
+            "businessState",
+            "businessZipCode",
             "latitude",
             "longitude",
             "showExactLocation",
-            "openingTime",
-            "closingTime",
+            "businessHours",
             "contact_privacy",
             "preferredContact",
             "newBookingNotification",
@@ -486,14 +524,17 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "tags_keywords": {"required": False, "allow_null": True},
             "founding_year": {"required": False, "allow_null": True},
             "businessAddress": {"required": False, "allow_blank": True},
-            # MODIFIED: Added kwargs for the new location fields to make them writeable
+            "businessUnit": {
+                "required": False,
+                "allow_blank": True,
+                "allow_null": True,
+            },
             "businessCity": {"required": False, "allow_blank": True},
             "businessState": {"required": False, "allow_blank": True},
             "businessZipCode": {"required": False, "allow_blank": True},
             "latitude": {"required": False, "allow_null": True},
             "longitude": {"required": False, "allow_null": True},
-            "openingTime": {"required": False, "allow_null": True},
-            "closingTime": {"required": False, "allow_null": True},
+            "businessHours": {"required": False, "allow_null": True},
             "preferredContact": {
                 "required": False,
                 "allow_blank": True,
@@ -517,9 +558,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
         original_path = obj.businessImage.name
         if not original_path.startswith("originals/"):
             return None
-        # Split the path to separate filename and extension
         base_path = os.path.splitext(original_path)[0]
-        # Replace directory and append .webp extension
         resized_path = base_path.replace("originals/", "public/medium/", 1) + ".webp"
         return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
 
@@ -537,8 +576,6 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
         logger.debug(
             f"Parsing JSON for {field_name}, value: '{value}', type: {type(value)}"
         )
-
-        # Case 1: Value is already a Python list/dict (e.g., from JSONParser if not FormData)
         if isinstance(value, (list, dict)):
             if expected_type and not isinstance(value, expected_type):
                 logger.warning(
@@ -551,10 +588,8 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
                 )
             logger.debug(f"Value for {field_name} is already parsed: {value}")
             return value
-
-        # Case 2: Value is a string (e.g., from FormData)
         if isinstance(value, str):
-            if not value.strip():  # Empty or whitespace-only string
+            if not value.strip():
                 logger.debug(
                     f"Empty string for {field_name}, defaulting to empty {expected_type or 'container'}."
                 )
@@ -562,7 +597,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
                     expected_type()
                     if expected_type is not None
                     else (None if value is None else {})
-                )  # Default to dict if expected_type is None but not an empty string
+                )
             try:
                 parsed_value = json.loads(value)
                 if expected_type and not isinstance(parsed_value, expected_type):
@@ -585,15 +620,11 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
                 raise DRFValidationError(
                     {field_name: f"Invalid JSON string provided for {field_name}."}
                 )
-
-        # Case 3: Value is None
         if value is None:
             logger.debug(
                 f"None value for {field_name}, defaulting to empty {expected_type or 'container'}."
             )
             return expected_type() if expected_type is not None else None
-
-        # Case 4: Value is some other unexpected type
         logger.error(
             f"Unexpected data type for {field_name}: {type(value).__name__}. Value: '{value}'"
         )
@@ -604,25 +635,19 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
         )
 
     def to_internal_value(self, data):
-        # Convert QueryDict to a mutable Python dictionary FIRST
-        if hasattr(data, "dict") and callable(
-            data.dict
-        ):  # QueryDict has a .dict() method
+        if hasattr(data, "dict") and callable(data.dict):
             processed_data = data.dict()
         elif isinstance(data, dict):
             import copy
 
-            processed_data = copy.deepcopy(data)  # Or data.copy() if deep is not needed
-        else:  # Fallback for other types, though less common here
+            processed_data = copy.deepcopy(data)
+        else:
             import copy
 
             processed_data = (
                 data.copy() if hasattr(data, "copy") else copy.deepcopy(data)
             )
-
         parsing_errors = {}
-
-        # Handle boolean string fields from FormData
         boolean_fields = [
             "showExactLocation",
             "newBookingNotification",
@@ -635,7 +660,6 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
                 current_value = processed_data.get(field)
                 if isinstance(current_value, str):
                     try:
-                        # For standard dict, direct assignment is fine
                         processed_data[field] = self._parse_boolean_from_string(
                             current_value, field
                         )
@@ -647,13 +671,13 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
         json_fields_config = {
             "social_media_links": dict,
             "tags_keywords": list,
+            "businessHours": list,  # ADDED
         }
 
         for field_name, expected_type in json_fields_config.items():
             if field_name in processed_data:
                 current_value = processed_data.get(field_name)
                 try:
-                    # Direct assignment to the standard dictionary
                     processed_data[field_name] = self._parse_json_from_string(
                         current_value, field_name, expected_type
                     )
@@ -688,7 +712,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
         return super().to_internal_value(processed_data)
 
     def validate_studentContactEmail(self, value):
-        if value:  # Allow blank
+        if value:
             try:
                 validate_email(value)
             except DjangoValidationError:
@@ -696,7 +720,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
         return value
 
     def validate_website(self, value):
-        if value:  # Allow blank
+        if value:
             validator = URLValidator()
             try:
                 validator(value)
@@ -705,7 +729,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
         return value
 
     def validate_founding_year(self, value):
-        if value is not None:  # Allow null
+        if value is not None:
             current_year = datetime.now().year
             if not isinstance(value, int) or not (1800 <= value <= current_year):
                 raise DRFValidationError(
@@ -714,17 +738,15 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
         return value
 
     def validate_tags_keywords(self, value):
-        if value is not None:  # Allow null
+        if value is not None:
             if not isinstance(value, list):
                 raise DRFValidationError("Tags/Keywords must be a list.")
             if not all(isinstance(item, str) for item in value):
                 raise DRFValidationError("All tags/keywords must be strings.")
-        return (
-            value if value is not None else []
-        )  # Ensure empty list if None was intended for list
+        return value if value is not None else []
 
     def validate_social_media_links(self, value):
-        if value is not None:  # Allow null
+        if value is not None:
             if not isinstance(value, dict):
                 raise DRFValidationError("Social media links must be a dictionary.")
             url_validator = URLValidator()
@@ -733,69 +755,46 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
                     raise DRFValidationError(
                         f"Invalid format for social media link: {key}. Both key and URL must be strings."
                     )
-                if url_val:  # Only validate if URL is not empty and not null
+                if url_val:
                     try:
                         url_validator(url_val)
                     except DjangoValidationError:
                         raise DRFValidationError(
                             f"Invalid URL for social media '{key}': {url_val}"
                         )
-        return (
-            value if value is not None else {}
-        )  # Ensure empty dict if None was intended for dict
+        return value if value is not None else {}
 
-    def validate_openingTime(self, value):
-        if isinstance(value, str):  # From FormData
-            try:
-                return time.fromisoformat(
-                    value.split(".")[0]
-                )  # Handle HH:MM:SS or HH:MM
-            except ValueError:
+    def validate_businessHours(self, value):
+        if value is not None:
+            if not isinstance(value, list):
                 raise DRFValidationError(
-                    "Invalid opening time format. Use HH:MM or HH:MM:SS."
+                    "Business hours must be a list of day objects."
                 )
-        return value  # Already a time object
-
-    def validate_closingTime(self, value):
-        if isinstance(value, str):  # From FormData
-            try:
-                return time.fromisoformat(value.split(".")[0])
-            except ValueError:
-                raise DRFValidationError(
-                    "Invalid closing time format. Use HH:MM or HH:MM:SS."
-                )
+            if not any(day.get("isOpen") for day in value):
+                raise DRFValidationError("At least one day must be marked as open.")
+            for day_data in value:
+                if day_data.get("isOpen"):
+                    open_time_str = day_data.get("open")
+                    close_time_str = day_data.get("close")
+                    if not open_time_str or not close_time_str:
+                        raise DRFValidationError(
+                            f"Open and close times are required for {day_data.get('day')}."
+                        )
+                    try:
+                        open_time = datetime.strptime(open_time_str, "%H:%M").time()
+                        close_time = datetime.strptime(close_time_str, "%H:%M").time()
+                        if open_time >= close_time:
+                            raise DRFValidationError(
+                                f"Closing time must be after opening time for {day_data.get('day')}."
+                            )
+                    except (ValueError, TypeError):
+                        raise DRFValidationError(
+                            "Invalid time format in business hours. Use HH:MM."
+                        )
         return value
 
     def validate(self, data):
-        # Retrieve instance if updating
         instance = getattr(self, "instance", None)
-
-        opening_time_str = self.context["request"].data.get("openingTime")
-        closing_time_str = self.context["request"].data.get("closingTime")
-
-        # Get current or new values for opening and closing times
-        opening = data.get("openingTime", instance.openingTime if instance else None)
-        closing = data.get("closingTime", instance.closingTime if instance else None)
-
-        # If times are provided as strings (e.g. from FormData and not yet converted by field validation)
-        # This happens if validate_openingTime/validate_closingTime is not called or they pass string
-        if isinstance(opening, str):
-            try:
-                opening = time.fromisoformat(opening.split(".")[0])
-            except ValueError:
-                pass  # Let field validation catch it if it hasn't already
-        if isinstance(closing, str):
-            try:
-                closing = time.fromisoformat(closing.split(".")[0])
-            except ValueError:
-                pass
-
-        if opening and closing and opening >= closing:
-            raise DRFValidationError(
-                {"closingTime": "Closing time must be after opening time."}
-            )
-
-        # Coordinate validation: if one is provided, the other must also be.
         latitude = data.get("latitude", instance.latitude if instance else None)
         longitude = data.get("longitude", instance.longitude if instance else None)
 
@@ -808,7 +807,6 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
                 }
             )
 
-        # Automatically set showExactLocation based on coordinates if not explicitly provided
         if "showExactLocation" not in data and (
             latitude is not None and longitude is not None
         ):
@@ -816,7 +814,6 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
         elif "showExactLocation" not in data and (
             latitude is None and longitude is None
         ):
-            # If coordinates are cleared, and showExactLocation is not sent, default it based on instance or to False
             data["showExactLocation"] = (
                 instance.showExactLocation
                 if instance and latitude is None and longitude is None
@@ -825,22 +822,17 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
         return data
 
     def update(self, instance, validated_data):
-        # The source='businessImage_s3_key' in the field maps the incoming data
-        # to 'businessImage_s3_key' in validated_data.
         s3_key = validated_data.pop("businessImage_s3_key", "NOT_PROVIDED")
 
-        # If a new key was provided, update the image field.
-        # If null was sent, clear the image field.
         if s3_key is None:
             if instance.businessImage:
-                instance.businessImage.delete(save=False)  # Delete old S3 object
+                instance.businessImage.delete(save=False)
             instance.businessImage = None
         elif s3_key != "NOT_PROVIDED":
             if instance.businessImage:
-                instance.businessImage.delete(save=False)  # Delete old S3 object
-            instance.businessImage = s3_key  # Assign the new S3 key
+                instance.businessImage.delete(save=False)
+            instance.businessImage = s3_key
 
-        # Update all other fields
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
 

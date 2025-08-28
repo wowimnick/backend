@@ -25,7 +25,6 @@ class MyProfileSerializer(serializers.ModelSerializer):
             "username",
             "first_name",
             "last_name",
-            "birth_date",
             "bio",
             "phone_number",
             "country",
