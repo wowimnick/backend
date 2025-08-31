@@ -272,7 +272,7 @@ class AdminClassSerializer(serializers.ModelSerializer):
         max_price_dec = Decimal(str(max_price))
 
         if min_price_dec == max_price_dec:
-            return {"min": min_price_dec, "max": max_price_dec, "single_price": True}
+            return {"min": min_price_dec, "max": min_price_dec, "single_price": True}
         else:
             return {"min": min_price_dec, "max": max_price_dec, "single_price": False}
 
@@ -284,7 +284,9 @@ class AdminClassSerializer(serializers.ModelSerializer):
                 "key": obj.category.key,
                 "color": obj.category.color,
             }
-            return None
+            # The original code had a 'return None' here, which makes this 'if' block always return None.
+            # Assuming you meant to return the dictionary if a category exists.
+        return None
 
     def get_subcategory(self, obj):
         if obj.subcategory:
@@ -293,7 +295,8 @@ class AdminClassSerializer(serializers.ModelSerializer):
                 "name": obj.subcategory.name,
                 "key": obj.subcategory.key,
             }
-            return None
+            # Same as above, assuming you meant to return the dictionary.
+        return None
 
 
 # --- AdminReviewSerializer ---

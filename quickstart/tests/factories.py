@@ -102,14 +102,12 @@ class PartnerTierFactory(DjangoModelFactory):
     fee_percentage = Decimal("13.00")
     is_default = False
 
-    # This ensures our model's validation is respected by the factory
     @factory.post_generation
     def clean(self, create, extracted, **kwargs):
         if create:
             try:
                 self.clean()
             except ValidationError:
-                # If a default already exists, just unset this one
                 if (
                     PartnerTier.objects.filter(is_default=True)
                     .exclude(pk=self.pk)
@@ -157,7 +155,6 @@ class BusinessInfoFactory(DjangoModelFactory):
     stripe_account_status = "active"
 
 
-# --- Class and Scheduling Factories ---
 class ClassesMainFactory(DjangoModelFactory):
     class Meta:
         model = ClassesMain
@@ -209,7 +206,6 @@ class ScheduleInstanceFactory(DjangoModelFactory):
     status = "scheduled"
 
 
-# --- Interaction Factories ---
 class BookingFactory(DjangoModelFactory):
     class Meta:
         model = Booking
@@ -285,9 +281,40 @@ class PaymentFactory(DjangoModelFactory):
 
     booking = factory.SubFactory(BookingFactory)
     stripe_payment_intent_id = factory.Sequence(lambda n: f"pi_test_{n}")
-    amount = factory.LazyAttribute(lambda o: o.booking.amount_paid)
-    service_fee_amount = factory.LazyAttribute(lambda o: o.amount * Decimal("0.13"))
+
+    # --- FIX: Refactored to avoid non-model keyword arguments ---
+    @factory.lazy_attribute
+    def tax_amount(self):
+        subtotal = self.booking.amount_paid
+        return (subtotal * Decimal("0.13")).quantize(Decimal("0.01"))
+
+    @factory.lazy_attribute
+    def amount(self):
+        subtotal = self.booking.amount_paid
+        tax = (subtotal * Decimal("0.13")).quantize(Decimal("0.01"))
+        return subtotal + tax
+
+    @factory.lazy_attribute
+    def platform_fee_amount(self):
+        subtotal = self.booking.amount_paid
+        fee_percentage = (
+            self.booking.schedule_instance.schedule.option.classId.businessId.partner_tier.fee_percentage
+        )
+        return (subtotal * fee_percentage / Decimal(100)).quantize(Decimal("0.01"))
+
+    @factory.lazy_attribute
+    def platform_fee_tax(self):
+        return (self.platform_fee_amount * Decimal("0.13")).quantize(Decimal("0.01"))
+
+    @factory.lazy_attribute
+    def net_payout_amount(self):
+        subtotal = self.booking.amount_paid
+        return (subtotal - self.platform_fee_amount) + (
+            self.tax_amount - self.platform_fee_tax
+        )
+
     status = "succeeded"
+    currency = "CAD"
     payment_method_type = "card"
     card_brand = "visa"
     card_last4 = "4242"

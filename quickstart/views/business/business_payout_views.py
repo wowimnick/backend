@@ -9,7 +9,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied
 
-from quickstart.models import BusinessInfo, Booking, Payout
+from quickstart.models import BusinessInfo, Booking, Payment, Payout
 from quickstart.serializers.business.business_payout_serializers import (
     BusinessPayoutSerializer,
     PayoutSummarySerializer,
@@ -93,20 +93,14 @@ class BusinessPayoutViewSet(viewsets.ReadOnlyModelViewSet):
         """
         business = self.get_business_context()
 
-        pending_bookings = Booking.objects.filter(
-            schedule_instance__schedule__option__classId__businessId=business,
-            status="completed",
-            payment_status="paid",
-            payout_status="pending",
-        ).prefetch_related("payments")
-
-        pending_payout_amount = Decimal("0.0")
-        for booking in pending_bookings:
-            payment = booking.payments.first()
-            if payment:
-                service_fee = payment.service_fee_amount or Decimal("0.00")
-                net_amount = booking.amount_paid - service_fee
-                pending_payout_amount += net_amount
+        pending_payout_aggregation = Payment.objects.filter(
+            booking__schedule_instance__schedule__option__classId__businessId=business,
+            booking__status="completed",
+            booking__payment_status="paid",
+            booking__payout_status="pending",
+            status="succeeded",
+        ).aggregate(total_pending=Coalesce(Sum("net_payout_amount"), Decimal("0.00")))
+        pending_payout_amount = pending_payout_aggregation["total_pending"]
 
         last_payout = (
             Payout.objects.filter(business=business, status="paid")

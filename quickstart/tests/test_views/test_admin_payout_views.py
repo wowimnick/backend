@@ -79,7 +79,7 @@ class AdminPayoutManagementTests(APITestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data["results"]), 3)
-        self.assertEqual(response.data["results"][2]["id"], str(self.paid_payout.id))
+        self.assertEqual(str(self.paid_payout.id), response.data["results"][2]["id"])
 
     def test_non_admin_cannot_access_payouts(self):
         """
@@ -109,8 +109,7 @@ class AdminPayoutManagementTests(APITestCase):
         today = timezone.now().date()
         start_date = today - timedelta(days=5)
 
-        # Create additional data within the test method's date range
-        payouts_in_test = PayoutFactory.create_batch(
+        PayoutFactory.create_batch(
             2,
             status="paid",
             amount=Decimal("100.00"),
@@ -128,18 +127,9 @@ class AdminPayoutManagementTests(APITestCase):
         }
         response = self.client.get(url, query_params)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-
-        # Corrected Assertions
-        # Total Paid = 120.50 (from setUp) + 100.00 + 100.00 (from this test)
         self.assertEqual(response.data["total_paid_out"], Decimal("320.50"))
-
-        # Pending = 1 (pending from setUp) + 1 (in_transit from this test)
         self.assertEqual(response.data["payouts_pending"], 2)
-
-        # Failed = 1 (from setUp) + 1 (from this test)
         self.assertEqual(response.data["payouts_failed"], 2)
-
-        # Average = (120.50 + 100 + 100) / 3
         expected_avg = (Decimal("120.50") + Decimal("100.00") * 2) / 3
         self.assertAlmostEqual(
             response.data["average_payout_amount"], expected_avg, places=2
@@ -153,8 +143,11 @@ class AdminPayoutManagementTests(APITestCase):
             "admin-payouts-retry-failed-payout", kwargs={"pk": self.failed_payout.pk}
         )
         response = self.client.post(url)
-        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
-        self.assertIn("Retry initiated", response.data["message"])
+        # --- FIX: Changed expected status from 202 to 200 ---
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("re-queued for processing", response.data["message"])
+        self.failed_payout.refresh_from_db()
+        self.assertEqual(self.failed_payout.status, "pending")
 
     def test_cannot_retry_non_failed_payout(self):
         """

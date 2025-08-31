@@ -39,11 +39,11 @@ def update_completed_booking_status():
 @shared_task(name="tasks.process_daily_payouts")
 def process_daily_payouts():
     """
-    Calculates net daily revenue for businesses and initiates Stripe transfers.
+    Groups paid-out bookings by business and initiates Stripe transfers
+    based on the pre-calculated net_payout_amount.
     """
     logger.info("--- Starting Daily Payout Processing Task ---")
 
-    # Correctly fetches completed bookings ready for payout.
     bookings_to_payout = (
         Booking.objects.filter(
             status="completed",
@@ -58,7 +58,6 @@ def process_daily_payouts():
         logger.info("No bookings found requiring payout. Process finished.")
         return "No bookings to pay out."
 
-    # Group bookings by business to create consolidated payouts
     payouts_by_business = {}
     for booking in bookings_to_payout:
         business = booking.schedule_instance.schedule.option.classId.businessId
@@ -67,24 +66,23 @@ def process_daily_payouts():
                 business.stripe_account_id,
                 {
                     "business_instance": business,
-                    "net_revenue": Decimal("0.0"),
+                    "total_payout": Decimal("0.0"),
                     "booking_ids": [],
                 },
             )
 
-            payment = booking.payments.first()
+            payment = booking.payments.filter(status="succeeded").first()
             if payment:
-                service_fee = payment.service_fee_amount or Decimal("0.00")
-                net_amount = booking.amount_paid - service_fee
+                # Use the pre-calculated net_payout_amount from the Payment model
                 payouts_by_business[business.stripe_account_id][
-                    "net_revenue"
-                ] += net_amount
+                    "total_payout"
+                ] += payment.net_payout_amount
                 payouts_by_business[business.stripe_account_id]["booking_ids"].append(
                     booking.id
                 )
             else:
                 logger.warning(
-                    f"Booking {booking.id} skipped for payout: no associated payment record found."
+                    f"Booking {booking.id} skipped for payout: no associated successful payment record found."
                 )
 
     logger.info(f"Found {len(payouts_by_business)} businesses to process payouts for.")
@@ -94,7 +92,7 @@ def process_daily_payouts():
 
     for stripe_id, data in payouts_by_business.items():
         business = data["business_instance"]
-        net_payout_amount = data["net_revenue"]
+        net_payout_amount = data["total_payout"]
         booking_ids = data["booking_ids"]
 
         if net_payout_amount <= Decimal("0.50"):
@@ -110,24 +108,21 @@ def process_daily_payouts():
             with transaction.atomic():
                 payout_amount_cents = int(net_payout_amount * 100)
 
-                # Create the payout record FIRST with 'pending' status and temporary ID
                 payout_record = Payout.objects.create(
                     business=business,
-                    stripe_transfer_id=temp_transfer_id,  # Temporary ID, will be updated after successful Stripe call
+                    stripe_transfer_id=temp_transfer_id,
                     amount=net_payout_amount,
                     currency=business.currency.upper(),
-                    arrival_date=timezone.now().date()
-                    + timedelta(days=3),  # Default arrival date
-                    status="pending",  # Start as pending
+                    arrival_date=timezone.now().date() + timedelta(days=3),
+                    status="pending",
                     metadata={
                         "source": "daily_payout_task",
                         "business_id": business.businessId,
                         "booking_count": len(booking_ids),
-                        "temp_id": True,  # Flag to indicate this started with a temp ID
+                        "temp_id": True,
                     },
                 )
 
-                # Try to create the Stripe transfer
                 transfer = stripe.Transfer.create(
                     amount=payout_amount_cents,
                     currency=business.currency.lower(),
@@ -136,28 +131,22 @@ def process_daily_payouts():
                     metadata={
                         "business_id": business.businessId,
                         "booking_count": len(booking_ids),
-                        "payout_record_id": payout_record.id,  # Link back to our record
+                        "payout_record_id": str(payout_record.id),
                     },
                 )
 
-                # SUCCESS: Update the record with Stripe details
                 arrival_date = (
                     datetime.fromtimestamp(transfer.arrival_date, tz=pytz.utc).date()
                     if transfer.arrival_date
                     else timezone.now().date() + timedelta(days=3)
                 )
 
-                # Update metadata to remove temp flag and add real Stripe data
                 updated_metadata = transfer.metadata.copy()
-                updated_metadata.pop("temp_id", None)  # Remove temp flag
+                updated_metadata.pop("temp_id", None)
 
-                payout_record.stripe_transfer_id = (
-                    transfer.id
-                )  # Replace temp ID with real Stripe ID
+                payout_record.stripe_transfer_id = transfer.id
                 payout_record.arrival_date = arrival_date
-                payout_record.status = (
-                    "paid"  # Hardcode to success since API call succeeded
-                )
+                payout_record.status = "paid"
                 payout_record.metadata = updated_metadata
                 payout_record.save(
                     update_fields=[
@@ -168,7 +157,6 @@ def process_daily_payouts():
                     ]
                 )
 
-                # Associate bookings and mark as processed
                 bookings = Booking.objects.filter(id__in=booking_ids)
                 payout_record.bookings.set(bookings)
                 bookings.update(payout_status="processed")
@@ -179,7 +167,6 @@ def process_daily_payouts():
                 )
 
         except stripe.error.StripeError as stripe_error:
-            # STRIPE API FAILURE: Mark as failed
             failed_payouts += 1
             if payout_record:
                 payout_record.status = "failed"
@@ -193,7 +180,6 @@ def process_daily_payouts():
                 )
 
         except Exception as general_error:
-            # GENERAL FAILURE: Mark as failed
             failed_payouts += 1
             if payout_record:
                 payout_record.status = "failed"

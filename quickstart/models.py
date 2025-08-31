@@ -2021,14 +2021,37 @@ class Payment(models.Model):
     # Stripe specific fields
     stripe_payment_intent_id = models.CharField(max_length=255, unique=True)
     stripe_charge_id = models.CharField(max_length=255, null=True, blank=True)
-    amount = models.DecimalField(max_digits=10, decimal_places=2)
-    service_fee_amount = models.DecimalField(
+
+    amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="The grand total amount charged to the customer, including tax.",
+    )
+    tax_amount = models.DecimalField(
         max_digits=10,
         decimal_places=2,
         default=Decimal("0.00"),
-        help_text="The portion of the payment amount that is the platform's service fee.",
+        help_text="The total HST/tax amount included in the 'amount'.",
     )
-    currency = models.CharField(max_length=3, default="USD")
+    platform_fee_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        help_text="The portion of the payment (pre-tax) that is the platform's service fee.",
+    )
+    platform_fee_tax = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        help_text="The portion of the tax amount that corresponds to the platform fee.",
+    )
+    net_payout_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        help_text="The final net amount to be transferred to the business (their revenue + their share of tax).",
+    )
+    currency = models.CharField(max_length=3, default="CAD")
 
     # Status tracking
     status = models.CharField(
@@ -2091,7 +2114,6 @@ class Payment(models.Model):
             models.Index(fields=["created_at"]),
         ]
         permissions = [
-            # --- Platform Admin Permissions (Keep these) ---
             ("process_refund", "Can process refunds for any payment"),
             ("mark_payment_paid", "Can manually mark a payment as paid"),
             ("view_payment_stats", "Can view aggregated payment statistics"),
