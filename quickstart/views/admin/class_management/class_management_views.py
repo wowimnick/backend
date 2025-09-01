@@ -224,6 +224,7 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 output_field=Count("pk").output_field,
             )
 
+            # --- FIX: Changed service_fee_amount to platform_fee_amount ---
             platform_revenue_subquery = Subquery(
                 Payment.objects.filter(
                     booking__schedule_instance__schedule__option__classId=OuterRef(
@@ -234,7 +235,7 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 .values(
                     "booking__schedule_instance__schedule__option__classId"
                 )  # Group by class
-                .annotate(total_fees=Sum("service_fee_amount"))
+                .annotate(total_fees=Sum("platform_fee_amount"))  # Changed field name
                 .values("total_fees")[:1],
                 output_field=DecimalField(),
             )

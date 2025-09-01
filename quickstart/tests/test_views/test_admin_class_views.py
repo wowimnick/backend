@@ -1,5 +1,3 @@
-# quickstart/tests/test_views/test_admin_class_views.py
-
 from rest_framework.test import APITestCase
 from rest_framework import status
 from django.urls import reverse
@@ -39,9 +37,12 @@ class AdminClassReviewManagementTests(APITestCase):
                     "change_class_status",
                 ],
                 Reviews: ["access_review_admin", "view_reviews", "change_reviews"],
-                ClassCategory: [  # Add permissions for category management
+                ClassCategory: [
                     "access_category_admin",
                     "delete_classcategory",
+                    # Explicitly add view/change for robustness
+                    "view_classcategory",
+                    "change_classcategory",
                 ],
             },
         )
@@ -49,11 +50,20 @@ class AdminClassReviewManagementTests(APITestCase):
         self.admin_user.user_permissions.add(*self.admin_role.permissions.all())
 
         self.category = ClassCategoryFactory()
+        # Ensure the business is active and verified for classes to be listable
         self.klass1 = ClassesMainFactory(
-            title="Active Class", status="active", category=self.category
+            title="Active Class",
+            status="active",
+            category=self.category,
+            businessId__isActive=True,
+            businessId__verificationStatus="verified",
         )
         self.klass2 = ClassesMainFactory(
-            title="Inactive Class", status="inactive", category=self.category
+            title="Inactive Class",
+            status="inactive",
+            category=self.category,
+            businessId__isActive=True,
+            businessId__verificationStatus="verified",
         )
         self.review1 = ReviewFactory(classId=self.klass1, status="approved")
         self.review2 = ReviewFactory(classId=self.klass2, status="under_review")
@@ -69,6 +79,7 @@ class AdminClassReviewManagementTests(APITestCase):
         response = self.client.get(url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+        # Assuming the Admin view shows all classes regardless of status
         self.assertEqual(len(response.data["results"]), 2)
         print("✅ PASSED: Admin can list all classes.")
 
@@ -121,7 +132,6 @@ class AdminClassReviewManagementTests(APITestCase):
         [EDGE CASE] DELETE .../categories/{pk}/ - Admin cannot delete a category with classes assigned.
         """
         print("\n--- Running: test_cannot_delete_category_with_assigned_classes ---")
-        # klass1 is already assigned to a category via the factory
         category_with_class = self.klass1.category
         url = reverse("admin-categories-detail", kwargs={"pk": category_with_class.pk})
 
@@ -148,7 +158,7 @@ class AdminClassReviewManagementTests(APITestCase):
         )
         data = {"new_id": new_category.pk}
 
-        # FIX: Add format="json" to the request.
+        # --- FIX: Add format="json" to the request. ---
         response = self.client.post(url, data, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)

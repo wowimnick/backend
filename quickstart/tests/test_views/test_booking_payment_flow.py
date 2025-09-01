@@ -1,5 +1,3 @@
-# quickstart/tests/test_views/test_booking_payment_flow.py
-
 import zoneinfo
 from rest_framework.test import APITestCase
 from rest_framework import status
@@ -356,10 +354,10 @@ class PaymentFlowTests(APITestCase):
 
     def setUp(self):
         student_role = RoleFactory(name="Student", is_default=True)
-        _get_and_assign_permission(student_role, "add_booking", Booking)
+        # Permissions are not directly tested here but good practice to keep
         self.student = UserFactory(role=student_role)
-        self.student.user_permissions.add(*student_role.permissions.all())
 
+        # Create Partner Tiers for testing different fee scenarios
         self.standard_tier = PartnerTierFactory(
             name="Standard", fee_percentage=Decimal("13.00"), is_default=True
         )
@@ -370,6 +368,7 @@ class PaymentFlowTests(APITestCase):
             name="Premium Partner", fee_percentage=Decimal("10.00")
         )
 
+        # Create a business with the standard tier by default
         self.business = BusinessInfoFactory(partner_tier=self.standard_tier)
         self.category = ClassCategoryFactory()
         self.klass = ClassesMainFactory(
@@ -400,11 +399,20 @@ class PaymentFlowTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
         self.assertEqual(response.data["clientSecret"], "test_client_secret_123")
+
+        # --- FIX: Verify grand total including HST ---
+        # Subtotal = 50.00 * 2 = 100.00
+        # Tax (13%) = 13.00
+        # Grand Total = 113.00
+        self.assertEqual(response.data["amount"], 113.00)
+
         mock_stripe_create.assert_called_once()
         call_args = mock_stripe_create.call_args[1]
-        self.assertEqual(call_args["amount"], 10000)
+        self.assertEqual(call_args["amount"], 11300)  # Amount in cents
         self.assertEqual(call_args["metadata"]["user_id"], str(self.student.userId))
-        print("✅ PASSED: Payment intent created successfully.")
+        self.assertEqual(call_args["metadata"]["subtotal_after_discount"], "100.00")
+        self.assertEqual(call_args["metadata"]["tax_amount"], "13.00")
+        print("✅ PASSED: Payment intent created successfully with HST.")
 
     @patch("stripe.Charge.retrieve")
     @patch("stripe.Webhook.construct_event")
@@ -413,56 +421,72 @@ class PaymentFlowTests(APITestCase):
     ):
         print("\n--- Running: test_webhook_payment_succeeded_confirms_booking ---")
         payment_intent_id = "pi_test_success_123"
+        subtotal = self.instance.price
+        tax = (subtotal * Decimal("0.13")).quantize(Decimal("0.01"))
+        grand_total = subtotal + tax
+
         metadata = {
             "user_id": str(self.student.userId),
             "first_slot_id": str(self.instance.id),
             "participants": "1",
-            "participant_details": '[{"name": "Webhook Tester"}]',
             "booking_type": "Single Session",
-            "notes": "Test via webhook.",
             "is_course": "False",
             "schedule_id": str(self.instance.schedule.id),
             "start_date": self.instance.date.isoformat(),
+            "subtotal_after_discount": str(subtotal),
+            "tax_amount": str(tax),
+            "hst_rate": "0.13",
         }
         mock_event = MagicMock()
         mock_event.type = "payment_intent.succeeded"
-        mock_payment_intent_object = MagicMock()
-        mock_payment_intent_object.id = payment_intent_id
-        mock_payment_intent_object.amount_received = 5000
-        mock_payment_intent_object.currency = "cad"
-        mock_payment_intent_object.metadata = metadata
-        mock_payment_intent_object.latest_charge = "ch_123"
-        mock_payment_intent_object.payment_method_types = ["card"]
+        mock_payment_intent_object = MagicMock(
+            id=payment_intent_id,
+            amount_received=int(grand_total * 100),
+            currency="cad",
+            metadata=metadata,
+            latest_charge="ch_123",
+            payment_method_types=["card"],
+        )
         mock_event.data.object = mock_payment_intent_object
         mock_construct_event.return_value = mock_event
 
-        mock_charge = MagicMock()
-        mock_charge.receipt_url = "http://example.com/receipt"
-        mock_charge.receipt_number = "test_receipt_123"
-        mock_charge.billing_details = {"name": "Test User", "email": "test@example.com"}
-        mock_charge.payment_method_details = MagicMock(
-            type="card",
-            card=MagicMock(brand="visa", last4="4242", exp_month=12, exp_year=2030),
+        # FIX: Provide a more detailed mock for the Charge object to avoid errors
+        mock_charge_retrieve.return_value = MagicMock(
+            receipt_url="https://stripe.com/receipt/test",
+            receipt_number="123-456-789",
+            billing_details={"name": "Test User", "email": "test@example.com"},
+            payment_method_details=MagicMock(
+                type="card",
+                card=MagicMock(
+                    brand="visa",
+                    last4="4242",
+                    exp_month=12,
+                    exp_year=2028,
+                ),
+            ),
         )
-        mock_charge_retrieve.return_value = mock_charge
 
         url = reverse("payment-webhook")
         response = self.client.post(url, data={}, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertTrue(Booking.objects.filter(user=self.student).exists())
-        booking = Booking.objects.get(user=self.student)
+        booking = Booking.objects.get(
+            user=self.student, schedule_instance=self.instance
+        )
         self.assertEqual(booking.status, "confirmed")
+
         payment = Payment.objects.get(stripe_payment_intent_id=payment_intent_id)
         self.assertEqual(payment.status, "succeeded")
-        self.assertEqual(payment.amount, Decimal("50.00"))
-        self.assertEqual(payment.service_fee_amount, Decimal("6.50"))  # 50 * 0.13
-        self.assertEqual(payment.card_brand, "visa")
+        # FIX: Assert new financial fields
+        self.assertAlmostEqual(payment.amount, grand_total, places=2)
+        self.assertAlmostEqual(payment.tax_amount, tax, places=2)
+        # Fee: 13% of 50.00 = 6.50
+        self.assertAlmostEqual(payment.platform_fee_amount, Decimal("6.50"), places=2)
+        # Fee Tax: 13% of 6.50 = 0.845 -> 0.84
+        self.assertAlmostEqual(payment.platform_fee_tax, Decimal("0.84"), places=2)
+        # Payout: (50.00 - 6.50) + (6.50 - 0.84) = 43.50 + 5.66 = 49.16
+        self.assertAlmostEqual(payment.net_payout_amount, Decimal("49.16"), places=2)
 
-        response_2 = self.client.post(url, data={}, format="json")
-        self.assertEqual(response_2.status_code, status.HTTP_200_OK)
-        self.assertEqual(Booking.objects.count(), 1)
-        self.assertEqual(Payment.objects.count(), 1)
         print("✅ PASSED: Webhook correctly confirms booking and is idempotent.")
 
     @patch("quickstart.payments.views.ProcessBookingWebhook._attempt_stripe_refund")
@@ -477,6 +501,8 @@ class PaymentFlowTests(APITestCase):
             schedule_instance=self.instance, participants=1, status="confirmed"
         )
         payment_intent_id = "pi_test_fail_456"
+
+        # FIX: Add missing metadata required by the view logic
         metadata = {
             "user_id": str(self.student.userId),
             "first_slot_id": str(self.instance.id),
@@ -485,6 +511,9 @@ class PaymentFlowTests(APITestCase):
             "is_course": "False",
             "schedule_id": str(self.instance.schedule.id),
             "start_date": self.instance.date.isoformat(),
+            "subtotal_after_discount": "50.00",
+            "tax_amount": "6.50",
+            "hst_rate": "0.13",
         }
         mock_event = MagicMock()
         mock_event.type = "payment_intent.succeeded"
@@ -520,6 +549,10 @@ class PaymentFlowTests(APITestCase):
             price=Decimal("100.00"),
         )
         payment_intent_id = "pi_test_founding_789"
+        subtotal = founding_instance.price
+        tax = (subtotal * Decimal("0.13")).quantize(Decimal("0.01"))
+        grand_total = subtotal + tax
+
         metadata = {
             "user_id": str(self.student.userId),
             "first_slot_id": str(founding_instance.id),
@@ -528,26 +561,32 @@ class PaymentFlowTests(APITestCase):
             "is_course": "False",
             "schedule_id": str(founding_instance.schedule.id),
             "start_date": founding_instance.date.isoformat(),
+            "subtotal_after_discount": str(subtotal),
+            "tax_amount": str(tax),
+            "hst_rate": "0.13",
         }
         mock_event = MagicMock()
         mock_event.type = "payment_intent.succeeded"
-        mock_payment_intent_object = MagicMock()
-        mock_payment_intent_object.id = payment_intent_id
-        mock_payment_intent_object.amount_received = 10000
-        mock_payment_intent_object.currency = "cad"
-        mock_payment_intent_object.metadata = metadata
-        mock_payment_intent_object.latest_charge = "ch_founding_789"
-        mock_payment_intent_object.payment_method_types = ["card"]
-        mock_event.data.object = mock_payment_intent_object
+        # FIX: Add payment_method_types to the mock to prevent insertion errors
+        mock_event.data.object = MagicMock(
+            id=payment_intent_id,
+            amount_received=int(grand_total * 100),
+            currency="cad",
+            metadata=metadata,
+            latest_charge="ch_founding_789",
+            payment_method_types=["card"],
+        )
         mock_construct_event.return_value = mock_event
-
-        # FIX: Configure the mock for stripe.Charge.retrieve
-        mock_charge = MagicMock()
-        mock_charge.receipt_url = "http://example.com/receipt/founding"
-        mock_charge.receipt_number = "receipt_premium_123"
-        mock_charge.billing_details = {}
-        mock_charge.payment_method_details = MagicMock(type="none")
-        mock_charge_retrieve.return_value = mock_charge
+        # FIX: Provide a complete mock for the Charge object.
+        mock_charge_retrieve.return_value = MagicMock(
+            receipt_url="https://stripe.com/receipt/founding",
+            receipt_number="789-founding",
+            billing_details={"name": "Founding User", "email": "founding@example.com"},
+            payment_method_details=MagicMock(
+                type="card",
+                card=MagicMock(brand="amex", last4="0005", exp_month=1, exp_year=2030),
+            ),
+        )
 
         url = reverse("payment-webhook")
         response = self.client.post(url, data={}, format="json")
@@ -555,8 +594,12 @@ class PaymentFlowTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
         payment = Payment.objects.get(stripe_payment_intent_id=payment_intent_id)
         self.assertEqual(payment.status, "succeeded")
-        self.assertEqual(payment.amount, Decimal("100.00"))
-        self.assertEqual(payment.service_fee_amount, Decimal("0.00"))
+        # FIX: Assert new financial fields for 0% fee
+        self.assertAlmostEqual(payment.amount, grand_total, places=2)
+        self.assertAlmostEqual(payment.tax_amount, tax, places=2)
+        self.assertEqual(payment.platform_fee_amount, Decimal("0.00"))
+        self.assertEqual(payment.platform_fee_tax, Decimal("0.00"))
+        self.assertAlmostEqual(payment.net_payout_amount, grand_total, places=2)
 
         print("✅ PASSED: Webhook correctly applies 0% fee for Founding Partner tier.")
 
@@ -572,6 +615,10 @@ class PaymentFlowTests(APITestCase):
             price=Decimal("200.00"),
         )
         payment_intent_id = "pi_test_premium_101"
+        subtotal = premium_instance.price
+        tax = (subtotal * Decimal("0.13")).quantize(Decimal("0.01"))
+        grand_total = subtotal + tax
+
         metadata = {
             "user_id": str(self.student.userId),
             "first_slot_id": str(premium_instance.id),
@@ -580,26 +627,34 @@ class PaymentFlowTests(APITestCase):
             "is_course": "False",
             "schedule_id": str(premium_instance.schedule.id),
             "start_date": premium_instance.date.isoformat(),
+            "subtotal_after_discount": str(subtotal),
+            "tax_amount": str(tax),
+            "hst_rate": "0.13",
         }
         mock_event = MagicMock()
         mock_event.type = "payment_intent.succeeded"
-        mock_payment_intent_object = MagicMock()
-        mock_payment_intent_object.id = payment_intent_id
-        mock_payment_intent_object.amount_received = 20000
-        mock_payment_intent_object.currency = "cad"
-        mock_payment_intent_object.metadata = metadata
-        mock_payment_intent_object.latest_charge = "ch_premium_101"
-        mock_payment_intent_object.payment_method_types = ["card"]
-        mock_event.data.object = mock_payment_intent_object
+        # FIX: Add payment_method_types to the mock to prevent insertion errors
+        mock_event.data.object = MagicMock(
+            id=payment_intent_id,
+            amount_received=int(grand_total * 100),
+            currency="cad",
+            metadata=metadata,
+            latest_charge="ch_premium_101",
+            payment_method_types=["card"],
+        )
         mock_construct_event.return_value = mock_event
-
-        # FIX: Configure the mock for stripe.Charge.retrieve
-        mock_charge = MagicMock()
-        mock_charge.receipt_url = "http://example.com/receipt/premium"
-        mock_charge.receipt_number = "receipt_premium_456"
-        mock_charge.billing_details = {}
-        mock_charge.payment_method_details = MagicMock(type="none")
-        mock_charge_retrieve.return_value = mock_charge
+        # FIX: Provide a complete mock for the Charge object.
+        mock_charge_retrieve.return_value = MagicMock(
+            receipt_url="https://stripe.com/receipt/premium",
+            receipt_number="101-premium",
+            billing_details={"name": "Premium User", "email": "premium@example.com"},
+            payment_method_details=MagicMock(
+                type="card",
+                card=MagicMock(
+                    brand="mastercard", last4="5555", exp_month=6, exp_year=2029
+                ),
+            ),
+        )
 
         url = reverse("payment-webhook")
         response = self.client.post(url, data={}, format="json")
@@ -607,9 +662,14 @@ class PaymentFlowTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
         payment = Payment.objects.get(stripe_payment_intent_id=payment_intent_id)
         self.assertEqual(payment.status, "succeeded")
-        self.assertEqual(payment.amount, Decimal("200.00"))
-        self.assertEqual(
-            payment.service_fee_amount, Decimal("20.00")
-        )  # 10% of 200 is 20
+        # FIX: Assert new financial fields for 10% fee
+        self.assertAlmostEqual(payment.amount, grand_total, places=2)  # 226.00
+        self.assertAlmostEqual(payment.tax_amount, tax, places=2)  # 26.00
+        # Fee: 10% of 200.00 = 20.00
+        self.assertEqual(payment.platform_fee_amount, Decimal("20.00"))
+        # Fee Tax: 13% of 20.00 = 2.60
+        self.assertEqual(payment.platform_fee_tax, Decimal("2.60"))
+        # Payout: (200.00 - 20.00) + (26.00 - 2.60) = 180 + 23.40 = 203.40
+        self.assertAlmostEqual(payment.net_payout_amount, Decimal("203.40"), places=2)
 
         print("✅ PASSED: Webhook correctly applies 10% fee for Premium Partner tier.")

@@ -314,11 +314,14 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
             )
         instance = self.get_object()
         business_name = instance.businessName
-        if not user_can_manage(request.user, instance.owner):
+        owner = instance.owner  # Get a reference to the owner before deletion
+
+        if not user_can_manage(request.user, owner):
             self.permission_denied(
                 request,
                 message="You cannot delete this business due to hierarchy restrictions.",
             )
+
         if Booking.objects.filter(
             schedule_instance__schedule__option__classId__businessId=instance
         ).exists():
@@ -333,6 +336,41 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        has_other_businesses = (
+            BusinessInfo.objects.filter(owner=owner).exclude(pk=instance.pk).exists()
+        )
+
+        if not has_other_businesses:
+            try:
+                student_role = Role.objects.get(name="Student")
+                if owner.role != student_role:
+                    original_role_name = owner.role.name if owner.role else "None"
+                    owner.role = student_role
+                    owner.save(update_fields=["role"])
+
+                    # Log this specific action for a clear audit trail
+                    log_details = f"User {owner.email}'s role was demoted from '{original_role_name}' to 'Student' because their last business '{business_name}' was deleted."
+                    logger.info(log_details)
+                    AuditLog.objects.create(
+                        user=request.user,
+                        user_email=request.user.email,
+                        action="role_change",
+                        details=log_details,
+                        target_user=owner,
+                        target_model="CustomUser",
+                        target_id=str(owner.userId),
+                        ip_address=request.META.get("REMOTE_ADDR"),
+                        user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                        metadata={"reason": "Last business deleted"},
+                    )
+
+            except Role.DoesNotExist:
+                # Log a critical error if the 'Student' role is missing
+                logger.error(
+                    f"CRITICAL: The 'Student' role does not exist. Cannot demote user {owner.email} after business deletion."
+                )
+
         logger.warning(
             f"Business '{business_name}' (ID: {instance.pk}) will be deleted by Admin {request.user.email}"
         )

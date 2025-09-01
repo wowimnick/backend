@@ -1,5 +1,3 @@
-# quickstart/views/admin/payout_management/payout_views.py
-
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -19,6 +17,8 @@ from quickstart.serializers.admin.payout_management.admin_payout_serializers imp
     AdminPayoutListSerializer,
     AdminPayoutDetailSerializer,
 )
+
+from quickstart.tasks import process_daily_payouts
 
 logger = logging.getLogger(__name__)
 
@@ -133,8 +133,8 @@ class AdminPayoutViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=["post"], url_path="retry")
     def retry_failed_payout(self, request, pk=None):
         """
-        Placeholder for retrying a failed payout.
-        In a real app, this would call a service that interacts with Stripe's API.
+        Resets a failed payout's status to 'pending', allowing the nightly
+        Celery task to attempt processing it again.
         """
         if not request.user.has_perm("quickstart.retry_failed_payout"):
             self.permission_denied(
@@ -151,33 +151,33 @@ class AdminPayoutViewSet(viewsets.ReadOnlyModelViewSet):
         logger.info(
             f"Admin {request.user.email} initiated retry for failed payout {payout.id}"
         )
-        # --- Add your Stripe API call logic here ---
-        # For now, we simulate success for UI development
+
+        # Reset the status. The nightly task will handle the rest.
+        payout.status = "pending"
+        payout.save(update_fields=["status"])
+
         return Response(
-            {"message": f"Retry initiated for payout {payout.stripe_transfer_id}."},
-            status=status.HTTP_202_ACCEPTED,
+            {"message": f"Payout {payout.id} has been re-queued for processing."},
+            status=status.HTTP_200_OK,
         )
 
     @action(detail=False, methods=["post"], url_path="trigger-manual")
     def trigger_manual_payout(self, request):
         """
-        Placeholder for manually triggering the payout process.
-        Requires a background task runner like Celery.
+        Manually triggers the daily payout Celery task to run immediately.
         """
         if not request.user.has_perm("quickstart.trigger_manual_payout"):
             self.permission_denied(
                 request, message="You do not have permission to trigger manual payouts."
             )
 
-        business_id = request.data.get(
-            "business_id"
-        )  # Optional: for a specific business
-        logger.info(
-            f"Admin {request.user.email} triggered manual payout process. Target Business ID: {business_id or 'All'}"
-        )
-        # --- Add logic to queue your Celery task here ---
+        logger.info(f"Admin {request.user.email} triggered manual payout process.")
+
+        # Asynchronously call the Celery task
+        process_daily_payouts.delay()
+
         return Response(
-            {"message": "Manual payout process has been initiated."},
+            {"message": "Manual payout process has been initiated in the background."},
             status=status.HTTP_202_ACCEPTED,
         )
 
@@ -214,7 +214,7 @@ class AdminPayoutViewSet(viewsets.ReadOnlyModelViewSet):
             for payout in queryset:
                 writer.writerow(
                     [
-                        payout.id,
+                        str(payout.id),
                         payout.stripe_transfer_id,
                         payout.business.businessName,
                         payout.amount,

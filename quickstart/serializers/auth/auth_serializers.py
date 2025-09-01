@@ -99,7 +99,7 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
     def _get_avatar_url(self, obj, size=None):
         if not obj.avatar or not hasattr(obj.avatar, "name") or not obj.avatar.name:
             return None
-        if not getattr(settings, "CLOUDFONT_DOMAIN", None):
+        if not getattr(settings, "CLOUDFRONT_DOMAIN", None):
             logger.warning("CLOUDFRONT_DOMAIN is not configured.")
             return obj.avatar.url
 

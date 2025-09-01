@@ -1,7 +1,5 @@
-# quickstart/serializers/admin/payout_management/payout_serializers.py
-
 from rest_framework import serializers
-from quickstart.models import Payout, Booking
+from quickstart.models import Payout, Booking, Payment
 
 
 class AdminPayoutBookingSerializer(serializers.ModelSerializer):
@@ -29,13 +27,18 @@ class AdminPayoutBookingSerializer(serializers.ModelSerializer):
 
     def get_net_amount(self, obj):
         """
-        Calculate the net amount for the business after the platform fee.
-        This assumes the fee is stored on the related Payment record.
+        Returns the pre-calculated net payout amount for the business from the
+        associated Payment record for this specific booking.
         """
-        payment = obj.payments.first()
+        # Find the successful payment associated with this booking
+        payment = obj.payments.filter(status="succeeded").first()
         if payment:
-            return payment.amount - payment.service_fee_amount
-        return obj.amount_paid  # Fallback if no payment record found
+            # --- FIX: Use the correct field 'net_payout_amount' ---
+            # This field already contains the final calculated amount due to the business for this booking.
+            return payment.net_payout_amount
+
+        # Fallback for older data or if payment somehow isn't found
+        return obj.amount_paid
 
 
 class AdminPayoutListSerializer(serializers.ModelSerializer):

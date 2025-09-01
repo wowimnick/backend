@@ -23,7 +23,7 @@ class AdminPaymentSerializer(serializers.ModelSerializer):
             "stripe_payment_intent_id",
             "stripe_charge_id",
             "amount",
-            "service_fee_amount",
+            "platform_fee_amount",  # FIX: Renamed from service_fee_amount
             "currency",
             "status",
             "formatted_status",
@@ -108,8 +108,10 @@ class AdminBookingPaymentSerializer(serializers.ModelSerializer):
 
     available_refund_amount = serializers.ReadOnlyField()
     formatted_status = serializers.ReadOnlyField()
-    service_fee_amount = serializers.DecimalField(
-        max_digits=10, decimal_places=2, read_only=True
+    platform_fee_amount = (
+        serializers.DecimalField(  # FIX: Renamed from service_fee_amount
+            max_digits=10, decimal_places=2, read_only=True
+        )
     )
 
     class Meta:
@@ -118,7 +120,7 @@ class AdminBookingPaymentSerializer(serializers.ModelSerializer):
             "id",
             "stripe_payment_intent_id",
             "amount",
-            "service_fee_amount",
+            "platform_fee_amount",  # FIX: Renamed from service_fee_amount
             "currency",
             "status",
             "formatted_status",

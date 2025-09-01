@@ -34,6 +34,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
+HST_RATE = Decimal("0.13")
 
 
 class CreatePaymentIntentView(APIView):
@@ -63,27 +64,22 @@ class CreatePaymentIntentView(APIView):
                 "participant_details": request.data.get("participant_details", []),
             }
 
-            # --- FIX: Wrap serializer validation in a transaction to allow select_for_update ---
             with transaction.atomic():
                 serializer = BookingCreateSerializer(
                     data=serializer_data, context={"request": request}
                 )
 
                 if not serializer.is_valid():
-                    # This will now correctly raise validation errors from within the transaction
                     return Response(
                         {"error": serializer.errors}, status=status.HTTP_400_BAD_REQUEST
                     )
 
                 validated_instance = serializer.context.get("validated_instance")
                 if not validated_instance:
-                    # This check remains inside the transaction for consistency
                     return Response(
                         {"error": "Internal error: Validated instance not found."},
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     )
-
-            # The transaction is committed here, releasing the lock. The validated data is safe to use.
 
             instance = validated_instance
             option = instance.schedule.option
@@ -98,7 +94,7 @@ class CreatePaymentIntentView(APIView):
             participants = serializer.validated_data["participants"]
             subtotal = sum(Decimal(inst.price) * participants for inst in all_instances)
 
-            final_amount = subtotal
+            final_amount = subtotal  # This is now the subtotal before discount
             discount_to_apply = None
             calculated_discount_amount = Decimal("0.00")
 
@@ -142,8 +138,16 @@ class CreatePaymentIntentView(APIView):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
-            total_amount_for_stripe_cents = int(final_amount * 100)
-            if total_amount_for_stripe_cents < 50 and final_amount > 0:
+            subtotal_after_discount = final_amount
+            tax_amount = (subtotal_after_discount * HST_RATE).quantize(Decimal("0.01"))
+            grand_total = subtotal_after_discount + tax_amount
+
+            logger.info(
+                f"Tax Calculation: Subtotal after discount: {subtotal_after_discount}, HST ({HST_RATE*100}%): {tax_amount}, Grand Total: {grand_total}"
+            )
+
+            total_amount_for_stripe_cents = int(grand_total * 100)
+            if total_amount_for_stripe_cents < 50 and grand_total > 0:
                 return Response(
                     {"error": "The final amount after discount is too low to process."},
                     status=status.HTTP_400_BAD_REQUEST,
@@ -169,6 +173,9 @@ class CreatePaymentIntentView(APIView):
                 "discount_amount": (
                     str(calculated_discount_amount) if discount_to_apply else None
                 ),
+                "subtotal_after_discount": str(subtotal_after_discount),
+                "tax_amount": str(tax_amount),
+                "hst_rate": str(HST_RATE),
             }
             if booking_type == "Full Course" and instance.schedule.end_date:
                 metadata["end_date"] = str(instance.schedule.end_date)
@@ -189,7 +196,7 @@ class CreatePaymentIntentView(APIView):
             return Response(
                 {
                     "clientSecret": intent.client_secret,
-                    "amount": float(final_amount.quantize(Decimal("0.01"))),
+                    "amount": float(grand_total.quantize(Decimal("0.01"))),
                     "total_sessions": len(all_instances),
                     "booking_type": booking_type,
                 }
@@ -398,6 +405,9 @@ class ProcessBookingWebhook(APIView):
             applied_discount_id_str = metadata.get("applied_discount_id")
             discount_amount_str = metadata.get("discount_amount")
 
+            subtotal_after_discount_str = metadata.get("subtotal_after_discount")
+            tax_amount_str = metadata.get("tax_amount")
+
             required_meta_keys = [
                 "user_id",
                 "first_slot_id",
@@ -406,6 +416,8 @@ class ProcessBookingWebhook(APIView):
                 "is_course",
                 "schedule_id",
                 "start_date",
+                "subtotal_after_discount",
+                "tax_amount",  # Add tax keys to validation
             ]
             if not all(key in metadata for key in required_meta_keys):
                 missing_keys = [
@@ -434,9 +446,7 @@ class ProcessBookingWebhook(APIView):
                     f"Invalid payment metadata or related object not found: {e}"
                 )
 
-            # Get the business object to check for founding partner status
             business = initial_instance.schedule.option.classId.businessId
-
             discount_to_apply = None
             if applied_discount_id_str:
                 try:
@@ -449,7 +459,6 @@ class ProcessBookingWebhook(APIView):
                     )
 
             total_calculated_discount_amount = Decimal(discount_amount_str or "0.00")
-
             instances_to_book = []
             if is_course:
                 if not end_date_str:
@@ -479,12 +488,13 @@ class ProcessBookingWebhook(APIView):
                         f"Session on {instance_check.date.strftime('%b %d')} is now full. Your payment will be refunded."
                     )
 
-            total_amount_from_stripe = Decimal(payment_intent.amount_received) / 100
+            grand_total_from_stripe = Decimal(payment_intent.amount_received) / 100
+            total_tax = Decimal(tax_amount_str)
+            subtotal_after_discount = Decimal(subtotal_after_discount_str)
 
             if business.partner_tier:
                 fee_percentage = business.partner_tier.fee_percentage
             else:
-                # Fallback to the default tier if for some reason a business doesn't have one
                 try:
                     default_tier = PartnerTier.objects.get(is_default=True)
                     fee_percentage = default_tier.fee_percentage
@@ -492,21 +502,33 @@ class ProcessBookingWebhook(APIView):
                         f"Business {business.id} was missing a partner tier. Fell back to default tier '{default_tier.name}'."
                     )
                 except PartnerTier.DoesNotExist:
-                    # Critical fallback if no default is configured
                     logger.error(
                         "CRITICAL: No default PartnerTier is configured in the database. Using hardcoded 13% fee."
                     )
                     fee_percentage = Decimal("13.00")
 
             service_fee_rate = fee_percentage / Decimal("100.0")
+            platform_fee_amount = (subtotal_after_discount * service_fee_rate).quantize(
+                Decimal("0.01")
+            )
+            platform_fee_tax = (platform_fee_amount * HST_RATE).quantize(
+                Decimal("0.01")
+            )
+            business_payout_tax = total_tax - platform_fee_tax
+            business_net_revenue = subtotal_after_discount - platform_fee_amount
+            net_payout_to_business = business_net_revenue + business_payout_tax
 
-            calculated_service_fee = (
-                total_amount_from_stripe * service_fee_rate
-            ).quantize(Decimal("0.01"))
+            logger.info(
+                f"Webhook Fee & Tax Split for PI {payment_intent.id}: "
+                f"Grand Total: {grand_total_from_stripe}, Subtotal: {subtotal_after_discount}, Total Tax: {total_tax}. "
+                f"Platform Fee: {platform_fee_amount}, Platform Tax: {platform_fee_tax}. "
+                f"Business Net Revenue: {business_net_revenue}, Business Tax: {business_payout_tax}. "
+                f"--> Net Payout to Business: {net_payout_to_business}"
+            )
 
             num_instances = len(instances_to_book)
             amount_per_booking_instance = (
-                (total_amount_from_stripe / num_instances)
+                (grand_total_from_stripe / num_instances)
                 if num_instances > 0
                 else Decimal("0.00")
             )
@@ -532,7 +554,6 @@ class ProcessBookingWebhook(APIView):
                 )
                 booking.save()
 
-                # --- FIX: Create AppliedDiscount record correctly ---
                 if discount_to_apply:
                     AppliedDiscount.objects.create(
                         booking=booking,
@@ -541,9 +562,7 @@ class ProcessBookingWebhook(APIView):
                             Decimal("0.01")
                         ),
                     )
-                    # Atomically increment usage count
                     discount_to_apply.redeem()
-
                 created_bookings_for_email.append(booking)
 
             logger.info(
@@ -564,8 +583,11 @@ class ProcessBookingWebhook(APIView):
                 booking=created_bookings_for_email[0],
                 stripe_payment_intent_id=payment_intent.id,
                 stripe_charge_id=latest_charge_id,
-                amount=total_amount_from_stripe,
-                service_fee_amount=calculated_service_fee,
+                amount=grand_total_from_stripe,
+                tax_amount=total_tax,
+                platform_fee_amount=platform_fee_amount,
+                platform_fee_tax=platform_fee_tax,
+                net_payout_amount=net_payout_to_business,
                 currency=payment_intent.currency.upper(),
                 status="succeeded",
                 payment_method_type=(
@@ -577,10 +599,7 @@ class ProcessBookingWebhook(APIView):
             )
 
             if charge_details:
-                # FIX: Use attribute access for Stripe objects and handle nested structure
-                # This makes the code compatible with both the real Stripe object and MagicMock.
                 update_fields = []
-
                 pm_details = getattr(charge_details, "payment_method_details", None)
                 if pm_details and getattr(pm_details, "type", None) == "card":
                     card_obj = getattr(pm_details, "card", None)
@@ -612,11 +631,6 @@ class ProcessBookingWebhook(APIView):
 
                 billing_details_obj = getattr(charge_details, "billing_details", None)
                 if billing_details_obj:
-                    # The billing_details object from Stripe is dict-like.
-                    # The previous use of .to_dict() caused a DataError because it
-                    # unexpectedly returned a string.
-                    # By converting the StripeObject to a standard dict, we ensure
-                    # it's in a format the Django JSONField can safely serialize.
                     payment_record.billing_details = dict(billing_details_obj)
                     update_fields.append("billing_details")
 
@@ -638,7 +652,6 @@ class ProcessBookingWebhook(APIView):
                 )
 
             try:
-                # The business object is already fetched above
                 business_info_obj = business
                 if business_info_obj and business_info_obj.newBookingNotification:
                     recipients = {business_info_obj.owner} | set(

@@ -29,12 +29,15 @@ class PayoutBookingSerializer(serializers.ModelSerializer):
         ]
 
     def get_net_amount_for_payout(self, obj):
-        # This mirrors the calculation logic from the payout task
-        payment = obj.payments.first()
+        """
+        Returns the pre-calculated net payout amount for the business from the
+        associated Payment record for this specific booking.
+        """
+        payment = obj.payments.filter(status="succeeded").first()
         if payment:
-            service_fee = payment.service_fee_amount or Decimal("0.00")
-            return obj.amount_paid - service_fee
-        return obj.amount_paid  # Fallback, though a payment should exist
+            return payment.net_payout_amount
+
+        return Decimal("0.00")
 
 
 class BusinessPayoutSerializer(serializers.ModelSerializer):
@@ -42,7 +45,6 @@ class BusinessPayoutSerializer(serializers.ModelSerializer):
     Serializer for the Payout model for business user consumption.
     """
 
-    # This now uses the efficient annotation from the viewset
     booking_count = serializers.IntegerField(source="booking_count_agg", read_only=True)
     amount_display = serializers.SerializerMethodField()
 

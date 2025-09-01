@@ -1,5 +1,3 @@
-# quickstart/tests/test_views/test_admin_booking_payment_views.py
-
 from rest_framework.test import APITestCase
 from rest_framework import status
 from django.urls import reverse
@@ -35,8 +33,6 @@ def _get_and_assign_permissions(role, permissions_map):
 )
 class AdminBookingPaymentTests(APITestCase):
     def setUp(self):
-        # FIX: The patch was targeting a non-existent signal and was not used
-        # by the tests in this class. It has been removed to resolve the AttributeError.
         self.admin_role = RoleFactory(name="Admin", hierarchy_level=80)
         _get_and_assign_permissions(
             self.admin_role,
@@ -49,11 +45,17 @@ class AdminBookingPaymentTests(APITestCase):
         self.admin_user.user_permissions.add(*self.admin_role.permissions.all())
 
         # Create some data
-        self.booking1 = BookingFactory(status="confirmed", payment_status="paid")
+        self.booking1 = BookingFactory(
+            status="confirmed",
+            payment_status="paid",
+            # Explicitly set price for predictable calculations
+            schedule_instance__price=Decimal("100.00"),
+        )
+        # --- FIX: Simplify PaymentFactory call. It now calculates everything automatically ---
+        # The factory will create a payment with amount=113.00 based on the booking's price
         self.payment1 = PaymentFactory(
             booking=self.booking1,
             status="succeeded",
-            amount=Decimal("100.00"),
             refunded_amount=Decimal("0.00"),
         )
         self.booking2 = BookingFactory(status="pending", payment_status="pending")
@@ -88,7 +90,6 @@ class AdminBookingPaymentTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
         self.booking1.refresh_from_db()
         self.assertEqual(self.booking1.status, "cancelled")
-        # Since it was paid, it should be marked for refund
         self.assertEqual(self.booking1.payment_status, "refund_pending")
         mock_send_email.assert_called_once()
         print("✅ PASSED: Admin can cancel a booking.")
@@ -128,7 +129,6 @@ class AdminBookingPaymentTests(APITestCase):
         POST .../refund/ - Admin can process a full refund for a payment.
         """
         print("\n--- Running: test_admin_can_process_refund ---")
-        # Mock the Stripe API response
         mock_stripe_refund.return_value = MagicMock(id="re_12345")
 
         url = reverse("admin-payments-refund", kwargs={"pk": self.payment1.pk})
@@ -140,7 +140,6 @@ class AdminBookingPaymentTests(APITestCase):
         self.payment1.refresh_from_db()
         self.assertEqual(self.payment1.status, "refunded")
         self.assertEqual(self.payment1.refunded_amount, self.payment1.amount)
-        # Check that the related booking's payment status was also updated
         self.booking1.refresh_from_db()
         self.assertEqual(self.booking1.payment_status, "refunded")
         mock_stripe_refund.assert_called_once()
@@ -152,14 +151,13 @@ class AdminBookingPaymentTests(APITestCase):
         [EDGE CASE] POST .../refund/ - Admin cannot refund more than the available amount.
         """
         print("\n--- Running: test_admin_cannot_refund_more_than_available ---")
-        # Make a partial refund first
         self.payment1.refunded_amount = Decimal("20.00")
         self.payment1.status = "partially_refunded"
         self.payment1.save()
 
         url = reverse("admin-payments-refund", kwargs={"pk": self.payment1.pk})
-        # Try to refund 90.00, but only 80.00 is available
-        data = {"amount": "90.00", "reason": "requested_by_customer"}
+        # Try to refund 100.00, but only (113.00 - 20.00) = 93.00 is available
+        data = {"amount": "100.00", "reason": "requested_by_customer"}
 
         response = self.client.post(url, data, format="json")
 
@@ -180,6 +178,7 @@ class AdminBookingPaymentTests(APITestCase):
         url = reverse("admin-bookings-list")
 
         with self.settings(SILKY_META=False):
+            # Query count may change slightly, adjust if needed. The key is that it's a low constant number.
             with self.assertNumQueries(5):
                 response = self.client.get(url)
 
