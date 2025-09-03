@@ -99,6 +99,7 @@ from quickstart.views import (
     AcceptStaffInvitationView,
     BusinessRoleViewSet,
     ValidateInvitationTokenView,
+    ContactImportViewSet,
 )
 
 # =============================================================================
@@ -123,6 +124,9 @@ public_router.register(
 
 # --- Business Management Router ---
 business_management_router = DefaultRouter()
+business_management_router.register(
+    r"contact-import", ContactImportViewSet, basename="business-contact-import"
+)
 business_management_router.register(
     r"classes", BusinessClassViewSet, basename="business-class"
 )

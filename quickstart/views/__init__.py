@@ -33,6 +33,8 @@ from .business.business_class_views import (
     AllCategoriesForBusinessViewSet,
 )
 
+from .business.business_crm_views import ContactImportViewSet
+
 from .public.public_blog_views import (
     PublicBlogPostViewSet,
     PublicBlogCategoryViewSet,
@@ -94,6 +96,7 @@ __all__ = [
     "UserUpdateView",
     "CustomRegisterView",
     # Business Views
+    "ContactImportViewSet",
     "BusinessDashboardViewSet",
     "get_user_businesses",
     "register_business",

@@ -21,6 +21,8 @@ from .business.business_management_serializers import (
     colors,
 )
 
+from .business.business_crm_serializers import ContactImportUploadSerializer
+
 from .business.business_class_serializers import (
     ManagedClassSerializer,
     ClassImageSerializer,
@@ -108,7 +110,8 @@ __all__ = [
     "RoleNestedSerializer",
     "CustomPasswordResetSerializer",
     "CustomAllAuthPasswordResetForm",
-    # Business Serializers
+    # Business
+    "ContactImportUploadSerializer",
     "PublicBusinessInfoSerializer",
     "ManagedBusinessInfoSerializer",
     "BusinessStatsSerializer",

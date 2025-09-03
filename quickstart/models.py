@@ -18,6 +18,7 @@ from django.core.validators import MinValueValidator, MaxValueValidator
 from django.contrib.postgres.search import SearchVectorField
 from django.contrib.postgres.search import SearchVector
 from django.contrib.postgres.indexes import GinIndex
+from django.db.models.signals import pre_delete
 from django.core.exceptions import ValidationError
 from django.db.models import (
     Count,
@@ -31,7 +32,7 @@ from django.db.models import (
     F,
 )
 from django.db.models.functions import Coalesce
-from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from decimal import Decimal
 from django.utils import timezone
 from django.db.models.signals import post_save, post_delete
@@ -890,10 +891,128 @@ class BusinessStaff(models.Model):
         ordering = ["-created_at"]
 
 
-class StudentNote(models.Model):
-    user = models.ForeignKey(
-        CustomUser, on_delete=models.CASCADE, related_name="business_notes"
+class Contact(models.Model):
+    """
+    Represents a CRM contact for a business, who may or may not be
+    a registered platform user.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        BusinessInfo, on_delete=models.CASCADE, related_name="contacts"
     )
+
+    # This is the crucial link. It's nullable because the contact might not be a platform user yet.
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="contact_profiles",  # Changed related_name to reflect multiple
+    )
+    first_name = models.CharField(max_length=150)
+    last_name = models.CharField(max_length=150, blank=True)
+    email = models.EmailField(blank=True, null=True)
+    phone_number = models.CharField(max_length=100, blank=True)
+
+    # CRM-specific fields
+    source = models.CharField(
+        max_length=50,
+        default="manual_entry",
+        help_text="e.g., 'imported_csv', 'manual_entry', 'website_form'",
+    )
+    status = models.CharField(
+        max_length=50, default="active", help_text="e.g., 'lead', 'active', 'inactive'"
+    )
+    tags = models.JSONField(
+        default=list, blank=True, help_text="List of tags for segmentation"
+    )
+
+    notes = GenericRelation(
+        "StudentNote",
+        content_type_field="content_type",
+        object_id_field="object_id",
+        related_query_name="contact",  # Optional but good practice
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.first_name} {self.last_name} ({self.business.businessName})"
+
+    class Meta:
+        unique_together = (("business", "user"), ("business", "email"))
+        ordering = ["last_name", "first_name"]
+        db_table = "crm_contacts"
+
+
+class Resource(models.Model):
+    """A schedulable resource, e.g., 'Room A', 'Pottery Wheel 3'."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        BusinessInfo, on_delete=models.CASCADE, related_name="resources"
+    )
+    name = models.CharField(max_length=100)
+    resource_type = models.CharField(
+        max_length=50, help_text="e.g., 'Room', 'Equipment'"
+    )
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        unique_together = ("business", "name")
+        db_table = "crm_resources"
+
+
+class Appointment(models.Model):
+    """Represents a manually scheduled appointment or off-platform booking."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        BusinessInfo, on_delete=models.CASCADE, related_name="appointments"
+    )
+    resources = models.ManyToManyField(
+        Resource, blank=True, related_name="appointments"
+    )
+
+    # Link to one or more contacts
+    contacts = models.ManyToManyField(Contact, related_name="appointments")
+
+    title = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    start_time = models.DateTimeField()
+    end_time = models.DateTimeField()
+
+    STATUS_CHOICES = [
+        ("scheduled", "Scheduled"),
+        ("completed", "Completed"),
+        ("cancelled", "Cancelled"),
+        ("no_show", "No Show"),
+    ]
+    status = models.CharField(
+        max_length=20, choices=STATUS_CHOICES, default="scheduled"
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="created_appointments",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-start_time"]
+        db_table = "crm_appointments"
+
+
+class StudentNote(models.Model):
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+    object_id = models.CharField(max_length=255)
+    content_object = GenericForeignKey("content_type", "object_id")
+
     business = models.ForeignKey(
         BusinessInfo, on_delete=models.CASCADE, related_name="user_notes"
     )
@@ -904,12 +1023,12 @@ class StudentNote(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"Note for {self.user} by {self.author} ({self.business.businessName})"
+        return f"Note for {self.content_object} by {self.author} ({self.business.businessName})"
 
     class Meta:
         db_table = "student_notes"
         indexes = [
-            models.Index(fields=["user", "business"]),
+            models.Index(fields=["content_type", "object_id"]),
         ]
         default_permissions = ()
 
@@ -1257,6 +1376,59 @@ def classsubcategory_change_receiver(sender, instance, update_fields, **kwargs):
                     ClassesMain.objects.filter(pk=class_instance.pk).update(
                         search_vector=new_vector
                     )
+
+
+@receiver(post_save, sender=CustomUser)
+def link_contact_on_user_creation(sender, instance, created, **kwargs):
+    """
+    After a new user registers, check if a CRM contact with their email exists
+    and link them if it does.
+    """
+    if created and instance.email:
+        try:
+            with transaction.atomic():
+                # Find a contact with a matching email that is not yet linked to any user
+                contact_to_link = Contact.objects.select_for_update().get(
+                    email__iexact=instance.email, user__isnull=True
+                )
+
+                # Link the new user to this contact record
+                contact_to_link.user = instance
+                # Potentially update contact details from the more "official" user profile
+                if instance.first_name and not contact_to_link.first_name:
+                    contact_to_link.first_name = instance.first_name
+                if instance.last_name and not contact_to_link.last_name:
+                    contact_to_link.last_name = instance.last_name
+                if instance.phone_number and not contact_to_link.phone_number:
+                    contact_to_link.phone_number = instance.phone_number
+
+                contact_to_link.save()
+                logger.info(
+                    f"Successfully linked new user {instance.email} to existing CRM Contact ID {contact_to_link.id} for Business ID {contact_to_link.business_id}."
+                )
+
+        except Contact.DoesNotExist:
+            # This is a common and expected case: a new user who was not previously a CRM contact.
+            pass
+        except Exception as e:
+            # Log any other unexpected errors during the linking process
+            logger.error(
+                f"Error linking new user {instance.email} to a CRM contact: {e}",
+                exc_info=True,
+            )
+
+
+@receiver(pre_delete, sender="quickstart.Contact")
+def delete_contact_notes(sender, instance, **kwargs):
+    """
+    When a Contact is deleted, also delete any StudentNote
+    records that point to it via the GenericForeignKey.
+    """
+    content_type = ContentType.objects.get_for_model(instance)
+    StudentNote.objects.filter(
+        content_type=content_type, object_id=instance.pk
+    ).delete()
+    logger.info(f"Deleted all notes associated with Contact ID {instance.pk}.")
 
 
 class Favorites(models.Model):
@@ -1824,6 +1996,46 @@ class Booking(models.Model):
             ),
             ("cancel_business_booking", "Can cancel bookings within own business"),
         ]
+
+
+@receiver(post_save, sender=Booking)
+def create_contact_on_first_booking(sender, instance, created, **kwargs):
+    """
+    When a booking is first created, ensure a Contact record exists for the user
+    at the business they booked with.
+    """
+    if created:  # Only run on initial creation
+        try:
+            # Use a transaction to ensure this is an atomic operation
+            with transaction.atomic():
+                user = instance.user
+                business = instance.schedule_instance.schedule.option.classId.businessId
+
+                # get_or_create is the safest way to do this, preventing race conditions
+                contact, contact_created = Contact.objects.get_or_create(
+                    business=business,
+                    user=user,
+                    defaults={
+                        "first_name": user.first_name or "",
+                        "last_name": user.last_name or "",
+                        "email": user.email,
+                        "phone_number": user.phone_number or "",
+                        "source": "platform_booking",
+                    },
+                )
+
+                if contact_created:
+                    logger.info(
+                        f"Automatically created Contact record for user '{user.email}' "
+                        f"at business '{business.businessName}' due to new booking."
+                    )
+        except Exception as e:
+            # Log an error if the business or user context can't be found,
+            # but don't crash the booking process.
+            logger.error(
+                f"Could not create Contact on booking for user {instance.user.userId}. Error: {e}",
+                exc_info=True,
+            )
 
 
 class Discount(models.Model):

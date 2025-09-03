@@ -48,6 +48,7 @@ from quickstart.models import (
     Payment,
     Reviews,
     GeographicBoundary,
+    Role,
 )
 from quickstart.serializers.admin.business_management.admin_business_serializers import (
     AdminBusinessDetailSerializer,
@@ -463,17 +464,19 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
             "total"
         ]
 
-        total_platform_revenue = Payment.objects.filter(
+        # Calculate total platform revenue by summing the fee AND the tax on the fee.
+        total_platform_revenue_agg = Payment.objects.filter(
             status__in=["succeeded", "partially_refunded"]
         ).aggregate(
             total=Coalesce(
-                Sum("service_fee_amount"),
-                Value(0),
+                Sum(
+                    F("platform_fee_amount") + F("platform_fee_tax")
+                ),  # Use F() expression to sum both fields
+                Value(Decimal("0.00")),  # Ensure default is Decimal
                 output_field=DecimalField(max_digits=12, decimal_places=2),
             )
-        )[
-            "total"
-        ]
+        )
+        total_platform_revenue = total_platform_revenue_agg["total"]
 
         # FIX: Rewrote the query to correctly count distinct businesses per category.
         category_distribution_qs = (
@@ -522,7 +525,9 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
                 "featured_businesses": business_counts["featured_businesses"],
                 "new_businesses_30d": business_counts["new_businesses_30d"],
                 "total_revenue": float(total_gross_revenue),
-                "total_platform_revenue": float(total_platform_revenue),
+                "total_platform_revenue": float(
+                    total_platform_revenue
+                ),  # This now uses the corrected value
                 "category_distribution": category_distribution,
                 "growth_trend": monthly_growth_data,
                 "location_distribution": location_distribution,
