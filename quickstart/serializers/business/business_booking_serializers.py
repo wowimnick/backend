@@ -117,7 +117,10 @@ class _PaymentDetailSerializerForBusiness(serializers.ModelSerializer):
             "stripe_payment_intent_id",
             "status",  # e.g., succeeded, refunded, pending, failed
             "amount",  # Gross amount of this payment transaction
-            "service_fee_amount",  # The fee ClassEasily took (for business's info)
+            "tax_amount",  # Total tax collected
+            "platform_fee_amount",  # Replaced service_fee_amount
+            "platform_fee_tax",  # Tax collected on the platform fee
+            "net_payout_amount",  # Final amount transferred to business
             "currency",
             "payment_method_type",
             "card_brand",

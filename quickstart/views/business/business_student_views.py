@@ -35,6 +35,7 @@ from rest_framework.pagination import PageNumberPagination
 from quickstart.models import (
     Booking,
     BusinessInfo,
+    Contact,
     CustomUser,
     StudentNote,
     ScheduleInstance,
@@ -91,59 +92,58 @@ class StudentPagination(PageNumberPagination):
     max_page_size = 48
 
 
-class BusinessStudentViewSet(viewsets.ReadOnlyModelViewSet):
+class BusinessStudentViewSet(
+    viewsets.ModelViewSet
+):  # CHANGED to ModelViewSet for destroy
     serializer_class = BusinessStudentProfileSerializer
     permission_classes = [IsAuthenticated, CanViewBusinessStudents]
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     pagination_class = StudentPagination
-    search_fields = ["email", "first_name", "last_name", "phone_number", "userId"]
+    search_fields = [
+        "first_name",
+        "last_name",
+        "email",
+        "phone_number",
+        "user__first_name",
+        "user__last_name",
+        "user__email",
+    ]
     ordering_fields = [
         "first_name",
         "last_name",
         "email",
-        "active_bookings_count",
-        "completed_bookings_count",
         "last_booking_date_this_business",
         "total_spent_this_business",
-        "bookings__user_facing_reference",
     ]
     ordering = ["last_name", "first_name"]
-    http_method_names = ["get", "post", "head", "options"]
+    # ALLOWED `destroy` method
+    http_method_names = ["get", "post", "delete", "head", "options"]
 
     def get_business_context(self):
         user = self.request.user
-        try:
-            business = BusinessInfo.objects.filter(
-                Q(owner=user)
-                | Q(staff_members__user=user, staff_members__status="accepted")
-            ).first()
-            if not business:
-                raise PermissionDenied("User not associated with any managed business.")
-            return business
-        except BusinessInfo.DoesNotExist:
-            raise PermissionDenied("Associated business not found unexpectedly.")
+        business = BusinessInfo.objects.filter(
+            Q(owner=user)
+            | Q(staff_members__user=user, staff_members__status="accepted")
+        ).first()
+        if not business:
+            raise PermissionDenied("User not associated with any managed business.")
+        return business
 
     def get_queryset(self):
-        user = self.request.user
         business = self.get_business_context()
 
-        queryset = (
-            CustomUser.objects.filter(
-                bookings__schedule_instance__schedule__option__classId__businessId=business
-            )
-            .select_related("role")
-            .distinct()
+        # Base queryset is now Contact
+        queryset = Contact.objects.filter(business=business).select_related(
+            "user", "user__role"
         )
 
-        business_filter_q = Q(
-            bookings__schedule_instance__schedule__option__classId__businessId=business
-        )
+        # Annotations now pull data from the linked user, coalescing to 0/null if no user is linked
         thirty_days_ago_date = (timezone.now() - timezone.timedelta(days=30)).date()
 
+        # Subquery for first paid booking in a course group
         first_paid_course_booking_id_subquery = Subquery(
             Booking.objects.filter(
-                booking_group_id=OuterRef("bookings__booking_group_id"),
-                schedule_instance__schedule__option__classId__businessId=business,
+                user_id=OuterRef("user_id"),
+                booking_group_id=OuterRef("user__bookings__booking_group_id"),
                 payment_status="paid",
             )
             .order_by("booking_date", "id")
@@ -151,31 +151,40 @@ class BusinessStudentViewSet(viewsets.ReadOnlyModelViewSet):
         )
 
         queryset = queryset.annotate(
-            active_bookings_count=Count(
-                "bookings", filter=Q(bookings__status="confirmed") & business_filter_q
-            ),
-            completed_bookings_count=Count(
-                "bookings", filter=Q(bookings__status="completed") & business_filter_q
-            ),
-            is_active_student=Exists(
+            is_active=Exists(
                 Booking.objects.filter(
-                    user=OuterRef("pk"),
+                    user_id=OuterRef("user_id"),
                     status="confirmed",
                     schedule_instance__date__gte=thirty_days_ago_date,
-                    schedule_instance__schedule__option__classId__businessId=business,
+                    schedule_instance__schedule__option__classId__businessId=business.businessId,
                 )
             ),
-            last_booking_datetime_this_business=Max(
-                "bookings__booking_date", filter=business_filter_q
+            last_booking_datetime=Max(
+                "user__bookings__booking_date",
+                filter=Q(
+                    user__bookings__schedule_instance__schedule__option__classId__businessId=business.businessId
+                ),
+            ),
+            total_classes_taken=Coalesce(
+                Count(
+                    "user__bookings",
+                    filter=Q(
+                        user__bookings__status="completed",
+                        user__bookings__schedule_instance__schedule__option__classId__businessId=business.businessId,
+                    ),
+                ),
+                Value(0),
             ),
             total_spent_this_business=Coalesce(
                 Sum(
-                    "bookings__amount_paid",
-                    filter=business_filter_q
-                    & Q(bookings__payment_status="paid")
+                    "user__bookings__amount_paid",
+                    filter=Q(
+                        user__bookings__payment_status="paid",
+                        user__bookings__schedule_instance__schedule__option__classId__businessId=business.businessId,
+                    )
                     & (
-                        Q(bookings__booking_group_id__isnull=True)
-                        | Q(bookings__id=first_paid_course_booking_id_subquery)
+                        Q(user__bookings__booking_group_id__isnull=True)
+                        | Q(user__bookings__id=first_paid_course_booking_id_subquery)
                     ),
                 ),
                 Value(Decimal("0.0")),
@@ -183,55 +192,61 @@ class BusinessStudentViewSet(viewsets.ReadOnlyModelViewSet):
             ),
         ).annotate(
             last_booking_date_this_business=ExpressionWrapper(
-                TruncDate(F("last_booking_datetime_this_business")),
+                TruncDate(F("last_booking_datetime")),
                 output_field=DateField(),
-            ),
+            )
         )
 
+        # Apply status filter
         status_filter_param = self.request.query_params.get("status_filter", "all")
         if status_filter_param == "active":
-            queryset = queryset.filter(is_active_student=True)
+            queryset = queryset.filter(user__isnull=False)
         elif status_filter_param == "inactive":
-            queryset = queryset.filter(is_active_student=False)
+            queryset = queryset.filter(user__isnull=True)
 
-        can_view_notes = user.has_perm("quickstart.view_studentnote")
-        if can_view_notes:
-            notes_for_this_business_qs = (
+        # Prefetch notes
+        user = self.request.user
+        if user.has_perm("quickstart.view_studentnote"):
+            notes_qs = (
                 StudentNote.objects.filter(business=business)
                 .select_related("author")
                 .order_by("-created_at")
             )
-            queryset = queryset.prefetch_related(
-                Prefetch(
-                    "business_notes",
-                    queryset=notes_for_this_business_qs,
-                    to_attr="notes_for_this_business",
-                )
-            )
-        return queryset
+            queryset = queryset.prefetch_related(Prefetch("notes", queryset=notes_qs))
 
-    def retrieve(self, request, *args, **kwargs):
-        instance = self.get_object()
-        business = self.get_business_context()
+        return queryset.distinct()
 
-        # Fetch booking history for this student within this business context
-        booking_history_qs = (
-            Booking.objects.filter(
-                user=instance,
-                schedule_instance__schedule__option__classId__businessId=business,
+    def destroy(self, request, *args, **kwargs):
+        """
+        Deletes an imported contact record.
+        """
+        contact = self.get_object()
+
+        # Safety Check 1: Do not delete if the contact is a platform user
+        if contact.user:
+            return Response(
+                {
+                    "detail": "Cannot delete a contact that is linked to a platform user account."
+                },
+                status=status.HTTP_403_FORBIDDEN,
             )
-            .select_related(
-                "schedule_instance__schedule__option__classId",
-                "schedule_instance__schedule__option",
+
+        # Safety Check 2: Do not delete if there are appointments associated
+        if contact.appointments.exists():
+            return Response(
+                {
+                    "detail": "Cannot delete a contact with scheduled appointments. Please cancel or reassign them first."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
             )
-            .order_by("-schedule_instance__date", "-schedule_instance__time")[:50]
+
+        contact_name = f"{contact.first_name} {contact.last_name}".strip()
+        logger.info(
+            f"User {request.user.email} is deleting contact '{contact_name}' (ID: {contact.id})."
         )
 
-        # Attach the data to the instance for the serializer
-        instance.booking_history = booking_history_qs
-
-        serializer = self.get_serializer(instance, context={"request": request})
-        return Response(serializer.data)
+        self.perform_destroy(contact)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(
         detail=True,
@@ -239,21 +254,51 @@ class BusinessStudentViewSet(viewsets.ReadOnlyModelViewSet):
         permission_classes=[IsAuthenticated, CanManageBusinessStudentNotes],
     )
     def add_note(self, request, pk=None):
-        student_user = self.get_object()
+        """
+        Adds a note to a contact or a user via their contact record.
+        """
+        contact = self.get_object()  # This now gets the Contact instance
         if not request.user.has_perm("quickstart.add_studentnote"):
             raise PermissionDenied("You do not have permission to add notes.")
+
         business = self.get_business_context()
         serializer = BusinessStudentNoteSerializer(
             data=request.data, context={"request": request}
         )
-        if serializer.is_valid():
-            serializer.save(user=student_user, business=business, author=request.user)
-            logger.info(
-                f"Note added for student {student_user.email} (ID: {pk}) by {request.user.email} in business {business.businessName}"
+        serializer.is_valid(raise_exception=True)
+
+        # The 'content_object' will be the Contact instance
+        note = serializer.save(
+            content_object=contact, business=business, author=request.user
+        )
+
+        logger.info(
+            f"Note added for Contact {contact.id} by {request.user.email} in business {business.businessName}"
+        )
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    # The retrieve method is largely handled by the serializer now,
+    # but we can add booking history for platform users.
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()  # This is a Contact instance
+
+        # For platform users, we enrich with booking history
+        if instance.user:
+            business = self.get_business_context()
+            booking_history_qs = (
+                Booking.objects.filter(
+                    user=instance.user,
+                    schedule_instance__schedule__option__classId__businessId=business,
+                )
+                .select_related(
+                    "schedule_instance__schedule__option__classId",
+                )
+                .order_by("-schedule_instance__date", "-schedule_instance__time")[:50]
             )
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            # Attach for the serializer to pick up
+            instance.booking_history = booking_history_qs
         else:
-            logger.warning(
-                f"Failed to add note for student {student_user.email} by {request.user.email}. Errors: {serializer.errors}"
-            )
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            instance.booking_history = []
+
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)

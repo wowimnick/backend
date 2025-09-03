@@ -5,6 +5,7 @@ from rest_framework import serializers
 from quickstart.models import (
     Booking,
     BusinessInfo,
+    Contact,
     CustomUser,
     StudentNote,
     ScheduleInstance,
@@ -88,15 +89,9 @@ class BookingHistorySerializer(serializers.ModelSerializer):
 
 
 class BusinessStudentProfileSerializer(serializers.ModelSerializer):
-    active_classes = serializers.IntegerField(
-        source="active_bookings_count", read_only=True, default=0
-    )
-    total_classes_taken = serializers.IntegerField(
-        source="completed_bookings_count", read_only=True, default=0
-    )
-    is_active = serializers.BooleanField(source="is_active_student", read_only=True)
-    avatar_thumb_url = serializers.SerializerMethodField()
-
+    # These fields are annotated in the view's queryset
+    is_active = serializers.BooleanField(read_only=True, default=False)
+    total_classes_taken = serializers.IntegerField(read_only=True, default=0)
     last_booking_date_this_business = serializers.DateField(
         read_only=True, allow_null=True
     )
@@ -104,25 +99,33 @@ class BusinessStudentProfileSerializer(serializers.ModelSerializer):
         max_digits=10, decimal_places=2, read_only=True, default=Decimal("0.00")
     )
 
-    notes = BusinessStudentNoteSerializer(
-        source="notes_for_this_business", many=True, read_only=True
-    )
+    # These fields are sourced from the linked user, if it exists
+    userId = serializers.IntegerField(source="user.userId", read_only=True)
+    avatar_thumb_url = serializers.SerializerMethodField()
+    createdAt = serializers.DateTimeField(source="user.createdAt", read_only=True)
 
-    # Updated to use the new serializer
+    # Custom field to distinguish between contact types on the frontend
+    type = serializers.SerializerMethodField()
+
+    # Serializer for notes attached to the contact
+    notes = BusinessStudentNoteSerializer(many=True, read_only=True)
+
+    # This is populated in the view's retrieve method
     booking_history = BookingHistorySerializer(
         many=True, read_only=True, required=False
     )
 
     class Meta:
-        model = CustomUser
+        model = Contact
         fields = [
-            "userId",
+            "id",  # The UUID of the Contact record
+            "userId",  # The integer ID of the linked CustomUser, can be null
+            "type",
             "email",
             "first_name",
             "last_name",
             "phone_number",
-            "avatar_thumb_url",  # UPDATED
-            "active_classes",
+            "avatar_thumb_url",
             "total_classes_taken",
             "notes",
             "is_active",
@@ -133,12 +136,20 @@ class BusinessStudentProfileSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
+    def get_type(self, obj):
+        return "user" if obj.user else "contact"
+
     def get_avatar_thumb_url(self, obj):
-        if obj.avatar and hasattr(obj.avatar, "name") and obj.avatar.name:
-            original_path = obj.avatar.name
+        # Prioritize the user's avatar if they are a platform user
+        if (
+            obj.user
+            and obj.user.avatar
+            and hasattr(obj.user.avatar, "name")
+            and obj.user.avatar.name
+        ):
+            original_path = obj.user.avatar.name
             if not original_path.startswith("originals/"):
                 return None
-
             base_path = os.path.splitext(original_path)[0]
             resized_path = base_path.replace("originals/", "public/thumb/", 1) + ".webp"
             return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
