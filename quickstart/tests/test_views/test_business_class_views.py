@@ -78,12 +78,10 @@ class BusinessClassManagementTests(APITestCase):
         print("\n--- Running: test_create_class_successfully ---")
         url = reverse("business-class-list")
 
-        # MODIFIED: Options are now sent as a JSON string within the main JSON payload.
         option_data_string = json.dumps(
             [{"booking_type": "Single Session", "level": "beginner"}]
         )
 
-        # MODIFIED: The entire payload is now JSON.
         data = {
             "title": "New Pottery Class",
             "description": "Learn to make pottery. " * 15,
@@ -91,7 +89,6 @@ class BusinessClassManagementTests(APITestCase):
             "subcategory_key": "pottery-making",
             "location": "Studio B",
             "coordinates": "40.7128,-74.0060",
-            # MODIFIED: We now send a list of S3 key strings.
             "image_s3_keys": [
                 "originals/class_images/test1.jpg",
                 "originals/class_images/test2.jpg",
@@ -100,12 +97,25 @@ class BusinessClassManagementTests(APITestCase):
             "options": option_data_string,
         }
 
-        # MODIFIED: The format is now 'json'.
         response = self.client.post(url, data, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
         self.assertTrue(ClassesMain.objects.filter(title="New Pottery Class").exists())
         print("✅ PASSED: Business owner successfully created a new class.")
+
+    def test_update_own_class(self):
+        """
+        PATCH /api/business/classes/{pk}/ - Owner can update their own class.
+        """
+        print("\n--- Running: test_update_own_class ---")
+        url = reverse("business-class-detail", kwargs={"pk": self.own_class.pk})
+        data = {"title": "Updated Class Title"}
+        response = self.client.patch(url, data, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.own_class.refresh_from_db()
+        self.assertEqual(self.own_class.title, "Updated Class Title")
+        print("✅ PASSED: Owner can update their own class.")
 
     def test_list_only_own_classes(self):
         """
@@ -128,21 +138,6 @@ class BusinessClassManagementTests(APITestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         print("✅ PASSED: Owner correctly gets 404 for another business's class.")
-
-    def test_update_own_class(self):
-        """
-        PATCH /api/business/classes/{pk}/ - Owner can update their own class.
-        """
-        print("\n--- Running: test_update_own_class ---")
-        url = reverse("business-class-detail", kwargs={"pk": self.own_class.pk})
-        data = {"title": "Updated Class Title"}
-        # MODIFIED: Update calls should also use format="json" now.
-        response = self.client.patch(url, data, format="json")
-
-        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
-        self.own_class.refresh_from_db()
-        self.assertEqual(self.own_class.title, "Updated Class Title")
-        print("✅ PASSED: Owner can update their own class.")
 
     def test_create_schedule_for_own_class_option(self):
         """
