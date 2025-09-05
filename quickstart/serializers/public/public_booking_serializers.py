@@ -228,6 +228,9 @@ class BookingDetailSerializer(serializers.ModelSerializer):
             "booking_group_id",
             "business_timezone",
             "session_info",
+            "cancellation_policy",
+            "cancellation_custom_hours",
+            "cancellation_refund_percentage",
         ]
         read_only_fields = fields
 

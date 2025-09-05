@@ -32,27 +32,30 @@ class StandardResultsSetPagination(PageNumberPagination):
 
 # --- Permission Helper Functions ---
 def user_can_manage(requesting_user, target_user):
-    """Checks if requesting user's role hierarchy is higher than target's."""
+    """
+    Checks if the requesting user can manage the target user.
+    A superuser or a user with the 'Super Admin' role bypasses all hierarchy checks.
+    """
     if not requesting_user or not target_user:
         return False
     if not requesting_user.is_authenticated:
         return False  # Must be logged in
 
+    # Superuser/Super Admin override: can manage anyone.
+    if requesting_user.is_superuser or (
+        requesting_user.role and requesting_user.role.name == "Super Admin"
+    ):
+        return True
+
     # Allow managing users without roles (e.g., newly created)
     if not target_user.role:
         return True
 
-    # Deny if requester has no role
+    # Deny if requester has no role (and is not a superuser)
     if not requesting_user.role:
         return False
 
-    # If the requester is a Super Admin, they can manage ANYONE. Period.
-    # This single check replaces the old, more complex one.
-    if requesting_user.role.name == "Super Admin":
-        return True
-
-    # The rest of the logic handles non-Super Admins.
-    # Check hierarchy level if roles exist (we know both roles exist at this point)
+    # For non-super admins, check the hierarchy level
     return requesting_user.role.hierarchy_level > target_user.role.hierarchy_level
 
 
@@ -213,28 +216,25 @@ class UserAdminViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        # Hierarchy Check: Can the requester assign the target role?
+        # Determine if the requester has super admin privileges
+        is_super_admin_request = request.user.is_superuser or (
+            request.user.role and request.user.role.name == "Super Admin"
+        )
+
+        # Hierarchy Check: Can the requester assign the requested role?
         role_id = request.data.get("role")
         target_role = None
-        if role_id:
+        if role_id and not is_super_admin_request:  # Bypass check for super admins
             try:
                 target_role = Role.objects.get(pk=role_id)
-                # Prevent assigning a role higher than or equal to own, unless self-assigning same level (excluding Super Admin)
+                # Prevent non-super admins from assigning a role higher than or equal to their own
                 if (
                     request.user.role
                     and request.user.role.hierarchy_level <= target_role.hierarchy_level
                 ):
                     self.permission_denied(
                         request,
-                        message=f"You cannot assign the role '{target_role.name}' (higher hierarchy).",
-                    )
-                # Special case: Cannot assign Super Admin unless you are Super Admin
-                if target_role.name == "Super Admin" and (
-                    not request.user.role or request.user.role.name != "Super Admin"
-                ):
-                    self.permission_denied(
-                        request,
-                        message=f"Only Super Admins can assign the Super Admin role.",
+                        message=f"You cannot assign the role '{target_role.name}' due to hierarchy restrictions.",
                     )
             except Role.DoesNotExist:
                 return Response(
@@ -248,7 +248,7 @@ class UserAdminViewSet(viewsets.ModelViewSet):
         headers = self.get_success_headers(AdminUserDetailSerializer(user).data)
         return Response(
             AdminUserDetailSerializer(user).data,
-            status=status.HTTP_201_CREATED,
+            status=status.HTTP_21_CREATED,
             headers=headers,
         )
 
@@ -315,14 +315,19 @@ class UserAdminViewSet(viewsets.ModelViewSet):
                 message="You cannot manage this user due to hierarchy restrictions.",
             )
 
-        # Hierarchy Check 2: If changing role, can requester assign the NEW role?
+        # Determine if the requester has super admin privileges
+        is_super_admin_request = request.user.is_superuser or (
+            request.user.role and request.user.role.name == "Super Admin"
+        )
+
+        # Hierarchy Check 2: If changing role, can the requester assign the NEW role?
         new_role = None
-        if is_changing_role:
+        if is_changing_role and not is_super_admin_request:  # Bypass for super admins
             new_role_id = request.data.get("role")
             if new_role_id:
                 try:
                     new_role = Role.objects.get(pk=new_role_id)
-                    # Prevent assigning a role higher than or equal to own, with exceptions
+                    # Prevent non-super admins from assigning a role higher than or equal to their own
                     if (
                         request.user.role
                         and request.user.role.hierarchy_level
@@ -330,15 +335,7 @@ class UserAdminViewSet(viewsets.ModelViewSet):
                     ):
                         self.permission_denied(
                             request,
-                            message=f"You cannot assign the role '{new_role.name}' (higher hierarchy).",
-                        )
-                    # Cannot assign Super Admin unless you are Super Admin
-                    if new_role.name == "Super Admin" and (
-                        not request.user.role or request.user.role.name != "Super Admin"
-                    ):
-                        self.permission_denied(
-                            request,
-                            message="Only Super Admins can assign the Super Admin role.",
+                            message=f"You cannot assign the role '{new_role.name}' due to hierarchy restrictions.",
                         )
                 except Role.DoesNotExist:
                     return Response(

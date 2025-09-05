@@ -58,8 +58,13 @@ class RoleManagementViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Superusers can bypass hierarchy checks
-        if not request.user.is_superuser:
+        # Determine if the requester has super admin privileges
+        is_super_admin_request = request.user.is_superuser or (
+            request.user.role and request.user.role.name == "Super Admin"
+        )
+
+        # Non-super admins are subject to hierarchy checks
+        if not is_super_admin_request:
             user_role = request.user.role
             # Check if user has sufficient privileges to delete this role
             if user_role and user_role.hierarchy_level <= instance.hierarchy_level:
@@ -112,8 +117,13 @@ class RoleManagementViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        # Superusers can bypass hierarchy checks
-        if not request.user.is_superuser:
+        # Determine if the requester has super admin privileges
+        is_super_admin_request = request.user.is_superuser or (
+            request.user.role and request.user.role.name == "Super Admin"
+        )
+
+        # Non-super admins are subject to hierarchy checks
+        if not is_super_admin_request:
             user_role = request.user.role
             new_role_level = serializer.validated_data.get("hierarchy_level", 0)
             if not user_role or user_role.hierarchy_level <= new_role_level:
@@ -164,8 +174,13 @@ class RoleManagementViewSet(viewsets.ModelViewSet):
         partial = kwargs.pop("partial", False)
         instance = self.get_object()
 
-        # Superusers can bypass all permission checks
-        if not request.user.is_superuser:
+        # Determine if the requester has super admin privileges
+        is_super_admin_request = request.user.is_superuser or (
+            request.user.role and request.user.role.name == "Super Admin"
+        )
+
+        # Non-super admins are subject to hierarchy and permission checks
+        if not is_super_admin_request:
             user_role = request.user.role
             is_editing_own_role = user_role == instance
 
@@ -292,11 +307,16 @@ class RoleManagementViewSet(viewsets.ModelViewSet):
                 updated_roles = []
                 user_role = request.user.role
 
+                # Determine if the requester has super admin privileges
+                is_super_admin_request = request.user.is_superuser or (
+                    request.user.role and request.user.role.name == "Super Admin"
+                )
+
                 for item in roles_data:
                     role = Role.objects.get(id=item["id"])
 
-                    # Superusers can bypass hierarchy checks
-                    if not request.user.is_superuser:
+                    # Non-super admins are subject to hierarchy checks
+                    if not is_super_admin_request:
                         # Prevent user from editing roles at or above their own level
                         if (
                             user_role
