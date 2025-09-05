@@ -412,6 +412,45 @@ class ProcessBookingWebhook(APIView):
             logger.error(f"REFUND: CRITICAL - Stripe error during refund: {e}")
             return False
 
+    def _mark_booking_as_failed(self, payment_intent_id, reason):
+        """
+        Helper function to find pending records and mark them as failed.
+        This is used when a paid booking cannot be fulfilled.
+        """
+        try:
+            with transaction.atomic():
+                # Use select_for_update to lock the rows during the update
+                payment_record = Payment.objects.select_for_update().get(
+                    stripe_payment_intent_id=payment_intent_id, status="pending"
+                )
+                booking_record = Booking.objects.select_for_update().get(
+                    pk=payment_record.booking.pk, status="pending"
+                )
+
+                # Update Payment record
+                payment_record.status = "failed"
+                payment_record.failure_message = reason
+                payment_record.save()
+
+                # Update Booking record
+                booking_record.status = "cancelled"  # The booking itself is cancelled
+                booking_record.payment_status = "failed"
+                booking_record.cancellation_reason = reason
+                booking_record.cancelled_at = timezone.now()
+                booking_record.save()
+
+                logger.warning(
+                    f"Marked Booking {booking_record.id} and Payment {payment_record.id} as FAILED. Reason: {reason}"
+                )
+        except (Payment.DoesNotExist, Booking.DoesNotExist):
+            logger.error(
+                f"FAILURE_MARKER: Could not find pending booking/payment for PI {payment_intent_id} to mark as failed."
+            )
+        except Exception as e:
+            logger.error(
+                f"FAILURE_MARKER: An unexpected error occurred while marking PI {payment_intent_id} as failed: {str(e)}"
+            )
+
     def post(self, request):
         webhook_id = str(uuid.uuid4())[:8]
         payload = request.body
@@ -439,6 +478,10 @@ class ProcessBookingWebhook(APIView):
                     f"[{webhook_id}] Validation error in webhook: {error_msg}",
                     exc_info=True,
                 )
+                # ADDED: Mark records as failed before refunding
+                self._mark_booking_as_failed(
+                    payment_intent.id, f"Booking validation failed: {error_msg}"
+                )
                 self._attempt_stripe_refund(
                     payment_intent.id, f"Booking validation failed: {error_msg}"
                 )
@@ -448,6 +491,10 @@ class ProcessBookingWebhook(APIView):
             except Exception as e:
                 logger.error(
                     f"[{webhook_id}] Unexpected error in webhook: {e}", exc_info=True
+                )
+                # ADDED: Mark records as failed before refunding
+                self._mark_booking_as_failed(
+                    payment_intent.id, f"Unexpected server error: {str(e)}"
                 )
                 self._attempt_stripe_refund(
                     payment_intent.id, f"Unexpected server error: {e}"
@@ -459,19 +506,46 @@ class ProcessBookingWebhook(APIView):
 
         elif event.type == "payment_intent.payment_failed":
             payment_intent = event.data.object
-            Payment.objects.filter(
-                stripe_payment_intent_id=payment_intent.id, status="pending"
-            ).update(
-                status="failed",
-                failure_message=(
-                    payment_intent.last_payment_error.message
-                    if payment_intent.last_payment_error
-                    else "Payment failed."
-                ),
+            failure_message = (
+                payment_intent.last_payment_error.message
+                if payment_intent.last_payment_error
+                else "Payment failed."
             )
+
+            # CHANGED: Update both Payment and the associated Booking
+            try:
+                with transaction.atomic():
+                    payment_to_fail = Payment.objects.select_for_update().get(
+                        stripe_payment_intent_id=payment_intent.id, status="pending"
+                    )
+                    booking_to_fail = payment_to_fail.booking
+
+                    payment_to_fail.status = "failed"
+                    payment_to_fail.failure_message = failure_message
+                    payment_to_fail.save()
+
+                    if booking_to_fail and booking_to_fail.status == "pending":
+                        booking_to_fail.status = "cancelled"
+                        booking_to_fail.payment_status = "failed"
+                        booking_to_fail.cancellation_reason = "Payment was declined."
+                        booking_to_fail.cancelled_at = timezone.now()
+                        booking_to_fail.save()
+                        logger.info(
+                            f"Set booking {booking_to_fail.id} to cancelled due to failed payment."
+                        )
+
+            except Payment.DoesNotExist:
+                logger.warning(
+                    f"Received payment_failed webhook for PI {payment_intent.id}, but no corresponding pending payment was found."
+                )
+            except Exception as e:
+                logger.error(
+                    f"Error processing payment_failed webhook for PI {payment_intent.id}: {str(e)}"
+                )
 
         return Response(status=status.HTTP_200_OK)
 
+    # ... (handle_successful_payment method remains the same) ...
     def handle_successful_payment(self, payment_intent, webhook_id):
         if Payment.objects.filter(
             stripe_payment_intent_id=payment_intent.id, status="succeeded"
@@ -490,8 +564,9 @@ class ProcessBookingWebhook(APIView):
                     pk=payment_record.booking.pk, status="pending"
                 )
             except (Payment.DoesNotExist, Booking.DoesNotExist):
+                # CHANGED: Raise a more specific error message
                 raise DRFValidationError(
-                    "Could not find a pending booking for this payment. Refunding."
+                    "Could not find a corresponding pending booking or payment for this successful payment. Refunding to prevent lost funds."
                 )
 
             metadata = payment_intent.metadata
