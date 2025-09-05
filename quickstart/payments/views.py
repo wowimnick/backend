@@ -1,3 +1,5 @@
+# quickstart/payments/views.py
+
 from unittest.mock import MagicMock
 import uuid
 import json
@@ -11,12 +13,14 @@ from django.db import transaction
 from decimal import Decimal
 import stripe
 from django.conf import settings
+from django.db.models.functions import Coalesce
+from django.db.models import Sum
 from quickstart.models import (
     CustomUser,
     Booking,
     Discount,
     AppliedDiscount,
-    PartnerTier,  # Import the AppliedDiscount model
+    PartnerTier,
     Payment,
     ScheduleInstance,
 )
@@ -41,17 +45,26 @@ class CreatePaymentIntentView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        request_id = str(uuid.uuid4())[:8]  # Short ID for tracking this request
+        logger.info(f"[{request_id}] ===== CreatePaymentIntentView START =====")
+        logger.info(
+            f"[{request_id}] User: {request.user.userId} ({request.user.email})"
+        )
+        logger.info(f"[{request_id}] Raw request data: {request.data}")
+
         try:
-            logger.info(
-                f"CreatePaymentIntentView - Received payment intent request: {request.data}"
-            )
+            # Parse and validate basic request data
             applied_discount_id = request.data.get("applied_discount_id")
             selected_slots = request.data.get("selectedSlots")
+            logger.info(f"[{request_id}] Applied discount ID: {applied_discount_id}")
+            logger.info(f"[{request_id}] Selected slots: {selected_slots}")
+
             if (
                 not selected_slots
                 or not isinstance(selected_slots, list)
                 or len(selected_slots) == 0
             ):
+                logger.error(f"[{request_id}] Invalid selectedSlots provided")
                 return Response(
                     {"error": "selectedSlots is required."},
                     status=status.HTTP_400_BAD_REQUEST,
@@ -63,57 +76,118 @@ class CreatePaymentIntentView(APIView):
                 "notes": request.data.get("notes", ""),
                 "participant_details": request.data.get("participant_details", []),
             }
+            logger.info(f"[{request_id}] Serializer data prepared: {serializer_data}")
 
+            # Validate booking data
+            logger.info(f"[{request_id}] Starting database transaction for validation")
             with transaction.atomic():
+                logger.info(f"[{request_id}] Creating BookingCreateSerializer")
                 serializer = BookingCreateSerializer(
                     data=serializer_data, context={"request": request}
                 )
 
+                logger.info(f"[{request_id}] Validating serializer...")
                 if not serializer.is_valid():
+                    logger.error(
+                        f"[{request_id}] Serializer validation failed: {serializer.errors}"
+                    )
                     return Response(
                         {"error": serializer.errors}, status=status.HTTP_400_BAD_REQUEST
                     )
 
+                logger.info(f"[{request_id}] Serializer validation passed")
                 validated_instance = serializer.context.get("validated_instance")
                 if not validated_instance:
+                    logger.error(
+                        f"[{request_id}] Validated instance not found in serializer context"
+                    )
                     return Response(
                         {"error": "Internal error: Validated instance not found."},
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     )
 
+                logger.info(
+                    f"[{request_id}] Validated instance found: {validated_instance.id}"
+                )
+
+            # Get booking details
             instance = validated_instance
             option = instance.schedule.option
             booking_type = option.booking_type
+            logger.info(
+                f"[{request_id}] Booking instance: {instance.id}, Option: {option.optionId}, Type: {booking_type}"
+            )
 
             all_instances = [instance]
             if booking_type == "Full Course":
+                logger.info(
+                    f"[{request_id}] Full Course booking - getting future instances"
+                )
                 all_instances = serializer.context.get(
                     "future_course_instances", [instance]
                 )
+                logger.info(
+                    f"[{request_id}] Future course instances found: {[inst.id for inst in all_instances]}"
+                )
 
             participants = serializer.validated_data["participants"]
-            subtotal = sum(Decimal(inst.price) * participants for inst in all_instances)
+            logger.info(f"[{request_id}] Number of participants: {participants}")
 
-            final_amount = subtotal  # This is now the subtotal before discount
+            # Calculate pricing
+            logger.info(
+                f"[{request_id}] Calculating pricing for {len(all_instances)} instances"
+            )
+            instance_prices = []
+            for inst in all_instances:
+                inst_price = Decimal(inst.price) * participants
+                instance_prices.append(inst_price)
+                logger.info(
+                    f"[{request_id}] Instance {inst.id} ({inst.date}): {inst.price} x {participants} = {inst_price}"
+                )
+
+            subtotal = sum(instance_prices)
+            logger.info(f"[{request_id}] Subtotal calculated: {subtotal}")
+
+            final_amount = subtotal
             discount_to_apply = None
             calculated_discount_amount = Decimal("0.00")
 
+            # Handle discount if provided
             if applied_discount_id:
+                logger.info(
+                    f"[{request_id}] Processing discount ID: {applied_discount_id}"
+                )
                 try:
                     discount_to_apply = Discount.objects.get(
                         id=applied_discount_id, business=option.classId.businessId
                     )
+                    logger.info(
+                        f"[{request_id}] Discount found: {discount_to_apply.code} ({discount_to_apply.discount_type})"
+                    )
+
+                    logger.info(f"[{request_id}] Validating discount eligibility")
                     is_valid, reason = discount_to_apply.is_valid(
                         user=request.user, booking_total=subtotal
                     )
                     if not is_valid:
+                        logger.warning(
+                            f"[{request_id}] Discount validation failed: {reason}"
+                        )
                         raise DRFValidationError(reason)
 
+                    logger.info(f"[{request_id}] Discount validation passed")
+
                     if discount_to_apply.discount_type == "percentage":
+                        logger.info(
+                            f"[{request_id}] Calculating percentage discount: {discount_to_apply.value}%"
+                        )
                         calculated_discount_amount = (
                             subtotal * (discount_to_apply.value / Decimal(100))
                         ).quantize(Decimal("0.01"))
                     elif discount_to_apply.discount_type == "fixed_amount":
+                        logger.info(
+                            f"[{request_id}] Applying fixed discount: ${discount_to_apply.value}"
+                        )
                         calculated_discount_amount = discount_to_apply.value
 
                     calculated_discount_amount = min(
@@ -121,42 +195,62 @@ class CreatePaymentIntentView(APIView):
                     )
                     final_amount = subtotal - calculated_discount_amount
 
+                    logger.info(f"[{request_id}] Discount calculation complete:")
+                    logger.info(f"[{request_id}]   - Subtotal: {subtotal}")
                     logger.info(
-                        f"Applying discount {discount_to_apply.id}. Subtotal: {subtotal}, Discount: {calculated_discount_amount}, Final: {final_amount}"
+                        f"[{request_id}]   - Discount amount: {calculated_discount_amount}"
                     )
+                    logger.info(f"[{request_id}]   - Final amount: {final_amount}")
 
                 except Discount.DoesNotExist:
                     logger.warning(
-                        f"Discount ID {applied_discount_id} not found for business {option.classId.businessId.businessId}. Ignoring."
+                        f"[{request_id}] Discount ID {applied_discount_id} not found for business {option.classId.businessId.businessId}"
                     )
                 except DRFValidationError as e:
                     logger.warning(
-                        f"Discount {applied_discount_id} failed server-side validation: {e.detail}"
+                        f"[{request_id}] Discount validation error: {e.detail}"
                     )
                     return Response(
                         {"error": {"discount": e.detail}},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
+            else:
+                logger.info(f"[{request_id}] No discount applied")
 
+            # Calculate taxes
             subtotal_after_discount = final_amount
             tax_amount = (subtotal_after_discount * HST_RATE).quantize(Decimal("0.01"))
             grand_total = subtotal_after_discount + tax_amount
 
+            logger.info(f"[{request_id}] Tax calculation:")
             logger.info(
-                f"Tax Calculation: Subtotal after discount: {subtotal_after_discount}, HST ({HST_RATE*100}%): {tax_amount}, Grand Total: {grand_total}"
+                f"[{request_id}]   - Subtotal after discount: {subtotal_after_discount}"
+            )
+            logger.info(f"[{request_id}]   - HST rate: {HST_RATE} ({HST_RATE*100}%)")
+            logger.info(f"[{request_id}]   - Tax amount: {tax_amount}")
+            logger.info(f"[{request_id}]   - Grand total: {grand_total}")
+
+            # Convert to cents for Stripe
+            total_amount_for_stripe_cents = int(grand_total * 100)
+            logger.info(
+                f"[{request_id}] Stripe amount (cents): {total_amount_for_stripe_cents}"
             )
 
-            total_amount_for_stripe_cents = int(grand_total * 100)
             if total_amount_for_stripe_cents < 50 and grand_total > 0:
+                logger.error(
+                    f"[{request_id}] Amount too low for Stripe processing: {grand_total}"
+                )
                 return Response(
                     {"error": "The final amount after discount is too low to process."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
+            # Prepare metadata
             participant_details_metadata_str = json.dumps(
                 serializer.validated_data.get("participant_details", [])
             )
 
+            logger.info(f"[{request_id}] Preparing Stripe metadata")
             metadata = {
                 "user_id": str(request.user.userId),
                 "first_slot_id": str(instance.id),
@@ -180,38 +274,121 @@ class CreatePaymentIntentView(APIView):
             if booking_type == "Full Course" and instance.schedule.end_date:
                 metadata["end_date"] = str(instance.schedule.end_date)
 
+            logger.info(f"[{request_id}] Stripe metadata prepared: {metadata}")
+
+            # Check for free booking
             if total_amount_for_stripe_cents == 0:
+                logger.error(f"[{request_id}] Free booking attempted (not supported)")
                 return Response(
                     {"error": "Free bookings are not supported in this flow."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
+            # Create Stripe PaymentIntent
+            logger.info(f"[{request_id}] Creating Stripe PaymentIntent")
+            stripe_currency = getattr(settings, "STRIPE_CURRENCY", "CAD").lower()
+            logger.info(f"[{request_id}] Stripe currency: {stripe_currency}")
+
             intent = stripe.PaymentIntent.create(
                 amount=total_amount_for_stripe_cents,
-                currency=getattr(settings, "STRIPE_CURRENCY", "CAD").lower(),
+                currency=stripe_currency,
                 payment_method_types=["card"],
                 metadata={k: v for k, v in metadata.items() if v is not None},
             )
 
-            return Response(
-                {
-                    "clientSecret": intent.client_secret,
-                    "amount": float(grand_total.quantize(Decimal("0.01"))),
-                    "total_sessions": len(all_instances),
-                    "booking_type": booking_type,
-                }
+            logger.info(f"[{request_id}] PaymentIntent created successfully:")
+            logger.info(f"[{request_id}]   - ID: {intent.id}")
+            logger.info(f"[{request_id}]   - Amount: {intent.amount}")
+            logger.info(f"[{request_id}]   - Currency: {intent.currency}")
+            logger.info(f"[{request_id}]   - Status: {intent.status}")
+
+            # Create pending booking and payment record immediately
+            logger.info(f"[{request_id}] Creating pending booking and payment record")
+
+            # Snapshot the cancellation policy NOW
+            logger.info(
+                f"[{request_id}] Snapshotting cancellation policy from option {option.optionId}"
+            )
+            snapshotted_policy = option.cancellationPolicy
+            snapshotted_refund_percent = option.cancellationRefundPercentage
+            snapshotted_custom_hours = option.cancellationCustomHours
+
+            logger.info(f"[{request_id}] Cancellation policy snapshot:")
+            logger.info(f"[{request_id}]   - Policy: {snapshotted_policy}")
+            logger.info(
+                f"[{request_id}]   - Refund percentage: {snapshotted_refund_percent}"
+            )
+            logger.info(f"[{request_id}]   - Custom hours: {snapshotted_custom_hours}")
+
+            # Create pending booking
+            pending_booking = Booking.objects.create(
+                schedule_instance=instance,
+                user=request.user,
+                participants=participants,
+                participant_details=serializer.validated_data.get(
+                    "participant_details", []
+                ),
+                notes=serializer.validated_data.get("notes", ""),
+                amount_paid=grand_total.quantize(Decimal("0.01")),
+                status="pending",
+                payment_status="pending",
+                enrollment_type=booking_type,
+                cancellation_policy=snapshotted_policy,
+                cancellation_refund_percentage=snapshotted_refund_percent,
+                cancellation_custom_hours=snapshotted_custom_hours,
             )
 
+            logger.info(f"[{request_id}] Pending booking created:")
+            logger.info(f"[{request_id}]   - ID: {pending_booking.id}")
+            logger.info(f"[{request_id}]   - Status: {pending_booking.status}")
+            logger.info(
+                f"[{request_id}]   - Payment status: {pending_booking.payment_status}"
+            )
+            logger.info(
+                f"[{request_id}]   - Cancellation policy: {pending_booking.cancellation_policy}"
+            )
+
+            # Create pending payment record
+            pending_payment = Payment.objects.create(
+                booking=pending_booking,
+                stripe_payment_intent_id=intent.id,
+                amount=grand_total,
+                tax_amount=tax_amount,
+                currency=intent.currency.upper(),
+                status="pending",
+                payment_method_type="card",
+                metadata={"original_stripe_metadata": metadata},
+            )
+
+            logger.info(f"[{request_id}] Pending payment record created:")
+            logger.info(f"[{request_id}]   - ID: {pending_payment.id}")
+            logger.info(f"[{request_id}]   - Status: {pending_payment.status}")
+            logger.info(f"[{request_id}]   - Amount: {pending_payment.amount}")
+
+            response_data = {
+                "clientSecret": intent.client_secret,
+                "amount": float(grand_total.quantize(Decimal("0.01"))),
+                "total_sessions": len(all_instances),
+                "booking_type": booking_type,
+            }
+
+            logger.info(f"[{request_id}] Response data prepared: {response_data}")
+            logger.info(f"[{request_id}] ===== CreatePaymentIntentView SUCCESS =====")
+
+            return Response(response_data)
+
         except ScheduleInstance.DoesNotExist:
+            logger.error(f"[{request_id}] ScheduleInstance not found")
             return Response(
                 {"error": "Invalid schedule instance ID provided."},
                 status=status.HTTP_404_NOT_FOUND,
             )
         except DRFValidationError as ve:
+            logger.error(f"[{request_id}] DRF Validation error: {ve.detail}")
             return Response({"error": ve.detail}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             logger.error(
-                f"CreatePaymentIntentView - Error creating payment intent: {str(e)}",
+                f"[{request_id}] Unexpected error in CreatePaymentIntentView: {str(e)}",
                 exc_info=True,
             )
             return Response(
@@ -225,124 +402,63 @@ class ProcessBookingWebhook(APIView):
     permission_classes = []
 
     def _attempt_stripe_refund(self, payment_intent_id, reason_message=""):
+        logger.info(
+            f"REFUND: Attempting refund for PaymentIntent {payment_intent_id}. Reason: {reason_message}"
+        )
         try:
-            existing_payment_record = Payment.objects.filter(
-                stripe_payment_intent_id=payment_intent_id
-            ).first()
-            if existing_payment_record and existing_payment_record.status == "refunded":
-                logger.info(
-                    f"Refund for PI {payment_intent_id} skipped, already marked as refunded in DB."
-                )
-                return True
-
             stripe.Refund.create(payment_intent=payment_intent_id)
-            logger.info(
-                f"Stripe refund successfully initiated for PaymentIntent {payment_intent_id}. Reason: {reason_message}"
-            )
-
-            if existing_payment_record:
-                existing_payment_record.status = "refunded"
-                existing_payment_record.refund_reason = (
-                    reason_message or "Refund due to booking finalization error."
-                )
-                existing_payment_record.refund_date = timezone.now()
-                existing_payment_record.save(
-                    update_fields=["status", "refund_reason", "refund_date"]
-                )
             return True
-        except stripe.error.InvalidRequestError as ire:
-            if "has already been refunded" in str(ire).lower():
-                logger.warning(
-                    f"Attempted to refund PI {payment_intent_id}, but it was already refunded on Stripe: {ire}"
-                )
-                if (
-                    existing_payment_record
-                    and existing_payment_record.status != "refunded"
-                ):
-                    existing_payment_record.status = "refunded"
-                    existing_payment_record.refund_reason = (
-                        reason_message
-                        or "Already refunded on Stripe, syncing local DB."
-                    )
-                    existing_payment_record.refund_date = timezone.now()
-                    existing_payment_record.save(
-                        update_fields=["status", "refund_reason", "refund_date"]
-                    )
-                return True
-            logger.error(
-                f"CRITICAL: Stripe InvalidRequestError while trying to refund PI {payment_intent_id}: {ire}"
-            )
-            return False
-        except stripe.StripeError as refund_err:
-            logger.error(
-                f"CRITICAL: Failed to refund PaymentIntent {payment_intent_id}: {refund_err}"
-            )
+        except stripe.StripeError as e:
+            logger.error(f"REFUND: CRITICAL - Stripe error during refund: {e}")
             return False
 
     def post(self, request):
+        webhook_id = str(uuid.uuid4())[:8]
         payload = request.body
         sig_header = request.META.get("HTTP_STRIPE_SIGNATURE")
-        event = None
-
         try:
             event = stripe.Webhook.construct_event(
                 payload, sig_header, settings.STRIPE_PAYMENTS_WEBHOOK_SECRET
             )
-            logger.info(
-                f"--- Booking Webhook: Received event ID={event.id}, Type={event.type} ---"
-            )
-        except ValueError as e:
-            logger.error(f"Booking Webhook - Webhook Error: Invalid payload. {e}")
-            return Response(status=status.HTTP_400_BAD_REQUEST)
-        except stripe.error.SignatureVerificationError as e:
-            logger.error(f"Booking Webhook - Webhook Error: Invalid signature. {e}")
-            return Response(status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
-            logger.error(
-                f"Booking Webhook - Webhook Error: Unexpected error constructing event. {e}",
-                exc_info=True,
-            )
             return Response(status=status.HTTP_400_BAD_REQUEST)
 
         if event.type == "payment_intent.succeeded":
             payment_intent = event.data.object
             logger.info(
-                f"Booking Webhook - PaymentIntent {payment_intent.id} succeeded."
+                f"[{webhook_id}] Processing payment_intent.succeeded for PI: {payment_intent.id}"
             )
             try:
-                response_data = self.handle_successful_payment(payment_intent)
+                response_data = self.handle_successful_payment(
+                    payment_intent, webhook_id
+                )
                 return Response(response_data or {}, status=status.HTTP_200_OK)
             except DRFValidationError as ve:
-                error_detail_msg = ve.detail if hasattr(ve, "detail") else str(ve)
+                error_msg = str(ve.detail)
                 logger.error(
-                    f"Booking Webhook - Validation Error handling PI {payment_intent.id}: {error_detail_msg}"
+                    f"[{webhook_id}] Validation error in webhook: {error_msg}",
+                    exc_info=True,
                 )
                 self._attempt_stripe_refund(
-                    payment_intent.id, f"Booking validation failed: {error_detail_msg}"
+                    payment_intent.id, f"Booking validation failed: {error_msg}"
                 )
                 return Response(
-                    {"error": error_detail_msg}, status=status.HTTP_400_BAD_REQUEST
+                    {"error": error_msg}, status=status.HTTP_400_BAD_REQUEST
                 )
             except Exception as e:
                 logger.error(
-                    f"Booking Webhook - Unexpected Error processing successful PI {payment_intent.id}: {e}",
-                    exc_info=True,
+                    f"[{webhook_id}] Unexpected error in webhook: {e}", exc_info=True
                 )
                 self._attempt_stripe_refund(
                     payment_intent.id, f"Unexpected server error: {e}"
                 )
                 return Response(
-                    {
-                        "error": "Internal server error handling payment. Your payment, if processed, will be refunded."
-                    },
+                    {"error": "Internal server error"},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
 
         elif event.type == "payment_intent.payment_failed":
             payment_intent = event.data.object
-            logger.warning(
-                f'Booking Webhook - PaymentIntent {payment_intent.id} failed. Reason: {payment_intent.last_payment_error.message if payment_intent.last_payment_error else "Unknown"}'
-            )
             Payment.objects.filter(
                 stripe_payment_intent_id=payment_intent.id, status="pending"
             ).update(
@@ -350,162 +466,68 @@ class ProcessBookingWebhook(APIView):
                 failure_message=(
                     payment_intent.last_payment_error.message
                     if payment_intent.last_payment_error
-                    else "Payment failed on Stripe."
+                    else "Payment failed."
                 ),
             )
-        else:
-            logger.debug(f"Booking Webhook - Unhandled event type {event.type}")
 
         return Response(status=status.HTTP_200_OK)
 
-    def handle_successful_payment(self, payment_intent):
+    def handle_successful_payment(self, payment_intent, webhook_id):
         if Payment.objects.filter(
             stripe_payment_intent_id=payment_intent.id, status="succeeded"
         ).exists():
-            payment_record = Payment.objects.get(
-                stripe_payment_intent_id=payment_intent.id, status="succeeded"
-            )
-            booking = payment_record.booking
             logger.warning(
-                f"Booking Webhook - PaymentIntent {payment_intent.id} has already been successfully processed. Booking ID: {booking.id}, Ref: {booking.user_facing_reference}. Skipping."
+                f"[{webhook_id}] DUPLICATE: PI {payment_intent.id} already processed."
             )
-            return {
-                "message": "Already processed",
-                "booking_id": booking.id,
-                "user_facing_reference": booking.user_facing_reference,
-            }
-
-        created_bookings_for_email = []
+            return {"message": "Already processed"}
 
         with transaction.atomic():
+            try:
+                payment_record = Payment.objects.select_for_update().get(
+                    stripe_payment_intent_id=payment_intent.id, status="pending"
+                )
+                pending_booking = Booking.objects.select_for_update().get(
+                    pk=payment_record.booking.pk, status="pending"
+                )
+            except (Payment.DoesNotExist, Booking.DoesNotExist):
+                raise DRFValidationError(
+                    "Could not find a pending booking for this payment. Refunding."
+                )
+
             metadata = payment_intent.metadata
-            if not metadata:
-                raise DRFValidationError("Payment metadata missing.")
+            participants = pending_booking.participants
+            initial_instance = pending_booking.schedule_instance
 
-            logger.info(
-                f"Booking Webhook: Processing PI {payment_intent.id} with full metadata: {metadata}"
+            # Re-validate capacity, excluding the current pending booking
+            other_participants = (
+                initial_instance.bookings.filter(status__in=["confirmed", "pending"])
+                .exclude(pk=pending_booking.pk)
+                .aggregate(total=Coalesce(Sum("participants"), 0))["total"]
             )
-
-            user_id = metadata.get("user_id")
-            first_slot_id = metadata.get("first_slot_id")
-            participants_str = metadata.get("participants", "1")
-            participant_details_str = metadata.get("participant_details", "[]")
-            try:
-                participant_details = json.loads(participant_details_str)
-            except json.JSONDecodeError:
-                participant_details = []
-
-            booking_type = metadata.get("booking_type")
-            notes = metadata.get("notes", "")
-            is_course = metadata.get("is_course") == "True"
-            schedule_id_from_meta = metadata.get("schedule_id")
-            start_date_str = metadata.get("start_date")
-            end_date_str = metadata.get("end_date")
-
-            applied_discount_id_str = metadata.get("applied_discount_id")
-            discount_amount_str = metadata.get("discount_amount")
-
-            subtotal_after_discount_str = metadata.get("subtotal_after_discount")
-            tax_amount_str = metadata.get("tax_amount")
-
-            required_meta_keys = [
-                "user_id",
-                "first_slot_id",
-                "participants",
-                "booking_type",
-                "is_course",
-                "schedule_id",
-                "start_date",
-                "subtotal_after_discount",
-                "tax_amount",  # Add tax keys to validation
-            ]
-            if not all(key in metadata for key in required_meta_keys):
-                missing_keys = [
-                    key for key in required_meta_keys if key not in metadata
-                ]
+            if (initial_instance.max_participants - other_participants) < participants:
                 raise DRFValidationError(
-                    f"Payment metadata incomplete. Missing: {', '.join(missing_keys)}"
+                    f"Session on {initial_instance.date.strftime('%b %d')} is now full."
                 )
 
-            try:
-                participants = int(participants_str)
-                user = CustomUser.objects.get(userId=int(user_id))
-                initial_instance = ScheduleInstance.objects.select_for_update().get(
-                    id=int(first_slot_id)
-                )
-                start_date = timezone.datetime.strptime(
-                    start_date_str, "%Y-%m-%d"
-                ).date()
-            except (
-                ValueError,
-                TypeError,
-                CustomUser.DoesNotExist,
-                ScheduleInstance.DoesNotExist,
-            ) as e:
-                raise DRFValidationError(
-                    f"Invalid payment metadata or related object not found: {e}"
-                )
+            # --- UPDATE PENDING BOOKING TO CONFIRMED ---
+            pending_booking.status = "confirmed"
+            pending_booking.payment_status = "paid"
+            pending_booking.save()  # This generates the user_facing_reference
+            logger.info(f"[{webhook_id}] Booking {pending_booking.id} confirmed.")
 
+            # --- CALCULATE FEES AND UPDATE PAYMENT RECORD ---
+            grand_total = Decimal(payment_intent.amount_received) / 100
+            total_tax = Decimal(metadata.get("tax_amount", "0.00"))
+            subtotal_after_discount = Decimal(
+                metadata.get("subtotal_after_discount", "0.00")
+            )
             business = initial_instance.schedule.option.classId.businessId
-            discount_to_apply = None
-            if applied_discount_id_str:
-                try:
-                    discount_to_apply = Discount.objects.get(
-                        id=uuid.UUID(applied_discount_id_str)
-                    )
-                except (Discount.DoesNotExist, ValueError, TypeError):
-                    logger.warning(
-                        f"Webhook: Could not find Discount with ID '{applied_discount_id_str}' from metadata. Booking will proceed without it."
-                    )
 
-            total_calculated_discount_amount = Decimal(discount_amount_str or "0.00")
-            instances_to_book = []
-            if is_course:
-                if not end_date_str:
-                    raise DRFValidationError("End date missing for course booking.")
-                end_date = timezone.datetime.strptime(end_date_str, "%Y-%m-%d").date()
-                instances_to_book = list(
-                    ScheduleInstance.objects.select_for_update()
-                    .filter(
-                        schedule_id=int(schedule_id_from_meta),
-                        date__gte=start_date,
-                        date__lte=end_date,
-                        status="scheduled",
-                    )
-                    .order_by("date")
-                )
-            else:
-                instances_to_book = [initial_instance]
-
-            if not instances_to_book:
-                raise DRFValidationError(
-                    "No available sessions found. Your payment will be refunded."
-                )
-
-            for instance_check in instances_to_book:
-                if not instance_check.can_accommodate(participants):
-                    raise DRFValidationError(
-                        f"Session on {instance_check.date.strftime('%b %d')} is now full. Your payment will be refunded."
-                    )
-
-            grand_total_from_stripe = Decimal(payment_intent.amount_received) / 100
-            total_tax = Decimal(tax_amount_str)
-            subtotal_after_discount = Decimal(subtotal_after_discount_str)
-
-            if business.partner_tier:
-                fee_percentage = business.partner_tier.fee_percentage
-            else:
-                try:
-                    default_tier = PartnerTier.objects.get(is_default=True)
-                    fee_percentage = default_tier.fee_percentage
-                    logger.warning(
-                        f"Business {business.id} was missing a partner tier. Fell back to default tier '{default_tier.name}'."
-                    )
-                except PartnerTier.DoesNotExist:
-                    logger.error(
-                        "CRITICAL: No default PartnerTier is configured in the database. Using hardcoded 13% fee."
-                    )
-                    fee_percentage = Decimal("13.00")
+            fee_percentage = (
+                business.partner_tier.fee_percentage
+                if business.partner_tier
+                else PartnerTier.objects.get(is_default=True).fee_percentage
+            )
 
             service_fee_rate = fee_percentage / Decimal("100.0")
             platform_fee_amount = (subtotal_after_discount * service_fee_rate).quantize(
@@ -518,159 +540,44 @@ class ProcessBookingWebhook(APIView):
             business_net_revenue = subtotal_after_discount - platform_fee_amount
             net_payout_to_business = business_net_revenue + business_payout_tax
 
-            logger.info(
-                f"Webhook Fee & Tax Split for PI {payment_intent.id}: "
-                f"Grand Total: {grand_total_from_stripe}, Subtotal: {subtotal_after_discount}, Total Tax: {total_tax}. "
-                f"Platform Fee: {platform_fee_amount}, Platform Tax: {platform_fee_tax}. "
-                f"Business Net Revenue: {business_net_revenue}, Business Tax: {business_payout_tax}. "
-                f"--> Net Payout to Business: {net_payout_to_business}"
+            charge_details = (
+                stripe.Charge.retrieve(payment_intent.latest_charge)
+                if payment_intent.latest_charge
+                else None
             )
 
-            num_instances = len(instances_to_book)
-            amount_per_booking_instance = (
-                (grand_total_from_stripe / num_instances)
-                if num_instances > 0
-                else Decimal("0.00")
-            )
-            discount_per_booking_instance = (
-                (total_calculated_discount_amount / num_instances)
-                if num_instances > 0
-                else Decimal("0.00")
-            )
+            payment_record.stripe_charge_id = payment_intent.latest_charge
+            payment_record.status = "succeeded"
+            payment_record.amount = grand_total
+            payment_record.tax_amount = total_tax
+            payment_record.platform_fee_amount = platform_fee_amount
+            payment_record.platform_fee_tax = platform_fee_tax
+            payment_record.net_payout_amount = net_payout_to_business
+            payment_record.metadata = {"original_stripe_metadata": dict(metadata)}
 
-            booking_group_id = uuid.uuid4() if len(instances_to_book) > 1 else None
-            for current_sch_instance in instances_to_book:
-                booking = Booking(
-                    schedule_instance=current_sch_instance,
-                    user=user,
-                    booking_group_id=booking_group_id,
-                    participants=participants,
-                    participant_details=participant_details,
-                    notes=notes,
-                    amount_paid=amount_per_booking_instance.quantize(Decimal("0.01")),
-                    status="confirmed",
-                    payment_status="paid",
-                    enrollment_type=booking_type,
+            if charge_details and charge_details.payment_method_details.card:
+                payment_record.card_brand = (
+                    charge_details.payment_method_details.card.brand
                 )
-                booking.save()
-
-                if discount_to_apply:
-                    AppliedDiscount.objects.create(
-                        booking=booking,
-                        discount=discount_to_apply,
-                        amount_saved=discount_per_booking_instance.quantize(
-                            Decimal("0.01")
-                        ),
-                    )
-                    discount_to_apply.redeem()
-                created_bookings_for_email.append(booking)
-
-            logger.info(
-                f"Booking Webhook - Created {len(created_bookings_for_email)} booking(s) for PI {payment_intent.id}. Group ID: {booking_group_id}. Discount Applied: {discount_to_apply.id if discount_to_apply else 'None'}"
-            )
-
-            charge_details = None
-            latest_charge_id = getattr(payment_intent, "latest_charge", None)
-            if latest_charge_id:
-                try:
-                    charge_details = stripe.Charge.retrieve(latest_charge_id)
-                except stripe.StripeError as e:
-                    logger.warning(
-                        f"Booking Webhook - Could not retrieve charge {latest_charge_id} for PI {payment_intent.id}: {e}"
-                    )
-
-            payment_record = Payment.objects.create(
-                booking=created_bookings_for_email[0],
-                stripe_payment_intent_id=payment_intent.id,
-                stripe_charge_id=latest_charge_id,
-                amount=grand_total_from_stripe,
-                tax_amount=total_tax,
-                platform_fee_amount=platform_fee_amount,
-                platform_fee_tax=platform_fee_tax,
-                net_payout_amount=net_payout_to_business,
-                currency=payment_intent.currency.upper(),
-                status="succeeded",
-                payment_method_type=(
-                    payment_intent.payment_method_types[0]
-                    if payment_intent.payment_method_types
-                    else "card"
-                ),
-                metadata={"original_stripe_metadata": metadata},
-            )
-
+                payment_record.card_last4 = (
+                    charge_details.payment_method_details.card.last4
+                )
             if charge_details:
-                update_fields = []
-                pm_details = getattr(charge_details, "payment_method_details", None)
-                if pm_details and getattr(pm_details, "type", None) == "card":
-                    card_obj = getattr(pm_details, "card", None)
-                    if card_obj:
-                        payment_record.card_brand = getattr(card_obj, "brand", None)
-                        payment_record.card_last4 = getattr(card_obj, "last4", None)
-                        payment_record.card_exp_month = getattr(
-                            card_obj, "exp_month", None
-                        )
-                        payment_record.card_exp_year = getattr(
-                            card_obj, "exp_year", None
-                        )
-                        update_fields.extend(
-                            [
-                                "card_brand",
-                                "card_last4",
-                                "card_exp_month",
-                                "card_exp_year",
-                            ]
-                        )
+                payment_record.receipt_url = charge_details.receipt_url
 
-                payment_record.receipt_url = getattr(
-                    charge_details, "receipt_url", None
-                )
-                payment_record.receipt_number = getattr(
-                    charge_details, "receipt_number", None
-                )
-                update_fields.extend(["receipt_url", "receipt_number"])
-
-                billing_details_obj = getattr(charge_details, "billing_details", None)
-                if billing_details_obj:
-                    payment_record.billing_details = dict(billing_details_obj)
-                    update_fields.append("billing_details")
-
-                if update_fields:
-                    payment_record.save(update_fields=update_fields)
-
+            payment_record.save()
             logger.info(
-                f"Booking Webhook - Created Payment record {payment_record.id} for PI {payment_intent.id}"
+                f"[{webhook_id}] Payment {payment_record.id} updated to succeeded."
             )
 
-        if created_bookings_for_email:
-            first_booking = created_bookings_for_email[0]
-            try:
-                send_booking_confirmation_email(user, first_booking)
-            except Exception as email_error:
-                logger.error(
-                    f"Booking Webhook - Failed to send confirmation email for booking {first_booking.id}: {email_error}",
-                    exc_info=True,
-                )
+        # Send emails after the transaction is successfully committed
+        send_booking_confirmation_email(pending_booking.user, pending_booking)
+        if business.newBookingNotification:
+            for recipient in {business.owner} | set(business.managers.all()):
+                if recipient and recipient.email:
+                    send_business_new_booking_email(recipient, pending_booking)
 
-            try:
-                business_info_obj = business
-                if business_info_obj and business_info_obj.newBookingNotification:
-                    recipients = {business_info_obj.owner} | set(
-                        business_info_obj.managers.all()
-                    )
-                    for biz_user in recipients:
-                        if biz_user and biz_user.email:
-                            send_business_new_booking_email(biz_user, first_booking)
-            except Exception as email_error_biz:
-                logger.error(
-                    f"Booking Webhook - Failed to send new booking notification email for booking {first_booking.id}: {email_error_biz}",
-                    exc_info=True,
-                )
-
-            return {
-                "booking_id": first_booking.id,
-                "user_facing_reference": first_booking.user_facing_reference,
-            }
-        else:
-            raise DRFValidationError(
-                "Booking creation failed unexpectedly after payment. Your payment will be refunded."
-            )
+        return {
+            "booking_id": pending_booking.id,
+            "user_facing_reference": pending_booking.user_facing_reference,
+        }

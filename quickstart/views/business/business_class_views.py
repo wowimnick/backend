@@ -349,6 +349,9 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                 equipment=option_dict.get("equipment", []),
                 tags=option_dict.get("tags", []),
                 cancellationPolicy=option_dict.get("cancellationPolicy", "flexible"),
+                cancellationCustomHours=option_dict.get(
+                    "cancellationCustomHours"
+                ),  # Use .get() which safely returns None if key is missing
                 cancellationRefundPercentage=option_dict.get(
                     "cancellationRefundPercentage", 100
                 ),

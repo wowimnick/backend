@@ -121,6 +121,7 @@ class PublicClassOptionSerializer(serializers.ModelSerializer):
             "equipment",
             "tags",
             "cancellationPolicy",
+            "cancellationCustomHours",
             "cancellationRefundPercentage",
             "price_type",
         ]
