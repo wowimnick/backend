@@ -342,21 +342,12 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
             # For simplicity, assuming one option on create as per original logic
             option_dict = options_data_list[0]
 
-            ClassOption.objects.create(
-                classId=class_instance,
-                booking_type=option_dict.get("booking_type", "Single Session"),
-                level=option_dict.get("level", "all"),
-                equipment=option_dict.get("equipment", []),
-                tags=option_dict.get("tags", []),
-                cancellationPolicy=option_dict.get("cancellationPolicy", "flexible"),
-                cancellationCustomHours=option_dict.get(
-                    "cancellationCustomHours"
-                ),  # Use .get() which safely returns None if key is missing
-                cancellationRefundPercentage=option_dict.get(
-                    "cancellationRefundPercentage", 100
-                ),
-                price_type=option_dict.get("price_type", "per_session"),
-            )
+            # Use the ManagedClassOptionSerializer to ensure consistent validation and creation
+            # logic with the update method. This is the correct DRF pattern.
+            option_serializer = ManagedClassOptionSerializer(data=option_dict)
+            option_serializer.is_valid(raise_exception=True)
+            # Pass the parent class instance to the save method to establish the relationship.
+            option_serializer.save(classId=class_instance)
             logger.info(f"Created ClassOption for class {class_instance.classId}.")
 
         except json.JSONDecodeError:
