@@ -83,6 +83,26 @@ class AuthAndProfileTests(APITestCase):
         self.assertTrue(self.user.avatar.name.startswith("originals/avatars/"))
         print("✅ PASSED: User can update their profile information.")
 
+    def test_update_own_profile(self):
+        print("\n--- Running: test_update_own_profile ---")
+        self.client.force_authenticate(user=self.user)
+        url = reverse("user-update")
+
+        data = {
+            "first_name": "Updated First",
+            "bio": "This is my new bio.",
+            # FIX: The serializer expects the key to be the model field name, 'avatar'.
+            "avatar": "originals/avatars/test-avatar-key.jpg",
+        }
+
+        response = self.client.patch(url, data, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.first_name, "Updated First")
+        self.assertTrue(self.user.avatar.name.startswith("originals/avatars/"))
+        print("✅ PASSED: User can update their profile information.")
+
     def test_successful_login(self):
         """
         POST /api/login/ - Ensure a user can log in and receive tokens in cookies.

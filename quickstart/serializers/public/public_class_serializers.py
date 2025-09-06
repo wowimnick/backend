@@ -121,6 +121,7 @@ class PublicClassOptionSerializer(serializers.ModelSerializer):
             "equipment",
             "tags",
             "cancellationPolicy",
+            "cancellationCustomHours",
             "cancellationRefundPercentage",
             "price_type",
         ]
@@ -170,6 +171,12 @@ class PublicClassSerializer(serializers.ModelSerializer):
     business_name = serializers.CharField(
         source="businessId.businessName", read_only=True, allow_null=True
     )
+    business_city = serializers.CharField(
+        source="businessId.businessCity", read_only=True
+    )
+    business_state = serializers.CharField(
+        source="businessId.businessState", read_only=True
+    )
     min_session_price = serializers.DecimalField(
         max_digits=10, decimal_places=2, read_only=True
     )
@@ -195,6 +202,8 @@ class PublicClassSerializer(serializers.ModelSerializer):
             "subcategory_name",
             "category_key",
             "subcategory_key",
+            "location",
+            "unit_number",
             "coordinates",
             "saltLocation",
             "createdAt",
@@ -204,6 +213,8 @@ class PublicClassSerializer(serializers.ModelSerializer):
             "review_count",
             "is_favorited",
             "business_timezone",
+            "business_city",
+            "business_state",
             "min_session_price",
             "min_course_price",
         ]

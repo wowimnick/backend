@@ -413,6 +413,7 @@ class ManagedClassOptionSerializer(serializers.ModelSerializer):
             "equipment",
             "tags",
             "cancellationPolicy",
+            "cancellationCustomHours",
             "cancellationRefundPercentage",
             "price_type",
             "createdAt",
@@ -445,6 +446,31 @@ class ManagedClassOptionSerializer(serializers.ModelSerializer):
                 "default": ClassOption._meta.get_field("price_type").get_default()
             },
         }
+
+    def validate(self, data):
+        """
+        Validate that custom hours are provided when the policy is 'custom'.
+        """
+        # When updating, 'cancellationPolicy' might not be in the payload.
+        # We need to consider the existing instance's policy in that case.
+        policy = data.get(
+            "cancellationPolicy", getattr(self.instance, "cancellationPolicy", None)
+        )
+        custom_hours = data.get("cancellationCustomHours")
+
+        if policy == "custom":
+            if custom_hours is None:
+                raise serializers.ValidationError(
+                    {
+                        "cancellationCustomHours": "A custom hour value is required when the policy is 'Custom'."
+                    }
+                )
+            if custom_hours < 1:
+                raise serializers.ValidationError(
+                    {"cancellationCustomHours": "Custom hours must be at least 1."}
+                )
+
+        return data
 
 
 class ManagedClassSerializer(serializers.ModelSerializer):

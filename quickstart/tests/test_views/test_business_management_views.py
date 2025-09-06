@@ -117,7 +117,6 @@ class BusinessManagementTests(APITestCase):
         self.client.force_authenticate(user=self.user)
         url = reverse("business-register")
 
-        # MODIFIED: The format is now 'json'.
         response = self.client.post(url, self.valid_data, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
@@ -189,14 +188,12 @@ class BusinessManagementTests(APITestCase):
         self.client.force_authenticate(user=self.user)
         url = reverse("my-business-profile")
 
-        # MODIFIED: The payload is now JSON. `tags_keywords` is a direct list.
         update_data = {
             "businessName": "Updated Name Fitness",
             "tags_keywords": ["cardio", "weights"],
-            "businessImage": "originals/business_images/new-image.png",  # The field is named 'businessImage' in the serializer
+            "businessImage": "originals/business_images/new-image.png",
         }
 
-        # MODIFIED: The format is now 'json'.
         response = self.client.patch(url, update_data, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)

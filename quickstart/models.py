@@ -1490,11 +1490,17 @@ class ClassOption(models.Model):
         ("48h", "48 Hours Notice"),
         ("72h", "72 Hours Notice"),
         ("strict", "Strict (Non-refundable)"),
+        ("custom", "Custom Notice Period"),  # Add this new choice
     ]
     cancellationPolicy = models.CharField(
         max_length=30,
         choices=CANCELLATION_POLICY_CHOICES,
         default="flexible",
+    )
+    cancellationCustomHours = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Custom cancellation notice period in hours, if policy is 'custom'.",
     )
     cancellationRefundPercentage = models.PositiveIntegerField(
         default=100,
@@ -1526,6 +1532,22 @@ class ClassOption(models.Model):
     def __str__(self):
         # Refer to the class's title for identification
         return f"Option for {self.classId.title} (ID: {self.optionId})"
+
+    def clean(self):
+        super().clean()
+        # Add validation logic
+        if self.cancellationPolicy == "custom" and self.cancellationCustomHours is None:
+            raise ValidationError(
+                {
+                    "cancellationCustomHours": "A custom hour value is required when the policy is set to 'Custom'."
+                }
+            )
+        if (
+            self.cancellationPolicy != "custom"
+            and self.cancellationCustomHours is not None
+        ):
+            # Optionally, nullify the custom hours if the policy is not custom
+            self.cancellationCustomHours = None
 
     class Meta:
         db_table = "class_options"
@@ -1936,6 +1958,11 @@ class Booking(models.Model):
         choices=CANCELLATION_POLICY_CHOICES,  # Assuming this is defined in your models.py
         default="flexible",
         help_text="The cancellation policy snapshotted at the time of booking.",
+    )
+    cancellation_custom_hours = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="The custom notice period in hours, snapshotted at time of booking.",
     )
     cancellation_refund_percentage = models.PositiveIntegerField(
         default=100,

@@ -164,103 +164,6 @@ class BookingCreateSerializer(serializers.Serializer):
         return data
 
 
-def create(self, validated_data):
-    user = self.context["request"].user
-    initial_instance = self.context["validated_instance"]
-    participants_count = validated_data["participants"]
-    participant_details_data = validated_data.get("participant_details", [])
-    notes = validated_data.get("notes", "")
-
-    # FIX: Ensure participant_details is properly serializable for psycopg3
-    # Convert to plain Python objects and ensure JSON serialization works
-    if participant_details_data:
-        try:
-            # Ensure it's JSON serializable and convert back to plain Python objects
-            participant_details_json = json.dumps(participant_details_data)
-            participant_details_data = json.loads(participant_details_json)
-        except (TypeError, ValueError) as e:
-            logger.error(f"Error serializing participant_details: {e}")
-            participant_details_data = []
-
-    price_per_instance = initial_instance.price
-    class_option = initial_instance.schedule.option
-    booking_type = class_option.booking_type
-    enrollment_type = (
-        "Full Course" if booking_type == "Full Course" else "Single Session"
-    )
-
-    snapshotted_policy = class_option.cancellationPolicy
-    snapshotted_refund_percent = class_option.cancellationRefundPercentage
-
-    try:
-        # The transaction is now handled in the view to cover the whole process
-        if booking_type == "Full Course":
-            booking_group_id = uuid.uuid4()
-            course_instances = self.context.get("future_course_instances")
-            if not course_instances:
-                raise DRFValidationError(
-                    "Course instances not found during creation (serializer.create)."
-                )
-
-            bookings = []
-            total_course_price = Decimal("0.00")
-
-            for instance_item in course_instances:
-                instance_price = instance_item.price * participants_count
-                total_course_price += instance_price
-
-                booking = Booking(
-                    schedule_instance=instance_item,
-                    user=user,
-                    booking_group_id=booking_group_id,
-                    participants=participants_count,
-                    participant_details=participant_details_data,  # Now properly serializable
-                    notes=notes,
-                    amount_paid=instance_price.quantize(Decimal("0.01")),
-                    status="pending",
-                    payment_status="pending",
-                    enrollment_type=enrollment_type,
-                    cancellation_policy=snapshotted_policy,
-                    cancellation_refund_percentage=snapshotted_refund_percent,
-                )
-                bookings.append(booking)
-
-            created_bookings = Booking.objects.bulk_create(bookings)
-            logger.info(
-                f"BookingCreateSerializer: Pending Course Booking created (Group: {booking_group_id}) for User {user.email}. Total Price: {total_course_price}"
-            )
-
-            return created_bookings[0] if created_bookings else None
-        else:
-            single_session_price = price_per_instance * participants_count
-            booking = Booking.objects.create(
-                schedule_instance=initial_instance,
-                user=user,
-                participants=participants_count,
-                participant_details=participant_details_data,  # Now properly serializable
-                notes=notes,
-                amount_paid=single_session_price.quantize(Decimal("0.01")),
-                status="pending",
-                payment_status="pending",
-                enrollment_type=enrollment_type,
-                cancellation_policy=snapshotted_policy,
-                cancellation_refund_percentage=snapshotted_refund_percent,
-            )
-            logger.info(
-                f"BookingCreateSerializer: Pending Single Session Booking created (ID: {booking.id}) for User {user.email}. Price: {single_session_price}"
-            )
-            return booking
-
-    except Exception as e:
-        logger.error(
-            f"Error creating booking (serializer.create) for user {user.email}: {str(e)}",
-            exc_info=True,
-        )
-        raise DRFValidationError(
-            {"error": "Failed to create booking. Please try again."}
-        )
-
-
 class BookingDetailSerializer(serializers.ModelSerializer):
     """
     Comprehensive serializer for the ADMIN booking detail view.
@@ -325,6 +228,9 @@ class BookingDetailSerializer(serializers.ModelSerializer):
             "booking_group_id",
             "business_timezone",
             "session_info",
+            "cancellation_policy",
+            "cancellation_custom_hours",
+            "cancellation_refund_percentage",
         ]
         read_only_fields = fields
 
@@ -371,6 +277,8 @@ class StudentBookingSerializer(serializers.ModelSerializer):
         allow_null=True,
         read_only=True,
     )
+    # --- ADDED ---
+    location_address_string = serializers.SerializerMethodField()
     business_name = serializers.CharField(
         source="schedule_instance.schedule.option.classId.businessId.businessName",
         read_only=True,
@@ -387,6 +295,9 @@ class StudentBookingSerializer(serializers.ModelSerializer):
     class_id = serializers.IntegerField(
         source="schedule_instance.schedule.option.classId.classId", read_only=True
     )
+    slug = serializers.CharField(
+        source="schedule_instance.schedule.option.classId.slug", read_only=True
+    )
     business_timezone = serializers.CharField(
         source="schedule_instance.schedule.option.classId.businessId.business_timezone",
         read_only=True,
@@ -400,11 +311,14 @@ class StudentBookingSerializer(serializers.ModelSerializer):
         fields = [
             "booking_id",
             "class_id",
+            "slug",
             "class_name",
             "option_name",
             "date",
             "time",
             "coordinates",
+            # --- ADDED ---
+            "location_address_string",
             "business_name",
             "price",
             "status",
@@ -421,6 +335,26 @@ class StudentBookingSerializer(serializers.ModelSerializer):
             "cancellation_policy",
         ]
         read_only_fields = fields
+
+    def get_location_address_string(self, obj):
+        """
+        Constructs the full, displayable address for the class associated with the booking.
+        """
+        try:
+            klass = obj.schedule_instance.schedule.option.classId
+
+            # CORRECTED: Only combine the class's specific location and unit number.
+            # The city/state are already part of the main `klass.location` string.
+            parts = [
+                klass.location,  # e.g., "123 Main St, Anytown, ON"
+                klass.unit_number,  # e.g., "Unit 5"
+            ]
+
+            # Filter out any None or empty/whitespace parts and join them.
+            return ", ".join(part for part in parts if part and part.strip())
+        except AttributeError:
+            # This will catch errors if schedule_instance or other related objects are None.
+            return None
 
     def get_class_image_thumb(self, obj):
         try:

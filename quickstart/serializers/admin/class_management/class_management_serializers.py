@@ -78,6 +78,7 @@ class AdminClassOptionSerializer(serializers.ModelSerializer):
             "equipment",
             "tags",
             "cancellationPolicy",
+            "cancellationCustomHours",
             "cancellationRefundPercentage",
             "schedules",
             "price_range",

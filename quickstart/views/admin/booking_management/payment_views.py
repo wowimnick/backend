@@ -318,6 +318,11 @@ class AdminPaymentViewSet(viewsets.ModelViewSet):
 
         # --- 4. Stripe Interaction ---
         try:
+            if abs(payment.available_refund_amount - refund_amount_decimal) < Decimal(
+                "0.01"
+            ):
+                refund_amount_decimal = payment.available_refund_amount
+
             logger.info(
                 f"Attempting Stripe refund for Payment Intent: {payment.stripe_payment_intent_id}, Amount: {refund_amount_decimal}, Requested by: {request.user.email} (SuperAdmin: {is_super_admin})"
             )

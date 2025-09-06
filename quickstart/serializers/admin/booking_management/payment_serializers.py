@@ -108,11 +108,10 @@ class AdminBookingPaymentSerializer(serializers.ModelSerializer):
 
     available_refund_amount = serializers.ReadOnlyField()
     formatted_status = serializers.ReadOnlyField()
-    platform_fee_amount = (
-        serializers.DecimalField(  # FIX: Renamed from service_fee_amount
-            max_digits=10, decimal_places=2, read_only=True
-        )
-    )
+
+    # --- ADD THIS ---
+    card_details = serializers.SerializerMethodField()
+    # --- END ADD ---
 
     class Meta:
         model = Payment
@@ -120,13 +119,13 @@ class AdminBookingPaymentSerializer(serializers.ModelSerializer):
             "id",
             "stripe_payment_intent_id",
             "amount",
-            "platform_fee_amount",  # FIX: Renamed from service_fee_amount
+            "platform_fee_amount",
+            "net_payout_amount",
             "currency",
             "status",
             "formatted_status",
             "payment_method_type",
-            "card_brand",
-            "card_last4",
+            "card_details",
             "receipt_url",
             "created_at",
             "refunded_amount",
@@ -134,6 +133,23 @@ class AdminBookingPaymentSerializer(serializers.ModelSerializer):
             "refund_reason",
             "available_refund_amount",
         ]
+
+    # --- ADD THIS ENTIRE METHOD (copied from AdminPaymentSerializer) ---
+    def get_card_details(self, obj):
+        if obj.card_brand and obj.card_last4:
+            return {
+                "brand": obj.card_brand,
+                "last4": obj.card_last4,
+                "exp_month": obj.card_exp_month,
+                "exp_year": obj.card_exp_year,
+                "display_name": f"{obj.card_brand.title()} •••• {obj.card_last4}",
+                "expiry": (
+                    f"{obj.card_exp_month}/{obj.card_exp_year}"
+                    if obj.card_exp_month and obj.card_exp_year
+                    else None
+                ),
+            }
+        return None
 
 
 class AdminBookingListSerializer(serializers.ModelSerializer):
@@ -188,6 +204,9 @@ class AdminBookingListSerializer(serializers.ModelSerializer):
             "booking_date",
             "session_info",
             "payment",
+            "cancellation_policy",
+            "cancellation_custom_hours",
+            "cancellation_refund_percentage",
         ]
 
     def get_user_name(self, obj):

@@ -1,4 +1,3 @@
-# views/public/public_booking_views.py
 from django.db import transaction
 from django.utils import timezone
 from datetime import datetime, timedelta
@@ -150,9 +149,21 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
 
                 # Now that validation (including the lock and availability check) has passed,
                 # we can safely create the booking.
+                validated_instance = serializer.context["validated_instance"]
+                class_option = validated_instance.schedule.option
+
+                # Snapshot the policy details at the time of creation
+                snapshotted_policy = class_option.cancellationPolicy
+                snapshotted_custom_hours = (
+                    class_option.cancellationCustomHours
+                    if snapshotted_policy == "custom"
+                    else None
+                )
+                snapshotted_refund_percent = class_option.cancellationRefundPercentage
+
                 booking = Booking.objects.create(
                     user=request.user,
-                    schedule_instance=serializer.context["validated_instance"],
+                    schedule_instance=validated_instance,
                     participants=serializer.validated_data["participants"],
                     participant_details=serializer.validated_data.get(
                         "participant_details", []
@@ -161,6 +172,9 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
                     amount_paid=0,
                     status="pending",
                     payment_status="pending",
+                    cancellation_policy=snapshotted_policy,
+                    cancellation_custom_hours=snapshotted_custom_hours,
+                    cancellation_refund_percentage=snapshotted_refund_percent,
                 )
                 response_serializer = StudentBookingDetailSerializer(
                     booking, context={"request": request}
@@ -215,8 +229,13 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
             # --- Determine refund eligibility based on the SNAPSHOTTED policy ---
             is_eligible_for_refund = False
             policy_key = booking.cancellation_policy
-            policy_hours_map = {"flexible": 1, "24h": 24, "48h": 48, "72h": 72}
-            required_hours = policy_hours_map.get(policy_key, 0)
+
+            required_hours = 0
+            if policy_key == "custom":
+                required_hours = booking.cancellation_custom_hours or 0
+            else:
+                policy_hours_map = {"flexible": 1, "24h": 24, "48h": 48, "72h": 72}
+                required_hours = policy_hours_map.get(policy_key, 0)
 
             deadline_aware = instance_datetime_aware - timedelta(hours=required_hours)
 
@@ -231,6 +250,11 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
                 "48h": "Full refund if you cancel at least 48 hours before the class starts.",
                 "72h": "Full refund if you cancel at least 72 hours before the class starts.",
                 "strict": "This booking is non-refundable and cannot be cancelled for a refund.",
+                "custom": (
+                    f"Full refund if you cancel at least {booking.cancellation_custom_hours} hours before the class starts."
+                    if booking.cancellation_custom_hours
+                    else "Custom cancellation policy applies."
+                ),
             }
             policy_description = policy_descriptions.get(
                 policy_key, "Standard cancellation policy applies."
@@ -315,8 +339,12 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
                 )
 
             # 3. Enforce time-based policies (24h, 48h, etc.)
-            policy_hours_map = {"flexible": 1, "24h": 24, "48h": 48, "72h": 72}
-            required_hours = policy_hours_map.get(policy, 0)
+            required_hours = 0
+            if policy == "custom":
+                required_hours = booking.cancellation_custom_hours or 0
+            else:
+                policy_hours_map = {"flexible": 1, "24h": 24, "48h": 48, "72h": 72}
+                required_hours = policy_hours_map.get(policy, 0)
 
             if required_hours > 0:
                 time_until_class = instance_datetime_aware - now_aware
