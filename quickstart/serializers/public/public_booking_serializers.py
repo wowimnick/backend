@@ -277,6 +277,8 @@ class StudentBookingSerializer(serializers.ModelSerializer):
         allow_null=True,
         read_only=True,
     )
+    # --- ADDED ---
+    location_address_string = serializers.SerializerMethodField()
     business_name = serializers.CharField(
         source="schedule_instance.schedule.option.classId.businessId.businessName",
         read_only=True,
@@ -293,6 +295,9 @@ class StudentBookingSerializer(serializers.ModelSerializer):
     class_id = serializers.IntegerField(
         source="schedule_instance.schedule.option.classId.classId", read_only=True
     )
+    slug = serializers.CharField(
+        source="schedule_instance.schedule.option.classId.slug", read_only=True
+    )
     business_timezone = serializers.CharField(
         source="schedule_instance.schedule.option.classId.businessId.business_timezone",
         read_only=True,
@@ -306,11 +311,14 @@ class StudentBookingSerializer(serializers.ModelSerializer):
         fields = [
             "booking_id",
             "class_id",
+            "slug",
             "class_name",
             "option_name",
             "date",
             "time",
             "coordinates",
+            # --- ADDED ---
+            "location_address_string",
             "business_name",
             "price",
             "status",
@@ -327,6 +335,26 @@ class StudentBookingSerializer(serializers.ModelSerializer):
             "cancellation_policy",
         ]
         read_only_fields = fields
+
+    def get_location_address_string(self, obj):
+        """
+        Constructs the full, displayable address for the class associated with the booking.
+        """
+        try:
+            klass = obj.schedule_instance.schedule.option.classId
+
+            # CORRECTED: Only combine the class's specific location and unit number.
+            # The city/state are already part of the main `klass.location` string.
+            parts = [
+                klass.location,  # e.g., "123 Main St, Anytown, ON"
+                klass.unit_number,  # e.g., "Unit 5"
+            ]
+
+            # Filter out any None or empty/whitespace parts and join them.
+            return ", ".join(part for part in parts if part and part.strip())
+        except AttributeError:
+            # This will catch errors if schedule_instance or other related objects are None.
+            return None
 
     def get_class_image_thumb(self, obj):
         try:
