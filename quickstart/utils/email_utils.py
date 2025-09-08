@@ -1297,3 +1297,50 @@ def send_admin_user_reply_notification(recipients: List[str], ticket: SupportTic
         context=context,
         subject=f"[User Reply] Ticket #{ticket.user_facing_id} - {ticket.subject}",
     )
+
+
+def send_booking_rescheduled_by_business_email(
+    user: CustomUser,
+    booking: Booking,
+    old_instance: ScheduleInstance,
+    new_instance: ScheduleInstance,
+):
+    """
+    Notifies a user that their booking was rescheduled by the business.
+    """
+    if not user or not user.email or not booking:
+        logger.warning(
+            "Attempted to send booking rescheduled email with invalid user or booking."
+        )
+        return
+
+    related_data = _get_booking_related_data(booking)
+    if not related_data.get("class_title"):
+        logger.error(
+            f"Could not access related data for booking {booking.id} when sending reschedule notification."
+        )
+        # Proceed with sending, template handles defaults
+
+    logger.info(
+        f"Preparing booking rescheduled email for booking {booking.id} to user {user.email}"
+    )
+
+    manage_bookings_url = f"{settings.FRONTEND_BASE_URL}/my-classes"
+
+    context = {
+        "user": user,
+        "booking": booking,
+        "old_instance": old_instance,
+        "new_instance": new_instance,
+        "manage_bookings_url": manage_bookings_url,
+        "recipient_email": user.email,
+        "related_data": related_data,
+    }
+
+    send_templated_email(
+        recipient_list=[user.email],
+        template_name="emails/booking_rescheduled_by_business.html",
+        context=context,
+        subject=f"Update: Your Booking for {related_data.get('class_title', '[Class Title]')} Has Been Rescheduled",
+    )
+    logger.info(f"Booking reschedule email prepared/queued for booking {booking.id}")

@@ -17,7 +17,9 @@ from django.db.models import (
     OuterRef,
     IntegerField,
     DateTimeField,
-    DateField,  # Added DateField
+    Case,
+    When,
+    BooleanField,
 )
 from django.db.models.functions import (
     TruncDate,
@@ -55,7 +57,10 @@ from quickstart.serializers.business.business_booking_serializers import (
     BusinessBookingDetailSerializer,
 )
 from quickstart.utils.permissions import CanManageOwnClasses
-from quickstart.utils.email_utils import send_booking_cancelled_by_other_email
+from quickstart.utils.email_utils import (
+    send_booking_cancelled_by_other_email,
+    send_booking_rescheduled_by_business_email,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -147,7 +152,8 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         """
         This view returns a list of all bookings for the business
-        associated with the currently authenticated user (owner or staff).
+        associated with the currently authenticated user (owner or staff),
+        with appropriate filters applied.
         """
         user = self.request.user
 
@@ -162,8 +168,8 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
             )
             return Booking.objects.none()
 
-        # Filter bookings to only those that belong to the user's business.
-        return (
+        # Base queryset for all bookings belonging to the user's business.
+        queryset = (
             Booking.objects.filter(
                 schedule_instance__schedule__option__classId__businessId=business
             )
@@ -173,6 +179,9 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
             )
             .order_by("-booking_date")
         )
+
+        # Apply status and date filters from the request query parameters.
+        return self._apply_business_filters(queryset, self.request)
 
     def _apply_business_filters(self, queryset, request):
         status_param = request.query_params.get("status")
@@ -242,6 +251,258 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
         instance = self.get_object()
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
+
+    def _get_policy_check_details(self, booking):
+        """
+        Helper function to check if a reschedule is within the booking's policy.
+        Returns a dictionary with the check result and a descriptive message.
+        """
+        policy_hours_map = {"flexible": 1, "24h": 24, "48h": 48, "72h": 72}
+
+        # Use the policy snapshotted on the booking itself
+        policy = booking.cancellation_policy
+
+        if policy == "strict":
+            return {
+                "is_within_policy": False,
+                "message": "The booking is under a strict (non-refundable/non-changeable) policy.",
+            }
+
+        # Get the original instance datetime
+        original_instance = booking.schedule_instance
+        business_tz_str = (
+            original_instance.schedule.option.classId.businessId.business_timezone
+        )
+        business_tz = pytz.timezone(business_tz_str)
+        instance_datetime_naive = datetime.combine(
+            original_instance.date, original_instance.time
+        )
+        instance_datetime_aware = business_tz.localize(instance_datetime_naive)
+
+        # Calculate notice period in hours
+        notice_hours = 0
+        if policy == "custom":
+            notice_hours = booking.cancellation_custom_hours or 0
+        else:
+            notice_hours = policy_hours_map.get(policy, 0)
+
+        if notice_hours == 0:
+            return {
+                "is_within_policy": True,
+                "message": "The policy does not restrict this change.",
+            }
+
+        # Calculate the cutoff time
+        cutoff_datetime = instance_datetime_aware - timedelta(hours=notice_hours)
+
+        # Check if the current time is before the cutoff
+        is_within_policy = timezone.now() < cutoff_datetime
+
+        message = (
+            f"The student is within the {notice_hours}-hour notice period."
+            if is_within_policy
+            else f"The student is outside the {notice_hours}-hour notice period."
+        )
+
+        return {"is_within_policy": is_within_policy, "message": message}
+
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path="available-slots",
+        permission_classes=[IsAuthenticated, CanManageOwnBusinessBookings],
+    )
+    def available_slots(self, request, pk=None):
+        """
+        Returns a list of future, scheduled instances for a booking's class option,
+        annotated with their validity for rescheduling.
+        """
+        booking = self.get_object()
+        today = timezone.now().date()
+
+        # Get all future instances for the same class option
+        queryset = (
+            ScheduleInstance.objects.filter(
+                schedule__option=booking.schedule_instance.schedule.option,
+                status="scheduled",
+                date__gte=today,
+            )
+            .exclude(pk=booking.schedule_instance.pk)
+            .annotate(
+                # Calculate remaining spots, considering all confirmed/pending bookings
+                current_occupancy=Coalesce(
+                    Sum(
+                        "bookings__participants",
+                        filter=Q(bookings__status__in=["confirmed", "pending"]),
+                    ),
+                    0,
+                )
+            )
+            .annotate(
+                # Check if there is enough capacity for THIS specific booking
+                has_capacity=Case(
+                    When(
+                        max_participants__gte=F("current_occupancy")
+                        + booking.participants,
+                        then=True,
+                    ),
+                    default=False,
+                    output_field=BooleanField(),
+                )
+            )
+            .values(
+                "id",
+                "date",
+                "time",
+                "price",
+                "max_participants",
+                "current_occupancy",
+                "has_capacity",
+            )
+            .order_by("date", "time")
+        )
+
+        # Format the data for the frontend
+        slots = []
+        for inst in queryset:
+            is_valid = inst["has_capacity"]  # For now, only capacity is a hard blocker
+            reason_invalid = (
+                ""
+                if is_valid
+                else f"Not enough spots. Only {inst['max_participants'] - inst['current_occupancy']} available."
+            )
+
+            slots.append(
+                {
+                    "id": inst["id"],
+                    "date": inst["date"],
+                    "time": inst["time"],
+                    "price": inst["price"],
+                    "available_spots": inst["max_participants"]
+                    - inst["current_occupancy"],
+                    "is_valid": is_valid,
+                    "reason_invalid": reason_invalid,
+                }
+            )
+
+        return Response(slots)
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="reschedule",
+        permission_classes=[IsAuthenticated, CanManageOwnBusinessBookings],
+    )
+    def reschedule(self, request, pk=None):
+        booking = self.get_object()
+        new_instance_id = request.data.get("new_schedule_instance_id")
+        dry_run = request.data.get("dry_run", False)
+
+        if not new_instance_id:
+            raise ValidationError(
+                {"new_schedule_instance_id": "This field is required."}
+            )
+
+        # --- Initial Validations ---
+        if booking.status not in ["confirmed"]:
+            raise ValidationError(
+                {
+                    "status": f"Cannot reschedule a booking with status '{booking.status}'."
+                }
+            )
+
+        try:
+            new_instance = ScheduleInstance.objects.get(id=new_instance_id)
+        except ScheduleInstance.DoesNotExist:
+            raise NotFound("The selected new session could not be found.")
+
+        if (
+            new_instance.schedule.option.classId.businessId
+            != self.get_business_context()
+        ):
+            raise PermissionDenied(
+                "You can only reschedule to a session within your own business."
+            )
+
+        if new_instance.date < timezone.now().date():
+            raise ValidationError(
+                {
+                    "new_schedule_instance_id": "Cannot reschedule to a session in the past."
+                }
+            )
+
+        if new_instance.available_spots < booking.participants:
+            raise ValidationError(
+                {
+                    "new_schedule_instance_id": "The selected new session does not have enough available spots."
+                }
+            )
+
+        # --- Perform Policy and Price Check ---
+        policy_details = self._get_policy_check_details(booking)
+        price_difference = new_instance.price - booking.schedule_instance.price
+
+        # --- Handle Dry Run Request ---
+        if dry_run:
+            return Response(
+                {
+                    "status": "check_success",
+                    "is_within_policy": policy_details["is_within_policy"],
+                    "policy_message": policy_details["message"],
+                    "warning_required": not policy_details["is_within_policy"],
+                    "price_difference": price_difference,
+                    "original_price": booking.schedule_instance.price,
+                    "new_price": new_instance.price,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        # --- Handle Execution Request ---
+        original_instance = booking.schedule_instance
+        # The 'reason' is not used by the email function, but we keep it here in case it's needed elsewhere
+        reschedule_reason = request.data.get("reason", "Operational change.")
+
+        try:
+            with transaction.atomic():
+                booking.schedule_instance = new_instance
+                booking.is_rescheduled = True
+                booking.original_schedule_instance = original_instance
+                booking.rescheduled_at = timezone.now()
+                booking.rescheduled_by = request.user
+
+                # IMPORTANT: We DO NOT change booking.amount_paid. It remains as the historical record of the transaction.
+                booking.save(
+                    update_fields=[
+                        "schedule_instance",
+                        "is_rescheduled",
+                        "original_schedule_instance",
+                        "rescheduled_at",
+                        "rescheduled_by",
+                    ]
+                )
+
+                logger.info(
+                    f"Booking {booking.id} rescheduled from instance {original_instance.id} to {new_instance.id} by user {request.user.email}."
+                )
+
+                send_booking_rescheduled_by_business_email(
+                    user=booking.user,
+                    booking=booking,
+                    old_instance=original_instance,
+                    new_instance=new_instance,
+                )
+
+            serializer = self.get_serializer(booking)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.error(
+                f"Error during reschedule for booking {pk}: {e}", exc_info=True
+            )
+            return Response(
+                {"error": "An error occurred while rescheduling the booking."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     @action(
         detail=True,

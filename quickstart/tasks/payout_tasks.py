@@ -246,17 +246,28 @@ def process_daily_refunds():
                     successful_refunds += 1
                     continue
 
-                stripe.Refund.create(
+                # Process the refund with Stripe
+                stripe_refund = stripe.Refund.create(
                     payment_intent=payment.stripe_payment_intent_id,
                     amount=int(amount_to_refund * 100),
                     reason="customer_request",
                 )
 
+                # Update the associated Payment record
+                payment.refunded_amount += Decimal(stripe_refund.amount) / 100
+                if payment.available_refund_amount <= Decimal("0.00"):
+                    payment.status = "refunded"
+                else:
+                    payment.status = "partially_refunded"
+                payment.save(update_fields=["refunded_amount", "status"])
+
+                # Update the booking status
                 locked_booking.payment_status = "refunded"
                 locked_booking.save(update_fields=["payment_status"])
+
                 successful_refunds += 1
                 logger.info(
-                    f"Successfully processed refund for Booking {locked_booking.id}."
+                    f"Successfully processed refund of ${amount_to_refund:.2f} for Booking {locked_booking.id}. Payment {payment.id} updated."
                 )
 
         except stripe.error.StripeError as e:

@@ -1950,6 +1950,26 @@ class Booking(models.Model):
         help_text="List of dicts for participant names, e.g., [{'name': 'Jane Doe'}, {'name': 'John Smith'}]",
     )
     notes = models.TextField(blank=True)
+    is_rescheduled = models.BooleanField(default=False)
+    original_schedule_instance = models.ForeignKey(
+        "ScheduleInstance",
+        on_delete=models.SET_NULL,
+        related_name="rescheduled_bookings",
+        null=True,
+        blank=True,
+        help_text="Stores the original instance if this booking was rescheduled.",
+    )
+    rescheduled_at = models.DateTimeField(
+        null=True, blank=True, help_text="Timestamp of the last reschedule action."
+    )
+    rescheduled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="rescheduled_by_user",
+        null=True,
+        blank=True,
+        help_text="The admin or staff who performed the reschedule.",
+    )
     cancelled_at = models.DateTimeField(null=True, blank=True)
     cancellation_reason = models.TextField(blank=True)
 

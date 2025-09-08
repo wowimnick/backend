@@ -251,6 +251,9 @@ class BusinessBookingDetailSerializer(serializers.ModelSerializer):
     duration = serializers.IntegerField(
         source="schedule_instance.duration", read_only=True
     )
+    is_rescheduled = serializers.BooleanField(read_only=True)
+    rescheduled_at = serializers.DateTimeField(read_only=True)
+    original_session_details = serializers.SerializerMethodField()
 
     class Meta:
         model = Booking
@@ -278,11 +281,23 @@ class BusinessBookingDetailSerializer(serializers.ModelSerializer):
             "payment_status",
             "session_info",
             "payment_info",
+            "is_rescheduled",
+            "rescheduled_at",
+            "original_session_details",
         ]
         read_only_fields = fields
 
+    def get_original_session_details(self, obj):
+        if obj.is_rescheduled and obj.original_schedule_instance:
+            instance = obj.original_schedule_instance
+            return {
+                "date": instance.date,
+                "time": instance.time,
+                "class_name": instance.schedule.option.classId.title,
+            }
+        return None
+
     def get_session_info(self, obj):
-        # Same logic as in BusinessBookingListSerializer
         if obj.enrollment_type == "Full Course" and obj.booking_group_id:
             related_bookings_qs = (
                 Booking.objects.filter(booking_group_id=obj.booking_group_id)

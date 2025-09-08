@@ -27,6 +27,7 @@ from django.db.models import (
     Sum,
     Value,
     DecimalField,
+    Exists,
 )  # Added Sum, Value, DecimalField
 from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
@@ -703,6 +704,35 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
         if not business:
             return Schedule.objects.none()
 
+        # --- START OF MODIFICATION ---
+
+        # Subquery to efficiently calculate the sum of participants for confirmed bookings
+        booked_participants_subquery = (
+            Booking.objects.filter(
+                schedule_instance__schedule=OuterRef("pk"), status="confirmed"
+            )
+            .values("schedule_instance__schedule")
+            .annotate(total_pax=Sum("participants"))
+            .values("total_pax")
+        )
+
+        # Subquery to efficiently calculate the total revenue from paid, confirmed bookings
+        total_revenue_subquery = (
+            Booking.objects.filter(
+                schedule_instance__schedule=OuterRef("pk"),
+                status="confirmed",
+                payment_status="paid",
+            )
+            .values("schedule_instance__schedule")
+            .annotate(total_rev=Sum("amount_paid"))
+            .values("total_rev")
+        )
+
+        # Subquery to efficiently check for the existence of any confirmed bookings
+        has_bookings_subquery = Booking.objects.filter(
+            schedule_instance__schedule=OuterRef("pk"), status="confirmed"
+        )
+
         queryset = Schedule.objects.filter(option__classId__businessId=business)
 
         option_id = self.request.query_params.get("option_id")
@@ -711,21 +741,25 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
                 option_id=option_id, option__classId__businessId=business
             )
 
-        # Prefetch related instances and their confirmed bookings count for efficiency in serializer
+        # Annotate the main queryset to include calculated values in a single DB trip
         queryset = (
             queryset.select_related("option", "option__classId")
-            .prefetch_related(
-                Prefetch(
-                    "instances",
-                    queryset=ScheduleInstance.objects.all().select_related("schedule"),
-                ),  # Prefetch all instances
-                Prefetch(
-                    "instances__bookings",
-                    queryset=Booking.objects.filter(status="confirmed"),
-                ),  # Prefetch confirmed bookings for those instances
+            .annotate(
+                booked_participants=Coalesce(
+                    Subquery(booked_participants_subquery, output_field=IntegerField()),
+                    Value(0),
+                ),
+                total_revenue=Coalesce(
+                    Subquery(total_revenue_subquery, output_field=DecimalField()),
+                    Value(Decimal("0.00")),
+                ),
+                has_confirmed_bookings=Exists(has_bookings_subquery),
             )
             .order_by("option__classId__title", "day", "time")
         )
+
+        # --- END OF MODIFICATION ---
+
         return queryset
 
     def perform_create(self, serializer):

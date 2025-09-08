@@ -191,9 +191,12 @@ class ScheduleInstanceSerializer(serializers.ModelSerializer):
 class ScheduleSerializer(serializers.ModelSerializer):
     """Serializer for creating/managing schedules within a class option."""
 
-    booked_participants = serializers.SerializerMethodField()
-    total_revenue = serializers.SerializerMethodField()
-    has_confirmed_bookings = serializers.SerializerMethodField()
+    # These fields are now efficiently provided by the annotated queryset
+    booked_participants = serializers.IntegerField(read_only=True)
+    total_revenue = serializers.DecimalField(
+        max_digits=10, decimal_places=2, read_only=True
+    )
+    has_confirmed_bookings = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = Schedule
@@ -210,9 +213,9 @@ class ScheduleSerializer(serializers.ModelSerializer):
             "end_date",
             "date",
             "allow_late_enrollment",
-            "booked_participants",
-            "total_revenue",
-            "has_confirmed_bookings",
+            "booked_participants",  # Now an annotated field
+            "total_revenue",  # Now an annotated field
+            "has_confirmed_bookings",  # Now an annotated field
             "created_at",
             "updated_at",
         ]
@@ -225,23 +228,6 @@ class ScheduleSerializer(serializers.ModelSerializer):
             "has_confirmed_bookings",
         ]
         extra_kwargs = {"option": {"write_only": True}}
-
-    def get_booked_participants(self, obj):
-        return Booking.objects.filter(
-            schedule_instance__schedule=obj, status="confirmed"
-        ).aggregate(total_booked=Coalesce(Sum("participants"), 0))["total_booked"]
-
-    def get_total_revenue(self, obj):
-        return Booking.objects.filter(
-            schedule_instance__schedule=obj, status="confirmed", payment_status="paid"
-        ).aggregate(total_revenue=Coalesce(Sum("amount_paid"), Decimal("0.00")))[
-            "total_revenue"
-        ]
-
-    def get_has_confirmed_bookings(self, obj):
-        return Booking.objects.filter(
-            schedule_instance__schedule=obj, status="confirmed"
-        ).exists()
 
     def validate(self, data):
         option = data.get("option") or getattr(self.instance, "option", None)
