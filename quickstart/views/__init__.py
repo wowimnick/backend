@@ -19,6 +19,8 @@ from .public.public_business_views import (
     PublicBusinessInfoViewSet,
 )
 
+from .public.guest_booking_views import GuestBookingCancellationView
+
 from .public.public_class_views import (
     PublicClassViewSet,
     PublicScheduleViewSet,
@@ -134,6 +136,7 @@ __all__ = [
     # Student Views
     "MyProfileView",
     "BusinessStudentViewSet",
+    "GuestBookingCancellationView",
     # Booking Views
     "BusinessBookingViewSet",
     "StudentBookingViewSet",

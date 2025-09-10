@@ -347,6 +347,74 @@ class BookingFlowTests(APITestCase):
         self.assertIn(data["reason"], booking.cancellation_reason)
         print("✅ PASSED: Business owner can cancel a booking.")
 
+    def test_business_owner_can_reschedule_booking(self):
+        """
+        POST /api/business/bookings/{pk}/reschedule/ - An owner can reschedule a booking.
+        """
+        print("\n--- Running: test_business_owner_can_reschedule_booking ---")
+        booking_to_reschedule = BookingFactory(
+            schedule_instance__schedule__option=self.option, status="confirmed"
+        )
+        original_instance = booking_to_reschedule.schedule_instance
+
+        new_instance = ScheduleInstanceFactory(
+            schedule__option=self.option,
+            date=timezone.now().date() + timedelta(days=20),
+            max_participants=10,
+        )
+
+        self.client.force_authenticate(user=self.owner)
+        url = reverse(
+            "business-booking-reschedule", kwargs={"pk": booking_to_reschedule.pk}
+        )
+        data = {"new_schedule_instance_id": new_instance.id}
+
+        response = self.client.post(url, data, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        booking_to_reschedule.refresh_from_db()
+        self.assertEqual(booking_to_reschedule.schedule_instance, new_instance)
+        self.assertTrue(booking_to_reschedule.is_rescheduled)
+        self.assertEqual(
+            booking_to_reschedule.original_schedule_instance, original_instance
+        )
+        print("✅ PASSED: Business owner successfully rescheduled a booking.")
+
+    def test_reschedule_fails_for_full_class(self):
+        """
+        POST /api/business/bookings/{pk}/reschedule/ - Rescheduling fails if the target is full.
+        """
+        print("\n--- Running: test_reschedule_fails_for_full_class ---")
+        booking_to_reschedule = BookingFactory(
+            schedule_instance__schedule__option=self.option,
+            status="confirmed",
+            participants=2,
+        )
+
+        # This new instance only has 1 spot left
+        new_instance_almost_full = ScheduleInstanceFactory(
+            schedule__option=self.option,
+            date=timezone.now().date() + timedelta(days=21),
+            max_participants=5,
+        )
+        BookingFactory(
+            schedule_instance=new_instance_almost_full,
+            participants=4,
+            status="confirmed",
+        )
+
+        self.client.force_authenticate(user=self.owner)
+        url = reverse(
+            "business-booking-reschedule", kwargs={"pk": booking_to_reschedule.pk}
+        )
+        data = {"new_schedule_instance_id": new_instance_almost_full.id}
+
+        response = self.client.post(url, data, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("not have enough available spots", str(response.data))
+        print("✅ PASSED: Rescheduling to a full class was correctly blocked.")
+
     def test_custom_cancellation_policy(self):
         """
         [NEW TEST] Tests the 'custom' cancellation policy with a specific hour value.

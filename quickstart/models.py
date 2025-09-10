@@ -1901,7 +1901,28 @@ class Booking(models.Model):
         blank=True,
     )
     user = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="bookings"
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,  # Use SET_NULL to preserve booking history if a user is deleted
+        related_name="bookings",
+        null=True,
+        blank=True,
+    )
+    # Add a direct link to the Contact model for guests
+    contact = models.ForeignKey(
+        "Contact",
+        on_delete=models.SET_NULL,  # Use SET_NULL to preserve booking if a contact is deleted
+        related_name="bookings",
+        null=True,
+        blank=True,
+        help_text="Link to a CRM contact, used for guest bookings.",
+    )
+
+    cancellation_token = models.UUIDField(
+        null=True,
+        blank=True,
+        unique=True,
+        db_index=True,
+        help_text="Secure token for guest cancellations.",
     )
 
     enrollment_type = models.CharField(
@@ -2014,6 +2035,19 @@ class Booking(models.Model):
             if not Booking.objects.filter(user_facing_reference=reference).exists():
                 return reference
 
+    def clean(self):
+        # Ensure that a booking is always associated with someone.
+        if self.user is None and self.contact is None:
+            raise ValidationError(
+                "A booking must be linked to either a user or a guest contact."
+            )
+        if self.user and self.contact:
+            # This shouldn't happen, but as a safeguard:
+            if self.user != self.contact.user:
+                raise ValidationError(
+                    "The booking's user and contact's user do not match."
+                )
+
     def save(self, *args, **kwargs):
         if not self.user_facing_reference and self.status == "confirmed":
             # Generate reference only when booking is confirmed (e.g., by webhook)
@@ -2031,6 +2065,7 @@ class Booking(models.Model):
             models.Index(fields=["booking_group_id"]),
             models.Index(fields=["payout_status"]),
             models.Index(fields=["user_facing_reference"]),  # Index new field
+            models.Index(fields=["contact"]),
         ]
         permissions = [
             ("cancel_any_booking", "Can cancel any user's booking (Admin)"),
@@ -2051,6 +2086,9 @@ def create_contact_on_first_booking(sender, instance, created, **kwargs):
     When a booking is first created, ensure a Contact record exists for the user
     at the business they booked with.
     """
+
+    if not instance.user:
+        return
     if created:  # Only run on initial creation
         try:
             # Use a transaction to ensure this is an atomic operation

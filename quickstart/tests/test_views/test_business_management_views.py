@@ -6,12 +6,17 @@ from django.urls import reverse
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 import json
+from django.utils import timezone
+from datetime import timedelta
+from decimal import Decimal
 
-from quickstart.models import BusinessInfo, BusinessRole, BusinessStaff
+from quickstart.models import BusinessInfo, BusinessRole, BusinessStaff, Discount
 from quickstart.tests.factories import (
     UserFactory,
     BusinessInfoFactory,
     RoleFactory,
+    ClassesMainFactory,
+    ClassOptionFactory,
 )
 
 
@@ -39,6 +44,9 @@ class BusinessManagementTests(APITestCase):
         )
         _get_and_assign_permission(
             self.business_owner_role, "manage_own_business_profile", BusinessInfo
+        )
+        _get_and_assign_permission(
+            self.business_owner_role, "manage_own_business_discounts", BusinessInfo
         )
         self.user.role = self.business_owner_role
         self.user.save()
@@ -269,3 +277,107 @@ class BusinessManagementTests(APITestCase):
         response_denied = self.client.get(url)
         self.assertEqual(response_denied.status_code, status.HTTP_403_FORBIDDEN)
         print("✅ PASSED: Removed manager correctly denied access to dashboard.")
+
+
+class BusinessDiscountManagementTests(APITestCase):
+    """
+    Tests for a business owner creating and managing discounts and coupons.
+    """
+
+    def setUp(self):
+        self.user = UserFactory()
+        business_role = RoleFactory(name="Business Owner")
+        _get_and_assign_permission(
+            business_role, "manage_own_business_discounts", BusinessInfo
+        )
+        self.user.role = business_role
+        self.user.save()
+        self.user.user_permissions.add(*business_role.permissions.all())
+
+        self.business = BusinessInfoFactory(owner=self.user)
+        self.klass = ClassesMainFactory(businessId=self.business)
+        self.option = ClassOptionFactory(classId=self.klass)
+        self.client.force_authenticate(user=self.user)
+        self.url = reverse("business-discount-list")
+
+    def test_owner_can_create_percentage_coupon(self):
+        """
+        POST /api/business/discounts/ - Create a percentage-based coupon for a class.
+        """
+        print("\n--- Running: test_owner_can_create_percentage_coupon ---")
+        data = {
+            "name": "SUMMER20",
+            "code": "SUMMER20",
+            "discount_type": "percentage",
+            "value": "20.00",
+            "scope": "class",
+            "target_class": self.klass.pk,
+            "is_active": True,
+            "usage_limit": 100,
+        }
+        response = self.client.post(self.url, data, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertTrue(
+            Discount.objects.filter(business=self.business, code="SUMMER20").exists()
+        )
+        print("✅ PASSED: Business owner can create a percentage coupon.")
+
+    def test_customer_can_validate_valid_coupon(self):
+        """
+        POST /api/business/discounts/validate-coupon/ - A valid coupon returns a success response.
+        """
+        print("\n--- Running: test_customer_can_validate_valid_coupon ---")
+        Discount.objects.create(
+            business=self.business,
+            name="HOLIDAY10",
+            code="HOLIDAY10",
+            discount_type="fixed_amount",
+            value=Decimal("10.00"),
+            scope="class",
+            target_class=self.klass,
+            is_active=True,
+        )
+        url = reverse("business-discount-validate-coupon")
+        data = {
+            "code": "HOLIDAY10",
+            "option_id": self.option.optionId,
+            "base_amount": "50.00",
+        }
+        # Does not require auth
+        self.client.force_authenticate(user=None)
+        response = self.client.post(url, data, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["calculated_discount_amount"], 10.00)
+        print("✅ PASSED: A valid coupon was successfully validated.")
+
+    def test_customer_cannot_validate_expired_coupon(self):
+        """
+        POST .../validate-coupon/ - An expired coupon returns a validation error.
+        """
+        print("\n--- Running: test_customer_cannot_validate_expired_coupon ---")
+        # FIX: Set valid_from and valid_to to create a valid-in-the-past but now-expired coupon.
+        Discount.objects.create(
+            business=self.business,
+            name="EXPIRED",
+            code="EXPIRED",
+            discount_type="percentage",
+            value=Decimal("10.00"),
+            scope="class",
+            target_class=self.klass,
+            is_active=True,
+            valid_from=timezone.now() - timedelta(days=2),
+            valid_to=timezone.now() - timedelta(days=1),
+        )
+        url = reverse("business-discount-validate-coupon")
+        data = {
+            "code": "EXPIRED",
+            "option_id": self.option.optionId,
+            "base_amount": "50.00",
+        }
+        self.client.force_authenticate(user=None)
+        response = self.client.post(url, data, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("expired", response.data["detail"])
+        print("✅ PASSED: An expired coupon was correctly rejected.")

@@ -343,8 +343,9 @@ class MyBusinessOverviewView(APIView):
                 Booking.objects.filter(
                     schedule_instance__schedule__option__classId__businessId=business,
                     booking_date__gte=current_month_start,
+                    contact__isnull=False,
                 )
-                .values("user")
+                .values("contact")
                 .distinct()
                 .count()
             )
@@ -353,8 +354,9 @@ class MyBusinessOverviewView(APIView):
                 Booking.objects.filter(
                     schedule_instance__schedule__option__classId__businessId=business,
                     booking_date__range=(prev_month_start, prev_month_end),
+                    contact__isnull=False,
                 )
-                .values("user")
+                .values("contact")
                 .distinct()
                 .count()
             )

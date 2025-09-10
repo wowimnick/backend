@@ -144,7 +144,8 @@ class BusinessBookingListSerializer(serializers.ModelSerializer):
         source="schedule_instance.schedule.option.classId.title", read_only=True
     )
     user_name = serializers.SerializerMethodField(read_only=True)
-    user_email = serializers.CharField(source="user.email", read_only=True)
+    # MODIFICATION: Changed to SerializerMethodField to handle guests
+    user_email = serializers.SerializerMethodField(read_only=True)
     date = serializers.DateField(source="schedule_instance.date", read_only=True)
     time = serializers.TimeField(source="schedule_instance.time", read_only=True)
     duration = serializers.IntegerField(
@@ -176,13 +177,24 @@ class BusinessBookingListSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
+    # --- MODIFICATION START ---
     def get_user_name(self, obj):
         if obj.user:
             name = f"{obj.user.first_name} {obj.user.last_name}".strip()
-            return (
-                name if name else "Unnamed User"
-            )  # Handle case where names might be empty
-        return "Unknown User"
+            return name if name else "Unnamed User"
+        if obj.contact:
+            name = f"{obj.contact.first_name} {obj.contact.last_name}".strip()
+            return name if name else "Guest"
+        return "Unknown"
+
+    def get_user_email(self, obj):
+        if obj.user:
+            return obj.user.email
+        if obj.contact:
+            return obj.contact.email
+        return "N/A"
+
+    # --- MODIFICATION END ---
 
     def get_session_info(self, obj):
         if obj.enrollment_type == "Full Course" and obj.booking_group_id:
@@ -230,7 +242,7 @@ class BusinessBookingListSerializer(serializers.ModelSerializer):
 
 # --- Serializer for DETAIL view of a booking (Business Context) ---
 class BusinessBookingDetailSerializer(serializers.ModelSerializer):
-    user_details = _BusinessDetailUserSerializer(source="user", read_only=True)
+    booker_details = serializers.SerializerMethodField()
     schedule_instance_details = _BusinessDetailScheduleInstanceSerializer(
         source="schedule_instance", read_only=True
     )
@@ -261,7 +273,7 @@ class BusinessBookingDetailSerializer(serializers.ModelSerializer):
             "id",
             "user_facing_reference",
             "booking_group_id",
-            "user_details",
+            "booker_details",
             "class_name",
             "option_name",
             "date",
@@ -286,6 +298,20 @@ class BusinessBookingDetailSerializer(serializers.ModelSerializer):
             "original_session_details",
         ]
         read_only_fields = fields
+
+    def get_booker_details(self, obj):
+        if obj.user:
+            return _BusinessDetailUserSerializer(obj.user).data
+        if obj.contact:
+            return {
+                "userId": None,
+                "email": obj.contact.email,
+                "full_name": f"{obj.contact.first_name} {obj.contact.last_name}".strip(),
+                "phone_number": obj.contact.phone_number,
+                "avatar_url": None,
+                "user_timezone": None,
+            }
+        return None
 
     def get_original_session_details(self, obj):
         if obj.is_rescheduled and obj.original_schedule_instance:
