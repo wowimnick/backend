@@ -494,6 +494,9 @@ class StudentBookingDetailSerializer(serializers.ModelSerializer):
             "session_info",
             "user_name",
             "user_email",
+            "cancellation_policy",
+            "cancellation_custom_hours",
+            "cancellation_refund_percentage",
         ]
         read_only_fields = fields
 
