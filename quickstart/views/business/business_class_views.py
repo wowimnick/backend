@@ -260,10 +260,14 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
         try:
             with transaction.atomic():
                 # The serializer now handles category/subcategory lookup.
-                # We just need to pass the businessId context.
+                # We pass the businessId and new structured location fields to its save method.
+                # NOTE: Your ClassCreateSerializer's .create() method must be updated
+                # to handle and save the 'city' and 'state' fields.
                 instance = serializer.save(
                     businessId=business,
                     status="active",
+                    city=request_data.get("city"),
+                    state=request_data.get("state"),
                 )
                 logger.info(
                     f"Class '{instance.title}' (ID: {instance.classId}) created for business '{business.businessName}' by user {user.email}"
@@ -285,9 +289,10 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                 f"Error during perform_create for class by {user.email}: {e}",
                 exc_info=True,
             )
-            # Raise a generic validation error so the frontend gets a 400
             raise DRFValidationError(
-                {"detail": f"An error occurred during class creation: {str(e)}"}
+                {
+                    "detail": f"An unexpected error occurred during class creation: {str(e)}"
+                }
             )
 
     def _process_images_and_options_on_create(self, class_instance, request_data):
@@ -301,7 +306,6 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                 {"image_s3_keys": "At least one class image is required."}
             )
 
-        # Ensure cover key is within the list of uploaded keys
         if cover_image_s3_key and cover_image_s3_key not in image_s3_keys:
             raise DRFValidationError(
                 {
@@ -309,14 +313,13 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                 }
             )
 
-        # Set the cover key to the first image if not provided
-        if not cover_image_s3_key:
+        if not cover_image_s3_key and image_s3_keys:
             cover_image_s3_key = image_s3_keys[0]
 
         image_objects_to_create = [
             ClassImage(
                 classId=class_instance,
-                image=key,  # Assign S3 key directly
+                image=key,
                 isCover=(key == cover_image_s3_key),
             )
             for key in image_s3_keys
@@ -326,7 +329,7 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
             f"Bulk-created {len(image_objects_to_create)} images for class {class_instance.classId} from S3 keys."
         )
 
-        # 2. Handle Single Class Option (logic is mostly the same, just ensure no file handling)
+        # 2. Handle Single Class Option
         options_json_string = request_data.get("options")
         if not options_json_string:
             raise DRFValidationError({"options": "Class option data is required."})
@@ -340,14 +343,9 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                     }
                 )
 
-            # For simplicity, assuming one option on create as per original logic
             option_dict = options_data_list[0]
-
-            # Use the ManagedClassOptionSerializer to ensure consistent validation and creation
-            # logic with the update method. This is the correct DRF pattern.
             option_serializer = ManagedClassOptionSerializer(data=option_dict)
             option_serializer.is_valid(raise_exception=True)
-            # Pass the parent class instance to the save method to establish the relationship.
             option_serializer.save(classId=class_instance)
             logger.info(f"Created ClassOption for class {class_instance.classId}.")
 
@@ -367,23 +365,19 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         """
         Handles updates for a class, including its related images and options.
-        FIXED: Now correctly handles new images via a list of pre-signed S3 keys,
-        matching the application's established pattern and avoiding direct uploads.
         """
         instance = serializer.instance
         user = self.request.user
-        # .data is safer than .POST for DRF's parsed data, which can be JSON or form-data.
         request_data = self.request.data
 
         with transaction.atomic():
-            # 1. Update Class Info (delegated to the serializer)
+            # 1. Update Class Info (including new location fields from serializer)
             updated_instance = serializer.save()
             logger.info(
                 f"Class '{updated_instance.title}' (ID: {updated_instance.pk}) base fields updated by user {user.email}"
             )
 
             # 2. Handle Image Deletions based on IDs from payload
-            # The frontend should send a JSON string array of image IDs to delete.
             delete_image_ids_str = request_data.get("delete_image_ids", "[]")
             try:
                 delete_image_ids = json.loads(delete_image_ids_str)
@@ -391,11 +385,9 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                     images_to_delete = ClassImage.objects.filter(
                         classId=instance, imageId__in=delete_image_ids
                     )
-                    # Optional: Clean up S3 files for deleted images
                     for img in images_to_delete:
                         if img.image and img.image.name:
                             default_storage.delete(img.image.name)
-
                     deleted_count, _ = images_to_delete.delete()
                     if deleted_count:
                         logger.info(
@@ -424,30 +416,23 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                     f"Could not parse new_image_s3_keys: {new_image_s3_keys_str}"
                 )
 
-            # 4. Handle Cover Image Assignment (this logic is still correct)
-            # The frontend specifies the cover by either its existing ID or the new S3 key (filename).
+            # 4. Handle Cover Image Assignment
             cover_image_id_str = request_data.get("cover_image_id")
-            cover_image_s3_key = request_data.get(
-                "cover_image_s3_key"
-            )  # Use S3 key for new images
+            cover_image_s3_key = request_data.get("cover_image_s3_key")
 
-            # Unset the current cover first
             ClassImage.objects.filter(classId=instance, isCover=True).update(
                 isCover=False
             )
 
             if cover_image_s3_key:
-                # Cover is a newly uploaded image, identify it by its key
                 ClassImage.objects.filter(
                     classId=instance, image=cover_image_s3_key
                 ).update(isCover=True)
             elif cover_image_id_str:
-                # Cover is an existing image
                 ClassImage.objects.filter(
                     classId=instance, imageId=int(cover_image_id_str)
                 ).update(isCover=True)
 
-            # 5. Fallback: Ensure a cover exists if there are any images left
             if not ClassImage.objects.filter(classId=instance, isCover=True).exists():
                 first_image = (
                     ClassImage.objects.filter(classId=instance)
@@ -458,7 +443,7 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                     first_image.isCover = True
                     first_image.save(update_fields=["isCover"])
 
-            # 6. Handle ClassOption Updates (this logic is correct)
+            # 5. Handle ClassOption Updates
             options_json_string = request_data.get("options")
             if options_json_string:
                 try:
@@ -468,7 +453,6 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                     option_instance = get_object_or_404(
                         ClassOption, optionId=option_id, classId=instance
                     )
-
                     option_serializer = ManagedClassOptionSerializer(
                         option_instance, data=option_dict, partial=True
                     )

@@ -171,12 +171,6 @@ class PublicClassSerializer(serializers.ModelSerializer):
     business_name = serializers.CharField(
         source="businessId.businessName", read_only=True, allow_null=True
     )
-    business_city = serializers.CharField(
-        source="businessId.businessCity", read_only=True
-    )
-    business_state = serializers.CharField(
-        source="businessId.businessState", read_only=True
-    )
     min_session_price = serializers.DecimalField(
         max_digits=10, decimal_places=2, read_only=True
     )
@@ -213,20 +207,18 @@ class PublicClassSerializer(serializers.ModelSerializer):
             "review_count",
             "is_favorited",
             "business_timezone",
-            "business_city",
-            "business_state",
+            "city",  # Automatically handled by ModelSerializer
+            "state",  # Automatically handled by ModelSerializer
             "min_session_price",
             "min_course_price",
         ]
         read_only_fields = fields
 
     def get_coordinates(self, obj):
-        # --- FIXED: Read from the new 'point' field ---
         if obj.point is None:
             return None
 
         try:
-            # A GEOS Point object has .y for latitude and .x for longitude
             lat, lng = obj.point.y, obj.point.x
 
             if obj.saltLocation:
