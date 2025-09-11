@@ -22,12 +22,28 @@
                    color: #111827;
                    margin-top: 0;
                    margin-bottom: 12px">{% trans "Booking Details:" %}</h2>
-        <p style="margin-bottom: 6px;">
-            <strong>{% trans "Booker Name:" %}</strong> {{ booking.user.get_full_name|default:"N/A" }}
-        </p>
-        <p style="margin-bottom: 6px;">
-            <strong>{% trans "Booker Email:" %}</strong> {{ booking.user.email }}
-        </p>
+        {% with booker=booking.user|default:booking.contact %}
+            <p style="margin-bottom: 6px;">
+                <strong>{% trans "Booker Name:" %}</strong>
+                {% if booker.get_full_name %}
+                    {{ booker.get_full_name }}
+                {% elif booker.first_name %}
+                    {{ booker.first_name }} {{ booker.last_name|default:''|safe }}
+                {% else %}
+                    Guest Booker
+                {% endif %}
+            </p>
+            <p style="margin-bottom: 6px;">
+                <strong>{% trans "Booker Email:" %}</strong> {{ booker.email|default:"N/A" }}
+            </p>
+            {# --- ADDITION START --- #}
+            {% if booker.phone_number %}
+                <p style="margin-bottom: 6px;">
+                    <strong>{% trans "Booker Phone:" %}</strong> {{ booker.phone_number }}
+                </p>
+            {% endif %}
+            {# --- ADDITION END --- #}
+        {% endwith %}
         <p style="margin-bottom: 6px;">
             <strong>{% trans "Date:" %}</strong> {{ booking.schedule_instance.date|date:"l, F j, Y" }}
         </p>

@@ -8,8 +8,16 @@ from django.contrib.contenttypes.models import ContentType
 import json
 from django.utils import timezone
 from datetime import timedelta
+from decimal import Decimal
 
-from quickstart.models import ClassesMain, ClassOption, BusinessInfo, Role
+from quickstart.models import (
+    ClassesMain,
+    ClassOption,
+    BusinessInfo,
+    Role,
+    Booking,
+    ScheduleInstance,
+)
 from quickstart.tests.factories import (
     UserFactory,
     BusinessInfoFactory,
@@ -19,6 +27,8 @@ from quickstart.tests.factories import (
     RoleFactory,
     ClassCategoryFactory,
     ClassSubcategoryFactory,
+    ScheduleInstanceFactory,
+    BookingFactory,
 )
 
 
@@ -159,3 +169,64 @@ class BusinessClassManagementTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
         self.assertTrue(self.own_option.schedules.filter(date=future_date).exists())
         print("✅ PASSED: Owner can create a new schedule.")
+
+    def test_delete_class_cancels_future_bookings_and_sets_for_refund(self):
+        """
+        DELETE /api/business/classes/{pk}/ - When a class is deleted (suspended),
+        ensure future paid, confirmed bookings are cancelled and marked for refund.
+        """
+        print(
+            "\n--- Running: test_delete_class_cancels_future_bookings_and_sets_for_refund ---"
+        )
+        # 1. Setup future and past bookings for the class
+        future_instance = ScheduleInstanceFactory(
+            schedule__option=self.own_option,
+            date=timezone.now().date() + timedelta(days=10),
+            price=Decimal("100.00"),
+        )
+        past_instance = ScheduleInstanceFactory(
+            schedule__option=self.own_option,
+            date=timezone.now().date() - timedelta(days=2),
+        )
+
+        future_booking = BookingFactory(
+            schedule_instance=future_instance,
+            status="confirmed",
+            payment_status="paid",
+            amount_paid=Decimal("100.00"),
+        )
+        past_booking = BookingFactory(
+            schedule_instance=past_instance, status="completed"
+        )
+
+        # 2. Action: Delete the class
+        url = reverse("business-class-detail", kwargs={"pk": self.own_class.pk})
+        response = self.client.delete(url)
+
+        # 3. Assertions
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+
+        # Class is soft-deleted
+        self.own_class.refresh_from_db()
+        self.assertEqual(self.own_class.status, "suspended")
+
+        # Future instance is hard-deleted
+        self.assertFalse(
+            ScheduleInstance.objects.filter(pk=future_instance.pk).exists()
+        )
+
+        # Future booking is cancelled and marked for refund
+        future_booking.refresh_from_db()
+        self.assertEqual(future_booking.status, "cancelled")
+        self.assertEqual(future_booking.payment_status, "refund_pending")
+        self.assertIn(
+            "Session instance was removed", future_booking.cancellation_reason
+        )
+
+        # Past booking is unaffected
+        past_booking.refresh_from_db()
+        self.assertEqual(past_booking.status, "completed")
+
+        print(
+            "✅ PASSED: Deleting a class correctly handles future bookings and refunds."
+        )

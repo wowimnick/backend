@@ -139,31 +139,59 @@ class BusinessStudentViewSet(
         # Annotations now pull data from the linked user, coalescing to 0/null if no user is linked
         thirty_days_ago_date = (timezone.now() - timezone.timedelta(days=30)).date()
 
-        # Subquery for first paid booking in a course group
-        first_paid_course_booking_id_subquery = Subquery(
+        # Subqueries to correctly fetch data for GUESTS (where user is null)
+        last_booking_subquery = Subquery(
             Booking.objects.filter(
-                user_id=OuterRef("user_id"),
-                booking_group_id=OuterRef("user__bookings__booking_group_id"),
-                payment_status="paid",
+                contact=OuterRef("pk"),
+                schedule_instance__schedule__option__classId__businessId=business.businessId,
             )
-            .order_by("booking_date", "id")
-            .values("id")[:1]
+            .order_by("-booking_date")
+            .values("booking_date")[:1],
+            output_field=DateTimeField(),
         )
 
+        total_classes_subquery = Subquery(
+            Booking.objects.filter(
+                contact=OuterRef("pk"),
+                status="completed",
+                schedule_instance__schedule__option__classId__businessId=business.businessId,
+            )
+            .values("contact")
+            .annotate(count=Count("pk"))
+            .values("count"),
+            output_field=IntegerField(),
+        )
+
+        total_spent_subquery = Subquery(
+            Booking.objects.filter(
+                contact=OuterRef("pk"),
+                payment_status="paid",
+                schedule_instance__schedule__option__classId__businessId=business.businessId,
+            )
+            .values("contact")
+            .annotate(total=Sum("amount_paid"))
+            .values("total"),
+            output_field=DecimalField(),
+        )
+
+        # Annotations now use Coalesce to pick the user-based stat or fall back to the guest-based subquery
         queryset = queryset.annotate(
             is_active=Exists(
                 Booking.objects.filter(
-                    user_id=OuterRef("user_id"),
+                    Q(contact=OuterRef("pk")) | Q(user=OuterRef("user")),
                     status="confirmed",
                     schedule_instance__date__gte=thirty_days_ago_date,
                     schedule_instance__schedule__option__classId__businessId=business.businessId,
                 )
             ),
-            last_booking_datetime=Max(
-                "user__bookings__booking_date",
-                filter=Q(
-                    user__bookings__schedule_instance__schedule__option__classId__businessId=business.businessId
+            last_booking_datetime=Coalesce(
+                Max(
+                    "user__bookings__booking_date",
+                    filter=Q(
+                        user__bookings__schedule_instance__schedule__option__classId__businessId=business.businessId
+                    ),
                 ),
+                last_booking_subquery,
             ),
             total_classes_taken=Coalesce(
                 Count(
@@ -173,6 +201,7 @@ class BusinessStudentViewSet(
                         user__bookings__schedule_instance__schedule__option__classId__businessId=business.businessId,
                     ),
                 ),
+                total_classes_subquery,
                 Value(0),
             ),
             total_spent_this_business=Coalesce(
@@ -181,12 +210,9 @@ class BusinessStudentViewSet(
                     filter=Q(
                         user__bookings__payment_status="paid",
                         user__bookings__schedule_instance__schedule__option__classId__businessId=business.businessId,
-                    )
-                    & (
-                        Q(user__bookings__booking_group_id__isnull=True)
-                        | Q(user__bookings__id=first_paid_course_booking_id_subquery)
                     ),
                 ),
+                total_spent_subquery,
                 Value(Decimal("0.0")),
                 output_field=DecimalField(),
             ),
@@ -218,11 +244,11 @@ class BusinessStudentViewSet(
 
     def destroy(self, request, *args, **kwargs):
         """
-        Deletes an imported contact record.
+        Deletes an imported contact record, with safety checks.
         """
         contact = self.get_object()
 
-        # Safety Check 1: Do not delete if the contact is a platform user
+        # Safety Check 1: Do not delete if the contact is a platform user.
         if contact.user:
             return Response(
                 {
@@ -231,7 +257,16 @@ class BusinessStudentViewSet(
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # Safety Check 2: Do not delete if there are appointments associated
+        # Safety Check 2: Do not delete if the contact has any booking history.
+        if contact.bookings.exists():
+            return Response(
+                {
+                    "detail": "Cannot delete a contact that has a booking history. Inactivate them instead if needed."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Safety Check 3: Do not delete if there are appointments associated.
         if contact.appointments.exists():
             return Response(
                 {

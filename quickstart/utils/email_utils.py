@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta
 import logging
 from icalendar import Calendar, Event, vRecur, vText
-from django.core.mail import EmailMultiAlternatives  # Keep for type hints maybe
+from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
 from django.conf import settings
 from django.utils import timezone
@@ -26,6 +26,7 @@ from ..models import (
     ScheduleInstance,
     ClassesMain,
     Schedule,
+    Contact,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,17 +36,16 @@ TASK_NAME = "quickstart.tasks.email_tasks.send_email_task"
 TRANSACTIONAL_TASK_NAME = "quickstart.tasks.email_tasks.send_transactional_email_task"
 
 
-# --- Helper function to safely get related data (ensure business_timezone is included) ---
 def _get_booking_related_data(booking: Booking) -> dict:
     data = {
         "class_title": "N/A",
         "class_id": None,
-        "class_slug": None,  # ADDED
+        "class_slug": None,
         "business_name": "N/A",
         "option_title": "N/A",
         "class_location": "N/A",
-        "business_timezone": "UTC",  # Default
-        "business_contact_email": settings.DEFAULT_FROM_EMAIL,  # Default
+        "business_timezone": "UTC",
+        "business_contact_email": settings.DEFAULT_FROM_EMAIL,
     }
     try:
         schedule_instance = getattr(booking, "schedule_instance", None)
@@ -83,7 +83,6 @@ def _get_booking_related_data(booking: Booking) -> dict:
     return data
 
 
-# --- Helper to generate ICS content ---
 def _generate_ics_content(
     booking: Booking, related_data: Dict[str, Any], user: CustomUser
 ) -> Optional[str]:
@@ -97,9 +96,7 @@ def _generate_ics_content(
         cal = Calendar()
         cal.add("prodid", f"-//ClassEasily Booking//classeasily.com//EN")
         cal.add("version", "2.0")
-        cal.add(
-            "method", "REQUEST"
-        )  # For calendar invites, or PUBLISH for just event data
+        cal.add("method", "REQUEST")
 
         event = Event()
         class_title = related_data.get("class_title", "Class Booking")
@@ -120,21 +117,14 @@ def _generate_ics_content(
         naive_start_dt = datetime.combine(schedule_inst.date, schedule_inst.time)
         aware_start_business = business_tz.localize(naive_start_dt)
 
-        # For ICS, DTSTART and DTEND should ideally be in UTC or have TZID specified
-        # Using UTC is generally safer for broader compatibility.
         aware_start_utc = aware_start_business.astimezone(pytz.utc)
         aware_end_utc = aware_start_utc + timedelta(minutes=schedule_inst.duration)
 
         event.add("dtstart", aware_start_utc)
         event.add("dtend", aware_end_utc)
-        event.add(
-            "dtstamp", datetime.utcnow().replace(tzinfo=pytz.utc)
-        )  # Timestamp of ICS creation
+        event.add("dtstamp", datetime.utcnow().replace(tzinfo=pytz.utc))
 
-        # Unique ID for the event
-        uid_domain = (
-            settings.SITE_DOMAIN or "classeasily.com"
-        )  # Get from settings or default
+        uid_domain = settings.SITE_DOMAIN or "classeasily.com"
         event.add(
             "uid",
             f'{booking.user_facing_reference or booking.id}-{schedule_inst.date.strftime("%Y%m%d")}@{uid_domain}',
@@ -152,7 +142,6 @@ def _generate_ics_content(
             description_parts.append(f"Your Notes: {booking.notes}")
         event.add("description", vText("\n".join(description_parts)))
 
-        # Organizer
         organizer_email = related_data.get(
             "business_contact_email", settings.DEFAULT_FROM_EMAIL
         )
@@ -164,9 +153,13 @@ def _generate_ics_content(
             },
         )
 
-        # Attendee (the user)
         if user and user.email:
-            attendee_cn = vText(user.get_full_name() or user.email)
+            attendee_name = (
+                user.get_full_name()
+                if isinstance(user, CustomUser)
+                else f"{user.first_name} {user.last_name}"
+            )
+            attendee_cn = vText(attendee_name or user.email)
             event.add(
                 "attendee",
                 f"MAILTO:{user.email}",
@@ -179,11 +172,7 @@ def _generate_ics_content(
             )
 
         event.add("status", "CONFIRMED")
-        event.add("transp", "OPAQUE")  # Shows as busy time
-
-        # Recurrence for courses
-        if booking.enrollment_type == "Full Course" and booking.booking_group_id:
-            pass  # No RRULE for single instance ICS. Add if this email is for the *entire* course.
+        event.add("transp", "OPAQUE")
 
         cal.add_component(event)
         return cal.to_ical().decode("utf-8")
@@ -196,9 +185,6 @@ def _generate_ics_content(
         return None
 
 
-# --- Main Function to Send Templated Emails (NOW USES TASK QUEUE) ---
-
-
 def send_templated_email(
     recipient_list: List[str],
     template_name: str,
@@ -208,20 +194,13 @@ def send_templated_email(
     attachments: Optional[List[Dict]] = None,
 ):
     """
-    Renders and sends a templated transactional email using a Celery task.
-
-    This function is designed to be resilient. It validates inputs before queueing
-    and sends a fallback email if the primary template fails to render.
-
-    Args:
-        recipient_list: A list of email addresses for the 'to' field.
-        template_name: The path to the Django HTML email template.
-        context: A dictionary of context variables to pass to the template.
-        subject: The email subject. If None, one is generated.
-        from_email: The sender's email. Defaults to Django's setting.
-        attachments: A list of attachment objects for the email.
+    Renders an email template, queues it for sending via a Celery task,
+    and includes robust error handling and fallback mechanisms.
     """
-    # --- FIX: Added a critical safeguard to prevent the 'Missing to field' error ---
+    logger.info(
+        f"Attempting to queue email via send_templated_email. Template: '{template_name}', Recipients: {recipient_list}"
+    )
+
     if not recipient_list or not isinstance(recipient_list, list):
         logger.error(
             f"send_templated_email was called with an invalid or empty recipient_list for template '{template_name}'. Aborting."
@@ -229,14 +208,14 @@ def send_templated_email(
         return
 
     try:
-        # Add settings to context for templates that need it
+        # Ensure settings are always available in the template context
         template_context = context.copy()
         template_context["settings"] = settings
 
-        # 1. Render the primary HTML content from the specified template.
+        # Render the HTML content from the specified template
         html_content = render_to_string(template_name, template_context)
 
-        # 2. Generate a subject line if one was not explicitly provided.
+        # If no subject is provided, generate a default one from the template name
         if not subject:
             template_base = (
                 template_name.split("/")[-1]
@@ -246,29 +225,26 @@ def send_templated_email(
             )
             subject = f"{template_base} - ClassEasily"
 
-        # 3. Safeguard: Truncate the subject to prevent API validation errors.
-        max_subject_length = 150  # A safe, reasonable limit.
+        # Truncate subject if it's excessively long to prevent email client issues
+        max_subject_length = 150
         if len(subject) > max_subject_length:
             subject = subject[:max_subject_length] + "..."
             logger.warning(
                 f"Subject for template '{template_name}' was too long and has been truncated."
             )
 
-        # 4. Prepare the parameters for the Celery email task.
-        # FIX: Use correct parameter names that match the task signature
+        # Prepare arguments for the Celery task
         task_kwargs = {
             "subject": subject,
             "html": html_content,
             "to": recipient_list,
-            "from_email": from_email
-            or settings.DEFAULT_FROM_EMAIL,  # FIX: Changed "from" to "from_email"
+            "from_email": from_email or settings.DEFAULT_FROM_EMAIL,
         }
 
-        # Add attachments if provided
         if attachments:
             task_kwargs["attachments"] = attachments
 
-        # 5. Queue the task and log success.
+        # Asynchronously queue the email sending task
         task_result = send_transactional_email_task.delay(**task_kwargs)
         logger.info(
             f"✅ Email from template '{template_name}' successfully queued for {recipient_list}. Task ID: {task_result.id}"
@@ -276,30 +252,136 @@ def send_templated_email(
         return task_result
 
     except Exception as e:
-        # --- FALLBACK MECHANISM ---
-        # If any part of the rendering fails, log the error and send a fallback email.
+        # This block catches errors during template rendering (e.g., a missing variable)
         logger.error(
             f"CRITICAL: Failed to render email template '{template_name}'. Error: {e}",
             exc_info=True,
         )
 
+        # If template rendering fails, send a generic fallback email to the user
         fallback_subject = "Important Notification from ClassEasily"
         fallback_html = "<p>We tried to send you an email, but a server error prevented it from being created correctly. Our team has been notified.</p><p>If you were expecting a booking confirmation or password reset, please contact our support team for assistance.</p><p>We apologize for the inconvenience.</p>"
 
         fallback_kwargs = {
             "subject": fallback_subject,
-            "html": fallback_html,  # Changed from html_content to html
-            "to": recipient_list,  # Changed from to_list to to
-            "from": from_email
-            or settings.DEFAULT_FROM_EMAIL,  # Changed from from_email to from
+            "html": fallback_html,
+            "to": recipient_list,
+            "from_email": from_email or settings.DEFAULT_FROM_EMAIL,
         }
 
-        # Queue the fallback email task.
         task_result = send_transactional_email_task.delay(**fallback_kwargs)
         logger.warning(
             f"⚠️ A fallback email was sent to {recipient_list} due to a template rendering error. Task ID: {task_result.id}"
         )
         return task_result
+
+
+def send_booking_confirmation_email(user, booking: Booking):
+    """
+    Sends a booking confirmation email to either a registered user (CustomUser)
+    or a guest (Contact).
+    """
+    logger.info(
+        f"--- send_booking_confirmation_email initiated for Booking ID: {booking.id} ---"
+    )
+    logger.info(f"Recipient object type: {type(user)}")
+
+    recipient = user
+    if (
+        not recipient
+        or not hasattr(recipient, "email")
+        or not recipient.email
+        or not booking
+    ):
+        logger.error(
+            f"send_booking_confirmation_email HALTED: Invalid recipient or booking. Recipient valid: {bool(recipient)}, Recipient has email: {hasattr(recipient, 'email')}, Email: {getattr(recipient, 'email', 'N/A')}, Booking valid: {bool(booking)}"
+        )
+        return
+
+    logger.info(f"Recipient email address: {recipient.email}")
+
+    related_data = _get_booking_related_data(booking)
+    class_identifier = related_data.get("class_slug") or related_data.get("class_id")
+    if not class_identifier:
+        logger.error(
+            f"Could not access essential related data for booking {booking.id} when sending confirmation."
+        )
+
+    class_details_url = (
+        f"{settings.FRONTEND_BASE_URL}/classes/{class_identifier}"
+        if class_identifier
+        else "#"
+    )
+    manage_bookings_url = f"{settings.FRONTEND_BASE_URL}/my-classes"
+
+    payment = (
+        booking.payments.filter(status="succeeded").order_by("-created_at").first()
+    )
+
+    is_guest_flag = not isinstance(recipient, CustomUser)
+    logger.info(f"Determined recipient is_guest status: {is_guest_flag}")
+
+    context = {
+        "user": recipient,
+        "booking": booking,
+        "class_details_url": class_details_url,
+        "manage_bookings_url": manage_bookings_url,
+        "recipient_email": recipient.email,
+        "related_data": related_data,
+        "payment": payment,
+        "is_guest": is_guest_flag,
+    }
+
+    if context["is_guest"] and booking.cancellation_token:
+        guest_cancellation_url = (
+            f"{settings.FRONTEND_BASE_URL}/guest/cancel/{booking.cancellation_token}"
+        )
+        context["guest_cancellation_url"] = guest_cancellation_url
+        logger.info(
+            f"Adding guest cancellation URL to email context for booking {booking.id}"
+        )
+    elif context["is_guest"] and not booking.cancellation_token:
+        logger.warning(
+            f"Guest booking {booking.id} is missing a cancellation token for the email."
+        )
+
+    ics_content_str = _generate_ics_content(booking, related_data, recipient)
+    email_attachments = None
+    if ics_content_str:
+        filename_class_part = (
+            (related_data.get("class_title", "class")[:20])
+            .replace(" ", "_")
+            .replace("/", "_")
+        )
+        ics_filename = f"{filename_class_part}_booking_{booking.schedule_instance.date.strftime('%Y%m%d')}.ics"
+        email_attachments = [
+            {
+                "filename": ics_filename,
+                "content": ics_content_str,
+                "mimetype": "text/calendar; charset=utf-8; method=REQUEST",
+            }
+        ]
+        logger.info(
+            f"Generated ICS attachment: {ics_filename} for booking {booking.id}"
+        )
+    else:
+        logger.warning(f"Could not generate ICS attachment for booking {booking.id}")
+
+    logger.info(
+        f"Proceeding to call send_templated_email for booking {booking.id} to {recipient.email}"
+    )
+
+    send_templated_email(
+        recipient_list=[recipient.email],
+        template_name="emails/booking_confirmation_user.html",
+        context=context,
+        subject=f"Your Booking for {related_data.get('class_title', '[Class Title]')} is Confirmed!",
+        attachments=email_attachments,
+    )
+
+    logger.info(
+        f"--- send_booking_confirmation_email finished for Booking ID: {booking.id} ---"
+    )
 
 
 def send_business_staff_invitation_email(invitation: BusinessStaff):
@@ -481,77 +563,6 @@ def send_account_security_email(
         template_name="emails/account_security_change.html",
         context=context,
         subject=subject,  # Pass explicit subject
-    )
-
-
-def send_booking_confirmation_email(user: CustomUser, booking: Booking):
-    if not user or not user.email or not booking:
-        logger.warning(
-            "Attempted to send booking confirmation with invalid user or booking."
-        )
-        return
-
-    related_data = _get_booking_related_data(booking)
-    class_identifier = related_data.get("class_slug") or related_data.get("class_id")
-    if not class_identifier:
-        logger.error(
-            f"Could not access essential related data for booking {booking.id} when sending confirmation."
-        )
-
-    logger.info(
-        f"Preparing booking confirmation email for booking {booking.id} to user {user.email}"
-    )
-
-    class_details_url = (
-        f"{settings.FRONTEND_BASE_URL}/classes/{class_identifier}"
-        if class_identifier
-        else "#"
-    )
-    manage_bookings_url = f"{settings.FRONTEND_BASE_URL}/my-classes"
-
-    payment = (
-        booking.payments.filter(status="succeeded").order_by("-created_at").first()
-    )
-
-    context = {
-        "user": user,
-        "booking": booking,
-        "class_details_url": class_details_url,
-        "manage_bookings_url": manage_bookings_url,
-        "recipient_email": user.email,
-        "related_data": related_data,
-        "payment": payment,
-    }
-
-    # Generate ICS content
-    ics_content_str = _generate_ics_content(booking, related_data, user)
-    email_attachments = None
-    if ics_content_str:
-        filename_class_part = (
-            (related_data.get("class_title", "class")[:20])
-            .replace(" ", "_")
-            .replace("/", "_")
-        )
-        ics_filename = f"{filename_class_part}_booking_{booking.schedule_instance.date.strftime('%Y%m%d')}.ics"
-        email_attachments = [
-            {
-                "filename": ics_filename,
-                "content": ics_content_str,  # Pass as string
-                "mimetype": "text/calendar; charset=utf-8; method=REQUEST",  # Method can be PUBLISH or REQUEST
-            }
-        ]
-        logger.info(
-            f"Generated ICS attachment: {ics_filename} for booking {booking.id}"
-        )
-    else:
-        logger.warning(f"Could not generate ICS attachment for booking {booking.id}")
-
-    send_templated_email(
-        recipient_list=[user.email],
-        template_name="emails/booking_confirmation_user.html",
-        context=context,
-        subject=f"Your Booking for {related_data.get('class_title', '[Class Title]')} is Confirmed!",
-        attachments=email_attachments,  # Pass the attachments list
     )
 
 
@@ -1297,3 +1308,50 @@ def send_admin_user_reply_notification(recipients: List[str], ticket: SupportTic
         context=context,
         subject=f"[User Reply] Ticket #{ticket.user_facing_id} - {ticket.subject}",
     )
+
+
+def send_booking_rescheduled_by_business_email(
+    user: CustomUser,
+    booking: Booking,
+    old_instance: ScheduleInstance,
+    new_instance: ScheduleInstance,
+):
+    """
+    Notifies a user that their booking was rescheduled by the business.
+    """
+    if not user or not user.email or not booking:
+        logger.warning(
+            "Attempted to send booking rescheduled email with invalid user or booking."
+        )
+        return
+
+    related_data = _get_booking_related_data(booking)
+    if not related_data.get("class_title"):
+        logger.error(
+            f"Could not access related data for booking {booking.id} when sending reschedule notification."
+        )
+        # Proceed with sending, template handles defaults
+
+    logger.info(
+        f"Preparing booking rescheduled email for booking {booking.id} to user {user.email}"
+    )
+
+    manage_bookings_url = f"{settings.FRONTEND_BASE_URL}/my-classes"
+
+    context = {
+        "user": user,
+        "booking": booking,
+        "old_instance": old_instance,
+        "new_instance": new_instance,
+        "manage_bookings_url": manage_bookings_url,
+        "recipient_email": user.email,
+        "related_data": related_data,
+    }
+
+    send_templated_email(
+        recipient_list=[user.email],
+        template_name="emails/booking_rescheduled_by_business.html",
+        context=context,
+        subject=f"Update: Your Booking for {related_data.get('class_title', '[Class Title]')} Has Been Rescheduled",
+    )
+    logger.info(f"Booking reschedule email prepared/queued for booking {booking.id}")

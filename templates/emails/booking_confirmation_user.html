@@ -45,9 +45,9 @@
                 <strong>{% trans "Time:" %}</strong>
                 {{ booking.schedule_instance.time|time:"P" }}
                 {% if related_data.business_timezone and related_data.business_timezone != "Etc/UTC" %}
-                    {% if user.user_timezone and related_data.business_timezone != user.user_timezone %}
+                    {% if not is_guest and user.user_timezone and user.user_timezone != related_data.business_timezone %}
                         ({{ related_data.business_timezone|humanize_timezone }})
-                    {% elif not user.user_timezone %}
+                    {% elif is_guest or not user.user_timezone %}
                         ({{ related_data.business_timezone|humanize_timezone }})
                     {% endif %}
                 {% endif %}
@@ -90,15 +90,23 @@
            width="100%">
         <tr>
             <td align="center" class="button-td">
-                <a href="{{ manage_bookings_url }}" target="_blank" class="button">{% trans 'View Your Bookings' %}</a>
+                {% if is_guest and guest_cancellation_url %}
+                    <a href="{{ guest_cancellation_url }}" target="_blank" class="button">{% trans 'Cancel This Booking' %}</a>
+                {% else %}
+                    <a href="{{ manage_bookings_url }}" target="_blank" class="button">{% trans 'View Your Bookings' %}</a>
+                {% endif %}
             </td>
         </tr>
     </table>
     <p>
-        {% blocktrans %}You can view or manage this booking, including cancellation options (subject to the business's policy), from your 'My Classes' page.{% endblocktrans %}
+        {% if is_guest and guest_cancellation_url %}
+            {% blocktrans %}You can cancel this booking using the button above, subject to the business's cancellation policy.{% endblocktrans %}
+        {% else %}
+            {% blocktrans %}You can view or manage this booking, including cancellation options (subject to the business's policy), from your 'My Classes' page.{% endblocktrans %}
+        {% endif %}
     </p>
     <p>
-        {% trans "We look forward to seeing you!" %}
+        {% trans "We look to seeing you!" %}
         <br />
         {% trans "The ClassEasily Team" %}
     </p>

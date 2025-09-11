@@ -137,7 +137,11 @@ class BusinessStudentProfileSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_type(self, obj):
-        return "user" if obj.user else "contact"
+        if obj.user:
+            return "user"
+        if obj.source == "guest_booking":
+            return "guest"
+        return "contact"
 
     def get_avatar_thumb_url(self, obj):
         # Prioritize the user's avatar if they are a platform user

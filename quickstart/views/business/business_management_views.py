@@ -1,3 +1,5 @@
+# quickstart/views/business/business_management_views.py
+
 from rest_framework import viewsets, status, permissions, generics
 import boto3
 import uuid
@@ -343,8 +345,9 @@ class MyBusinessOverviewView(APIView):
                 Booking.objects.filter(
                     schedule_instance__schedule__option__classId__businessId=business,
                     booking_date__gte=current_month_start,
+                    contact__isnull=False,
                 )
-                .values("user")
+                .values("contact")
                 .distinct()
                 .count()
             )
@@ -353,8 +356,9 @@ class MyBusinessOverviewView(APIView):
                 Booking.objects.filter(
                     schedule_instance__schedule__option__classId__businessId=business,
                     booking_date__range=(prev_month_start, prev_month_end),
+                    contact__isnull=False,
                 )
-                .values("user")
+                .values("contact")
                 .distinct()
                 .count()
             )
@@ -489,18 +493,24 @@ class MyBusinessOverviewView(APIView):
                     booking_date__gte=three_days_ago_utc,
                     status="confirmed",
                 )
-                .select_related("user")
+                .select_related("user", "contact")
                 .order_by("-booking_date")[:3]
             )
             for booking in recent_bookings:
+                booker_name = "A guest"
+                if booking.user and booking.user.first_name:
+                    booker_name = booking.user.first_name
+                elif booking.contact and booking.contact.first_name:
+                    booker_name = booking.contact.first_name
+
+                message = f"New booking: {booker_name}"
+                if booking.participants > 1:
+                    message += f" (+{booking.participants - 1} more)"
+
                 recent_activity_data.append(
                     {
                         "timestamp": booking.booking_date.isoformat(),
-                        "message": (
-                            f"New booking: {booking.user.first_name} (+{booking.participants -1} more)"
-                            if booking.participants > 1
-                            else f"New booking: {booking.user.first_name}"
-                        ),
+                        "message": message,
                         "icon": "UserPlus",
                         "color": colors.get("chart", {}).get("blue", "#3b82f6"),
                         "type": "booking",

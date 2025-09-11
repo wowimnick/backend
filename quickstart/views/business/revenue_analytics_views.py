@@ -161,7 +161,7 @@ class RevenueAnalyticsView(views.APIView):
                 Sum("amount_paid"), Value(Decimal("0.0")), output_field=DecimalField()
             ),
             total_bookings=Count("id"),
-            unique_users=Count("user", distinct=True),
+            unique_bookers=Count("contact", distinct=True),
             total_participant_spots_decimal=Coalesce(
                 Sum("participants"), Value(0), output_field=IntegerField()
             ),
@@ -170,7 +170,7 @@ class RevenueAnalyticsView(views.APIView):
             current_aggregates["total_gross_revenue_decimal"]
         )
         current_total_bookings = current_aggregates["total_bookings"]
-        current_unique_users = current_aggregates["unique_users"]
+        current_unique_bookers = current_aggregates["unique_bookers"]
         current_total_participant_spots = int(
             current_aggregates["total_participant_spots_decimal"]
         )
@@ -189,9 +189,9 @@ class RevenueAnalyticsView(views.APIView):
             if current_total_bookings > 0
             else 0.0
         )
-        revenue_per_user = (
-            (current_total_gross_revenue / current_unique_users)
-            if current_unique_users > 0
+        revenue_per_booker = (
+            (current_total_gross_revenue / current_unique_bookers)
+            if current_unique_bookers > 0
             else 0.0
         )
         revenue_growth = 0.0
@@ -223,7 +223,7 @@ class RevenueAnalyticsView(views.APIView):
             "estimated_platform_fees": round(estimated_platform_fees, 2),
             "estimated_net_revenue": round(estimated_net_revenue, 2),
             "average_order_value": round(average_order_value, 2),
-            "revenue_per_user": round(revenue_per_user, 2),
+            "revenue_per_booker": round(revenue_per_booker, 2),
             "revenue_growth": round(revenue_growth, 1),
             "revenue_per_spot": round(revenue_per_spot, 2),
             "recurring_revenue": 0.0,  # Placeholder

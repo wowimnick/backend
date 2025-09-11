@@ -100,6 +100,7 @@ from quickstart.views import (
     BusinessRoleViewSet,
     ValidateInvitationTokenView,
     ContactImportViewSet,
+    GuestBookingCancellationView,
 )
 
 # =============================================================================
@@ -239,6 +240,11 @@ urlpatterns = [
     path("token/refresh/", CustomTokenRefreshView.as_view(), name="token_refresh"),
     path("logout/", LogoutView.as_view(), name="logout"),
     path("csrf/", CSRFTokenView.as_view(), name="csrf_cookie"),
+    path(
+        "bookings/guest-cancel/<uuid:token>/",
+        GuestBookingCancellationView.as_view(),
+        name="guest-booking-cancel",
+    ),
     # Registration and Email Verification
     path(
         "auth/registration/",
