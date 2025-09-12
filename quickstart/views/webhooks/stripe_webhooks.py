@@ -61,6 +61,10 @@ def _update_business_status_from_stripe_account(stripe_account_obj):
 
 @csrf_exempt
 def stripe_connect_webhook(request):
+    if request.method == "GET":
+        # Stripe verification ping
+        return HttpResponse("Webhook endpoint is active", status=200)
+
     if request.method != "POST":
         return HttpResponse(status=405)
 
