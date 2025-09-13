@@ -566,9 +566,7 @@ def send_account_security_email(
     )
 
 
-def send_booking_cancellation_user_email(
-    user: CustomUser, booking: Booking, refund_details: str
-):
+def send_booking_cancellation_user_email(user, booking: Booking, refund_details: str):
     """
     Sends confirmation to a user after they cancelled their booking.
     """
@@ -612,7 +610,7 @@ def send_booking_cancellation_user_email(
 
 
 def send_booking_cancelled_by_other_email(
-    user: CustomUser,
+    user,
     booking: Booking,
     cancelled_by: str,
     reason: str,
@@ -660,7 +658,7 @@ def send_booking_cancelled_by_other_email(
     logger.info(f"'Cancelled by other' email prepared/queued for booking {booking.id}")
 
 
-def send_booking_reminder_email(user: CustomUser, booking: Booking):
+def send_booking_reminder_email(user, booking: Booking):
     """
     Sends a reminder email to a user about an upcoming class.
     """
@@ -1311,7 +1309,7 @@ def send_admin_user_reply_notification(recipients: List[str], ticket: SupportTic
 
 
 def send_booking_rescheduled_by_business_email(
-    user: CustomUser,
+    user,
     booking: Booking,
     old_instance: ScheduleInstance,
     new_instance: ScheduleInstance,

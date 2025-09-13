@@ -1131,7 +1131,7 @@ class ClassesMain(models.Model):
         db_index=True,
     )
     title = models.CharField(max_length=100)
-    description = models.TextField(max_length=2000)
+    description = models.TextField(max_length=4000)
     features = models.JSONField(default=list)
     category = models.ForeignKey(
         ClassCategory,

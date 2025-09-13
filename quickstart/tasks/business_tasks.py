@@ -1,7 +1,8 @@
 from celery import shared_task
 from django.utils import timezone
 from datetime import timedelta
-from django.db.models import Sum, Count
+from django.db.models import Sum, Count, CharField
+from django.db.models.functions import Coalesce, Cast
 from decimal import Decimal
 
 from quickstart.models import BusinessInfo, Booking
@@ -40,7 +41,18 @@ def send_weekly_performance_summaries():
             ).aggregate(total=Sum("amount_paid"))["total"] or Decimal("0.00")
 
             new_bookings_count = bookings_in_period.count()
-            unique_students_count = bookings_in_period.values("user").distinct().count()
+            # MODIFIED: Correctly count unique users OR contacts
+            unique_students_count = (
+                bookings_in_period.annotate(
+                    booker_identifier=Coalesce(
+                        Cast("user_id", output_field=CharField()),
+                        Cast("contact_id", output_field=CharField()),
+                    )
+                )
+                .values("booker_identifier")
+                .distinct()
+                .count()
+            )
 
             summary_data = {
                 "total_revenue": f"{total_revenue:.2f}",

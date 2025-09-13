@@ -281,7 +281,6 @@ class StripeConnectView(views.APIView):
                 account.charges_enabled
                 and account.payouts_enabled
                 and not currently_due
-                and not eventually_due
                 and disabled_reason is None
             ):
                 new_platform_status = "active"

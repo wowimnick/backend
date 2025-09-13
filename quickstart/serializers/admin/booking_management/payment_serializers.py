@@ -134,7 +134,6 @@ class AdminBookingPaymentSerializer(serializers.ModelSerializer):
             "available_refund_amount",
         ]
 
-    # --- ADD THIS ENTIRE METHOD (copied from AdminPaymentSerializer) ---
     def get_card_details(self, obj):
         if obj.card_brand and obj.card_last4:
             return {

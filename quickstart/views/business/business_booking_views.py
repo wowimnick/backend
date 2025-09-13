@@ -20,6 +20,7 @@ from django.db.models import (
     Case,
     When,
     BooleanField,
+    CharField,
 )
 from django.db.models.functions import (
     TruncDate,
@@ -113,6 +114,9 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
         "user__email",
         "user__first_name",
         "user__last_name",
+        "contact__email",  # Added contact fields
+        "contact__first_name",  # Added contact fields
+        "contact__last_name",  # Added contact fields
         "schedule_instance__schedule__option__classId__title",
         "schedule_instance__schedule__option__classId__title",  # Corrected from option.title
         "id",
@@ -318,15 +322,17 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
         annotated with their validity for rescheduling.
         """
         booking = self.get_object()
-        today = timezone.now().date()
+        now = timezone.now()
+        today = now.date()
 
-        # Get all future instances for the same class option
         queryset = (
             ScheduleInstance.objects.filter(
                 schedule__option=booking.schedule_instance.schedule.option,
                 status="scheduled",
-                date__gte=today,
+                date__gte=today,  # First, efficiently filter for today or future dates
             )
+            # Then, exclude instances on today's date that are in the past
+            .exclude(Q(date=today) & Q(time__lt=now.time()))
             .exclude(pk=booking.schedule_instance.pk)
             .annotate(
                 # Calculate remaining spots, considering all confirmed/pending bookings
@@ -416,15 +422,23 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
         except ScheduleInstance.DoesNotExist:
             raise NotFound("The selected new session could not be found.")
 
-        if (
-            new_instance.schedule.option.classId.businessId
-            != self.get_business_context()
-        ):
-            raise PermissionDenied(
-                "You can only reschedule to a session within your own business."
-            )
+        # Create a timezone-aware datetime for the new instance's start time
+        business_tz_str = (
+            new_instance.schedule.option.classId.businessId.business_timezone
+        )
+        try:
+            business_tz = pytz.timezone(business_tz_str)
+        except pytz.UnknownTimeZoneError:
+            business_tz = pytz.utc  # Fallback to UTC
+            logger.warning(f"Invalid business timezone '{business_tz_str}'. Using UTC.")
 
-        if new_instance.date < timezone.now().date():
+        new_instance_datetime_naive = datetime.combine(
+            new_instance.date, new_instance.time
+        )
+        new_instance_datetime_aware = business_tz.localize(new_instance_datetime_naive)
+
+        # Compare with the current time
+        if new_instance_datetime_aware < timezone.now():
             raise ValidationError(
                 {
                     "new_schedule_instance_id": "Cannot reschedule to a session in the past."
@@ -486,7 +500,7 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                 )
 
                 send_booking_rescheduled_by_business_email(
-                    user=booking.user,
+                    user=(booking.user or booking.contact),
                     booking=booking,
                     old_instance=original_instance,
                     new_instance=new_instance,
@@ -540,7 +554,7 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
         if aware_instance_datetime < timezone.now():
             raise ValidationError({"date": "Cannot cancel bookings for past sessions."})
 
-        user_to_notify = booking.user
+        user_to_notify = booking.user or booking.contact
         try:
             with transaction.atomic():
                 booking.status = "cancelled"
@@ -619,6 +633,7 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
             bookings_qs = bookings_qs_base.select_related(
                 "schedule_instance__schedule__option__classId",
                 "user",
+                "contact",
             )
 
             # --- Summary Aggregates (Simplified) ---
@@ -646,8 +661,17 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                 if total_booking_transactions > 0
                 else 0
             )
-            user_bookings_in_business = bookings_qs.values("user").annotate(
-                booking_tx_count=Count("id")
+            # MODIFIED: Coalesce user and contact emails to get unique bookers
+            user_bookings_in_business = (
+                bookings_qs.annotate(
+                    booker_email=Coalesce(
+                        F("user__email"),
+                        F("contact__email"),
+                        output_field=CharField(),
+                    )
+                )
+                .values("booker_email")
+                .annotate(booking_tx_count=Count("id"))
             )
             total_unique_bookers = user_bookings_in_business.count()
             repeat_bookers = user_bookings_in_business.filter(
@@ -742,7 +766,9 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                 .annotate(
                     total_booking_transactions=Count("id"),
                     total_participant_spots=Coalesce(Sum("participants"), Value(0)),
-                    unique_bookers=Count("user", distinct=True),
+                    unique_bookers=Count(
+                        Coalesce(F("user__email"), F("contact__email")), distinct=True
+                    ),
                     class_cancelled_spots=Coalesce(
                         Sum("participants", filter=Q(status="cancelled")), Value(0)
                     ),
@@ -875,7 +901,8 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
             # Identify users whose first booking with this business falls within the current date range
             first_booking_dates_subquery = (
                 Booking.objects.filter(
-                    user=OuterRef("user"),
+                    Q(user=OuterRef("user")) | Q(contact=OuterRef("contact")),
+                    user__isnull=False,
                     schedule_instance__schedule__option__classId__businessId=business,
                 )
                 .order_by("booking_date")
