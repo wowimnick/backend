@@ -1131,7 +1131,7 @@ class ClassesMain(models.Model):
         db_index=True,
     )
     title = models.CharField(max_length=100)
-    description = models.TextField(max_length=2000)
+    description = models.TextField(max_length=4000)
     features = models.JSONField(default=list)
     category = models.ForeignKey(
         ClassCategory,
@@ -1154,6 +1154,8 @@ class ClassesMain(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="active")
     location = models.CharField(max_length=255)
     unit_number = models.CharField(max_length=50, blank=True, null=True)
+    city = models.CharField(max_length=100, blank=True, null=True, db_index=True)
+    state = models.CharField(max_length=100, blank=True, null=True, db_index=True)
     coordinates = models.CharField(max_length=50)
     point = gis_models.PointField(
         srid=4326,  # Standard GPS coordinate system

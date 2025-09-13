@@ -404,6 +404,8 @@ class RevenueAnalyticsView(views.APIView):
             class_id_filter = request.query_params.get("class_id")
             if class_id_filter and not class_id_filter.isdigit():
                 class_id_filter = None
+            else:
+                class_id_filter = int(class_id_filter) if class_id_filter else None
 
             response = HttpResponse(content_type="text/csv")
             filename = f"{business.businessName.replace(' ', '_')}_revenue_report_{start_date_utc.strftime('%Y%m%d')}_{end_date_utc.strftime('%Y%m%d')}.csv"
@@ -430,49 +432,88 @@ class RevenueAnalyticsView(views.APIView):
                     )
             writer.writerow([])
 
+            # Fetch the base metrics from the existing function
             metrics = self.calculate_metrics(
                 business, start_date_utc, end_date_utc, class_id_filter
             )
-
-            fee_percentage = self._get_fee_rate_for_business(business) * 100
+            platform_fee_rate = self._get_fee_rate_for_business(business)
+            fee_percentage = platform_fee_rate * 100
             fee_percentage_text = f"{fee_percentage:.0f}%"
 
-            writer.writerow(["Key Metrics", "Value"])
-            writer.writerow(
-                ["Total Gross Revenue", f"${metrics['total_gross_revenue']:.2f}"]
+            # --- IMPROVEMENT: Create an explicit, accountant-friendly summary for the CSV ---
+            # The 'total_gross_revenue' from metrics includes tax. We'll break it down.
+            # Assuming a constant 13% HST rate for the summary calculation.
+            HST_RATE = Decimal("0.13")
+            total_amount_collected = Decimal(str(metrics["total_gross_revenue"]))
+
+            # Calculate pre-tax revenue and tax collected
+            gross_sales_pre_tax = (total_amount_collected / (1 + HST_RATE)).quantize(
+                Decimal("0.01")
             )
+            tax_collected_from_customers = (
+                total_amount_collected - gross_sales_pre_tax
+            ).quantize(Decimal("0.01"))
+
+            # Recalculate fees and net revenue based on the pre-tax amount for accuracy
+            platform_fees_pre_tax = (gross_sales_pre_tax * platform_fee_rate).quantize(
+                Decimal("0.01")
+            )
+            net_revenue_pre_tax = (
+                gross_sales_pre_tax - platform_fees_pre_tax
+            ).quantize(Decimal("0.01"))
+
+            writer.writerow(["Key Metrics Summary", "Value"])
+            writer.writerow(["Gross Sales (Pre-Tax)", f"${gross_sales_pre_tax:.2f}"])
             writer.writerow(
                 [
-                    f"Estimated Platform Fees ({fee_percentage_text})",
-                    f"${metrics['estimated_platform_fees']:.2f}",
+                    "Tax Collected from Customers (HST)",
+                    f"${tax_collected_from_customers:.2f}",
                 ]
             )
             writer.writerow(
-                ["Estimated Net Revenue", f"${metrics['estimated_net_revenue']:.2f}"]
+                [
+                    "Total Amount Collected from Customers",
+                    f"${total_amount_collected:.2f}",
+                ]
             )
             writer.writerow(
-                ["Average Order Value", f"${metrics['average_order_value']:.2f}"]
+                [
+                    f"Estimated Platform Fees ({fee_percentage_text}, Pre-Tax)",
+                    f"${platform_fees_pre_tax:.2f}",
+                ]
             )
-            writer.writerow(["Revenue Per User", f"${metrics['revenue_per_user']:.2f}"])
+            writer.writerow(
+                ["Estimated Net Revenue (Pre-Tax)", f"${net_revenue_pre_tax:.2f}"]
+            )
+            writer.writerow([])  # Add a spacer row
+            writer.writerow(["Additional Metrics", "Value"])
+            writer.writerow(
+                [
+                    "Average Order Value (incl. Tax)",
+                    f"${metrics['average_order_value']:.2f}",
+                ]
+            )
+            writer.writerow(
+                [
+                    "Revenue Per Booker (incl. Tax)",
+                    f"${metrics['revenue_per_booker']:.2f}",
+                ]
+            )
             writer.writerow(["Revenue Growth (%)", f"{metrics['revenue_growth']:.1f}%"])
             writer.writerow(
-                ["Revenue Per Participant Spot", f"${metrics['revenue_per_spot']:.2f}"]
+                [
+                    "Revenue Per Participant Spot (incl. Tax)",
+                    f"${metrics['revenue_per_spot']:.2f}",
+                ]
             )
             writer.writerow([])
 
+            # --- Daily Trends & Class Revenue (No change needed here) ---
             trends = self.get_revenue_trends(
                 business, start_date_utc, end_date_utc, class_id_filter
             )
-            trend_title = "Daily Revenue Detail"
-            writer.writerow([trend_title])
-            writer.writerow(
-                [
-                    "Date (Local Business Time)",
-                    "Gross Revenue",
-                    "Platform Fees",
-                    "Net Revenue",
-                ]
-            )
+            writer.writerow(["Daily Revenue Detail (Local Business Time, incl. Tax)"])
+            writer.writerow(["Date", "Gross Revenue", "Platform Fees", "Net Revenue"])
             for entry in trends:
                 writer.writerow(
                     [
@@ -487,7 +528,7 @@ class RevenueAnalyticsView(views.APIView):
             class_revenue = self.get_class_revenue(
                 business, start_date_utc, end_date_utc, class_id_filter
             )
-            writer.writerow(["Revenue by Class"])
+            writer.writerow(["Revenue by Class (incl. Tax)"])
             writer.writerow(
                 ["Class Name", "Gross Revenue", "Platform Fees", "Net Revenue"]
             )
@@ -498,6 +539,91 @@ class RevenueAnalyticsView(views.APIView):
                         f"${entry['gross_revenue']:.2f}",
                         f"${entry['platform_fees']:.2f}",
                         f"${entry['net_revenue']:.2f}",
+                    ]
+                )
+            writer.writerow([])
+
+            # --- Detailed Transaction Report (Already enhanced) ---
+            writer.writerow(["Detailed Transaction Report for Accounting"])
+            writer.writerow(
+                [
+                    "Booking Reference",
+                    "Booking Date (UTC)",
+                    "Class Date (Local)",
+                    "Class Name",
+                    "Booker Name",
+                    "Booker Email",
+                    "Participants",
+                    "Subtotal (Pre-Tax)",
+                    "Tax Collected from Student (HST)",
+                    "Total Amount Paid",
+                    f"Platform Fee ({fee_percentage_text}, Pre-tax)",
+                    "HST on Platform Fee (ITC for Business)",
+                    "Net Payout to Business",
+                    "Payment Status",
+                    "Booking Status",
+                ]
+            )
+
+            detailed_bookings_qs = (
+                self.get_valid_bookings_queryset(
+                    business, start_date_utc, end_date_utc, class_id_filter
+                )
+                .select_related(
+                    "user", "contact", "schedule_instance__schedule__option__classId"
+                )
+                .prefetch_related("payments")
+                .order_by("booking_date")
+            )
+
+            for booking in detailed_bookings_qs:
+                payment = booking.payments.first()
+                booker_name, booker_email = ("N/A", "N/A")
+                if booking.user:
+                    booker_name = (
+                        f"{booking.user.first_name} {booking.user.last_name}".strip()
+                    )
+                    booker_email = booking.user.email
+                elif booking.contact:
+                    booker_name = f"{booking.contact.first_name} {booking.contact.last_name}".strip()
+                    booker_email = booking.contact.email
+
+                if payment:
+                    subtotal, tax_collected, total_paid = (
+                        payment.amount - payment.tax_amount,
+                        payment.tax_amount,
+                        payment.amount,
+                    )
+                    platform_fee_pre_tax, hst_on_fee, net_payout = (
+                        payment.platform_fee_amount,
+                        payment.platform_fee_tax,
+                        payment.net_payout_amount,
+                    )
+                else:  # Fallback for older data
+                    total_paid = booking.amount_paid
+                    subtotal = total_paid / (1 + HST_RATE)
+                    tax_collected = total_paid - subtotal
+                    platform_fee_pre_tax = subtotal * platform_fee_rate
+                    hst_on_fee = platform_fee_pre_tax * HST_RATE
+                    net_payout = total_paid - (platform_fee_pre_tax + hst_on_fee)
+
+                writer.writerow(
+                    [
+                        booking.user_facing_reference or f"ID-{booking.id}",
+                        booking.booking_date.strftime("%Y-%m-%d %H:%M"),
+                        booking.schedule_instance.date.strftime("%Y-%m-%d"),
+                        booking.schedule_instance.schedule.option.classId.title,
+                        booker_name,
+                        booker_email,
+                        booking.participants,
+                        f"${subtotal:.2f}",
+                        f"${tax_collected:.2f}",
+                        f"${total_paid:.2f}",
+                        f"${platform_fee_pre_tax:.2f}",
+                        f"${hst_on_fee:.2f}",
+                        f"${net_payout:.2f}",
+                        booking.get_payment_status_display(),
+                        booking.get_status_display(),
                     ]
                 )
 

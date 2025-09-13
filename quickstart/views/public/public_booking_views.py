@@ -243,6 +243,14 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
                 if now_aware < deadline_aware:
                     is_eligible_for_refund = True
 
+            def get_refund_text(percentage):
+                if percentage == 100:
+                    return "Full refund"
+                elif percentage > 0:
+                    return f"A {percentage}% refund"
+                else:
+                    return "No refund"
+
             # --- Generate human-readable policy description ---
             policy_descriptions = {
                 "flexible": f"Full refund if you cancel at least 1 hour before the class starts.",
@@ -251,7 +259,7 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
                 "72h": "Full refund if you cancel at least 72 hours before the class starts.",
                 "strict": "This booking is non-refundable and cannot be cancelled for a refund.",
                 "custom": (
-                    f"Full refund if you cancel at least {booking.cancellation_custom_hours} hours before the class starts."
+                    f"{get_refund_text(booking.cancellation_refund_percentage)} if you cancel at least {booking.cancellation_custom_hours} hours before the class starts."
                     if booking.cancellation_custom_hours
                     else "Custom cancellation policy applies."
                 ),

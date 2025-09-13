@@ -437,8 +437,6 @@ class ManagedClassOptionSerializer(serializers.ModelSerializer):
         """
         Validate that custom hours are provided when the policy is 'custom'.
         """
-        # When updating, 'cancellationPolicy' might not be in the payload.
-        # We need to consider the existing instance's policy in that case.
         policy = data.get(
             "cancellationPolicy", getattr(self.instance, "cancellationPolicy", None)
         )
@@ -484,7 +482,6 @@ class ManagedClassSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ClassesMain
-
         fields = [
             "classId",
             "businessId",
@@ -496,6 +493,8 @@ class ManagedClassSerializer(serializers.ModelSerializer):
             "status",
             "unit_number",
             "location",
+            "city",
+            "state",
             "coordinates",
             "saltLocation",
             "studentContactEmail",
@@ -531,18 +530,10 @@ class ManagedClassSerializer(serializers.ModelSerializer):
         ]
 
     def update(self, instance, validated_data):
-        """
-        Custom update to handle parsing 'coordinates' into latitude and longitude,
-        and to correctly handle stringified JSON for 'features'.
-        This is now NON-DESTRUCTIVE for coordinates.
-        """
-
         if "features" in validated_data and isinstance(validated_data["features"], str):
             try:
-
                 validated_data["features"] = json.loads(validated_data["features"])
             except json.JSONDecodeError:
-
                 raise serializers.ValidationError(
                     {
                         "features": "Invalid format. Features must be a valid JSON array string."
@@ -551,25 +542,19 @@ class ManagedClassSerializer(serializers.ModelSerializer):
 
         if "coordinates" in validated_data:
             coordinates_str = validated_data.get("coordinates")
-
             if (
                 coordinates_str
                 and isinstance(coordinates_str, str)
                 and coordinates_str.lower() != "undefined"
             ):
                 try:
-
                     lat_str, lng_str = map(str.strip, coordinates_str.split(","))
-
                     validated_data["latitude"] = Decimal(lat_str)
                     validated_data["longitude"] = Decimal(lng_str)
-
                 except (ValueError, InvalidOperation) as e:
-
                     logger.warning(
                         f"During class update (ID: {instance.pk}), could not parse coordinates: '{coordinates_str}'. Error: {e}. Existing coordinates will be preserved."
                     )
-
         return super().update(instance, validated_data)
 
 
@@ -580,6 +565,8 @@ class ClassCreateSerializer(serializers.ModelSerializer):
     subcategory_key = serializers.CharField(
         write_only=True, required=True, allow_blank=False
     )
+    city = serializers.CharField(required=False, allow_blank=True, max_length=100)
+    state = serializers.CharField(required=False, allow_blank=True, max_length=100)
 
     class Meta:
         model = ClassesMain
@@ -592,6 +579,8 @@ class ClassCreateSerializer(serializers.ModelSerializer):
             "location",
             "unit_number",
             "coordinates",
+            "city",
+            "state",
             "saltLocation",
             "studentContactEmail",
             "studentContactPhone",
@@ -624,22 +613,15 @@ class ClassCreateSerializer(serializers.ModelSerializer):
         return data
 
     def create(self, validated_data):
-        """
-        Custom create method to handle conversion of category/subcategory keys
-        and to correctly parse coordinates into the GIS point field.
-        """
         category_key = validated_data.pop("category_key")
         subcategory_key = validated_data.pop("subcategory_key", None)
 
-        # Keep the coordinates string, as the model has a field for it.
         coordinates_str = validated_data.get("coordinates")
-        point = None  # Initialize point as None
+        point = None
 
         if coordinates_str:
             try:
-                # Parse the coordinates but don't add them back to validated_data
                 lng_str, lat_str = map(str.strip, coordinates_str.split(","))
-                # Create a GIS Point object. Note: It's (longitude, latitude)
                 point = Point(float(lng_str), float(lat_str), srid=4326)
             except (ValueError, TypeError):
                 logger.warning(
@@ -668,8 +650,6 @@ class ClassCreateSerializer(serializers.ModelSerializer):
 
         validated_data["category"] = category
         validated_data["subcategory"] = subcategory
-
-        # Manually add the created point to the validated_data for creation
         validated_data["point"] = point
 
         instance = ClassesMain.objects.create(**validated_data)

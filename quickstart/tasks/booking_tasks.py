@@ -37,6 +37,7 @@ def send_upcoming_booking_reminders():
         )
         .select_related(
             "user",
+            "contact",  # Added contact
             "schedule_instance__schedule__option__classId__businessId",
         )
         .iterator()
@@ -74,12 +75,19 @@ def send_upcoming_booking_reminders():
             if cache.get(cache_key):
                 continue
 
-            send_booking_reminder_email(user=booking.user, booking=booking)
+            recipient = booking.user or booking.contact
+            if not recipient:
+                logger.warning(
+                    f"Booking {booking.id} has no user or contact to send a reminder to. Skipping."
+                )
+                continue
+
+            send_booking_reminder_email(user=recipient, booking=booking)
             sent_count += 1
 
-            cache.set(cache_key, True, timeout=90000)  # 25 hours
+            cache.set(cache_key, timeout=90000)  # 25 hours
             logger.info(
-                f"Queued reminder email for booking {booking.id} to {booking.user.email}."
+                f"Queued reminder email for booking {booking.id} to {recipient.email}."
             )
 
         except Exception as e:
