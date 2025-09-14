@@ -74,6 +74,8 @@ class BusinessContactInfoSerializer(serializers.ModelSerializer):
             "businessUnit",
             "latitude",
             "longitude",
+            "businessCity",
+            "businessState",
         ]
 
 
