@@ -383,6 +383,11 @@ class AdminClassDetailSerializer(AdminClassSerializer):
             "studentContactEmail",
             "studentContactPhone",
             "features",
+            "unit_number",
+            "coordinates",
+            "saltLocation",
+            "city",
+            "state",
         ]
         # Read-only fields are inherited, add new ones if needed
         read_only_fields = fields  # Keep detail view read-only for now
