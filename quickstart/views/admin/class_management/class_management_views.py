@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated, BasePermission
 from rest_framework.parsers import JSONParser, FormParser
+import json
 from django.db import transaction
 from django.db.models import (
     Q,
@@ -54,6 +55,8 @@ from quickstart.serializers.admin.class_management.class_management_serializers 
     ReassignmentSerializer,
     SubcategorySerializer,
 )
+
+from quickstart.serializers import ManagedClassOptionSerializer, ManagedClassSerializer
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +126,8 @@ class AdminClassViewSet(viewsets.ModelViewSet):
     def get_serializer_class(self):
         if self.action == "retrieve":
             return AdminClassDetailSerializer
+        if self.action in ["update", "partial_update"]:
+            return ManagedClassSerializer
         return AdminClassSerializer
 
     http_method_names = [
@@ -320,20 +325,97 @@ class AdminClassViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(instance, context={"request": request})
         return Response(serializer.data)
 
-    def partial_update(self, request, *args, **kwargs):
+    def update(self, request, *args, **kwargs):
         if not request.user.has_perm("quickstart.change_classesmain"):
             self.permission_denied(request, message="You cannot update class details.")
 
         instance = self.get_object()
-        serializer = self.get_serializer(
-            instance, data=request.data, partial=True, context={"request": request}
-        )
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        logger.info(
-            f"Class '{instance.title}' (ID: {instance.pk}) partially updated by Admin {request.user.email}"
-        )
+        request_data = request.data
 
+        # Use a transaction to ensure all or no changes are saved
+        with transaction.atomic():
+            # 1. Update the main ClassesMain instance fields
+            # We use a serializer for validation and basic field updates
+            serializer = self.get_serializer(instance, data=request_data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            updated_instance = serializer.save()
+            logger.info(
+                f"Admin {request.user.email} started updating Class '{instance.title}' (ID: {instance.pk})."
+            )
+
+            # 2. Handle Image Deletions
+            try:
+                delete_image_ids = json.loads(
+                    request_data.get("delete_image_ids", "[]")
+                )
+                if delete_image_ids:
+                    ClassImage.objects.filter(
+                        classId=instance, imageId__in=delete_image_ids
+                    ).delete()
+                    logger.info(
+                        f"Deleted {len(delete_image_ids)} images for class {instance.pk}."
+                    )
+            except (json.JSONDecodeError, TypeError):
+                logger.warning(
+                    f"Could not parse 'delete_image_ids' for class {instance.pk}."
+                )
+
+            # 3. Handle New Image Additions from S3 keys
+            try:
+                new_image_s3_keys = json.loads(
+                    request_data.get("new_image_s3_keys", "[]")
+                )
+                if new_image_s3_keys:
+                    images_to_create = [
+                        ClassImage(classId=instance, image=key, isCover=False)
+                        for key in new_image_s3_keys
+                    ]
+                    ClassImage.objects.bulk_create(images_to_create)
+                    logger.info(
+                        f"Added {len(new_image_s3_keys)} new images for class {instance.pk}."
+                    )
+            except (json.JSONDecodeError, TypeError):
+                logger.warning(
+                    f"Could not parse 'new_image_s3_keys' for class {instance.pk}."
+                )
+
+            # 4. Handle Cover Image Assignment
+            cover_image_id = request_data.get("cover_image_id")
+            if cover_image_id:
+                # Unset previous cover first
+                ClassImage.objects.filter(classId=instance, isCover=True).update(
+                    isCover=False
+                )
+                # Set the new cover
+                ClassImage.objects.filter(
+                    classId=instance, imageId=cover_image_id
+                ).update(isCover=True)
+                logger.info(
+                    f"Set image {cover_image_id} as cover for class {instance.pk}."
+                )
+
+            # 5. Handle ClassOption Update (assuming one option per class for now)
+            options_json_string = request_data.get("options")
+            if options_json_string:
+                try:
+                    options_data = json.loads(options_json_string)[
+                        0
+                    ]  # Get the first option object
+                    option_instance = instance.options.first()
+                    if option_instance:
+                        option_serializer = ManagedClassOptionSerializer(
+                            instance=option_instance, data=options_data, partial=True
+                        )
+                        option_serializer.is_valid(raise_exception=True)
+                        option_serializer.save()
+                        logger.info(f"Updated options for class {instance.pk}.")
+                except (json.JSONDecodeError, IndexError, TypeError) as e:
+                    logger.error(
+                        f"Error processing options update for class {instance.pk}: {e}"
+                    )
+                    raise ValidationError({"options": "Invalid options data provided."})
+
+        # After the transaction, return the fully updated object
         detail_serializer = AdminClassDetailSerializer(
             instance, context={"request": request}
         )
