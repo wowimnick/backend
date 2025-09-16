@@ -30,7 +30,7 @@ class BookingCreateSerializer(serializers.Serializer):
     notes = serializers.CharField(
         required=False, allow_blank=True, trim_whitespace=True
     )
-    participants = serializers.IntegerField(default=1, min_value=1, max_value=4)
+    participants = serializers.IntegerField(default=1, min_value=1)
     participant_details = serializers.ListField(
         child=serializers.DictField(),
         required=False,
@@ -146,6 +146,11 @@ class BookingCreateSerializer(serializers.Serializer):
                     raise DRFValidationError(
                         f"Not enough spots available for the session on {instance.date}. "
                         f"Requested: {participants_count}, Available: {instance.available_spots}."
+                    )
+                if participants_count < instance.min_participants:
+                    raise DRFValidationError(
+                        f"A minimum of {instance.min_participants} participant(s) are required to book "
+                        f"the session on {instance.date}. You requested {participants_count}."
                     )
 
         except ScheduleInstance.DoesNotExist:

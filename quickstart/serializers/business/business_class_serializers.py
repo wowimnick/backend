@@ -161,6 +161,7 @@ class ScheduleInstanceSerializer(serializers.ModelSerializer):
             "duration",
             "price",
             "max_participants",
+            "min_participants",
             "status",
             "cancellation_reason",
             "current_bookings_count",
@@ -211,13 +212,14 @@ class ScheduleSerializer(serializers.ModelSerializer):
             "duration",
             "price",
             "maxParticipants",
+            "minParticipants",
             "start_date",
             "end_date",
             "date",
             "allow_late_enrollment",
-            "booked_participants",  # Now an annotated field
-            "total_revenue",  # Now an annotated field
-            "has_confirmed_bookings",  # Now an annotated field
+            "booked_participants",
+            "total_revenue",
+            "has_confirmed_bookings",
             "created_at",
             "updated_at",
         ]
@@ -324,6 +326,17 @@ class ScheduleSerializer(serializers.ModelSerializer):
         if data.get("price", 0) < 0:
             raise serializers.ValidationError({"price": "Price cannot be negative."})
 
+        min_participants = data.get(
+            "minParticipants", getattr(self.instance, "minParticipants", 1)
+        )
+        max_participants = data.get(
+            "maxParticipants", getattr(self.instance, "maxParticipants", 1)
+        )
+        if min_participants > max_participants:
+            raise serializers.ValidationError(
+                "Minimum participants cannot exceed maximum capacity."
+            )
+
         return data
 
 
@@ -354,6 +367,8 @@ class BulkScheduleCreateSerializer(serializers.Serializer):
         required=True, max_digits=10, decimal_places=2, min_value=Decimal("0.00")
     )
     maxParticipants = serializers.IntegerField(required=True, min_value=1)
+    # --- FIX: Removed 'default=1' ---
+    minParticipants = serializers.IntegerField(required=True, min_value=1)
 
     def validate(self, data):
         request = self.context.get("request")
@@ -381,6 +396,11 @@ class BulkScheduleCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 {"start_date": "Bulk creation cannot start in the past."}
             )
+        if data.get("minParticipants", 1) > data.get("maxParticipants", 1):
+            raise serializers.ValidationError(
+                "Minimum participants cannot exceed maximum capacity."
+            )
+
         return data
 
 

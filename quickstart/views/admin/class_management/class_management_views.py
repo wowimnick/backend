@@ -49,7 +49,6 @@ from quickstart.models import (
 from quickstart.serializers.admin.class_management.class_management_serializers import (
     AdminClassSerializer,
     AdminClassDetailSerializer,
-    # AdminClassCreateSerializer, # Keep if used, commented out if not needed in this file context
     AdminClassCategorySerializer,
     AdminReviewSerializer,
     ReassignmentSerializer,
@@ -59,8 +58,6 @@ from quickstart.serializers.admin.class_management.class_management_serializers 
 from quickstart.serializers import ManagedClassOptionSerializer, ManagedClassSerializer
 
 logger = logging.getLogger(__name__)
-
-# --- Custom Permission Classes (Example - Adapt as needed) ---
 
 
 class CanAccessClassAdmin(BasePermission):

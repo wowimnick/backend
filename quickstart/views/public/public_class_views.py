@@ -736,6 +736,7 @@ class PublicScheduleViewSet(viewsets.ReadOnlyModelViewSet):
                         "instance_id": instance.id,
                         "price": str(instance.price),
                         "duration": instance.duration,
+                        "min_participants": instance.min_participants,
                     }
                 )
         return Response(availability_by_date)
