@@ -634,6 +634,20 @@ class BusinessInfo(models.Model):
 
     last_booking_date = models.DateTimeField(null=True, blank=True)
 
+    widget_api_key = models.UUIDField(
+        default=uuid.uuid4,
+        editable=False,
+        unique=True,
+        db_index=True,
+        help_text="Publicly-safe API key for the embeddable booking widget.",
+    )
+
+    allowed_widget_origins = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="A list of domains (e.g., 'www.mywebsite.com') where the widget is allowed to be embedded.",
+    )
+
     def __str__(self):
         return self.businessName
 
@@ -1927,7 +1941,7 @@ class Booking(models.Model):
     # Add a direct link to the Contact model for guests
     contact = models.ForeignKey(
         "Contact",
-        on_delete=models.SET_NULL,  # Use SET_NULL to preserve booking if a contact is deleted
+        on_delete=models.SET_NULL,
         related_name="bookings",
         null=True,
         blank=True,
