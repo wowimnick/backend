@@ -634,6 +634,20 @@ class BusinessInfo(models.Model):
 
     last_booking_date = models.DateTimeField(null=True, blank=True)
 
+    widget_api_key = models.UUIDField(
+        default=uuid.uuid4,
+        editable=False,
+        unique=True,
+        db_index=True,
+        help_text="Publicly-safe API key for the embeddable booking widget.",
+    )
+
+    allowed_widget_origins = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="A list of domains (e.g., 'www.mywebsite.com') where the widget is allowed to be embedded.",
+    )
+
     def __str__(self):
         return self.businessName
 
@@ -1584,6 +1598,7 @@ class Schedule(models.Model):
     duration = models.IntegerField(default=60)
     price = models.DecimalField(max_digits=10, decimal_places=2)
     maxParticipants = models.IntegerField(validators=[MinValueValidator(1)])
+    minParticipants = models.IntegerField(default=1, validators=[MinValueValidator(1)])
 
     # Only used for courses
     start_date = models.DateField(null=True, blank=True)
@@ -1626,7 +1641,8 @@ class Schedule(models.Model):
                         fields_to_update["price"] = self.price
                     if instance.max_participants != self.maxParticipants:
                         fields_to_update["max_participants"] = self.maxParticipants
-
+                    if instance.min_participants != self.minParticipants:
+                        fields_to_update["min_participants"] = self.minParticipants
                     if fields_to_update:
                         if instance.bookings.filter(status="confirmed").exists():
                             logger.warning(
@@ -1652,6 +1668,7 @@ class Schedule(models.Model):
                             duration=self.duration,
                             price=self.price,
                             max_participants=self.maxParticipants,
+                            min_participants=self.minParticipants,
                             status="scheduled",
                         )
                 except ScheduleInstance.MultipleObjectsReturned:
@@ -1676,6 +1693,9 @@ class Schedule(models.Model):
                         instance_changed = True
                     if instance.max_participants != self.maxParticipants:
                         instance.max_participants = self.maxParticipants
+                        instance_changed = True
+                    if instance.min_participants != self.minParticipants:
+                        instance.min_participants = self.minParticipants
                         instance_changed = True
 
                     if instance_changed:
@@ -1734,6 +1754,7 @@ class Schedule(models.Model):
                 time=self.time,
                 price=self.price,
                 max_participants=self.maxParticipants,
+                min_participants=self.minParticipants,
                 duration=self.duration,
             )
             instances.append(instance)
@@ -1763,6 +1784,13 @@ class Schedule(models.Model):
             if self.date and not self.day:
                 self.day = self.date.strftime("%a")
 
+        if self.minParticipants > self.maxParticipants:
+            raise ValidationError(
+                {
+                    "minParticipants": "Minimum participants cannot be greater than maximum capacity."
+                }
+            )
+
     class Meta:
         db_table = "schedules"
         ordering = ["day", "time"]
@@ -1783,6 +1811,7 @@ class ScheduleInstance(models.Model):
     duration = models.IntegerField(default=60)
     price = models.DecimalField(max_digits=10, decimal_places=2)
     max_participants = models.IntegerField()
+    min_participants = models.IntegerField(default=1)
 
     STATUS_CHOICES = [
         ("scheduled", "Scheduled"),
@@ -1912,7 +1941,7 @@ class Booking(models.Model):
     # Add a direct link to the Contact model for guests
     contact = models.ForeignKey(
         "Contact",
-        on_delete=models.SET_NULL,  # Use SET_NULL to preserve booking if a contact is deleted
+        on_delete=models.SET_NULL,
         related_name="bookings",
         null=True,
         blank=True,
@@ -1964,9 +1993,7 @@ class Booking(models.Model):
     )
 
     booking_date = models.DateTimeField(auto_now_add=True)
-    participants = models.IntegerField(
-        validators=[MinValueValidator(1), MaxValueValidator(4)]
-    )
+    participants = models.IntegerField(validators=[MinValueValidator(1)])
     participant_details = models.JSONField(
         default=list,
         blank=True,

@@ -777,6 +777,7 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
                 duration=schedule.duration,
                 price=schedule.price,
                 max_participants=schedule.maxParticipants,
+                min_participants=schedule.minParticipants,
                 status="scheduled",
             )
             logger.info(
@@ -838,6 +839,7 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
                             duration=data["duration"],
                             price=data["price"],
                             maxParticipants=data["maxParticipants"],
+                            minParticipants=data["minParticipants"],
                         )
                     )
             current_date += timedelta(days=1)
@@ -861,6 +863,7 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
                         duration=schedule.duration,
                         price=schedule.price,
                         max_participants=schedule.maxParticipants,
+                        min_participants=schedule.minParticipants,
                         status="scheduled",
                     )
                     for schedule in created_schedules
