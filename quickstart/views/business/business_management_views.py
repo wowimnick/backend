@@ -126,7 +126,7 @@ def generate_presigned_upload_url(request):
 
     # Security policy that S3 will enforce.
     conditions = [
-        ["content-length-range", 0, 10 * 1024 * 1024],
+        ["content-length-range", 0, 30 * 1024 * 1024],  # 30 MB
         ["starts-with", "$Content-Type", "image/"],
     ]
 
@@ -663,7 +663,7 @@ class BusinessDashboardViewSet(viewsets.ReadOnlyModelViewSet):
         return BusinessInfo.objects.filter(
             Q(owner=user)
             | Q(staff_members__user=user, staff_members__status="accepted")
-        ).first()
+        )
 
     @action(detail=True, methods=["get"])
     def dashboard_stats(self, request, pk=None):

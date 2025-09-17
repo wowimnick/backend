@@ -73,6 +73,7 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
             "state",
             "address",
             "zipCode",
+            "user_timezone",
             "avatar",
             "avatar_thumb_url",
             "avatar_medium_url",
