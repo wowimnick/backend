@@ -103,6 +103,14 @@ from quickstart.views import (
     GuestBookingCancellationView,
 )
 
+from quickstart.views.widget.widget_views import (
+    WidgetConfigView,
+    WidgetClassListView,
+    WidgetAvailabilityView,
+    CreateGuestPaymentIntentView,
+    GuestBookingCreateView,
+)
+
 # =============================================================================
 # ROUTER DEFINITIONS
 # =============================================================================
@@ -224,6 +232,18 @@ def class_id_redirect_view(request, class_id):
 # =============================================================================
 # URL PATTERNS
 # =============================================================================
+
+widget_urlpatterns = [
+    path("config/", WidgetConfigView.as_view(), name="widget-config"),
+    path("classes/", WidgetClassListView.as_view(), name="widget-classes"),
+    path("availability/", WidgetAvailabilityView.as_view(), name="widget-availability"),
+    path(
+        "payment-intent/",
+        CreateGuestPaymentIntentView.as_view(),
+        name="widget-payment-intent",
+    ),
+    path("bookings/", GuestBookingCreateView.as_view(), name="widget-create-booking"),
+]
 
 urlpatterns = [
     # --- Django Admin & 3rd Party Libs ---
@@ -413,5 +433,6 @@ urlpatterns = [
         AdminGeographicalDataView.as_view(),
         name="admin-geographical-data",
     ),
+    path("widget/v1/", include((widget_urlpatterns, "widget"), namespace="widget-v1")),
     path("health-check/", health_check, name="health-check"),
 ]

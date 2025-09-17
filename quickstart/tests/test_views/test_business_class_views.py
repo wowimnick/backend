@@ -42,6 +42,23 @@ def _get_and_assign_permission(role, perm_codename, model_class):
     role.permissions.add(permission)
 
 
+class PublicCategoryViewsTest(APITestCase):
+    """
+    [NEW] Tests for the public category endpoints.
+    """
+
+    def setUp(self):
+        self.cat1 = ClassCategoryFactory(name="Music")
+        self.subcat1 = ClassSubcategoryFactory(category=self.cat1, name="Guitar")
+        self.cat2 = ClassCategoryFactory(name="Art")
+        self.subcat2 = ClassSubcategoryFactory(category=self.cat2, name="Painting")
+        # This category has no classes and should not appear in the public list
+        self.empty_cat = ClassCategoryFactory(name="Empty")
+
+        # Assign a class to a subcategory to make it appear
+        ClassesMainFactory(category=self.cat1, subcategory=self.subcat1)
+
+
 class BusinessClassManagementTests(APITestCase):
     """
     Tests for a business owner managing their own classes, options, and schedules.
@@ -127,6 +144,28 @@ class BusinessClassManagementTests(APITestCase):
         self.assertEqual(self.own_class.title, "Updated Class Title")
         print("✅ PASSED: Owner can update their own class.")
 
+    def test_toggle_class_active_status(self):
+        """
+        [NEW TEST] PATCH /api/business/classes/{pk}/toggle-active/ - Owner can toggle class status.
+        """
+        print("\n--- Running: test_toggle_class_active_status ---")
+        self.own_class.status = "active"
+        self.own_class.save()
+        url = reverse(
+            "business-class-toggle-class-active", kwargs={"pk": self.own_class.pk}
+        )
+
+        # Deactivate
+        response_off = self.client.patch(url, {}, format="json")
+        self.assertEqual(response_off.status_code, status.HTTP_200_OK)
+        self.assertEqual(response_off.data["status"], "inactive")
+
+        # Reactivate
+        response_on = self.client.patch(url, {}, format="json")
+        self.assertEqual(response_on.status_code, status.HTTP_200_OK)
+        self.assertEqual(response_on.data["status"], "active")
+        print("✅ PASSED: Owner can successfully toggle a class's active status.")
+
     def test_list_only_own_classes(self):
         """
         GET /api/business/classes/ - A business owner should only see their own classes.
@@ -148,27 +187,6 @@ class BusinessClassManagementTests(APITestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         print("✅ PASSED: Owner correctly gets 404 for another business's class.")
-
-    def test_create_schedule_for_own_class_option(self):
-        """
-        POST /api/business/schedules/ - Owner can create a schedule for their class option.
-        """
-        print("\n--- Running: test_create_schedule_for_own_class_option ---")
-        url = reverse("business-schedule-list")
-        future_date = (timezone.now() + timedelta(days=30)).strftime("%Y-%m-%d")
-        data = {
-            "option": self.own_option.optionId,
-            "date": future_date,
-            "time": "18:00",
-            "duration": 90,
-            "price": "35.00",
-            "maxParticipants": 8,
-        }
-
-        response = self.client.post(url, data)
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
-        self.assertTrue(self.own_option.schedules.filter(date=future_date).exists())
-        print("✅ PASSED: Owner can create a new schedule.")
 
     def test_delete_class_cancels_future_bookings_and_sets_for_refund(self):
         """
@@ -229,4 +247,124 @@ class BusinessClassManagementTests(APITestCase):
 
         print(
             "✅ PASSED: Deleting a class correctly handles future bookings and refunds."
+        )
+
+
+class BusinessScheduleManagementTests(APITestCase):
+    def setUp(self):
+        self.owner = UserFactory()
+        business_role = RoleFactory(name="Business Test Role")
+        _get_and_assign_permission(business_role, "manage_own_classes", BusinessInfo)
+        self.owner.role = business_role
+        self.owner.save()
+        self.owner.user_permissions.add(*business_role.permissions.all())
+        self.business = BusinessInfoFactory(owner=self.owner)
+        self.klass = ClassesMainFactory(businessId=self.business)
+        self.option = ClassOptionFactory(classId=self.klass)
+        self.client.force_authenticate(user=self.owner)
+
+    def test_create_schedule_for_own_class_option(self):
+        """
+        POST /api/business/schedules/ - Owner can create a schedule for their class option.
+        """
+        print("\n--- Running: test_create_schedule_for_own_class_option ---")
+        url = reverse("business-schedule-list")
+        future_date = (timezone.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+        data = {
+            "option": self.option.optionId,
+            "date": future_date,
+            "time": "18:00",
+            "duration": 90,
+            "price": "35.00",
+            "maxParticipants": 8,
+        }
+
+        response = self.client.post(url, data)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertTrue(self.option.schedules.filter(date=future_date).exists())
+        print("✅ PASSED: Owner can create a new schedule.")
+
+    def test_bulk_create_schedules(self):
+        """
+        [NEW TEST] POST .../schedules/bulk-create/ - Can create multiple schedules at once.
+        """
+        print("\n--- Running: test_bulk_create_schedules ---")
+        url = reverse("business-schedule-bulk-create")
+        start_date = timezone.now().date() + timedelta(days=10)
+        end_date = start_date + timedelta(days=7)  # Create for a week
+        data = {
+            "option": self.option.pk,
+            "name": "Weekly Drop-in",
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "days_of_week": ["Mon", "Wed"],
+            "times": ["10:00", "14:00"],
+            "duration": 60,
+            "price": "25.00",
+            "maxParticipants": 15,
+        }
+        response = self.client.post(url, data, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["created_count"], 4)  # 2 days * 2 times
+        self.assertEqual(self.option.schedules.count(), 4)
+        print("✅ PASSED: Bulk schedule creation successful.")
+
+    def test_group_delete_schedules(self):
+        """
+        [NEW TEST] POST .../schedules/group-delete/ - Can delete a named group of schedules.
+        """
+        print("\n--- Running: test_group_delete_schedules ---")
+        ScheduleFactory.create_batch(5, option=self.option, name="Yoga Flow Tuesdays")
+        self.assertEqual(self.option.schedules.count(), 5)
+
+        url = reverse("business-schedule-group-delete")
+        data = {"option_id": self.option.pk, "name": "Yoga Flow Tuesdays"}
+        response = self.client.post(url, data, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["message"],
+            "Successfully deleted 5 schedules in group 'Yoga Flow Tuesdays'.",
+        )
+        self.assertEqual(self.option.schedules.count(), 0)
+        print("✅ PASSED: Group delete for schedules successful.")
+
+
+class BusinessScheduleInstanceManagementTests(APITestCase):
+    def setUp(self):
+        self.owner = UserFactory()
+        business_role = RoleFactory(name="Business Test Role")
+        _get_and_assign_permission(business_role, "manage_own_classes", BusinessInfo)
+        self.owner.role = business_role
+        self.owner.save()
+        self.owner.user_permissions.add(*business_role.permissions.all())
+        self.business = BusinessInfoFactory(owner=self.owner)
+        self.klass = ClassesMainFactory(businessId=self.business)
+        self.option = ClassOptionFactory(classId=self.klass)
+        self.client.force_authenticate(user=self.owner)
+
+    def test_business_can_cancel_future_instance(self):
+        """
+        [NEW TEST] POST .../schedule-instances/{pk}/cancel/ - Cancels instance and confirmed bookings.
+        """
+        print("\n--- Running: test_business_can_cancel_future_instance ---")
+        instance = ScheduleInstanceFactory(
+            schedule__option=self.option,
+            date=timezone.now().date() + timedelta(days=20),
+        )
+        booking = BookingFactory(schedule_instance=instance, status="confirmed")
+
+        url = reverse("business-schedule-instance-cancel", kwargs={"pk": instance.pk})
+        data = {"reason": "Instructor sick"}
+        response = self.client.post(url, data, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        instance.refresh_from_db()
+        booking.refresh_from_db()
+
+        self.assertEqual(instance.status, "cancelled")
+        self.assertEqual(booking.status, "cancelled")
+        self.assertIn("Session cancelled", booking.cancellation_reason)
+        print(
+            "✅ PASSED: Business successfully cancelled a future instance and its booking."
         )

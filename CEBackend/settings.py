@@ -141,6 +141,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "quickstart.middleware.HealthCheckMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "quickstart.middleware.DynamicCorsMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "quickstart.middleware.SeoStagingMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
