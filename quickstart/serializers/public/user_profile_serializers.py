@@ -32,6 +32,7 @@ class MyProfileSerializer(serializers.ModelSerializer):
             "state",
             "address",
             "zipCode",
+            "user_timezone",
             "avatar_thumb_url",
             "avatar_medium_url",
             "avatar_original_url",
