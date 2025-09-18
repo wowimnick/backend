@@ -214,11 +214,10 @@ def class_id_redirect_view(request, class_id):
     """
     klass = get_object_or_404(ClassesMain, pk=class_id)
     if klass.slug:
-        # Redirect to the frontend path, not a named DRF URL.
-        # This sends the browser to the correct React route.
+        # --- FIX: Redirect to the frontend's canonical PLURAL /classes/ path ---
         return redirect(f"/classes/{klass.slug}", permanent=True)
     # Fallback if a slug doesn't exist for some reason.
-    return redirect("/")  # Redirect to the homepage
+    return redirect("/")
 
 
 # =============================================================================
@@ -300,8 +299,6 @@ urlpatterns = [
         PublicClassViewSet.as_view({"post": "toggle_favorite"}),
         name="public-class-toggle-favorite",
     ),
-    # This URL pattern uses <str:pk> which the view's get_object method
-    # handles as either an ID or a slug. It points to the React ClassPage.
     path(
         "classes/<str:pk>/",
         PublicClassViewSet.as_view({"get": "retrieve"}),
@@ -313,7 +310,6 @@ urlpatterns = [
         PublicClassViewSet.as_view({"get": "list"}),
         name="public-class-list",
     ),
-    # --- ADDED: SEO Redirect for Old ID-based URLs ---
     # This path will capture old /classes/123 style URLs and permanently redirect them.
     # It will not be used by the React router.
     path("classes/<int:class_id>/", class_id_redirect_view, name="class-id-redirect"),
