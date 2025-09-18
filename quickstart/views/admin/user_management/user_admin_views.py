@@ -11,6 +11,8 @@ from django.contrib.auth import get_user_model
 from django.db.models import Count, Q
 from django.utils import timezone
 import logging
+from rest_framework_simplejwt.tokens import RefreshToken
+from django.conf import settings
 
 from quickstart.models import AuditLog, Role, Booking  # Import Role
 from quickstart.serializers.admin.user_management.admin_serializers import (
@@ -19,6 +21,8 @@ from quickstart.serializers.admin.user_management.admin_serializers import (
     AdminUserCreateUpdateSerializer,
     AdminUserBookingSerializer,
 )
+
+from quickstart.serializers import CustomUserDetailsSerializer
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -60,6 +64,22 @@ def user_can_manage(requesting_user, target_user):
 
 
 # --- Custom Permission Classes ---
+
+
+class CanImpersonateUser(BasePermission):
+    """
+    Checks if the user is a Super Admin.
+    """
+
+    def has_permission(self, request, view):
+        # Ensure the user is authenticated, has a role, and that role is 'Super Admin'.
+        return (
+            request.user
+            and request.user.is_authenticated
+            and hasattr(request.user, "role")
+            and request.user.role is not None
+            and request.user.role.name == "Super Admin"
+        )
 
 
 class CanAccessUserAdmin(BasePermission):
@@ -406,7 +426,76 @@ class UserAdminViewSet(viewsets.ModelViewSet):
         self.perform_destroy(instance)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
-    # Use permission_classes on @action for cleaner checks
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[CanImpersonateUser],
+        url_path="impersonate",
+        url_name="impersonate",
+    )
+    def impersonate(self, request, pk=None):
+        """
+        Allows an admin to log in as another user.
+        """
+        admin_user = request.user
+        target_user = self.get_object()
+
+        if not target_user.is_active:
+            return Response(
+                {"detail": "Cannot impersonate an inactive user."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Log the impersonation action for security auditing
+        try:
+            AuditLog.objects.create(
+                user=admin_user,
+                user_email=admin_user.email,
+                action="user_impersonate_start",
+                details=f"Admin '{admin_user.email}' started impersonating user '{target_user.email}'.",
+                target_user=target_user,
+            )
+        except Exception as e:
+            # Log error but don't block the feature
+            print(f"Failed to create impersonation audit log: {e}")
+
+        # Generate new tokens for the target user
+        refresh = RefreshToken.for_user(target_user)
+
+        # Add special claims for traceability
+        refresh["is_impersonated"] = True
+        refresh["impersonator_id"] = admin_user.userId
+        refresh["impersonator_email"] = admin_user.email
+
+        user_serializer = CustomUserDetailsSerializer(target_user)
+
+        response_data = {
+            "user": user_serializer.data,
+        }
+
+        # Create the response
+        response = Response(response_data, status=status.HTTP_200_OK)
+
+        # Set the cookies just like in CustomTokenObtainPairView
+        response.set_cookie(
+            settings.SIMPLE_JWT["AUTH_COOKIE"],
+            str(refresh.access_token),
+            max_age=settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"].total_seconds(),
+            httponly=True,
+            samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],
+            secure=settings.SIMPLE_JWT["AUTH_COOKIE_SECURE"],
+        )
+        response.set_cookie(
+            settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"],
+            str(refresh),
+            max_age=settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds(),
+            httponly=True,
+            samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],
+            secure=settings.SIMPLE_JWT["AUTH_COOKIE_SECURE"],
+        )
+
+        return response
+
     @action(
         detail=True,
         methods=["post"],

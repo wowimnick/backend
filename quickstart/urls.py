@@ -229,6 +229,7 @@ urlpatterns = [
     # --- Django Admin & 3rd Party Libs ---
     path("admin/silk/", include("silk.urls", namespace="admin_silk")),
     path("admin/panel/", admin.site.urls),
+    path("impersonate/", include("impersonate.urls")),
     path("accounts/", include("allauth.urls")),
     # --- Routers ---
     path("admin/", include(admin_router.urls)),
