@@ -115,6 +115,7 @@ INSTALLED_APPS = [
     "django.contrib.sitemaps",
     "django.contrib.gis",
     "rest_framework_gis",
+    "impersonate",
     "corsheaders",
     "rest_framework",
     "rest_framework.authtoken",
@@ -151,6 +152,7 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "allauth.account.middleware.AccountMiddleware",
     "quickstart.middleware.JWTCookieMiddleware",
+    "impersonate.middleware.ImpersonateMiddleware",
     "quickstart.monitoring.middleware.MetricsMiddleware",
 ]
 
