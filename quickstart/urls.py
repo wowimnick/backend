@@ -7,6 +7,7 @@ from dj_rest_auth.registration.views import VerifyEmailView, ResendEmailVerifica
 from dj_rest_auth.views import PasswordChangeView
 
 # --- Model import for the new redirect view ---
+from quickstart.views.widget.widget_config_views import WidgetConfigManagementView
 from quickstart.views.admin.payout_management.admin_payout_views import (
     AdminPayoutViewSet,
 )
@@ -403,6 +404,11 @@ urlpatterns = [
     ),
     path("business/register/", register_business, name="business-register"),
     path("my-businesses/", get_user_businesses, name="my-businesses"),
+    path(
+        "my-business/widget-config/",
+        WidgetConfigManagementView.as_view(),
+        name="my-business-widget-config",
+    ),
     path(
         "my-business/profile/",
         MyBusinessProfileView.as_view(),

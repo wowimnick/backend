@@ -12,6 +12,8 @@ from quickstart.models import (
     ScheduleInstance,
     Contact,
     Booking,
+    ClassImage,
+    Schedule,
 )
 
 logger = logging.getLogger(__name__)
@@ -27,14 +29,31 @@ class WidgetBusinessConfigSerializer(serializers.ModelSerializer):
     This is a READ-ONLY serializer.
     """
 
+    # CRITICAL CHANGE: This sources data from the `widget_config` JSONField on the model
+    # but presents it as `theme` in the API response, matching what the frontend expects.
+    theme = serializers.JSONField(source="widget_config")
+
     class Meta:
         model = BusinessInfo
         fields = [
             "businessName",
             "business_timezone",
             "currency",
-            # You can add styling fields here in the future, e.g.:
-            # 'widget_primary_color',
+            "theme",
+        ]
+        read_only_fields = fields
+
+
+class WidgetScheduleSerializer(serializers.ModelSerializer):
+    """Serializer for publicly displaying basic schedule info for summary."""
+
+    class Meta:
+        model = Schedule
+        fields = [
+            "id",
+            "duration",
+            "price",
+            "maxParticipants",
         ]
         read_only_fields = fields
 
@@ -45,14 +64,37 @@ class WidgetClassOptionSerializer(serializers.ModelSerializer):
     READ-ONLY.
     """
 
+    schedules = WidgetScheduleSerializer(many=True, read_only=True)
+
     class Meta:
         model = ClassOption
         fields = [
             "optionId",
             "booking_type",
             "level",
+            "schedules",
         ]
         read_only_fields = fields
+
+
+class WidgetClassImageSerializer(serializers.ModelSerializer):
+    """
+    Serializer for the class image, providing the necessary URL for the frontend.
+    """
+
+    thumbnail_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ClassImage
+        fields = ["thumbnail_url"]
+
+    def get_thumbnail_url(self, obj):
+        if obj.image and hasattr(obj.image, "url"):
+            request = self.context.get("request")
+            if request:
+                return request.build_absolute_uri(obj.image.url)
+            return obj.image.url  # Fallback
+        return None
 
 
 class WidgetClassSerializer(serializers.ModelSerializer):
@@ -62,6 +104,7 @@ class WidgetClassSerializer(serializers.ModelSerializer):
     """
 
     options = WidgetClassOptionSerializer(many=True, read_only=True)
+    images = WidgetClassImageSerializer(many=True, read_only=True)
 
     class Meta:
         model = ClassesMain
@@ -70,6 +113,7 @@ class WidgetClassSerializer(serializers.ModelSerializer):
             "title",
             "description",
             "options",
+            "images",
         ]
         read_only_fields = fields
 
@@ -98,7 +142,6 @@ class WidgetScheduleInstanceSerializer(serializers.ModelSerializer):
 
     def get_available_spots(self, obj):
         # This relies on the view having already calculated the current occupancy.
-        # This is a safe way to display the result of the view's logic.
         return obj.available_spots
 
 
@@ -145,7 +188,6 @@ class GuestBookingCreateSerializer(serializers.Serializer):
         """
         # 1. Validate the Schedule Instance
         try:
-            # The view should pass the business context to the serializer
             business = self.context["request"].business_context
             instance = ScheduleInstance.objects.get(
                 id=data["schedule_instance_id"],
@@ -174,8 +216,6 @@ class GuestBookingCreateSerializer(serializers.Serializer):
             )
 
         # 3. Validate participant count against what's available
-        # Note: The ultimate race-condition check is the select_for_update() in the view,
-        # but this validation provides a faster failure for the user.
         if not instance.can_accommodate(data["participants"]):
             raise DRFValidationError(
                 {

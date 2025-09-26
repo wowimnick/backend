@@ -9,7 +9,9 @@ from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, generics
-from rest_framework.exceptions import ValidationError, NotFound, PermissionDenied
+from rest_framework.exceptions import ValidationError, NotFound
+from django.db.models import Q, Count, Sum, Subquery, OuterRef, IntegerField, Prefetch
+from django.db.models.functions import Coalesce
 
 from quickstart.models import (
     BusinessInfo,
@@ -18,10 +20,10 @@ from quickstart.models import (
     Booking,
     Contact,
     Payment,
+    ClassImage,
     ClassOption,
 )
 from quickstart.serializers.widget.widget_serializers import (
-    # We will refine these serializers as needed
     WidgetBusinessConfigSerializer,
     WidgetClassSerializer,
     WidgetScheduleInstanceSerializer,
@@ -35,23 +37,16 @@ logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
 
-# This permission class is now much simpler, relying on the middleware
 class IsValidWidgetRequest(BasePermission):
     message = "Invalid or missing Business ID."
 
     def has_permission(self, request, view):
-        # The middleware has already done the lookup and attached the business.
-        # If it's not there, the request is invalid.
         if not request.business_context:
             return False
-        # Also check if the business is active and verified
         return (
             request.business_context.isActive
             and request.business_context.verificationStatus == "verified"
         )
-
-
-# --- VIEWS ---
 
 
 class WidgetConfigView(generics.RetrieveAPIView):
@@ -76,6 +71,9 @@ class WidgetClassListView(generics.ListAPIView):
     def get_queryset(self):
         return ClassesMain.objects.filter(
             businessId=self.request.business_context, status="active"
+        ).prefetch_related(
+            "options__schedules",
+            Prefetch("images", queryset=ClassImage.objects.order_by("-isCover")),
         )
 
 
@@ -83,19 +81,89 @@ class WidgetAvailabilityView(APIView):
     permission_classes = [IsValidWidgetRequest]
 
     def get(self, request, *args, **kwargs):
-        # This view remains largely the same, its job is just to report availability
+        logger.info(f"Widget availability request: {request.query_params}")
+
         option_id = request.query_params.get("option_id")
         start_date = request.query_params.get("start_date")
         end_date = request.query_params.get("end_date")
+
         if not all([option_id, start_date, end_date]):
             raise ValidationError(
                 "`option_id`, `start_date`, and `end_date` are required."
             )
-        instances = ScheduleInstance.get_available_in_range(
-            option_id, start_date, end_date
+
+        try:
+            # Verify the option belongs to this business
+            option = ClassOption.objects.get(
+                optionId=option_id,
+                classId__businessId=request.business_context,
+                classId__status="active",
+            )
+        except ClassOption.DoesNotExist:
+            logger.error(
+                f"ClassOption {option_id} not found for business {request.business_context.businessId}"
+            )
+            raise ValidationError("Invalid option_id for this business.")
+
+        # Correctly defined subquery to calculate the sum of confirmed participants.
+        # This groups bookings by the schedule instance, annotates the sum, and selects that value.
+        confirmed_participants_subquery = (
+            Booking.objects.filter(schedule_instance=OuterRef("pk"), status="confirmed")
+            .values("schedule_instance")
+            .annotate(total=Sum("participants"))
+            .values("total")
         )
-        serializer = WidgetScheduleInstanceSerializer(instances, many=True)
-        return Response(serializer.data)
+
+        # Get schedule instances with current booking counts
+        instances = (
+            ScheduleInstance.objects.filter(
+                schedule__option=option,
+                date__range=[start_date, end_date],
+                status="scheduled",
+            )
+            .annotate(
+                # Use Coalesce to handle instances with no bookings (returns 0 instead of None)
+                confirmed_participants=Coalesce(
+                    Subquery(
+                        confirmed_participants_subquery, output_field=IntegerField()
+                    ),
+                    0,
+                )
+            )
+            .select_related("schedule")
+            .order_by("date", "time")
+        )
+
+        logger.info(
+            f"Found {instances.count()} schedule instances for option {option_id}"
+        )
+
+        # Group by date
+        availability_by_date = {}
+        for instance in instances:
+            confirmed_participants = instance.confirmed_participants or 0
+            available_spots = max(0, instance.max_participants - confirmed_participants)
+
+            # Only include instances with available spots
+            if available_spots > 0:
+                date_str = instance.date.isoformat()
+                if date_str not in availability_by_date:
+                    availability_by_date[date_str] = []
+
+                availability_by_date[date_str].append(
+                    {
+                        "instance_id": instance.id,
+                        "time": instance.time.strftime("%H:%M:%S"),
+                        "duration": instance.duration,
+                        "price": str(instance.price),
+                        "max_participants": instance.max_participants,
+                        "available_spots": available_spots,
+                        "min_participants": instance.min_participants,
+                    }
+                )
+
+        logger.info(f"Returning availability for {len(availability_by_date)} dates")
+        return Response(availability_by_date)
 
 
 class CreateGuestPaymentIntentView(APIView):
@@ -117,7 +185,7 @@ class CreateGuestPaymentIntentView(APIView):
         business = request.business_context
         try:
             instance = ScheduleInstance.objects.select_related(
-                "schedule__option__classId__partner_tier"
+                "schedule__option__classId__businessId__partner_tier"
             ).get(id=instance_id, schedule__option__classId__businessId=business)
         except ScheduleInstance.DoesNotExist:
             raise NotFound("The selected session is not available.")
@@ -127,35 +195,25 @@ class CreateGuestPaymentIntentView(APIView):
                 f"Not enough spots available. Only {instance.available_spots} left."
             )
 
-        # --- PRODUCTION-READY FEE CALCULATION ---
-        # All calculations use Decimal for financial accuracy.
-
+        # Fee calculation
         subtotal = instance.price * Decimal(participants)
-
-        # 1. Platform Fee (6% of subtotal)
-        # Use the partner_tier if it exists, otherwise default to a higher rate.
         fee_percentage = (
             business.partner_tier.fee_percentage
             if business.partner_tier
-            else Decimal("6.00")
+            else Decimal("13.00")  # Use a default if no tier is set
         )
         platform_fee = (subtotal * (fee_percentage / Decimal("100"))).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP
         )
 
-        # 2. Tax (13% HST on the subtotal)
+        # Tax calculation
         hst_rate = Decimal("0.13")
         tax_on_subtotal = (subtotal * hst_rate).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP
         )
 
-        # 3. Grand Total charged to the customer
         total_amount_charged = subtotal + tax_on_subtotal
-
-        # 4. Final net amount that will be paid out to the business
         net_payout_amount = subtotal - platform_fee
-
-        # Convert to cents for Stripe API
         final_amount_cents = int(total_amount_charged * 100)
 
         try:
@@ -163,8 +221,7 @@ class CreateGuestPaymentIntentView(APIView):
                 amount=final_amount_cents,
                 currency=business.currency.lower(),
                 automatic_payment_methods={"enabled": True},
-                transfer_group=f"booking_widget_{uuid.uuid4()}",  # For grouping transfers
-                # CRITICAL: Store our calculated breakdown in metadata for data integrity.
+                transfer_group=f"booking_widget_{uuid.uuid4()}",
                 metadata={
                     "business_id": business.businessId,
                     "schedule_instance_id": instance.id,
@@ -203,7 +260,6 @@ class GuestBookingCreateView(generics.CreateAPIView):
         business = request.business_context
 
         try:
-            # 1. Retrieve and verify the Payment Intent from Stripe
             pi = stripe.PaymentIntent.retrieve(data["payment_intent_id"])
             if pi.status != "succeeded":
                 raise ValidationError(
@@ -214,24 +270,20 @@ class GuestBookingCreateView(generics.CreateAPIView):
             instance_id = int(metadata["schedule_instance_id"])
             participants = int(metadata["participants"])
 
-            # --- ATOMIC TRANSACTION & RACE CONDITION LOCK ---
             with transaction.atomic():
                 instance = ScheduleInstance.objects.select_for_update().get(
                     id=instance_id
                 )
 
                 if not instance.can_accommodate(participants):
-                    # Race condition detected! Someone booked while this user was paying.
                     logger.error(
-                        f"RACE CONDITION: Overbooking attempt on instance {instance.id}. PI: {pi.id}. Triggering refund."
+                        f"RACE CONDITION: Overbooking attempt on instance {instance.id}. PI: {pi.id}"
                     )
-                    # We have their money but can't provide the service. We MUST refund.
                     stripe.Refund.create(payment_intent=pi.id)
                     raise ValidationError(
-                        "Sorry, the last spots were booked just as you were paying. Your card has not been charged (or has been automatically refunded)."
+                        "Sorry, the last spots were booked just as you were paying. Your card has not been charged."
                     )
 
-                # 2. Get or Create Guest Contact Record
                 contact, _ = Contact.objects.get_or_create(
                     business=business,
                     email__iexact=data["email"],
@@ -243,7 +295,6 @@ class GuestBookingCreateView(generics.CreateAPIView):
                     },
                 )
 
-                # 3. Create the Booking Record
                 class_option = instance.schedule.option
                 booking = Booking.objects.create(
                     contact=contact,
@@ -260,7 +311,6 @@ class GuestBookingCreateView(generics.CreateAPIView):
                     cancellation_token=uuid.uuid4(),
                 )
 
-                # 4. Create the Authoritative Payment Record from Metadata
                 Payment.objects.create(
                     booking=booking,
                     stripe_payment_intent_id=pi.id,
