@@ -3,6 +3,9 @@
 from rest_framework import serializers
 from quickstart.models import BusinessInfo
 
+# Define default domains that should always be allowed but hidden from the user UI.
+DEFAULT_WIDGET_DOMAINS = {"classeasily.com", "staging.classeasily.com"}
+
 
 class BusinessWidgetConfigSerializer(serializers.ModelSerializer):
     """
@@ -24,11 +27,15 @@ class BusinessWidgetConfigSerializer(serializers.ModelSerializer):
         # Handle allowed_widget_origins separately
         if "allowed_widget_origins" in validated_data:
             origins_string = validated_data.pop("allowed_widget_origins")
-            instance.allowed_widget_origins = [
+            # Get user-defined domains from the input string
+            user_origins = {
                 origin.strip()
                 for origin in origins_string.split("\n")
                 if origin.strip()
-            ]
+            }
+            # Combine user domains with our default domains, ensuring no duplicates.
+            all_origins = sorted(list(user_origins.union(DEFAULT_WIDGET_DOMAINS)))
+            instance.allowed_widget_origins = all_origins
 
         # All other fields passed in validated_data are part of the widget_config
         # We merge them with the existing config to perform a partial update

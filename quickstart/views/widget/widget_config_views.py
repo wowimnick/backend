@@ -11,6 +11,9 @@ from quickstart.serializers.widget.widget_config_serializer import (
     BusinessWidgetConfigSerializer,
 )
 
+# Define default domains that should always be allowed but hidden from the user UI.
+DEFAULT_WIDGET_DOMAINS = {"classeasily.com", "staging.classeasily.com"}
+
 
 class WidgetConfigManagementView(APIView):
     """
@@ -38,9 +41,14 @@ class WidgetConfigManagementView(APIView):
 
         # Combine widget config and allowed origins into a single config object for the frontend
         config_data = business.widget_config or {}
-        config_data["allowed_widget_origins"] = "\n".join(
-            business.allowed_widget_origins or []
-        )
+
+        # Get user-configured domains by filtering out the default ones for display.
+        user_configured_origins = [
+            origin
+            for origin in (business.allowed_widget_origins or [])
+            if origin not in DEFAULT_WIDGET_DOMAINS
+        ]
+        config_data["allowed_widget_origins"] = "\n".join(user_configured_origins)
 
         response_data = {"classes": list(classes), "config": config_data}
         return Response(response_data, status=status.HTTP_200_OK)
