@@ -7,6 +7,7 @@ from dj_rest_auth.registration.views import VerifyEmailView, ResendEmailVerifica
 from dj_rest_auth.views import PasswordChangeView
 
 # --- Model import for the new redirect view ---
+from quickstart.views.widget.widget_config_views import WidgetConfigManagementView
 from quickstart.views.admin.payout_management.admin_payout_views import (
     AdminPayoutViewSet,
 )
@@ -101,6 +102,14 @@ from quickstart.views import (
     ValidateInvitationTokenView,
     ContactImportViewSet,
     GuestBookingCancellationView,
+)
+
+from quickstart.views.widget.widget_views import (
+    WidgetConfigView,
+    WidgetClassListView,
+    WidgetAvailabilityView,
+    CreateGuestPaymentIntentView,
+    GuestBookingCreateView,
 )
 
 # =============================================================================
@@ -223,6 +232,18 @@ def class_id_redirect_view(request, class_id):
 # =============================================================================
 # URL PATTERNS
 # =============================================================================
+
+widget_urlpatterns = [
+    path("config/", WidgetConfigView.as_view(), name="widget-config"),
+    path("classes/", WidgetClassListView.as_view(), name="widget-classes"),
+    path("availability/", WidgetAvailabilityView.as_view(), name="widget-availability"),
+    path(
+        "payment-intent/",
+        CreateGuestPaymentIntentView.as_view(),
+        name="widget-payment-intent",
+    ),
+    path("bookings/", GuestBookingCreateView.as_view(), name="widget-create-booking"),
+]
 
 urlpatterns = [
     # --- Django Admin & 3rd Party Libs ---
@@ -381,6 +402,11 @@ urlpatterns = [
     path("business/register/", register_business, name="business-register"),
     path("my-businesses/", get_user_businesses, name="my-businesses"),
     path(
+        "my-business/widget-config/",
+        WidgetConfigManagementView.as_view(),
+        name="my-business-widget-config",
+    ),
+    path(
         "my-business/profile/",
         MyBusinessProfileView.as_view(),
         name="my-business-profile",
@@ -410,5 +436,6 @@ urlpatterns = [
         AdminGeographicalDataView.as_view(),
         name="admin-geographical-data",
     ),
+    path("widget/v1/", include((widget_urlpatterns, "widget"), namespace="widget-v1")),
     path("health-check/", health_check, name="health-check"),
 ]

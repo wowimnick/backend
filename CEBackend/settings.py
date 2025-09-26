@@ -142,6 +142,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "quickstart.middleware.HealthCheckMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "quickstart.middleware.DynamicCorsMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "quickstart.middleware.SeoStagingMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -291,10 +292,10 @@ REST_FRAMEWORK = {
         "rest_framework.throttling.UserRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": {
-        "anon": "20/minute",
+        "anon": "40/minute",
         "user": "100/minute",
         "burst": "150/minute",
-        "sensitive": "5/minute",
+        "sensitive": "15/minute",
         "chat": "30/minute",
     },
 }

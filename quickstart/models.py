@@ -605,6 +605,12 @@ class BusinessInfo(models.Model):
     termsAccepted = models.BooleanField(default=False)
     privacyAccepted = models.BooleanField(default=False)
 
+    widget_config = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Custom theming for the booking widget, e.g., {'primaryColor': '#0000FF', 'fontFamily': 'Georgia, serif'}.",
+    )
+
     # --- Additional Useful Fields ---
     social_media_links = models.JSONField(
         default=dict,

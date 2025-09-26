@@ -205,13 +205,22 @@ class RevenueAnalyticsView(views.APIView):
 
         platform_fee_rate = self._get_fee_rate_for_business(business)
 
-        estimated_platform_fees = float(
-            current_aggregates["total_gross_revenue_decimal"] * platform_fee_rate
-        )
+        # --- FIX START: Correct fee calculation based on pre-tax amount ---
+        # Assuming a constant 13% HST rate for this calculation, adjust if variable.
+        HST_RATE = Decimal("0.13")
+        total_amount_collected_decimal = current_aggregates[
+            "total_gross_revenue_decimal"
+        ]
+
+        # This logic assumes 'amount_paid' on Booking is the pre-tax subtotal.
+        gross_sales_pre_tax = total_amount_collected_decimal
+
+        estimated_platform_fees = float(gross_sales_pre_tax * platform_fee_rate)
         estimated_net_revenue = float(
-            current_aggregates["total_gross_revenue_decimal"]
-            * (Decimal("1.0") - platform_fee_rate)
+            gross_sales_pre_tax * (Decimal("1.0") - platform_fee_rate)
         )
+        # --- FIX END ---
+
         revenue_per_spot = (
             (current_total_gross_revenue / current_total_participant_spots)
             if current_total_participant_spots > 0

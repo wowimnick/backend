@@ -9,12 +9,39 @@ from quickstart.models import (
     BusinessInfo,
     Discount,
     BusinessStaff,
-)  # MODIFIED: Import BusinessStaff
+)
 
 logger = logging.getLogger(__name__)
 
 
-# MODIFIED: Renamed class for clarity and updated logic.
+class IsWidgetRequest(BasePermission):
+    """
+    Checks if a request is from the widget by validating the X-Business-ID header.
+    If valid, it attaches the business object to the request for easy access in views.
+    """
+
+    message = "Invalid or missing Business ID."
+
+    def has_permission(self, request, view):
+        # The widget_api_key (UUID) will be sent in this header
+        business_key = request.headers.get("X-Business-ID")
+        if not business_key:
+            return False
+
+        try:
+            # Find the business that is active and verified
+            business = BusinessInfo.objects.get(
+                widget_api_key=business_key,
+                isActive=True,
+                verificationStatus="verified",
+            )
+            # Attach the business context to the request for the view to use
+            request.business_context = business
+            return True
+        except (BusinessInfo.DoesNotExist, ValueError):
+            return False
+
+
 class IsBusinessMember(BasePermission):
     """
     Allows access only to users who are the owner of a business or an accepted staff member.

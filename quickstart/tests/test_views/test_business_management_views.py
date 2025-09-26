@@ -17,6 +17,7 @@ from quickstart.tests.factories import (
     RoleFactory,
     ClassesMainFactory,
     ClassOptionFactory,
+    ClassCategoryFactory,
 )
 
 
@@ -28,6 +29,47 @@ def _get_and_assign_permission(role, perm_codename, model_class):
         content_type=content_type,
     )
     role.permissions.add(permission)
+
+
+class PresignedURLTests(APITestCase):
+    def setUp(self):
+        self.user = UserFactory()
+        self.client.force_authenticate(user=self.user)
+        self.url = reverse("generate-upload-url")
+
+    def test_generate_presigned_url_for_valid_type(self):
+        """
+        [NEW TEST] POST /api/business/generate-upload-url/ - Should succeed for a valid uploadType.
+        """
+        print("\n--- Running: test_generate_presigned_url_for_valid_type ---")
+        data = {
+            "fileName": "avatar.jpg",
+            "contentType": "image/jpeg",
+            "uploadType": "class_image",
+        }
+        response = self.client.post(self.url, data, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("url", response.data)
+        self.assertIn("fields", response.data)
+        self.assertTrue(response.data["s3_key"].startswith("originals/class_images/"))
+        print("✅ PASSED: Successfully generated presigned URL for a valid type.")
+
+    def test_generate_presigned_url_for_invalid_type_fails(self):
+        """
+        [NEW TEST] POST .../generate-upload-url/ - Should fail for an invalid uploadType.
+        """
+        print("\n--- Running: test_generate_presigned_url_for_invalid_type_fails ---")
+        data = {
+            "fileName": "document.pdf",
+            "contentType": "application/pdf",
+            "uploadType": "tax_document",  # Not in the allowed list
+        }
+        response = self.client.post(self.url, data, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Invalid uploadType", response.data["error"])
+        print(
+            "✅ PASSED: Correctly rejected presigned URL request for an invalid type."
+        )
 
 
 class BusinessManagementTests(APITestCase):
@@ -229,6 +271,36 @@ class BusinessManagementTests(APITestCase):
         self.assertIn("setup_progress", response.data)
         print("✅ PASSED: Owner can view their business dashboard.")
 
+    def test_dashboard_stats_actions(self):
+        """
+        [NEW TEST] GET /api/business-stats/{pk}/... - Test the dashboard stats actions.
+        """
+        print("\n--- Running: test_dashboard_stats_actions ---")
+        business = BusinessInfoFactory(owner=self.user)
+        # Add the required permission for these specific endpoints
+        permission = Permission.objects.get(codename="access_business_dashboard")
+        self.user.user_permissions.add(permission)
+        self.client.force_authenticate(user=self.user)
+
+        # Test dashboard_stats
+        url_stats = reverse("business-stats-dashboard", kwargs={"pk": business.pk})
+        res_stats = self.client.get(url_stats)
+        self.assertEqual(res_stats.status_code, status.HTTP_200_OK)
+        self.assertIn("total_students", res_stats.data)
+
+        # Test revenue_over_time
+        url_revenue = reverse("business-stats-revenue", kwargs={"pk": business.pk})
+        res_revenue = self.client.get(url_revenue)
+        self.assertEqual(res_revenue.status_code, status.HTTP_200_OK)
+        self.assertIsInstance(res_revenue.data, list)
+
+        # Test class_performance
+        url_perf = reverse("business-stats-class-perf", kwargs={"pk": business.pk})
+        res_perf = self.client.get(url_perf)
+        self.assertEqual(res_perf.status_code, status.HTTP_200_OK)
+        self.assertIsInstance(res_perf.data, list)
+        print("✅ PASSED: Dashboard stats-related endpoints are working.")
+
     def test_regular_user_cannot_view_dashboard(self):
         """
         GET /api/my-business/overview/ - A regular user cannot access the dashboard.
@@ -295,7 +367,10 @@ class BusinessDiscountManagementTests(APITestCase):
         self.user.user_permissions.add(*business_role.permissions.all())
 
         self.business = BusinessInfoFactory(owner=self.user)
-        self.klass = ClassesMainFactory(businessId=self.business)
+        self.category = ClassCategoryFactory()
+        self.klass = ClassesMainFactory(
+            businessId=self.business, category=self.category
+        )
         self.option = ClassOptionFactory(classId=self.klass)
         self.client.force_authenticate(user=self.user)
         self.url = reverse("business-discount-list")
@@ -321,6 +396,38 @@ class BusinessDiscountManagementTests(APITestCase):
             Discount.objects.filter(business=self.business, code="SUMMER20").exists()
         )
         print("✅ PASSED: Business owner can create a percentage coupon.")
+
+    def test_owner_can_toggle_discount_active_status(self):
+        """
+        [NEW TEST] PATCH .../discounts/{pk}/toggle-active/ - An owner can toggle the active status.
+        """
+        print("\n--- Running: test_owner_can_toggle_discount_active_status ---")
+        discount = Discount.objects.create(
+            business=self.business,
+            name="Toggle Me",
+            code="TOGGLE",
+            discount_type="fixed_amount",
+            value=Decimal("5.00"),
+            is_active=True,
+            scope="class",
+            target_class=self.klass,
+        )
+        url = reverse("business-discount-toggle-active", kwargs={"pk": discount.pk})
+
+        # 1. Deactivate
+        response_off = self.client.patch(url, {}, format="json")
+        self.assertEqual(response_off.status_code, status.HTTP_200_OK)
+        self.assertFalse(response_off.data["is_active"])
+        discount.refresh_from_db()
+        self.assertFalse(discount.is_active)
+
+        # 2. Reactivate
+        response_on = self.client.patch(url, {}, format="json")
+        self.assertEqual(response_on.status_code, status.HTTP_200_OK)
+        self.assertTrue(response_on.data["is_active"])
+        discount.refresh_from_db()
+        self.assertTrue(discount.is_active)
+        print("✅ PASSED: Owner can successfully toggle a discount's active status.")
 
     def test_customer_can_validate_valid_coupon(self):
         """
