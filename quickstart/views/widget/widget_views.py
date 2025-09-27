@@ -197,11 +197,8 @@ class CreateGuestPaymentIntentView(APIView):
 
         # Fee calculation
         subtotal = instance.price * Decimal(participants)
-        fee_percentage = (
-            business.partner_tier.fee_percentage
-            if business.partner_tier
-            else Decimal("13.00")  # Use a default if no tier is set
-        )
+        # MODIFICATION: For the widget, a fixed 6% fee is applied, overriding any partner tier.
+        fee_percentage = Decimal("6.00")
         platform_fee = (subtotal * (fee_percentage / Decimal("100"))).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP
         )
@@ -226,7 +223,7 @@ class CreateGuestPaymentIntentView(APIView):
                     "business_id": business.businessId,
                     "schedule_instance_id": instance.id,
                     "participants": participants,
-                    "booking_source": "widget",
+                    "booking_source": "widget",  # MODIFICATION: Explicitly flag as a widget booking
                     "subtotal_cents": int(subtotal * 100),
                     "tax_cents": int(tax_on_subtotal * 100),
                     "platform_fee_cents": int(platform_fee * 100),

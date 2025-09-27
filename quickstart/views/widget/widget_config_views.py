@@ -30,7 +30,7 @@ class WidgetConfigManagementView(APIView):
 
     def get(self, request, *args, **kwargs):
         """
-        Returns the widget config and a list of classes for the business.
+        Returns the widget config, a list of classes, and the widget API key for the business.
         """
         business = self.get_business(request.user)
 
@@ -50,7 +50,11 @@ class WidgetConfigManagementView(APIView):
         ]
         config_data["allowed_widget_origins"] = "\n".join(user_configured_origins)
 
-        response_data = {"classes": list(classes), "config": config_data}
+        response_data = {
+            "classes": list(classes),
+            "config": config_data,
+            "widget_api_key": business.widget_api_key,
+        }
         return Response(response_data, status=status.HTTP_200_OK)
 
     def patch(self, request, *args, **kwargs):
