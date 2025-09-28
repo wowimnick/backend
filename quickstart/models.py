@@ -1098,6 +1098,11 @@ class ClassCategory(models.Model):
         null=True,
         help_text="Name of the Lucide React icon (e.g., 'Music', 'Palette'). See lucide.dev for names.",
     )
+    sort_order = models.IntegerField(
+        default=0,
+        db_index=True,
+        help_text="Determines the display order; lower numbers appear first.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1114,6 +1119,7 @@ class ClassCategory(models.Model):
     class Meta:
         db_table = "class_categories"
         verbose_name_plural = "Class Categories"
+        ordering = ["sort_order", "name"]
         permissions = [
             ("view_category_stats", "Can view category statistics"),
             ("access_category_admin", "Can access the Category Administration section"),

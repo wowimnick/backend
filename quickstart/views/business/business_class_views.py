@@ -100,19 +100,16 @@ class PublicCategoryViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         """
-        Returns ALL ClassCategory objects. It then attaches a filtered list
-        of subcategories (only those with classes) to each category object.
+        Returns ALL ClassCategory objects, ordered by the default 'sort_order'.
+        It then attaches a filtered list of subcategories (only those with classes)
+        to each category object.
         """
         subcategories_with_classes = ClassSubcategory.objects.annotate(
             class_count=Count("classes_in_subcategory")
         ).filter(class_count__gt=0)
 
-        return (
-            ClassCategory.objects.all()
-            .prefetch_related(
-                Prefetch("subcategories", queryset=subcategories_with_classes)
-            )
-            .order_by("name")
+        return ClassCategory.objects.all().prefetch_related(
+            Prefetch("subcategories", queryset=subcategories_with_classes)
         )
 
     # --- ADDED: Caching decorator for the list view ---
