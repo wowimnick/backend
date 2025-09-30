@@ -474,6 +474,14 @@ class BusinessInfo(models.Model):
         related_name="owned_businesses",
     )
     businessName = models.CharField(max_length=100)
+    slug = models.SlugField(
+        max_length=255,
+        unique=True,
+        blank=False,
+        null=False,
+        help_text="SEO-friendly URL slug. Auto-generated from the business name.",
+        db_index=True,
+    )
     partner_tier = models.ForeignKey(
         "PartnerTier",
         on_delete=models.SET_NULL,  # Use SET_NULL to avoid deleting a business if a tier is deleted
@@ -654,11 +662,34 @@ class BusinessInfo(models.Model):
         help_text="A list of domains (e.g., 'www.mywebsite.com') where the widget is allowed to be embedded.",
     )
 
+    def _generate_unique_slug(self):
+        """Generates a unique slug from the business name."""
+        if self.slug:  # Do not regenerate if a slug already exists and is being saved
+            return
+
+        base_slug = django_slugify(self.businessName)
+        if not base_slug:
+            base_slug = "business"
+
+        slug = base_slug
+        # Use a transaction to ensure atomic check and creation
+        with transaction.atomic():
+            # Check for uniqueness and append a suffix if necessary
+            while BusinessInfo.objects.filter(slug=slug).exists():
+                random_suffix = uuid.uuid4().hex[:6]
+                slug = f"{base_slug}-{random_suffix}"
+        self.slug = slug
+
+    def save(self, *args, **kwargs):
+        """Override save to generate a slug."""
+        if not self.slug:
+            self._generate_unique_slug()
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return self.businessName
 
     def update_review_aggregates(self):
-        # (Keep your existing implementation of this method)
         approved_reviews_qs = Reviews.objects.filter(
             classId__businessId=self,
             status="approved",
@@ -689,6 +720,7 @@ class BusinessInfo(models.Model):
             models.Index(fields=["businessType"]),
             models.Index(fields=["isActive"]),
             models.Index(fields=["featured"]),
+            models.Index(fields=["slug"]),
             models.Index(fields=["verificationStatus"]),
             models.Index(fields=["stripe_account_id"]),
             models.Index(fields=["stripe_account_status"]),

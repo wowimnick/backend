@@ -15,7 +15,7 @@ from quickstart.views.admin.blog_management.admin_blog_views import (
     AdminBlogCategoryViewSet,
     AdminBlogPostViewSet,
 )
-from quickstart.models import ClassesMain
+from quickstart.models import ClassesMain, BusinessInfo
 
 from quickstart.views.admin.support_management.support_ticket_views import (
     AdminSupportTicketViewSet,
@@ -215,7 +215,6 @@ admin_router.register(
 )
 
 
-# --- ADDED: SEO Redirect View for old Class URLs ---
 def class_id_redirect_view(request, class_id):
     """
     Permanently redirects an old ID-based browser URL to the new slug-based URL.
@@ -225,6 +224,19 @@ def class_id_redirect_view(request, class_id):
     if klass.slug:
         # --- FIX: Redirect to the frontend's canonical PLURAL /classes/ path ---
         return redirect(f"/classes/{klass.slug}", permanent=True)
+    # Fallback if a slug doesn't exist for some reason.
+    return redirect("/")
+
+
+def business_id_redirect_view(request, business_id):
+    """
+    Permanently redirects an old ID-based URL (/business/123/) to the
+    new slug-based URL (/business/my-cool-business/).
+    """
+    business = get_object_or_404(BusinessInfo, pk=business_id)
+    if business.slug:
+        # Redirect to the frontend's canonical path
+        return redirect(f"/business/{business.slug}", permanent=True)
     # Fallback if a slug doesn't exist for some reason.
     return redirect("/")
 
@@ -335,6 +347,11 @@ urlpatterns = [
     # It will not be used by the React router.
     path("classes/<int:class_id>/", class_id_redirect_view, name="class-id-redirect"),
     # --- Other Application Views (Original order maintained) ---
+    path(
+        "business/<int:business_id>/",
+        business_id_redirect_view,
+        name="business-id-redirect",
+    ),
     path(
         "business/generate-upload-url/",
         generate_presigned_upload_url,

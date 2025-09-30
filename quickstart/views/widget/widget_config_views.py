@@ -6,6 +6,7 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 
+from quickstart.utils.permissions import CanManageOwnClasses
 from quickstart.models import BusinessInfo, ClassesMain
 from quickstart.serializers.widget.widget_config_serializer import (
     BusinessWidgetConfigSerializer,
@@ -22,7 +23,7 @@ class WidgetConfigManagementView(APIView):
     PATCH: Updates the widget configuration.
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, CanManageOwnClasses]
 
     def get_business(self, user):
         """Helper to get the business profile for the current user."""

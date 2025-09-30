@@ -171,6 +171,9 @@ class PublicClassSerializer(serializers.ModelSerializer):
     business_name = serializers.CharField(
         source="businessId.businessName", read_only=True, allow_null=True
     )
+    business_slug = serializers.CharField(
+        source="businessId.slug", read_only=True, allow_null=True
+    )
     min_session_price = serializers.DecimalField(
         max_digits=10, decimal_places=2, read_only=True
     )
@@ -187,6 +190,7 @@ class PublicClassSerializer(serializers.ModelSerializer):
         fields = [
             "classId",
             "slug",
+            "business_slug",
             "businessId",
             "business_name",
             "title",

@@ -452,6 +452,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
         fields = [
             "businessId",
             "businessName",
+            "slug",
             "businessType",
             "businessDescription",
             "businessImage",
@@ -493,6 +494,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = (
             "businessId",
+            "slug",
             "owner_email",
             "managers_emails",
             "verificationStatus",
@@ -855,6 +857,7 @@ class BusinessStatsSerializer(serializers.ModelSerializer):
         fields = [
             "businessId",
             "businessName",
+            "slug",
             "business_image_thumb_url",
             "totalReviews",
             "total_revenue",
