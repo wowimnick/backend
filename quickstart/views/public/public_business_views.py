@@ -155,7 +155,7 @@ class PublicBusinessInfoViewSet(viewsets.ReadOnlyModelViewSet):
         return queryset
 
     @action(detail=True, methods=["get"], permission_classes=[IsAuthenticated])
-    def contact_details(self, request, pk=None):
+    def contact_details(self, request, slug=None):
         """
         An authenticated action to reveal business contact details
         ONLY to users who have a confirmed or completed booking.

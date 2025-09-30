@@ -1,5 +1,3 @@
-# quickstart/tests/test_views/test_business_class_views.py
-
 from rest_framework.test import APITestCase
 from rest_framework import status
 from django.urls import reverse
@@ -302,6 +300,7 @@ class BusinessScheduleManagementTests(APITestCase):
             "duration": 60,
             "price": "25.00",
             "maxParticipants": 15,
+            "minParticipants": 1,
         }
         response = self.client.post(url, data, format="json")
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)

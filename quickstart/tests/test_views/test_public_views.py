@@ -80,7 +80,8 @@ class PublicBusinessInfoViewSetTest(APITestCase):
         GET /api/businesses/{pk}/ - Should successfully retrieve an active, verified business.
         """
         url = reverse(
-            "public-business-detail", kwargs={"pk": self.active_verified_business.pk}
+            "public-business-detail",
+            kwargs={"slug": self.active_verified_business.slug},
         )
         response = self.client.get(url)
 
@@ -94,7 +95,7 @@ class PublicBusinessInfoViewSetTest(APITestCase):
         GET /api/businesses/{pk}/ - Should return 404 for an inactive business.
         """
         url = reverse(
-            "public-business-detail", kwargs={"pk": self.inactive_business.pk}
+            "public-business-detail", kwargs={"slug": self.inactive_business.slug}
         )
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
@@ -105,7 +106,8 @@ class PublicBusinessInfoViewSetTest(APITestCase):
         """
         # Test the business with public contacts
         public_url = reverse(
-            "public-business-detail", kwargs={"pk": self.active_verified_business.pk}
+            "public-business-detail",
+            kwargs={"slug": self.active_verified_business.slug},
         )
         public_response = self.client.get(public_url)
         self.assertIn("studentContactEmail", public_response.data)
@@ -113,7 +115,8 @@ class PublicBusinessInfoViewSetTest(APITestCase):
 
         # Test the business with private contacts
         private_url = reverse(
-            "public-business-detail", kwargs={"pk": self.private_contact_business.pk}
+            "public-business-detail",
+            kwargs={"slug": self.private_contact_business.slug},
         )
         private_response = self.client.get(private_url)
         self.assertNotIn("studentContactEmail", private_response.data)
@@ -125,7 +128,7 @@ class PublicBusinessInfoViewSetTest(APITestCase):
         """
         url = reverse(
             "public-business-contact-details",
-            kwargs={"pk": self.private_contact_business.pk},
+            kwargs={"slug": self.private_contact_business.slug},
         )
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
@@ -139,7 +142,7 @@ class PublicBusinessInfoViewSetTest(APITestCase):
 
         url = reverse(
             "public-business-contact-details",
-            kwargs={"pk": self.private_contact_business.pk},
+            kwargs={"slug": self.private_contact_business.slug},
         )
         response = self.client.get(url)
 
@@ -161,7 +164,7 @@ class PublicBusinessInfoViewSetTest(APITestCase):
         self.client.force_authenticate(user=user)
         url = reverse(
             "public-business-contact-details",
-            kwargs={"pk": self.private_contact_business.pk},
+            kwargs={"slug": self.private_contact_business.slug},
         )
         response = self.client.get(url)
 

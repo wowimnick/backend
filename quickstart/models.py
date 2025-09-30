@@ -346,8 +346,8 @@ class CustomUser(AbstractUser):
     user_timezone = models.CharField(
         max_length=50,
         choices=COMMON_TIMEZONE_CHOICES,
-        default="UTC",  # Sensible default
-        blank=True,  # Allow blank if you want to prompt user or guess later
+        default="America/New_York",
+        blank=True,
         help_text="User's preferred IANA timezone for displaying dates/times.",
     )
     is_unsubscribed = models.BooleanField(
