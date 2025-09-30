@@ -21,6 +21,7 @@ from django.db.models import (
     Min,
     DateTimeField,
     DateField,
+    CharField,
 )
 from django.db.models.functions import (
     TruncDate,
@@ -43,7 +44,8 @@ from quickstart.models import (
     ClassOption,
     ClassesMain,
     CustomUser,
-    PartnerTier,  # Import PartnerTier
+    PartnerTier,
+    Payment,
 )
 
 logger = logging.getLogger(__name__)
@@ -296,45 +298,68 @@ class RevenueAnalyticsView(views.APIView):
         valid_bookings_qs = self.get_valid_bookings_queryset(
             business, start_date, end_date, class_id_filter
         )
+
+        # Query payments related to the valid bookings to get the source metadata
         class_revenue_data = (
-            valid_bookings_qs.values("schedule_instance__schedule__option__classId")
+            Payment.objects.filter(booking__in=valid_bookings_qs, status="succeeded")
+            .values("booking__schedule_instance__schedule__option__classId")
             .annotate(
-                total_gross_revenue_decimal=Coalesce(
-                    Sum("amount_paid"),
+                # Conditionally sum revenue for widget bookings
+                widget_revenue=Coalesce(
+                    Sum(
+                        "amount",
+                        filter=Q(
+                            metadata__original_stripe_metadata__booking_source="widget"
+                        ),
+                    ),
                     Value(Decimal("0.0")),
                     output_field=DecimalField(),
-                )
+                ),
+                # Conditionally sum revenue for platform bookings (source is null or not 'widget')
+                platform_revenue=Coalesce(
+                    Sum(
+                        "amount",
+                        filter=Q(
+                            metadata__original_stripe_metadata__booking_source__isnull=True
+                        )
+                        | Q(
+                            metadata__original_stripe_metadata__booking_source__ne="widget"
+                        ),
+                    ),
+                    Value(Decimal("0.0")),
+                    output_field=DecimalField(),
+                ),
+                total_gross_revenue=Sum("amount"),
             )
-            .order_by("-total_gross_revenue_decimal")
+            .order_by("-total_gross_revenue")
         )
 
         class_ids = [
-            item["schedule_instance__schedule__option__classId"]
+            item["booking__schedule_instance__schedule__option__classId"]
             for item in class_revenue_data
-            if item["schedule_instance__schedule__option__classId"] is not None
+            if item["booking__schedule_instance__schedule__option__classId"] is not None
         ]
+
         class_titles_map = dict(
             ClassesMain.objects.filter(classId__in=class_ids).values_list(
                 "classId", "title"
             )
         )
 
-        platform_fee_rate = self._get_fee_rate_for_business(business)
         result = []
         for item in class_revenue_data:
-            class_id = item["schedule_instance__schedule__option__classId"]
+            class_id = item["booking__schedule_instance__schedule__option__classId"]
             if class_id:
-                gross_rev = item["total_gross_revenue_decimal"]
+                gross_rev = item["total_gross_revenue"]
+                widget_rev = item["widget_revenue"]
+                platform_rev = item["platform_revenue"]
                 result.append(
                     {
                         "id": class_id,
                         "name": class_titles_map.get(class_id, f"Class ID {class_id}"),
                         "gross_revenue": float(gross_rev),
-                        "platform_fees": float(gross_rev * platform_fee_rate),
-                        "net_revenue": float(
-                            gross_rev * (Decimal("1.0") - platform_fee_rate)
-                        ),
-                        "type": "class",
+                        "widget_revenue": float(widget_rev),
+                        "platform_revenue": float(platform_rev),
                     }
                 )
         return result
@@ -342,10 +367,32 @@ class RevenueAnalyticsView(views.APIView):
     def get_revenue_by_booking_type(
         self, business, start_date, end_date, class_id=None
     ):
-        return [
-            {"type": "Single Session Revenue", "revenue": "Under Construction"},
-            {"type": "Full Course Revenue", "revenue": "Under Construction"},
+        valid_bookings_qs = self.get_valid_bookings_queryset(
+            business, start_date, end_date, class_id
+        )
+
+        revenue_by_type_data = (
+            Payment.objects.filter(booking__in=valid_bookings_qs, status="succeeded")
+            .annotate(
+                booking_type_category=Case(
+                    When(
+                        metadata__original_stripe_metadata__booking_source="widget",
+                        then=Value("Widget Booking"),
+                    ),
+                    default=Value("Platform Booking"),
+                    output_field=CharField(),
+                )
+            )
+            .values("booking_type_category")
+            .annotate(value=Sum("amount"))
+            .order_by("-value")
+        )
+
+        revenue_by_booking_type = [
+            {"name": entry["booking_type_category"], "value": float(entry["value"])}
+            for entry in revenue_by_type_data
         ]
+        return revenue_by_booking_type
 
     def get(self, request):
         user = request.user
