@@ -3,7 +3,9 @@
 import os
 from django.conf import settings
 from rest_framework import serializers
-from quickstart.models import BusinessInfo, ClassesMain, Reviews
+from quickstart.models import BusinessInfo, Reviews
+from .public_class_serializers import PublicClassSerializer
+from .public_review_serializers import PublicReviewSerializer
 from django.db.models import Avg
 
 
@@ -19,7 +21,7 @@ class BusinessContactDetailSerializer(serializers.ModelSerializer):
             "studentContactPhone",
             "studentContactEmail",
             "website",
-            "businessUnit",  # Added businessUnit
+            "businessUnit",
         ]
         read_only_fields = fields
 
@@ -40,10 +42,10 @@ class PublicBusinessInfoSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = BusinessInfo
-        # MODIFIED: Replaced openingTime/closingTime with businessHours and added businessUnit
         fields = [
             "businessId",
             "businessName",
+            "slug",
             "businessType",
             "businessDescription",
             "business_image_medium_url",
@@ -102,7 +104,21 @@ class PublicBusinessInfoSerializer(serializers.ModelSerializer):
         return representation
 
     def get_average_rating(self, obj):
-        avg = Reviews.objects.filter(businessId=obj, status="approved").aggregate(
-            Avg("rating")
-        )["rating__avg"]
-        return round(avg, 1) if avg else 0.0
+        # This uses the pre-calculated aggregate field from the model for performance
+        return obj.average_rating
+
+
+class PublicBusinessDetailSerializer(PublicBusinessInfoSerializer):
+    """
+    A detailed serializer for the standalone business page, including
+    all *active* classes and reviews associated with the business.
+    """
+
+    classes = PublicClassSerializer(many=True, read_only=True, source="active_classes")
+
+    reviews = PublicReviewSerializer(
+        many=True, source="reviews_directly_to_business", read_only=True
+    )
+
+    class Meta(PublicBusinessInfoSerializer.Meta):
+        fields = PublicBusinessInfoSerializer.Meta.fields + ["classes", "reviews"]

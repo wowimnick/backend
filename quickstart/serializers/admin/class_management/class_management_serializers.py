@@ -452,7 +452,8 @@ class AdminClassCategorySerializer(serializers.ModelSerializer):
             "key",
             "description",
             "is_featured",
-            "image_s3_key",  # The new write-only field
+            "image_s3_key",
+            "sort_order",
             "image_medium_url",
             "color",
             "icon_name",

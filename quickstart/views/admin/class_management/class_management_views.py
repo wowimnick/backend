@@ -706,7 +706,7 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
 
     permission_classes = [IsAuthenticated, CanAccessCategoryAdmin]
     serializer_class = AdminClassCategorySerializer
-    queryset = ClassCategory.objects.all().order_by("name")
+    queryset = ClassCategory.objects.all()
     http_method_names = ["get", "post", "put", "patch", "delete", "head", "options"]
     filter_backends = [filters.SearchFilter]
     search_fields = ["name", "key"]
@@ -800,6 +800,41 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
         instance = self.get_object()
         serializer = self.get_serializer(instance, context={"request": request})
         return Response(serializer.data)
+
+    @action(detail=False, methods=["post"], url_path="update-order")
+    def update_order(self, request):
+        """
+        Receives a list of category IDs in their desired order and updates their sort_order.
+        Expects a payload like: [{"id": 1, "order": 0}, {"id": 3, "order": 1}]
+        """
+        if not request.user.has_perm("quickstart.change_classcategory"):
+            self.permission_denied(request, message="You cannot reorder categories.")
+
+        ordered_data = request.data
+        if not isinstance(ordered_data, list):
+            return Response(
+                {"error": "Expected a list of category objects."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            with transaction.atomic():
+                for item in ordered_data:
+                    category_id = item.get("id")
+                    new_order = item.get("order")
+                    if category_id is not None and new_order is not None:
+                        ClassCategory.objects.filter(pk=category_id).update(
+                            sort_order=new_order
+                        )
+
+            logger.info(f"Category order updated by Admin {request.user.email}.")
+            return Response({"status": "success"}, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.error(f"Failed to update category order: {e}", exc_info=True)
+            return Response(
+                {"error": "An internal error occurred while updating the order."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     @action(detail=True, methods=["post"], url_path="delete-with-reassignment")
     @transaction.atomic

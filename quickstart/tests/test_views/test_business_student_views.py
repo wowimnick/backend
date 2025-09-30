@@ -5,8 +5,10 @@ from rest_framework import status
 from django.urls import reverse
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.auth.models import Permission
+from django.db.models.signals import post_save
+import factory
 
-from quickstart.models import StudentNote, BusinessInfo, Role, Contact
+from quickstart.models import StudentNote, BusinessInfo, Role, Contact, Booking
 from quickstart.tests.factories import (
     UserFactory,
     BusinessInfoFactory,
@@ -165,3 +167,63 @@ class BusinessStudentManagementTests(APITestCase):
         self.assertEqual(len(response.data["notes"]), 1)
         self.assertEqual(response.data["notes"][0]["content"], "Excellent progress.")
         print("✅ PASSED: Student note is correctly displayed in the profile view.")
+
+    def test_owner_can_delete_contact_without_history(self):
+        """
+        [NEW TEST] DELETE .../students/{pk}/ - An owner can delete a contact with no user or bookings.
+        """
+        print("\n--- Running: test_owner_can_delete_contact_without_history ---")
+        # Create a contact manually that isn't linked to a user or booking
+        contact_to_delete = Contact.objects.create(
+            business=self.business,
+            first_name="John",
+            last_name="Doe",
+            email="john.doe@example.com",
+        )
+        url = reverse("business-student-detail", kwargs={"pk": contact_to_delete.pk})
+        response = self.client.delete(url)
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Contact.objects.filter(pk=contact_to_delete.pk).exists())
+        print("✅ PASSED: Owner successfully deleted a contact with no history.")
+
+    def test_owner_cannot_delete_contact_linked_to_user(self):
+        """
+        [NEW TEST] DELETE .../students/{pk}/ - An owner cannot delete a contact linked to a platform user.
+        """
+        print("\n--- Running: test_owner_cannot_delete_contact_linked_to_user ---")
+        contact_with_user = Contact.objects.get(
+            user=self.student1, business=self.business
+        )
+        url = reverse("business-student-detail", kwargs={"pk": contact_with_user.pk})
+        response = self.client.delete(url)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("linked to a platform user", response.data["detail"])
+        print("✅ PASSED: Correctly blocked deletion of a contact linked to a user.")
+
+    def test_owner_cannot_delete_contact_with_booking_history(self):
+        """
+        [NEW TEST] DELETE .../students/{pk}/ - An owner cannot delete a guest contact that has bookings.
+        """
+        print(
+            "\n--- Running: test_owner_cannot_delete_contact_with_booking_history ---"
+        )
+        guest_contact = Contact.objects.create(
+            business=self.business, first_name="Guest", email="guest@example.com"
+        )
+        # Mute the post_save signal on Booking to prevent an error from a signal
+        # that doesn't correctly handle guest (user=None) bookings.
+        with factory.django.mute_signals(post_save):
+            BookingFactory(
+                contact=guest_contact,
+                user=None,
+                schedule_instance__schedule__option__classId=self.klass,
+            )
+
+        url = reverse("business-student-detail", kwargs={"pk": guest_contact.pk})
+        response = self.client.delete(url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("has a booking history", response.data["detail"])
+        print(
+            "✅ PASSED: Correctly blocked deletion of a contact with booking history."
+        )

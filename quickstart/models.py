@@ -346,8 +346,8 @@ class CustomUser(AbstractUser):
     user_timezone = models.CharField(
         max_length=50,
         choices=COMMON_TIMEZONE_CHOICES,
-        default="UTC",  # Sensible default
-        blank=True,  # Allow blank if you want to prompt user or guess later
+        default="America/New_York",
+        blank=True,
         help_text="User's preferred IANA timezone for displaying dates/times.",
     )
     is_unsubscribed = models.BooleanField(
@@ -474,6 +474,14 @@ class BusinessInfo(models.Model):
         related_name="owned_businesses",
     )
     businessName = models.CharField(max_length=100)
+    slug = models.SlugField(
+        max_length=255,
+        unique=True,
+        blank=False,
+        null=False,
+        help_text="SEO-friendly URL slug. Auto-generated from the business name.",
+        db_index=True,
+    )
     partner_tier = models.ForeignKey(
         "PartnerTier",
         on_delete=models.SET_NULL,  # Use SET_NULL to avoid deleting a business if a tier is deleted
@@ -605,6 +613,12 @@ class BusinessInfo(models.Model):
     termsAccepted = models.BooleanField(default=False)
     privacyAccepted = models.BooleanField(default=False)
 
+    widget_config = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Custom theming for the booking widget, e.g., {'primaryColor': '#0000FF', 'fontFamily': 'Georgia, serif'}.",
+    )
+
     # --- Additional Useful Fields ---
     social_media_links = models.JSONField(
         default=dict,
@@ -648,11 +662,34 @@ class BusinessInfo(models.Model):
         help_text="A list of domains (e.g., 'www.mywebsite.com') where the widget is allowed to be embedded.",
     )
 
+    def _generate_unique_slug(self):
+        """Generates a unique slug from the business name."""
+        if self.slug:  # Do not regenerate if a slug already exists and is being saved
+            return
+
+        base_slug = django_slugify(self.businessName)
+        if not base_slug:
+            base_slug = "business"
+
+        slug = base_slug
+        # Use a transaction to ensure atomic check and creation
+        with transaction.atomic():
+            # Check for uniqueness and append a suffix if necessary
+            while BusinessInfo.objects.filter(slug=slug).exists():
+                random_suffix = uuid.uuid4().hex[:6]
+                slug = f"{base_slug}-{random_suffix}"
+        self.slug = slug
+
+    def save(self, *args, **kwargs):
+        """Override save to generate a slug."""
+        if not self.slug:
+            self._generate_unique_slug()
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return self.businessName
 
     def update_review_aggregates(self):
-        # (Keep your existing implementation of this method)
         approved_reviews_qs = Reviews.objects.filter(
             classId__businessId=self,
             status="approved",
@@ -683,6 +720,7 @@ class BusinessInfo(models.Model):
             models.Index(fields=["businessType"]),
             models.Index(fields=["isActive"]),
             models.Index(fields=["featured"]),
+            models.Index(fields=["slug"]),
             models.Index(fields=["verificationStatus"]),
             models.Index(fields=["stripe_account_id"]),
             models.Index(fields=["stripe_account_status"]),
@@ -1092,6 +1130,11 @@ class ClassCategory(models.Model):
         null=True,
         help_text="Name of the Lucide React icon (e.g., 'Music', 'Palette'). See lucide.dev for names.",
     )
+    sort_order = models.IntegerField(
+        default=0,
+        db_index=True,
+        help_text="Determines the display order; lower numbers appear first.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1108,6 +1151,7 @@ class ClassCategory(models.Model):
     class Meta:
         db_table = "class_categories"
         verbose_name_plural = "Class Categories"
+        ordering = ["sort_order", "name"]
         permissions = [
             ("view_category_stats", "Can view category statistics"),
             ("access_category_admin", "Can access the Category Administration section"),

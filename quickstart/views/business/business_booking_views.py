@@ -329,13 +329,11 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
             ScheduleInstance.objects.filter(
                 schedule__option=booking.schedule_instance.schedule.option,
                 status="scheduled",
-                date__gte=today,  # First, efficiently filter for today or future dates
+                date__gte=today,
             )
-            # Then, exclude instances on today's date that are in the past
             .exclude(Q(date=today) & Q(time__lt=now.time()))
             .exclude(pk=booking.schedule_instance.pk)
             .annotate(
-                # Calculate remaining spots, considering all confirmed/pending bookings
                 current_occupancy=Coalesce(
                     Sum(
                         "bookings__participants",
@@ -345,7 +343,6 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                 )
             )
             .annotate(
-                # Check if there is enough capacity for THIS specific booking
                 has_capacity=Case(
                     When(
                         max_participants__gte=F("current_occupancy")
@@ -356,6 +353,7 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                     output_field=BooleanField(),
                 )
             )
+            .filter(has_capacity=True)  # FIX: Add this filter
             .values(
                 "id",
                 "date",

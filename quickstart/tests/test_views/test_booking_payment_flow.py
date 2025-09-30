@@ -84,6 +84,7 @@ class BookingFlowTests(APITestCase):
             schedule__option=self.option,
             date=timezone.now().date() + timedelta(days=10),
             max_participants=5,
+            min_participants=1,
         )
         self.past_instance = ScheduleInstanceFactory(
             schedule__option=self.option,
@@ -137,6 +138,37 @@ class BookingFlowTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("Not enough spots", str(response.data))
         print("✅ PASSED: Booking correctly fails for a full class.")
+
+    def test_booking_fails_if_min_participants_not_met(self):
+        """
+        [NEW TEST] A booking attempt should fail if the number of participants is below the schedule's minimum.
+        """
+        print("\n--- Running: test_booking_fails_if_min_participants_not_met ---")
+        # Setup: Create an instance that requires at least 3 participants
+        min_pax_instance = ScheduleInstanceFactory(
+            schedule__option=self.option,
+            date=timezone.now().date() + timedelta(days=15),
+            min_participants=3,
+            max_participants=10,
+        )
+
+        self.client.force_authenticate(user=self.student)
+        url = reverse("my-booking-list")
+        # Action: Attempt to book with only 2 participants
+        data = {
+            "selectedSlots": [{"id": min_pax_instance.id}],
+            "participants": 2,
+            "participant_details": [{"name": "John"}, {"name": "Jane"}],
+        }
+
+        response = self.client.post(url, data, format="json")
+
+        # Assert: The request should be rejected
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("A minimum of", str(response.data))
+        print(
+            "✅ PASSED: Booking correctly failed for not meeting minimum participants."
+        )
 
     def test_cancellation_policy_respects_business_timezone(
         self,

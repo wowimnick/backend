@@ -7,6 +7,7 @@ from dj_rest_auth.registration.views import VerifyEmailView, ResendEmailVerifica
 from dj_rest_auth.views import PasswordChangeView
 
 # --- Model import for the new redirect view ---
+from quickstart.views.widget.widget_config_views import WidgetConfigManagementView
 from quickstart.views.admin.payout_management.admin_payout_views import (
     AdminPayoutViewSet,
 )
@@ -14,7 +15,7 @@ from quickstart.views.admin.blog_management.admin_blog_views import (
     AdminBlogCategoryViewSet,
     AdminBlogPostViewSet,
 )
-from quickstart.models import ClassesMain
+from quickstart.models import ClassesMain, BusinessInfo
 
 from quickstart.views.admin.support_management.support_ticket_views import (
     AdminSupportTicketViewSet,
@@ -101,6 +102,14 @@ from quickstart.views import (
     ValidateInvitationTokenView,
     ContactImportViewSet,
     GuestBookingCancellationView,
+)
+
+from quickstart.views.widget.widget_views import (
+    WidgetConfigView,
+    WidgetClassListView,
+    WidgetAvailabilityView,
+    CreateGuestPaymentIntentView,
+    GuestBookingCreateView,
 )
 
 # =============================================================================
@@ -206,7 +215,6 @@ admin_router.register(
 )
 
 
-# --- ADDED: SEO Redirect View for old Class URLs ---
 def class_id_redirect_view(request, class_id):
     """
     Permanently redirects an old ID-based browser URL to the new slug-based URL.
@@ -220,9 +228,34 @@ def class_id_redirect_view(request, class_id):
     return redirect("/")
 
 
+def business_id_redirect_view(request, business_id):
+    """
+    Permanently redirects an old ID-based URL (/business/123/) to the
+    new slug-based URL (/business/my-cool-business/).
+    """
+    business = get_object_or_404(BusinessInfo, pk=business_id)
+    if business.slug:
+        # Redirect to the frontend's canonical path
+        return redirect(f"/business/{business.slug}", permanent=True)
+    # Fallback if a slug doesn't exist for some reason.
+    return redirect("/")
+
+
 # =============================================================================
 # URL PATTERNS
 # =============================================================================
+
+widget_urlpatterns = [
+    path("config/", WidgetConfigView.as_view(), name="widget-config"),
+    path("classes/", WidgetClassListView.as_view(), name="widget-classes"),
+    path("availability/", WidgetAvailabilityView.as_view(), name="widget-availability"),
+    path(
+        "payment-intent/",
+        CreateGuestPaymentIntentView.as_view(),
+        name="widget-payment-intent",
+    ),
+    path("bookings/", GuestBookingCreateView.as_view(), name="widget-create-booking"),
+]
 
 urlpatterns = [
     # --- Django Admin & 3rd Party Libs ---
@@ -315,6 +348,11 @@ urlpatterns = [
     path("classes/<int:class_id>/", class_id_redirect_view, name="class-id-redirect"),
     # --- Other Application Views (Original order maintained) ---
     path(
+        "business/<int:business_id>/",
+        business_id_redirect_view,
+        name="business-id-redirect",
+    ),
+    path(
         "business/generate-upload-url/",
         generate_presigned_upload_url,
         name="generate-upload-url",
@@ -381,6 +419,11 @@ urlpatterns = [
     path("business/register/", register_business, name="business-register"),
     path("my-businesses/", get_user_businesses, name="my-businesses"),
     path(
+        "my-business/widget-config/",
+        WidgetConfigManagementView.as_view(),
+        name="my-business-widget-config",
+    ),
+    path(
         "my-business/profile/",
         MyBusinessProfileView.as_view(),
         name="my-business-profile",
@@ -410,5 +453,6 @@ urlpatterns = [
         AdminGeographicalDataView.as_view(),
         name="admin-geographical-data",
     ),
+    path("widget/v1/", include((widget_urlpatterns, "widget"), namespace="widget-v1")),
     path("health-check/", health_check, name="health-check"),
 ]

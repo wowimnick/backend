@@ -24,7 +24,7 @@ from quickstart.models import (
     PartnerTier,
     Payment,
     ScheduleInstance,
-    Contact,  # MODIFICATION: Import Contact model
+    Contact,
 )
 from quickstart.serializers.public.public_booking_serializers import (
     BookingCreateSerializer,
@@ -451,8 +451,13 @@ class ProcessBookingWebhook(APIView):
             return False
 
     def _mark_booking_as_failed(self, payment_intent_id, reason):
+        """
+        Helper function to find pending records and mark them as failed.
+        This is used when a paid booking cannot be fulfilled.
+        """
         try:
             with transaction.atomic():
+                # Use select_for_update to lock the rows during the update
                 payment_record = Payment.objects.select_for_update().get(
                     stripe_payment_intent_id=payment_intent_id, status="pending"
                 )
@@ -460,11 +465,13 @@ class ProcessBookingWebhook(APIView):
                     pk=payment_record.booking.pk, status="pending"
                 )
 
+                # Update Payment record
                 payment_record.status = "failed"
                 payment_record.failure_message = reason
                 payment_record.save()
 
-                booking_record.status = "cancelled"
+                # Update Booking record
+                booking_record.status = "cancelled"  # The booking itself is cancelled
                 booking_record.payment_status = "failed"
                 booking_record.cancellation_reason = reason
                 booking_record.cancelled_at = timezone.now()
@@ -520,8 +527,15 @@ class ProcessBookingWebhook(APIView):
                 )
             except Exception as e:
                 logger.error(
-                    f"[{webhook_id}] Unexpected error in webhook: {e}", exc_info=True
+                    f"[{webhook_id}] !!! --- UNEXPECTED WEBHOOK EXCEPTION --- !!!"
                 )
+                logger.error(f"[{webhook_id}] Exception Type: {type(e).__name__}")
+                logger.error(f"[{webhook_id}] Exception Message: {e}")
+                logger.error(
+                    f"[{webhook_id}] Full Traceback:\n{traceback.format_exc()}"
+                )
+                logger.error(f"[{webhook_id}] !!! --- END OF TRACEBACK --- !!!")
+
                 self._mark_booking_as_failed(
                     payment_intent.id, f"Unexpected server error: {str(e)}"
                 )
@@ -532,7 +546,6 @@ class ProcessBookingWebhook(APIView):
                     {"error": "Internal server error"},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
-
         elif event.type == "payment_intent.payment_failed":
             payment_intent = event.data.object
             failure_message = (
@@ -630,291 +643,21 @@ class ProcessBookingWebhook(APIView):
             )
             business = initial_instance.schedule.option.classId.businessId
 
-            fee_percentage = (
-                business.partner_tier.fee_percentage
-                if business.partner_tier
-                else PartnerTier.objects.get(is_default=True).fee_percentage
-            )
-
-            service_fee_rate = fee_percentage / Decimal("100.0")
-            platform_fee_amount = (subtotal_after_discount * service_fee_rate).quantize(
-                Decimal("0.01")
-            )
-            platform_fee_tax = (platform_fee_amount * HST_RATE).quantize(
-                Decimal("0.01")
-            )
-            business_payout_tax = total_tax - platform_fee_tax
-            business_net_revenue = subtotal_after_discount - platform_fee_amount
-            net_payout_to_business = business_net_revenue + business_payout_tax
-
-            charge_details = (
-                stripe.Charge.retrieve(payment_intent.latest_charge)
-                if payment_intent.latest_charge
-                else None
-            )
-
-            payment_record.stripe_charge_id = payment_intent.latest_charge
-            payment_record.status = "succeeded"
-            payment_record.amount = grand_total
-            payment_record.tax_amount = total_tax
-            payment_record.platform_fee_amount = platform_fee_amount
-            payment_record.platform_fee_tax = platform_fee_tax
-            payment_record.net_payout_amount = net_payout_to_business
-            payment_record.metadata = {"original_stripe_metadata": dict(metadata)}
-
-            if charge_details and charge_details.payment_method_details.card:
-                payment_record.card_brand = (
-                    charge_details.payment_method_details.card.brand
-                )
-                payment_record.card_last4 = (
-                    charge_details.payment_method_details.card.last4
-                )
-            if charge_details:
-                payment_record.receipt_url = charge_details.receipt_url
-
-            payment_record.save()
-            logger.info(
-                f"[{webhook_id}] Payment {payment_record.id} updated to succeeded."
-            )
-
-        recipient_user = pending_booking.user
-        recipient_contact = pending_booking.contact
-
-        if recipient_user:
-            send_booking_confirmation_email(recipient_user, pending_booking)
-        elif recipient_contact:
-            send_booking_confirmation_email(recipient_contact, pending_booking)
-
-        if business.newBookingNotification:
-            for recipient in {business.owner} | set(business.managers.all()):
-                if recipient and recipient.email:
-                    send_business_new_booking_email(recipient, pending_booking)
-
-        return {
-            "booking_id": pending_booking.id,
-            "user_facing_reference": pending_booking.user_facing_reference,
-        }
-
-
-class ProcessBookingWebhook(APIView):
-    authentication_classes = []
-    permission_classes = []
-
-    def _attempt_stripe_refund(self, payment_intent_id, reason_message=""):
-        logger.info(
-            f"REFUND: Attempting refund for PaymentIntent {payment_intent_id}. Reason: {reason_message}"
-        )
-        try:
-            stripe.Refund.create(payment_intent=payment_intent_id)
-            return True
-        except stripe.StripeError as e:
-            logger.error(f"REFUND: CRITICAL - Stripe error during refund: {e}")
-            return False
-
-    def _mark_booking_as_failed(self, payment_intent_id, reason):
-        """
-        Helper function to find pending records and mark them as failed.
-        This is used when a paid booking cannot be fulfilled.
-        """
-        try:
-            with transaction.atomic():
-                # Use select_for_update to lock the rows during the update
-                payment_record = Payment.objects.select_for_update().get(
-                    stripe_payment_intent_id=payment_intent_id, status="pending"
-                )
-                booking_record = Booking.objects.select_for_update().get(
-                    pk=payment_record.booking.pk, status="pending"
-                )
-
-                # Update Payment record
-                payment_record.status = "failed"
-                payment_record.failure_message = reason
-                payment_record.save()
-
-                # Update Booking record
-                booking_record.status = "cancelled"  # The booking itself is cancelled
-                booking_record.payment_status = "failed"
-                booking_record.cancellation_reason = reason
-                booking_record.cancelled_at = timezone.now()
-                booking_record.save()
-
-                logger.warning(
-                    f"Marked Booking {booking_record.id} and Payment {payment_record.id} as FAILED. Reason: {reason}"
-                )
-        except (Payment.DoesNotExist, Booking.DoesNotExist):
-            logger.error(
-                f"FAILURE_MARKER: Could not find pending booking/payment for PI {payment_intent_id} to mark as failed."
-            )
-        except Exception as e:
-            logger.error(
-                f"FAILURE_MARKER: An unexpected error occurred while marking PI {payment_intent_id} as failed: {str(e)}"
-            )
-
-    def post(self, request):
-        webhook_id = str(uuid.uuid4())[:8]
-        payload = request.body
-        sig_header = request.META.get("HTTP_STRIPE_SIGNATURE")
-        try:
-            event = stripe.Webhook.construct_event(
-                payload, sig_header, settings.STRIPE_PAYMENTS_WEBHOOK_SECRET
-            )
-        except Exception as e:
-            return Response(status=status.HTTP_400_BAD_REQUEST)
-
-        if event.type == "payment_intent.succeeded":
-            payment_intent = event.data.object
-            logger.info(
-                f"[{webhook_id}] Processing payment_intent.succeeded for PI: {payment_intent.id}"
-            )
-            try:
-                response_data = self.handle_successful_payment(
-                    payment_intent, webhook_id
-                )
-                return Response(response_data or {}, status=status.HTTP_200_OK)
-            except DRFValidationError as ve:
-                error_msg = str(ve.detail)
-                logger.error(
-                    f"[{webhook_id}] Validation error in webhook: {error_msg}",
-                    exc_info=True,
-                )
-                self._mark_booking_as_failed(
-                    payment_intent.id, f"Booking validation failed: {error_msg}"
-                )
-                self._attempt_stripe_refund(
-                    payment_intent.id, f"Booking validation failed: {error_msg}"
-                )
-                return Response(
-                    {"error": error_msg}, status=status.HTTP_400_BAD_REQUEST
-                )
-            except Exception as e:
-                # --- THIS IS THE CRITICAL CHANGE ---
-                # It will print the full, multi-line error traceback to your logs.
-                logger.error(
-                    f"[{webhook_id}] !!! --- UNEXPECTED WEBHOOK EXCEPTION --- !!!"
-                )
-                logger.error(f"[{webhook_id}] Exception Type: {type(e).__name__}")
-                logger.error(f"[{webhook_id}] Exception Message: {e}")
-                logger.error(
-                    f"[{webhook_id}] Full Traceback:\n{traceback.format_exc()}"
-                )
-                logger.error(f"[{webhook_id}] !!! --- END OF TRACEBACK --- !!!")
-                # --- END OF CHANGE ---
-
-                self._mark_booking_as_failed(
-                    payment_intent.id, f"Unexpected server error: {str(e)}"
-                )
-                self._attempt_stripe_refund(
-                    payment_intent.id, f"Unexpected server error: {e}"
-                )
-                return Response(
-                    {"error": "Internal server error"},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                )
-        elif event.type == "payment_intent.payment_failed":
-            payment_intent = event.data.object
-            failure_message = (
-                payment_intent.last_payment_error.message
-                if payment_intent.last_payment_error
-                else "Payment failed."
-            )
-
-            # CHANGED: Update both Payment and the associated Booking
-            try:
-                with transaction.atomic():
-                    payment_to_fail = Payment.objects.select_for_update().get(
-                        stripe_payment_intent_id=payment_intent.id, status="pending"
-                    )
-                    booking_to_fail = payment_to_fail.booking
-
-                    payment_to_fail.status = "failed"
-                    payment_to_fail.failure_message = failure_message
-                    payment_to_fail.save()
-
-                    if booking_to_fail and booking_to_fail.status == "pending":
-                        booking_to_fail.status = "cancelled"
-                        booking_to_fail.payment_status = "failed"
-                        booking_to_fail.cancellation_reason = "Payment was declined."
-                        booking_to_fail.cancelled_at = timezone.now()
-                        booking_to_fail.save()
-                        logger.info(
-                            f"Set booking {booking_to_fail.id} to cancelled due to failed payment."
-                        )
-
-            except Payment.DoesNotExist:
-                logger.warning(
-                    f"Received payment_failed webhook for PI {payment_intent.id}, but no corresponding pending payment was found."
-                )
-            except Exception as e:
-                logger.error(
-                    f"Error processing payment_failed webhook for PI {payment_intent.id}: {str(e)}"
-                )
-
-        return Response(status=status.HTTP_200_OK)
-
-    def handle_successful_payment(self, payment_intent, webhook_id):
-        if Payment.objects.filter(
-            stripe_payment_intent_id=payment_intent.id, status="succeeded"
-        ).exists():
-            logger.warning(
-                f"[{webhook_id}] DUPLICATE: PI {payment_intent.id} already processed."
-            )
-            return {"message": "Already processed"}
-
-        with transaction.atomic():
-            try:
-                payment_record = Payment.objects.select_for_update().get(
-                    stripe_payment_intent_id=payment_intent.id, status="pending"
-                )
-                pending_booking = Booking.objects.select_for_update().get(
-                    pk=payment_record.booking.pk, status="pending"
-                )
-            except (Payment.DoesNotExist, Booking.DoesNotExist):
-                # CHANGED: Raise a more specific error message
-                raise DRFValidationError(
-                    "Could not find a corresponding pending booking or payment for this successful payment. Refunding to prevent lost funds."
-                )
-
-            metadata = payment_intent.metadata
-            participants = pending_booking.participants
-            initial_instance = pending_booking.schedule_instance
-
-            # Re-validate capacity, excluding the current pending booking
-            other_participants = (
-                initial_instance.bookings.filter(status__in=["confirmed", "pending"])
-                .exclude(pk=pending_booking.pk)
-                .aggregate(total=Coalesce(Sum("participants"), 0))["total"]
-            )
-            if (initial_instance.max_participants - other_participants) < participants:
-                raise DRFValidationError(
-                    f"Session on {initial_instance.date.strftime('%b %d')} is now full."
-                )
-
-            # --- UPDATE PENDING BOOKING TO CONFIRMED ---
-            pending_booking.status = "confirmed"
-            pending_booking.payment_status = "paid"
-
-            if pending_booking.contact and not pending_booking.user:
-                pending_booking.cancellation_token = uuid.uuid4()
+            # MODIFICATION: Check for the widget flag to determine the fee percentage.
+            if metadata.get("booking_source") == "widget":
+                fee_percentage = Decimal("6.00")
                 logger.info(
-                    f"[{webhook_id}] Generated cancellation token for guest booking {pending_booking.id}"
+                    f"[{webhook_id}] Applying fixed 6% widget fee for booking {pending_booking.id}."
                 )
-
-            pending_booking.save()  # This generates the user_facing_reference
-            logger.info(f"[{webhook_id}] Booking {pending_booking.id} confirmed.")
-
-            # --- CALCULATE FEES AND UPDATE PAYMENT RECORD ---
-            grand_total = Decimal(payment_intent.amount_received) / 100
-            total_tax = Decimal(metadata.get("tax_amount", "0.00"))
-            subtotal_after_discount = Decimal(
-                metadata.get("subtotal_after_discount", "0.00")
-            )
-            business = initial_instance.schedule.option.classId.businessId
-
-            fee_percentage = (
-                business.partner_tier.fee_percentage
-                if business.partner_tier
-                else PartnerTier.objects.get(is_default=True).fee_percentage
-            )
+            else:
+                fee_percentage = (
+                    business.partner_tier.fee_percentage
+                    if business.partner_tier
+                    else PartnerTier.objects.get(is_default=True).fee_percentage
+                )
+                logger.info(
+                    f"[{webhook_id}] Applying partner tier fee ({fee_percentage}%) for booking {pending_booking.id}."
+                )
 
             service_fee_rate = fee_percentage / Decimal("100.0")
             platform_fee_amount = (subtotal_after_discount * service_fee_rate).quantize(
@@ -960,7 +703,6 @@ class ProcessBookingWebhook(APIView):
         recipient_user = pending_booking.user
         recipient_contact = pending_booking.contact
 
-        # --- MODIFICATION START: Added Detailed Logging ---
         logger.info(
             f"[{webhook_id}] Preparing to send confirmation emails for Booking ID: {pending_booking.id}"
         )
@@ -981,7 +723,6 @@ class ProcessBookingWebhook(APIView):
             logger.error(
                 f"[{webhook_id}] CRITICAL: No recipient (user or contact) found for Booking ID {pending_booking.id}. Cannot send confirmation email."
             )
-        # --- MODIFICATION END ---
 
         if business.newBookingNotification:
             logger.info(
