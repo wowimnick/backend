@@ -108,8 +108,12 @@ class PublicCategoryViewSet(viewsets.ReadOnlyModelViewSet):
             class_count=Count("classes_in_subcategory")
         ).filter(class_count__gt=0)
 
-        return ClassCategory.objects.all().prefetch_related(
-            Prefetch("subcategories", queryset=subcategories_with_classes)
+        return (
+            ClassCategory.objects.all()
+            .order_by("sort_order", "name")
+            .prefetch_related(
+                Prefetch("subcategories", queryset=subcategories_with_classes)
+            )
         )
 
     # --- ADDED: Caching decorator for the list view ---

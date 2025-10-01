@@ -1,5 +1,3 @@
-# --- START OF FILE quickstart/serializers/public/public_class_serializers.py ---
-
 import os
 from django.conf import settings
 from rest_framework import serializers
@@ -9,12 +7,19 @@ from quickstart.models import (
     ClassOption,
     Schedule,
     ClassCategory,
+    ImportedGoogleReview,
 )
 
-from .public_review_serializers import PublicReviewSerializer
+# Important: Import the Google review serializer
+from .public_review_serializers import (
+    PublicReviewSerializer,
+    ImportedGoogleReviewSerializer,
+)
 from django.utils import timezone
 import logging
-from random import uniform  # For coordinate salting if needed here
+from random import uniform
+from decimal import Decimal
+from django.db.models import Count, Avg
 
 logger = logging.getLogger(__name__)
 
@@ -57,21 +62,11 @@ class PublicClassImageSerializer(serializers.ModelSerializer):
             if not original_path.startswith("originals/"):
                 return None
 
-            # 1. Get the base path of the original image, without its extension
-            base_path, _ = os.path.splitext(
-                original_path
-            )  # e.g., "originals/path/image.png" -> "originals/path/image"
-
-            # 2. Replace the path prefix
-            # e.g., "originals/path/image" -> "public/thumb/path/image"
+            base_path, _ = os.path.splitext(original_path)
             resized_base_path = base_path.replace(
                 "originals/", f"public/{size_name}/", 1
             )
-
-            # 3. Add the correct .webp extension
             final_path = resized_base_path + ".webp"
-
-            # 4. Construct the full URL
             return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
 
         return None
@@ -128,7 +123,6 @@ class PublicClassOptionSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-# --- NEW SERIALIZER FOR DETAIL VIEW ---
 class PublicClassOptionWithSchedulesSerializer(PublicClassOptionSerializer):
     """
     Extends the basic option serializer to include its schedules.
@@ -138,7 +132,6 @@ class PublicClassOptionWithSchedulesSerializer(PublicClassOptionSerializer):
     schedules = PublicScheduleSerializer(many=True, read_only=True)
 
     class Meta(PublicClassOptionSerializer.Meta):
-        # Inherit fields and add 'schedules'
         fields = PublicClassOptionSerializer.Meta.fields + ["schedules"]
 
 
@@ -148,11 +141,10 @@ class PublicClassSerializer(serializers.ModelSerializer):
     It does NOT include schedules to keep the payload small.
     """
 
-    # --- Existing fields ---
     options = PublicClassOptionSerializer(many=True, read_only=True)
     images = PublicClassImageSerializer(many=True, read_only=True)
-    average_rating = serializers.FloatField(read_only=True)
-    review_count = serializers.IntegerField(read_only=True)
+    average_rating = serializers.SerializerMethodField()
+    review_count = serializers.SerializerMethodField()
     category_name = serializers.CharField(
         source="category.name", read_only=True, allow_null=True
     )
@@ -180,8 +172,6 @@ class PublicClassSerializer(serializers.ModelSerializer):
     min_course_price = serializers.DecimalField(
         max_digits=10, decimal_places=2, read_only=True
     )
-
-    # --- Methods for dynamic fields ---
     coordinates = serializers.SerializerMethodField(read_only=True)
     is_favorited = serializers.SerializerMethodField()
 
@@ -211,8 +201,8 @@ class PublicClassSerializer(serializers.ModelSerializer):
             "review_count",
             "is_favorited",
             "business_timezone",
-            "city",  # Automatically handled by ModelSerializer
-            "state",  # Automatically handled by ModelSerializer
+            "city",
+            "state",
             "min_session_price",
             "min_course_price",
         ]
@@ -221,21 +211,13 @@ class PublicClassSerializer(serializers.ModelSerializer):
     def get_coordinates(self, obj):
         if obj.point is None:
             return None
-
         try:
             lat, lng = obj.point.y, obj.point.x
-
             if obj.saltLocation:
-                lat_salt = uniform(-0.0005, 0.0005)
-                lng_salt = uniform(-0.0005, 0.0005)
-                lat += lat_salt
-                lng += lng_salt
-
+                lat += uniform(-0.0005, 0.0005)
+                lng += uniform(-0.0005, 0.0005)
             return f"{lat:.8f},{lng:.8f}"
         except (ValueError, TypeError):
-            logger.warning(
-                f"Invalid numeric coordinates for Class {obj.classId} from point object."
-            )
             return None
 
     def get_is_favorited(self, obj):
@@ -244,19 +226,78 @@ class PublicClassSerializer(serializers.ModelSerializer):
             return request.user.favorited.filter(pk=obj.pk).exists()
         return False
 
+    def _get_google_review_stats(self, obj):
+        """Get Google review stats for combined counts"""
+        if not hasattr(self, "_google_review_stats_cache"):
+            self._google_review_stats_cache = {}
+
+        business_id = obj.businessId_id
+        if business_id not in self._google_review_stats_cache:
+            stats = obj.businessId.imported_google_reviews.aggregate(
+                google_count=Count("id"), google_avg_rating=Avg("rating")
+            )
+            self._google_review_stats_cache[business_id] = stats
+
+        return self._google_review_stats_cache[business_id]
+
+    def get_review_count(self, obj):
+        """Return combined review count (platform + Google)"""
+        platform_count = getattr(obj, "review_count", 0) or 0
+        google_stats = self._get_google_review_stats(obj)
+        google_count = google_stats.get("google_count") or 0
+        return platform_count + google_count
+
+    def get_average_rating(self, obj):
+        """Return combined average rating (platform + Google)"""
+        platform_avg = getattr(obj, "average_rating", None)
+        platform_count = getattr(obj, "review_count", 0) or 0
+
+        google_stats = self._get_google_review_stats(obj)
+        google_count = google_stats.get("google_count") or 0
+        google_avg_rating = google_stats.get("google_avg_rating") or 0.0
+
+        platform_avg_decimal = (
+            Decimal(str(platform_avg)) if platform_avg is not None else Decimal("0.0")
+        )
+        google_avg_decimal = (
+            Decimal(str(google_avg_rating))
+            if google_avg_rating is not None
+            else Decimal("0.0")
+        )
+
+        total_reviews = platform_count + google_count
+        if total_reviews == 0:
+            return Decimal("0.0")
+
+        total_rating_sum = (platform_avg_decimal * platform_count) + (
+            google_avg_decimal * google_count
+        )
+        combined_avg = total_rating_sum / total_reviews
+
+        return round(combined_avg, 1)
+
 
 class PublicClassDetailSerializer(PublicClassSerializer):
     """
     The serializer for the class DETAIL VIEW (`/api/classes/<id>/`).
     It inherits everything from the list serializer and overrides the `options`
     field to use the new serializer that INCLUDES schedules.
+
+    Reviews are now paginated separately via the reviews endpoint.
     """
 
     options = PublicClassOptionWithSchedulesSerializer(many=True, read_only=True)
-    initial_reviews = PublicReviewSerializer(
-        many=True, read_only=True, source="reviews"
+    platform_review_count = serializers.IntegerField(
+        source="review_count", read_only=True
     )
+    google_review_count = serializers.SerializerMethodField()
 
     class Meta(PublicClassSerializer.Meta):
-        # Inherit all fields from the parent and add the new one
-        fields = PublicClassSerializer.Meta.fields + ["initial_reviews"]
+        fields = PublicClassSerializer.Meta.fields + [
+            "platform_review_count",
+            "google_review_count",
+        ]
+
+    def get_google_review_count(self, obj):
+        google_stats = self._get_google_review_stats(obj)
+        return google_stats.get("google_count") or 0
