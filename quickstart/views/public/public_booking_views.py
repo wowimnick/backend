@@ -407,18 +407,44 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
                     ]
                 )
 
-            # Send email notifications after successful transaction
-            business_user = (
-                booking.schedule_instance.schedule.option.classId.businessId.owner
-            )
+            # --- NOTIFICATION LOGIC ---
+            # 1. Notify the student who cancelled
             send_booking_cancellation_user_email(
                 user=request.user,
                 booking=booking,
                 refund_details="A refund will be processed if applicable.",
             )
-            send_business_student_cancellation_email(
-                business_user=business_user, booking=booking
-            )
+
+            # 2. Notify the business owner and relevant staff
+            business = booking.schedule_instance.schedule.option.classId.businessId
+            if business.cancellationNotification:
+                logger.info(
+                    f"Preparing to send cancellation notification for booking {booking.id} to business {business.businessId}."
+                )
+
+                # Start with the business owner as a recipient
+                recipients = {business.owner}
+
+                # Find all active staff members whose role has the permission
+                staff_to_notify = BusinessStaff.objects.filter(
+                    business=business,
+                    status="accepted",
+                    role__permissions__codename="receive_booking_notifications",
+                ).select_related("user")
+
+                for staff in staff_to_notify:
+                    if staff.user:
+                        recipients.add(staff.user)
+
+                logger.info(
+                    f"Cancellation notification recipients: {[r.email for r in recipients if r]}"
+                )
+
+                for recipient in recipients:
+                    if recipient and recipient.email:
+                        send_business_student_cancellation_email(
+                            business_user=recipient, booking=booking
+                        )
 
             serializer = self.get_serializer(booking)
             return Response(serializer.data, status=status.HTTP_200_OK)
