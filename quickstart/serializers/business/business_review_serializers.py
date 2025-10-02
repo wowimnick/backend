@@ -1,7 +1,13 @@
 import os
 from django.conf import settings
 from rest_framework import serializers
-from quickstart.models import Reviews, CustomUser, Booking, ClassesMain
+from quickstart.models import (
+    ImportedGoogleReview,
+    Reviews,
+    CustomUser,
+    Booking,
+    ClassesMain,
+)
 
 
 class BusinessReviewUserSerializer(serializers.ModelSerializer):
@@ -30,6 +36,42 @@ class BusinessReviewUserSerializer(serializers.ModelSerializer):
             resized_path = base_path.replace("originals/", "public/thumb/", 1) + ".webp"
             return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
         return None
+
+
+class BusinessImportedGoogleReviewSerializer(serializers.ModelSerializer):
+    """Serializer for displaying Google reviews in business management interface."""
+
+    reviewer_avatar_url = serializers.SerializerMethodField()
+    image_urls = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ImportedGoogleReview
+        fields = [
+            "id",
+            "google_review_id",
+            "reviewer_name",
+            "reviewer_avatar_url",
+            "rating",
+            "comment",
+            "review_date",
+            "owner_response",
+            "owner_response_date",
+            "image_urls",
+            "source",
+        ]
+        read_only_fields = fields
+
+    def get_reviewer_avatar_url(self, obj):
+        if obj.reviewer_avatar:
+            return obj.reviewer_avatar.url
+        return None
+
+    def get_image_urls(self, obj):
+        if not obj.image_urls or not isinstance(obj.image_urls, list):
+            return []
+        from django.core.files.storage import default_storage
+
+        return [default_storage.url(key) for key in obj.image_urls]
 
 
 class BusinessReviewBookingSerializer(serializers.ModelSerializer):

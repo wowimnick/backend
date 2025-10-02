@@ -240,6 +240,14 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                     self.AVERAGE_RATING_SUBQUERY, Value(Decimal("0.0"))
                 ),
                 review_count=Coalesce(self.REVIEW_COUNT_SUBQUERY, Value(0)),
+                last_schedule_date=Subquery(
+                    ScheduleInstance.objects.filter(
+                        schedule__option__classId=OuterRef("pk"),
+                        date__gte=timezone.now().date(),
+                    )
+                    .order_by("-date")
+                    .values("date")[:1]
+                ),
             )
             .distinct()
         )

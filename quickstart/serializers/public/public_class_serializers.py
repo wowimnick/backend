@@ -241,11 +241,24 @@ class PublicClassSerializer(serializers.ModelSerializer):
         return self._google_review_stats_cache[business_id]
 
     def get_review_count(self, obj):
-        """Return combined review count (platform + Google)"""
+        """Return combined review count (platform + Google) with a deterministic offset."""
         platform_count = getattr(obj, "review_count", 0) or 0
         google_stats = self._get_google_review_stats(obj)
         google_count = google_stats.get("google_count") or 0
-        return platform_count + google_count
+        original_count = platform_count + google_count
+
+        if original_count == 0:
+            return 0
+
+        # Generate a deterministic offset between 10-20 based on classId
+        id_str = str(obj.classId)
+        # Using Python's hash is deterministic within a single process execution.
+        # For cross-process/language consistency, a more robust hashing algo like SHA1 could be used,
+        # but for this purpose, hash() is sufficient and simple.
+        py_hash = hash(id_str)
+        offset = 10 + (abs(py_hash) % 11)  # abs() handles potential negative hash value
+
+        return original_count + offset
 
     def get_average_rating(self, obj):
         """Return combined average rating (platform + Google)"""

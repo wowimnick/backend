@@ -783,6 +783,10 @@ class BusinessInfo(models.Model):
             ),
             ("manage_business_roles", "Can create, edit, and manage staff roles"),
             ("manage_own_business_discounts", "Can create, edit, and manage discounts"),
+            (
+                "receive_booking_notifications",
+                "Can receive business notifications for new bookings and cancellations",
+            ),
         ]
 
 
@@ -873,6 +877,7 @@ class BusinessRole(models.Model):
                 "add_business_review_response",
                 "manage_own_business_discounts",
                 "access_business_dashboard",
+                "receive_booking_notifications",
             ],
         },
     )

@@ -501,6 +501,7 @@ class ManagedClassSerializer(serializers.ModelSerializer):
     )
     average_rating = serializers.FloatField(read_only=True)
     review_count = serializers.IntegerField(read_only=True)
+    last_schedule_date = serializers.DateField(read_only=True, allow_null=True)
 
     class Meta:
         model = ClassesMain
@@ -534,6 +535,7 @@ class ManagedClassSerializer(serializers.ModelSerializer):
             "subcategory_name",
             "average_rating",
             "review_count",
+            "last_schedule_date",
         ]
         read_only_fields = [
             "classId",
@@ -549,6 +551,7 @@ class ManagedClassSerializer(serializers.ModelSerializer):
             "subcategory_name",
             "average_rating",
             "review_count",
+            "last_schedule_date",
         ]
 
     def update(self, instance, validated_data):

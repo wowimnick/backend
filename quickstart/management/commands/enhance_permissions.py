@@ -1,3 +1,5 @@
+# quickstart/management/commands/enhance_permissions.py
+
 from django.core.management.base import BaseCommand
 from django.contrib.auth.models import Permission
 from django.db import transaction
@@ -678,6 +680,10 @@ class Command(BaseCommand):
                 "add_business_review_response": {
                     "group": biz_student_engagement_group,
                     "description": "Allows user to write and publish public responses to student reviews.",
+                },
+                "receive_booking_notifications": {
+                    "group": biz_student_engagement_group,
+                    "description": "Staff with this permission will receive email notifications for new bookings and cancellations.",
                 },
             }
 
