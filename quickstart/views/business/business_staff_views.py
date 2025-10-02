@@ -195,12 +195,20 @@ class AcceptStaffInvitationView(generics.GenericAPIView):
                 "This invitation is intended for a different email address."
             )
 
-        if (
+        is_owner = BusinessInfo.objects.filter(owner=request.user).exists()
+
+        # 2. Check if the user is already an accepted staff member of ANY other business.
+        is_staff_member = (
             BusinessStaff.objects.filter(user=request.user, status="accepted")
             .exclude(id=invitation.id)
             .exists()
-        ):
-            raise PermissionDenied("You are already a member of another business team.")
+        )
+
+        # If either of these is true, block the user.
+        if is_owner or is_staff_member:
+            raise PermissionDenied(
+                "This user account is already associated with a business and cannot join another."
+            )
 
         invitation.user = request.user
         invitation.status = "accepted"
@@ -211,7 +219,6 @@ class AcceptStaffInvitationView(generics.GenericAPIView):
             f"User {request.user.email} accepted invitation to join '{invitation.business.businessName}'"
         )
 
-        # --- CRITICAL FIX ---
         # You MUST return the updated user object in the response so the Redux slice can update the permissions.
         serializer = CustomUserDetailsSerializer(
             request.user
