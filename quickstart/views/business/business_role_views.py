@@ -93,10 +93,22 @@ class BusinessRoleViewSet(viewsets.ModelViewSet):
     def update(self, request, *args, **kwargs):
         """
         Handle role updates with an added security check to prevent staff
-        from modifying the permissions of their own role.
+        from modifying the permissions of their own role OR the owner's role.
         """
         user = request.user
         role_to_update = self.get_object()
+
+        # Find the Business Owner's role
+        owner_staff_profile = BusinessStaff.objects.filter(
+            business=role_to_update.business, user=role_to_update.business.owner
+        ).first()
+
+        # If the role being updated is the owner's role, only the owner can edit it.
+        if owner_staff_profile and role_to_update == owner_staff_profile.role:
+            if user != role_to_update.business.owner:
+                raise PermissionDenied(
+                    "Only the business owner can modify the 'Business Owner' role."
+                )
 
         # The business owner is exempt from this check.
         if role_to_update.business.owner != user:
@@ -124,7 +136,6 @@ class BusinessRoleViewSet(viewsets.ModelViewSet):
         # Save the role first
         instance = serializer.save(business=business)
 
-        # MODIFIED: Always add the base dashboard access permission
         try:
             dashboard_perm = Permission.objects.get(
                 codename="access_business_dashboard"
@@ -137,7 +148,6 @@ class BusinessRoleViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         """Ensure the base dashboard access permission cannot be removed."""
-        # MODIFIED: Use the centralized permission check.
         self._check_role_management_permission()
         instance = serializer.save()
         try:
