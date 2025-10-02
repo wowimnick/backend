@@ -1,7 +1,7 @@
 import os
 from django.conf import settings
 from rest_framework import serializers
-from quickstart.models import CustomUser, Reviews
+from quickstart.models import CustomUser, ImportedGoogleReview, Reviews
 
 
 class ReviewSubmissionSerializer(serializers.ModelSerializer):
@@ -130,3 +130,39 @@ class PublicReviewSerializer(serializers.ModelSerializer):
 
     def get_image_medium_url(self, obj):
         return self._get_resized_url(obj, "medium")
+
+
+class ImportedGoogleReviewSerializer(serializers.ModelSerializer):
+    """Serializer for displaying imported Google Reviews."""
+
+    reviewer_avatar_url = serializers.ImageField(
+        source="reviewer_avatar", read_only=True
+    )
+    image_urls = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ImportedGoogleReview
+        fields = [
+            "google_review_id",
+            "reviewer_name",
+            "reviewer_avatar_url",
+            "rating",
+            "comment",
+            "review_date",
+            "owner_response",
+            "image_urls",
+            "source",
+        ]
+
+    def get_image_urls(self, obj):
+        """
+        Constructs full public URLs for the stored image keys.
+        """
+        if not obj.image_urls or not isinstance(obj.image_urls, list):
+            return []
+
+        # Use the default storage to get the public URL for each stored key.
+        # This correctly handles S3/CloudFront domain configuration.
+        from django.core.files.storage import default_storage
+
+        return [default_storage.url(key) for key in obj.image_urls]

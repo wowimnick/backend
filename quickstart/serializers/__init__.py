@@ -75,6 +75,7 @@ from .public.public_review_serializers import (
     ReviewSubmissionSerializer,
     UserReviewSerializer,
     PublicReviewSerializer,
+    ImportedGoogleReviewSerializer,
 )
 
 from .business.business_review_serializers import (
@@ -170,4 +171,5 @@ __all__ = [
     "BusinessReviewUserSerializer",
     "BusinessReviewBookingSerializer",
     "BusinessReviewSerializer",
+    "ImportedGoogleReviewSerializer",
 ]

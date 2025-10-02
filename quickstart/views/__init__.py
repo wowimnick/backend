@@ -69,7 +69,8 @@ from .business.business_payout_views import BusinessPayoutViewSet
 
 from .public.public_review_views import (
     ReviewSubmission,
-    ClassReviews,
+    PlatformClassReviews,
+    ImportedGoogleReviewsView,
 )
 
 from .business.business_staff_views import (
@@ -104,6 +105,7 @@ __all__ = [
     "register_business",
     "MyBusinessProfileView",
     "PublicBusinessInfoViewSet",
+    "ImportedGoogleReviewsView",
     "MyBusinessOverviewView",
     "NotificationViewSet",
     "BusinessDiscountViewSet",
@@ -144,7 +146,7 @@ __all__ = [
     "RevenueAnalyticsView",
     # Review Views
     "ReviewSubmission",
-    "ClassReviews",
+    "PlatformClassReviews",
     "BusinessReviewViewSet",
     # Utils
     "haversine_distance",

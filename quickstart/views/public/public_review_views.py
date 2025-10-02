@@ -1,8 +1,11 @@
+import random
 from rest_framework import status, permissions, generics
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from django.utils.decorators import method_decorator
+from django.views.decorators.cache import cache_page
 from rest_framework.exceptions import (
     ValidationError as DRFValidationError,
     PermissionDenied,
@@ -15,8 +18,9 @@ import logging
 from quickstart.utils.email_utils import send_review_submission_confirmation_email
 
 # Adjust import paths
-from quickstart.models import Reviews, Booking
+from quickstart.models import ImportedGoogleReview, Reviews, Booking
 from quickstart.serializers.public.public_review_serializers import (
+    ImportedGoogleReviewSerializer,
     ReviewSubmissionSerializer,
     PublicReviewSerializer,
 )
@@ -144,27 +148,50 @@ class ReviewSubmission(APIView):
             )
 
 
-class ClassReviews(generics.ListAPIView):
-    """
-    API endpoint for listing approved reviews for a specific class.
-    (PUBLIC CONTEXT)
-    """
-
+class PlatformClassReviews(generics.ListAPIView):
     serializer_class = PublicReviewSerializer
     permission_classes = [AllowAny]
     pagination_class = StandardResultsSetPagination
+
+    # --- CACHING IMPLEMENTED ---
+    # Cache the response for this view for 24 hours (86400 seconds)
+    @method_decorator(cache_page(60 * 60 * 24))
+    def get(self, *args, **kwargs):
+        return super().get(*args, **kwargs)
 
     def get_queryset(self):
         try:
             class_id = int(self.kwargs.get("pk"))
         except (ValueError, TypeError):
-            logger.warning(
-                f"Invalid class ID format in ClassReviews URL: {self.kwargs.get('pk')}"
-            )
             return Reviews.objects.none()
-
         return (
             Reviews.objects.filter(classId=class_id, status="approved")
             .select_related("userId")
             .order_by("-createdAt")
         )
+
+
+class ImportedGoogleReviewsView(generics.ListAPIView):
+    serializer_class = ImportedGoogleReviewSerializer
+    permission_classes = [AllowAny]
+    pagination_class = None
+
+    # --- CACHING IMPLEMENTED ---
+    @method_decorator(cache_page(60 * 60 * 24))
+    def get(self, *args, **kwargs):
+        return super().get(*args, **kwargs)
+
+    def get_queryset(self):
+        try:
+            business_id = int(self.kwargs.get("business_id"))
+            sample_size = int(self.request.query_params.get("sample_size", 10))
+        except (ValueError, TypeError):
+            return ImportedGoogleReview.objects.none()
+
+        all_reviews_qs = ImportedGoogleReview.objects.filter(business_id=business_id)
+        all_reviews_list = list(all_reviews_qs)
+
+        if len(all_reviews_list) <= sample_size:
+            return all_reviews_list
+
+        return random.sample(all_reviews_list, sample_size)

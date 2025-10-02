@@ -5,13 +5,19 @@ from django.contrib.sitemaps.views import sitemap  # Import the sitemap view
 
 # Import your sitemap classes from your app
 from quickstart.views.healthcheck import health_check, robots_txt_view
-from quickstart.sitemaps import ExplorePagesSitemap, StaticViewSitemap, ClassSitemap
+from quickstart.sitemaps import (
+    ExplorePagesSitemap,
+    StaticViewSitemap,
+    ClassSitemap,
+    BusinessSitemap,
+)
 
 # Define the sitemaps dictionary here, at the project level
 sitemaps = {
     "static": StaticViewSitemap,
     "classes": ClassSitemap,
-    'explore': ExplorePagesSitemap,
+    "businesses": BusinessSitemap,
+    "explore": ExplorePagesSitemap,
 }
 
 urlpatterns = [

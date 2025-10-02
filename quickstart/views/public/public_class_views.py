@@ -2,7 +2,7 @@ import math
 from django.http import Http404
 from django.shortcuts import get_object_or_404
 from rest_framework import viewsets, filters, status
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
@@ -59,6 +59,7 @@ from quickstart.models import (
     ClassesMain,
     ClassOption,
     GeographicBoundary,
+    ImportedGoogleReview,
     Reviews,
     Booking,
     Schedule,
@@ -68,6 +69,8 @@ from quickstart.serializers import (
     PublicClassSerializer,
     ScheduleSerializer,
     PublicClassDetailSerializer,
+    PublicReviewSerializer,
+    ImportedGoogleReviewSerializer,
 )
 from django.contrib.gis.geos import Point
 from django.contrib.gis.db.models.functions import Distance
@@ -740,3 +743,112 @@ class PublicScheduleViewSet(viewsets.ReadOnlyModelViewSet):
                     }
                 )
         return Response(availability_by_date)
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def paginated_class_reviews(request, identifier):
+    """
+    Endpoint for paginated reviews (both platform and Google reviews).
+    Accepts either class ID (numeric) or slug.
+
+    Query params:
+    - page: Page number (default: 1)
+    - page_size: Number of reviews per page (default: 10, max: 50)
+    """
+    try:
+        # Get and validate pagination parameters
+        page = int(request.query_params.get("page", 1))
+        page_size = min(int(request.query_params.get("page_size", 10)), 50)
+
+        if page < 1:
+            page = 1
+        if page_size < 1:
+            page_size = 10
+
+        # Get the class - handle both ID and slug
+        queryset = ClassesMain.objects.select_related("businessId").filter(
+            status="active",
+            businessId__isActive=True,
+            businessId__verificationStatus="verified",
+        )
+
+        if identifier.isdigit():
+            class_obj = get_object_or_404(queryset, pk=identifier)
+        else:
+            class_obj = get_object_or_404(queryset, slug=identifier)
+
+        # Fetch platform reviews
+        platform_reviews = (
+            Reviews.objects.filter(classId=class_obj, status="approved")
+            .select_related("userId")
+            .order_by("-createdAt")
+        )
+
+        # Fetch Google reviews
+        google_reviews = ImportedGoogleReview.objects.filter(
+            business=class_obj.businessId
+        ).order_by("-review_date")
+
+        # Format reviews with source tags
+        formatted_platform_reviews = [
+            {
+                **PublicReviewSerializer(review).data,
+                "source": "classeasily",
+                "id": f"p-{review.reviewId}",
+                "date": review.createdAt.isoformat(),
+            }
+            for review in platform_reviews
+        ]
+
+        formatted_google_reviews = [
+            {
+                **ImportedGoogleReviewSerializer(review).data,
+                "source": "google",
+                "id": f"g-{review.google_review_id}",
+                "date": review.review_date.isoformat(),
+            }
+            for review in google_reviews
+        ]
+
+        # Combine and sort all reviews by date
+        all_reviews = formatted_platform_reviews + formatted_google_reviews
+        all_reviews.sort(key=lambda x: x["date"], reverse=True)
+
+        # Calculate pagination
+        total_count = len(all_reviews)
+        start_index = (page - 1) * page_size
+        end_index = start_index + page_size
+
+        paginated_reviews = all_reviews[start_index:end_index]
+        has_more = end_index < total_count
+
+        return Response(
+            {
+                "reviews": paginated_reviews,
+                "pagination": {
+                    "page": page,
+                    "page_size": page_size,
+                    "total_count": total_count,
+                    "has_more": has_more,
+                    "total_pages": (total_count + page_size - 1) // page_size,
+                },
+                "counts": {
+                    "platform_reviews": len(formatted_platform_reviews),
+                    "google_reviews": len(formatted_google_reviews),
+                    "total_reviews": total_count,
+                },
+            }
+        )
+
+    except ValueError:
+        return Response(
+            {"error": "Invalid page or page_size parameter"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    except Exception as e:
+        logger.error(f"Error fetching paginated reviews: {str(e)}", exc_info=True)
+        return Response(
+            {"error": "An error occurred while fetching reviews"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )

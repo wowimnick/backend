@@ -7,6 +7,7 @@ from dj_rest_auth.registration.views import VerifyEmailView, ResendEmailVerifica
 from dj_rest_auth.views import PasswordChangeView
 
 # --- Model import for the new redirect view ---
+from quickstart.views.public.public_class_views import paginated_class_reviews
 from quickstart.views.widget.widget_config_views import WidgetConfigManagementView
 from quickstart.views.admin.payout_management.admin_payout_views import (
     AdminPayoutViewSet,
@@ -73,7 +74,8 @@ from quickstart.views import (
     MyBusinessProfileView,
     PublicBusinessInfoViewSet,
     register_business,
-    ClassReviews,
+    PlatformClassReviews,
+    ImportedGoogleReviewsView,
     BusinessStudentViewSet,
     MyProfileView,
     RevenueAnalyticsView,
@@ -359,7 +361,14 @@ urlpatterns = [
     ),
     path("admin/metrics/", AdminMetricsView.as_view(), name="admin-metrics"),
     path(
-        "classes/<int:pk>/reviews/", ClassReviews.as_view(), name="public-class-reviews"
+        "classes/<str:identifier>/reviews/",
+        paginated_class_reviews,
+        name="class-reviews-paginated",
+    ),
+    path(
+        "business/<int:business_id>/google-reviews/",
+        ImportedGoogleReviewsView.as_view(),
+        name="business-google-reviews",
     ),
     path(
         "business-stats/",

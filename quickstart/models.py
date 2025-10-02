@@ -19,6 +19,7 @@ from django.contrib.postgres.search import SearchVectorField
 from django.contrib.postgres.search import SearchVector
 from django.contrib.postgres.indexes import GinIndex
 from django.db.models.signals import pre_delete
+from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.db.models import (
     Count,
@@ -782,6 +783,10 @@ class BusinessInfo(models.Model):
             ),
             ("manage_business_roles", "Can create, edit, and manage staff roles"),
             ("manage_own_business_discounts", "Can create, edit, and manage discounts"),
+            (
+                "receive_booking_notifications",
+                "Can receive business notifications for new bookings and cancellations",
+            ),
         ]
 
 
@@ -872,6 +877,7 @@ class BusinessRole(models.Model):
                 "add_business_review_response",
                 "manage_own_business_discounts",
                 "access_business_dashboard",
+                "receive_booking_notifications",
             ],
         },
     )
@@ -2648,6 +2654,45 @@ class Reviews(models.Model):
                 )
 
         super().save(*args, **kwargs)
+
+
+class ImportedGoogleReview(models.Model):
+    """
+    Stores reviews scraped from Google Maps to temporarily populate business pages.
+    This keeps scraped data separate from native, user-submitted platform reviews.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        "BusinessInfo", on_delete=models.CASCADE, related_name="imported_google_reviews"
+    )
+
+    # Scraped data fields
+    google_review_id = models.CharField(max_length=255, unique=True, db_index=True)
+    reviewer_name = models.CharField(max_length=255)
+    rating = models.IntegerField(
+        validators=[MinValueValidator(1), MaxValueValidator(5)]
+    )
+    comment = models.TextField(blank=True, null=True)
+    review_date = models.DateTimeField(null=True, blank=True)
+    reviewer_avatar = models.ImageField(
+        upload_to="public/reviews/", blank=True, null=True
+    )
+    owner_response = models.TextField(blank=True, null=True)
+    owner_response_date = models.DateTimeField(null=True, blank=True)
+    image_urls = models.JSONField(default=list, blank=True)  # To store reviewImageUrls
+
+    # For transparency
+    source = models.CharField(max_length=50, default="Google")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Google Review by {self.reviewer_name} for {self.business.businessName}"
+
+    class Meta:
+        db_table = "imported_google_reviews"
+        ordering = ["-review_date"]
 
 
 class SupportTicket(models.Model):

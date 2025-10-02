@@ -53,6 +53,7 @@ from quickstart.models import (
     ScheduleInstance,
     Payment,
     Discount,
+    ImportedGoogleReview,
 )
 
 from .revenue_analytics_views import RevenueAnalyticsView
@@ -574,6 +575,42 @@ class MyBusinessOverviewView(APIView):
             if not recent_activity_data:
                 recent_activity_data = []
 
+        # --- COMBINED REVIEW METRICS (PLATFORM + GOOGLE) ---
+        average_rating_data = {"value": 0.0, "change": 0.0}  # Default
+        try:
+            # Platform stats
+            platform_stats = Reviews.objects.filter(
+                classId__businessId=business, status="approved"
+            ).aggregate(total_reviews=Count("reviewId"), avg_rating=Avg("rating"))
+            platform_total = platform_stats.get("total_reviews") or 0
+            platform_avg = platform_stats.get("avg_rating")
+
+            # Google stats
+            google_stats = ImportedGoogleReview.objects.filter(
+                business=business
+            ).aggregate(total_reviews=Count("id"), avg_rating=Avg("rating"))
+            google_total = google_stats.get("total_reviews") or 0
+            google_avg = google_stats.get("avg_rating")
+
+            total_reviews = platform_total + google_total
+
+            if total_reviews > 0:
+                # Calculate weighted average
+                platform_total_rating = float(platform_avg or 0) * platform_total
+                google_total_rating = float(google_avg or 0) * google_total
+                combined_avg_rating = (
+                    platform_total_rating + google_total_rating
+                ) / total_reviews
+                average_rating_data["value"] = round(combined_avg_rating, 1)
+
+        except Exception as e:
+            logger.error(
+                f"Error calculating combined review metrics for overview (Business {pk}): {e}",
+                exc_info=True,
+            )
+            # Fallback to avoid breaking dashboard on error, but value will be 0.0
+            average_rating_data = {"value": 0.0, "change": 0.0}
+
         # --- Setup Guide Status ---
         profile_fields_to_check = [
             business.businessDescription,
@@ -606,6 +643,38 @@ class MyBusinessOverviewView(APIView):
             option__classId__businessId=business
         ).exists()
 
+        # --- Actionable Prompts: Find classes needing schedules ---
+        actionable_prompts_data = {}
+        try:
+            seven_days_from_now = today_utc_date + timedelta(days=7)
+            active_classes_qs = ClassesMain.objects.filter(
+                businessId=business, status="active"
+            ).annotate(
+                last_schedule_date=Subquery(
+                    ScheduleInstance.objects.filter(
+                        schedule__option__classId=OuterRef("pk"),
+                        date__gte=today_utc_date,
+                    )
+                    .order_by("-date")
+                    .values("date")[:1]
+                )
+            )
+            at_risk_classes = [
+                c
+                for c in active_classes_qs
+                if not c.last_schedule_date
+                or c.last_schedule_date <= seven_days_from_now
+            ]
+            actionable_prompts_data["classes_needing_schedules_count"] = len(
+                at_risk_classes
+            )
+        except Exception as e:
+            logger.error(
+                f"Error calculating classes needing schedules for overview (Business {pk}): {e}",
+                exc_info=True,
+            )
+            actionable_prompts_data["classes_needing_schedules_count"] = 0
+
         setup_progress_data = {
             "is_stripe_connected": business.stripe_account_status == "active",
             "is_profile_complete": is_profile_complete,
@@ -620,10 +689,7 @@ class MyBusinessOverviewView(APIView):
                 "value": business.classes.filter(status="active").count(),
                 "change": 0,
             },
-            "average_rating": {
-                "value": float(business.average_rating or 0.0),
-                "change": 0.0,
-            },
+            "average_rating": average_rating_data,
         }
         # Only add revenue data to the payload if the user has permission
         if can_view_revenue and monthly_revenue is not None:
@@ -636,6 +702,7 @@ class MyBusinessOverviewView(APIView):
             "upcoming_classes": upcoming_classes_data,
             "popular_classes": popular_classes_data,
             "recent_activity": recent_activity_data,
+            "actionable_prompts": actionable_prompts_data,
             "setup_progress": setup_progress_data,  # Added setup progress
         }
         serializer = BusinessDashboardOverviewSerializer(payload)

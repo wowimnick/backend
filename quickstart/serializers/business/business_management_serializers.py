@@ -18,6 +18,7 @@ from quickstart.models import (
     Booking,
     VerificationRequest,
     Role,
+    ImportedGoogleReview,
 )  # Added Role
 from django.db.models import Sum, Count, Avg, Q, Subquery, OuterRef, IntegerField, F
 from django.db.models.functions import Coalesce
@@ -93,6 +94,10 @@ class SetupProgressSerializer(serializers.Serializer):
     has_schedules = serializers.BooleanField()
 
 
+class ActionablePromptsSerializer(serializers.Serializer):
+    classes_needing_schedules_count = serializers.IntegerField(default=0)
+
+
 class BusinessDashboardOverviewSerializer(serializers.Serializer):
     metrics = MetricsContainerSerializer()
     revenue_trend = RevenueTrendItemSerializer(many=True)
@@ -102,7 +107,7 @@ class BusinessDashboardOverviewSerializer(serializers.Serializer):
     today_snapshot = serializers.DictField(
         child=serializers.IntegerField(), required=False
     )
-    actionable_prompts = serializers.DictField(required=False)
+    actionable_prompts = ActionablePromptsSerializer(required=False)
     setup_progress = SetupProgressSerializer(required=False)
 
 
@@ -878,18 +883,36 @@ class BusinessStatsSerializer(serializers.ModelSerializer):
         return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
 
     def get_totalReviews(self, obj):
-        return obj.reviews_directly_to_business.filter(
+        platform_total = obj.reviews_directly_to_business.filter(
             status="approved"
-        ).count()  # Use the direct relation if available
+        ).count()
+        google_total = ImportedGoogleReview.objects.filter(business=obj).count()
+        return platform_total + google_total
 
     def get_average_rating(self, obj):
-        avg = (
-            obj.reviews_directly_to_business.filter(status="approved").aggregate(
-                avg=Avg("rating")
-            )["avg"]
-            or 0.0
+        platform_stats = obj.reviews_directly_to_business.filter(
+            status="approved"
+        ).aggregate(total_reviews=Count("reviewId"), avg_rating=Avg("rating"))
+        platform_total = platform_stats.get("total_reviews") or 0
+        platform_avg = platform_stats.get("avg_rating")
+
+        google_stats = ImportedGoogleReview.objects.filter(business=obj).aggregate(
+            total_reviews=Count("id"), avg_rating=Avg("rating")
         )
-        return round(avg, 1)
+        google_total = google_stats.get("total_reviews") or 0
+        google_avg = google_stats.get("avg_rating")
+
+        total_reviews = platform_total + google_total
+        combined_avg_rating = 0.0
+
+        if total_reviews > 0:
+            platform_total_rating = float(platform_avg or 0) * platform_total
+            google_total_rating = float(google_avg or 0) * google_total
+            combined_avg_rating = (
+                platform_total_rating + google_total_rating
+            ) / total_reviews
+
+        return round(combined_avg_rating, 1)
 
     def get_total_revenue(self, obj):
         valid_booking_ids = (

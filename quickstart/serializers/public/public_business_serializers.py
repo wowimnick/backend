@@ -1,12 +1,14 @@
-# In quickstart/serializers/public/public_business_serializers.py
-
 import os
 from django.conf import settings
 from rest_framework import serializers
-from quickstart.models import BusinessInfo, Reviews
+from quickstart.models import BusinessInfo, Reviews, ImportedGoogleReview
 from .public_class_serializers import PublicClassSerializer
-from .public_review_serializers import PublicReviewSerializer
-from django.db.models import Avg
+from .public_review_serializers import (
+    PublicReviewSerializer,
+    ImportedGoogleReviewSerializer,
+)
+from django.db.models import Avg, Count
+from decimal import Decimal
 
 
 class BusinessContactDetailSerializer(serializers.ModelSerializer):
@@ -29,6 +31,7 @@ class BusinessContactDetailSerializer(serializers.ModelSerializer):
 class PublicBusinessInfoSerializer(serializers.ModelSerializer):
     """Serializer for PUBLIC display of Business Information."""
 
+    # These fields are now handled by the detail serializer or are properties
     average_rating = serializers.DecimalField(
         max_digits=3, decimal_places=1, read_only=True
     )
@@ -59,8 +62,8 @@ class PublicBusinessInfoSerializer(serializers.ModelSerializer):
             "businessUnit",
             "businessCity",
             "businessState",
-            "totalReviews",
-            "average_rating",
+            "totalReviews",  # This will now be the combined count on the detail view
+            "average_rating",  # This will now be the combined rating on the detail view
             "featured",
             "contact_privacy",
             "founding_year",
@@ -98,27 +101,65 @@ class PublicBusinessInfoSerializer(serializers.ModelSerializer):
             representation.pop("studentContactPhone", None)
             representation.pop("studentContactEmail", None)
             representation.pop("website", None)
-            representation.pop(
-                "businessUnit", None
-            )  # Also hide unit if contact is private
+            representation.pop("businessUnit", None)
         return representation
-
-    def get_average_rating(self, obj):
-        # This uses the pre-calculated aggregate field from the model for performance
-        return obj.average_rating
 
 
 class PublicBusinessDetailSerializer(PublicBusinessInfoSerializer):
     """
     A detailed serializer for the standalone business page, including
-    all *active* classes and reviews associated with the business.
+    all *active* classes and now combining platform and Google reviews.
     """
 
     classes = PublicClassSerializer(many=True, read_only=True, source="active_classes")
 
-    reviews = PublicReviewSerializer(
-        many=True, source="reviews_directly_to_business", read_only=True
+    # Overwrite fields from parent to use combined metrics
+    totalReviews = serializers.SerializerMethodField(
+        method_name="get_combined_review_count"
+    )
+    average_rating = serializers.SerializerMethodField(
+        method_name="get_combined_average_rating"
     )
 
     class Meta(PublicBusinessInfoSerializer.Meta):
-        fields = PublicBusinessInfoSerializer.Meta.fields + ["classes", "reviews"]
+        fields = PublicBusinessInfoSerializer.Meta.fields + [
+            "classes",
+        ]
+
+    def get_google_reviews(self, obj):
+        # Fetches all imported google reviews for this business
+        google_reviews = obj.imported_google_reviews.all()
+        return ImportedGoogleReviewSerializer(google_reviews, many=True).data
+
+    def _get_google_review_stats(self, obj):
+        # Helper to get aggregated stats for Google reviews to avoid re-querying
+        if not hasattr(self, "_google_review_stats"):
+            self._google_review_stats = obj.imported_google_reviews.aggregate(
+                google_count=Count("id"), google_avg_rating=Avg("rating")
+            )
+        return self._google_review_stats
+
+    def get_combined_review_count(self, obj):
+        platform_count = obj.total_reviews_count
+        google_stats = self._get_google_review_stats(obj)
+        google_count = google_stats.get("google_count") or 0
+        return platform_count + google_count
+
+    def get_combined_average_rating(self, obj):
+        platform_count = obj.total_reviews_count
+        platform_avg = obj.average_rating or Decimal("0.0")
+
+        google_stats = self._get_google_review_stats(obj)
+        google_count = google_stats.get("google_count") or 0
+        google_avg = google_stats.get("google_avg_rating") or Decimal("0.0")
+
+        total_reviews = platform_count + google_count
+        if total_reviews == 0:
+            return Decimal("0.0")
+
+        total_rating_sum = (platform_avg * platform_count) + (
+            Decimal(google_avg) * google_count
+        )
+        combined_avg = total_rating_sum / total_reviews
+
+        return round(combined_avg, 1)

@@ -25,6 +25,7 @@ from quickstart.models import (
     Payment,
     ScheduleInstance,
     Contact,
+    BusinessStaff,
 )
 from quickstart.serializers.public.public_booking_serializers import (
     BookingCreateSerializer,
@@ -728,7 +729,26 @@ class ProcessBookingWebhook(APIView):
             logger.info(
                 f"[{webhook_id}] Preparing to send new booking notification to business."
             )
-            for recipient in {business.owner} | set(business.managers.all()):
+
+            # Start with the business owner as a recipient
+            recipients = {business.owner}
+
+            # Find all active staff members whose role has the new permission
+            staff_to_notify = BusinessStaff.objects.filter(
+                business=business,
+                status="accepted",
+                role__permissions__codename="receive_booking_notifications",
+            ).select_related("user")
+
+            for staff in staff_to_notify:
+                if staff.user:
+                    recipients.add(staff.user)
+
+            logger.info(
+                f"Notification recipients: {[r.email for r in recipients if r]}"
+            )
+
+            for recipient in recipients:
                 if recipient and recipient.email:
                     send_business_new_booking_email(recipient, pending_booking)
 
