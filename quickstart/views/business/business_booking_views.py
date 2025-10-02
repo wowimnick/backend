@@ -21,6 +21,7 @@ from django.db.models import (
     When,
     BooleanField,
     CharField,
+    Min,
 )
 from django.db.models.functions import (
     TruncDate,
@@ -82,7 +83,7 @@ class CanManageOwnBusinessBookings(BasePermission):
             and BusinessInfo.objects.filter(
                 Q(owner=user)
                 | Q(staff_members__user=user, staff_members__status="accepted")
-            ).first()
+            ).exists()
         )
 
     def has_object_permission(self, request, view, obj):  # obj is Booking instance
@@ -180,6 +181,7 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
             .select_related(
                 "user",
                 "schedule_instance__schedule__option__classId",
+                "contact",  # Added contact
             )
             .order_by("-booking_date")
         )
@@ -659,7 +661,7 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                 if total_booking_transactions > 0
                 else 0
             )
-            # MODIFIED: Coalesce user and contact emails to get unique bookers
+
             user_bookings_in_business = (
                 bookings_qs.annotate(
                     booker_email=Coalesce(
@@ -874,11 +876,6 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
             ]
 
             # --- Booking Lead Time Analysis (Simplified: avg lead time) ---
-            # lead_time_days = ExpressionWrapper(
-            #     F('schedule_instance__date') - TruncDate(F('booking_date')), # Difference between class date and booking date part
-            #     output_field=models.DurationField()
-            # )
-            # For more complex bucketing, Python processing post-fetch might be easier if DB functions are tricky
             avg_lead_time_data = (
                 bookings_qs.filter(status__in=["confirmed", "completed"])
                 .annotate(
@@ -895,62 +892,77 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                 else 0
             )
 
-            # --- New vs. Returning Student Bookings (Simplified: count of bookings by new/returning students in period) ---
-            # Identify users whose first booking with this business falls within the current date range
-            first_booking_dates_subquery = (
+            # --- CORRECTED: New vs. Returning Student Bookings ---
+            # Step 1: Identify all unique bookers (by user_id or contact_id) in the period
+            bookers_in_period_qs = (
+                bookings_qs_base.annotate(
+                    booker_user_id=F("user_id"), booker_contact_id=F("contact_id")
+                )
+                .values("booker_user_id", "booker_contact_id")
+                .distinct()
+            )
+
+            # Step 2: For each booker, find their first-ever booking date for this business
+            first_booking_subquery = (
                 Booking.objects.filter(
-                    Q(user=OuterRef("user")) | Q(contact=OuterRef("contact")),
-                    user__isnull=False,
-                    schedule_instance__schedule__option__classId__businessId=business,
+                    schedule_instance__schedule__option__classId__businessId=business
+                )
+                .filter(
+                    # Match on user OR contact, handling nulls
+                    (
+                        Q(user_id=OuterRef("booker_user_id"))
+                        & Q(booker_user_id__isnull=False)
+                    )
+                    | (
+                        Q(contact_id=OuterRef("booker_contact_id"))
+                        & Q(booker_contact_id__isnull=False)
+                    )
                 )
                 .order_by("booking_date")
                 .values("booking_date")[:1]
             )
 
-            new_vs_returning_data = bookings_qs.annotate(
-                user_first_booking_date=Subquery(
-                    first_booking_dates_subquery, output_field=DateTimeField()
-                )
-            ).aggregate(
-                new_student_bookings=Count(
-                    "id",
-                    filter=Q(
-                        user_first_booking_date__range=[
-                            start_datetime_utc,
-                            end_datetime_utc,
-                        ]
-                    ),
-                ),
-                returning_student_bookings=Count(
-                    "id", filter=Q(user_first_booking_date__lt=start_datetime_utc)
-                ),
-            )
-
-            # --- Occupancy Rate Trends (Simplified: average occupancy for instances that had bookings) ---
-            # This is complex to do efficiently per day. For MVP, overall avg might be simpler or fetched elsewhere.
-            # Let's calculate overall average occupancy for instances *within the booking_date range that had bookings*
-            instances_with_bookings_in_period = (
-                ScheduleInstance.objects.filter(
-                    bookings__in=bookings_qs  # Instances relevant to the bookings in the period
-                )
-                .distinct()
-                .annotate(
-                    total_capacity_for_instances=Sum(
-                        "max_participants"
-                    ),  # Sum of max_participants for these instances
-                    total_booked_spots_for_instances=Sum(
-                        "bookings__participants",
-                        filter=Q(bookings__status__in=["confirmed", "completed"]),
-                    ),  # Sum of booked spots for these instances
+            # Step 3: Annotate the bookers with their first booking date
+            bookers_with_first_date = bookers_in_period_qs.annotate(
+                first_booking_date=Subquery(
+                    first_booking_subquery, output_field=DateTimeField()
                 )
             )
 
-            total_capacity_sum = 0
-            total_booked_sum = 0
-            # Need to iterate to correctly sum capacity as an instance might appear multiple times if not aggregated
-            # A better approach for average daily/weekly occupancy would be a separate query.
-            # For now, let's provide an overall average based on instances that had bookings.
-            # This is an approximation.
+            # Step 4: Categorize bookers into new vs. returning
+            new_booker_filter = Q(
+                first_booking_date__range=(start_datetime_utc, end_datetime_utc)
+            )
+            returning_booker_filter = Q(first_booking_date__lt=start_datetime_utc)
+
+            new_bookers = bookers_with_first_date.filter(new_booker_filter)
+            returning_bookers = bookers_with_first_date.filter(returning_booker_filter)
+
+            # Step 5: Construct filters to count bookings from each group
+            new_booker_q = Q()
+            for b in new_bookers:
+                if b["booker_user_id"]:
+                    new_booker_q |= Q(user_id=b["booker_user_id"])
+                if b["booker_contact_id"]:
+                    new_booker_q |= Q(contact_id=b["booker_contact_id"])
+
+            returning_booker_q = Q()
+            for b in returning_bookers:
+                if b["booker_user_id"]:
+                    returning_booker_q |= Q(user_id=b["booker_user_id"])
+                if b["booker_contact_id"]:
+                    returning_booker_q |= Q(contact_id=b["booker_contact_id"])
+
+            new_student_bookings = (
+                bookings_qs_base.filter(new_booker_q).count() if new_booker_q else 0
+            )
+            returning_student_bookings = (
+                bookings_qs_base.filter(returning_booker_q).count()
+                if returning_booker_q
+                else 0
+            )
+
+            # --- Occupancy Rate Trends ---
             avg_occupancy_data = bookings_qs.filter(
                 schedule_instance__max_participants__gt=0,  # Avoid division by zero
                 status__in=["confirmed", "completed"],
@@ -1036,24 +1048,18 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                     "total_revenue": float(total_aggregates["total_revenue"]),
                     "cancellation_rate_by_transaction": round(cancellation_rate, 1),
                     "booker_retention_rate": round(booker_retention_rate, 1),
-                    "average_lead_time_days": avg_lead_time_days,  # Added
-                    "new_student_bookings": new_vs_returning_data[
-                        "new_student_bookings"
-                    ],  # Added
-                    "returning_student_bookings": new_vs_returning_data[
-                        "returning_student_bookings"
-                    ],  # Added
-                    "average_occupancy_rate": round(average_occupancy_rate, 1),  # Added
+                    "average_lead_time_days": avg_lead_time_days,
+                    "new_student_bookings": new_student_bookings,
+                    "returning_student_bookings": returning_student_bookings,
+                    "average_occupancy_rate": round(average_occupancy_rate, 1),
                 },
-                "trends": processed_trends,  # Modified for local date, net spots, cancelled spots
-                "class_insights": {
-                    "popular_classes": popular_classes
-                },  # Modified with revenue
+                "trends": processed_trends,
+                "class_insights": {"popular_classes": popular_classes},
                 "booking_patterns": {
-                    "time_distribution": time_distribution_local,  # Modified for local hour
+                    "time_distribution": time_distribution_local,
                     "booking_types": booking_types,
                 },
-                "upcoming_classes": upcoming_classes_data,  # ADDED THIS LINE
+                "upcoming_classes": upcoming_classes_data,
             }
             return Response(response_data)
 

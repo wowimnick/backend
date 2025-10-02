@@ -18,14 +18,16 @@ class NotificationViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         # Notifications for the current authenticated user OR for any business they manage/own
         user = self.request.user
-        user_businesses = BusinessInfo.objects.filter(
-            Q(owner=user) | Q(managers=user)
-        ).values_list("pk", flat=True)
+        # --- CORRECTED ---
+        # Uses the standard, correct way to find associated businesses.
+        user_businesses_qs = BusinessInfo.objects.filter(
+            Q(owner=user)
+            | Q(staff_members__user=user, staff_members__status="accepted")
+        ).distinct()
+        business_ids = list(user_businesses_qs.values_list("pk", flat=True))
 
         return (
-            Notification.objects.filter(
-                Q(user=user) | Q(business_id__in=list(user_businesses))
-            )
+            Notification.objects.filter(Q(user=user) | Q(business_id__in=business_ids))
             .select_related("user", "business")
             .distinct()
             .order_by("-created_at")
@@ -51,9 +53,11 @@ class NotificationViewSet(viewsets.ModelViewSet):
         count = cache.get(cache_key_user)
 
         if count is None:  # Cache miss
+            # --- CORRECTED ---
             user_businesses_qs = BusinessInfo.objects.filter(
-                Q(owner=user) | Q(managers=user)
-            )
+                Q(owner=user)
+                | Q(staff_members__user=user, staff_members__status="accepted")
+            ).distinct()
             business_ids = list(user_businesses_qs.values_list("pk", flat=True))
 
             count = (
@@ -79,20 +83,24 @@ class NotificationViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["post"], url_path="mark-all-read")
     def mark_all_as_read(self, request):
         user = request.user
-        user_businesses = BusinessInfo.objects.filter(
-            Q(owner=user) | Q(managers=user)
-        ).values_list("pk", flat=True)
+        # --- CORRECTED ---
+        user_businesses_qs = BusinessInfo.objects.filter(
+            Q(owner=user)
+            | Q(staff_members__user=user, staff_members__status="accepted")
+        ).distinct()
+        business_ids = list(user_businesses_qs.values_list("pk", flat=True))
 
         updated_count = (
             Notification.objects.filter(
-                (Q(user=user) | Q(business_id__in=list(user_businesses))), is_read=False
+                (Q(user=user) | Q(business_id__in=business_ids)), is_read=False
             )
             .distinct()
             .update(is_read=True)
         )
 
         if updated_count > 0:
-            self._clear_unread_count(user, list(user_businesses))
+            # Pass the list of business IDs to the clear function
+            self._clear_unread_count(user, business_ids)
 
         return Response({"message": f"{updated_count} notifications marked as read."})
 

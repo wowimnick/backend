@@ -278,8 +278,8 @@ class MyBusinessOverviewView(APIView):
     def get_business_for_user(self, user):
         businesses_qs = BusinessInfo.objects.filter(
             Q(owner=user)
-            | Q(staff_members__user=user, staff_members__status="accepted").distinct()
-        )
+            | Q(staff_members__user=user, staff_members__status="accepted")
+        ).distinct()
         count = businesses_qs.count()
         if count == 0:
             raise PermissionDenied(
