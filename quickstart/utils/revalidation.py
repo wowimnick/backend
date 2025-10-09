@@ -1,0 +1,114 @@
+import requests
+import logging
+from django.conf import settings
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+
+def trigger_nextjs_revalidation(
+    path: Optional[str] = None, tag: Optional[str] = None
+) -> bool:
+    """
+    Sends a request to the Next.js app to revalidate a path or tag.
+
+    Args:
+        path: The path to revalidate (e.g., "/classes/pottery-class")
+        tag: The tag to revalidate (e.g., "category-pottery")
+
+    Returns:
+        bool: True if revalidation was successful, False otherwise
+    """
+    # Validate configuration
+    if not settings.FRONTEND_BASE_URL:
+        logger.warning("FRONTEND_BASE_URL not configured. Skipping revalidation.")
+        return False
+
+    if not settings.REVALIDATION_SECRET:
+        logger.warning("REVALIDATION_SECRET not configured. Skipping revalidation.")
+        return False
+
+    if not path and not tag:
+        logger.warning("Neither path nor tag provided for revalidation. Skipping.")
+        return False
+
+    # Construct request
+    base_url = f"{settings.FRONTEND_BASE_URL.rstrip('/')}/api/revalidate"
+    headers = {"Content-Type": "application/json"}
+    payload = {"secret": settings.REVALIDATION_SECRET}
+
+    if path:
+        payload["type"] = "path"
+        payload["path"] = path
+        revalidation_target = f"path: {path}"
+    elif tag:
+        payload["type"] = "tag"
+        payload["tag"] = tag
+        revalidation_target = f"tag: {tag}"
+
+    try:
+        response = requests.post(
+            base_url,
+            json=payload,
+            headers=headers,
+            timeout=10,  # Increased timeout slightly
+        )
+        response.raise_for_status()
+
+        logger.info(f"Successfully triggered revalidation for {revalidation_target}")
+        return True
+
+    except requests.exceptions.Timeout:
+        logger.error(f"Timeout while revalidating {revalidation_target}")
+        return False
+
+    except requests.exceptions.HTTPError as e:
+        logger.error(
+            f"HTTP error during revalidation for {revalidation_target}: "
+            f"{e.response.status_code} - {e.response.text}"
+        )
+        return False
+
+    except requests.exceptions.RequestException as e:
+        logger.error(
+            f"Error triggering Next.js revalidation for {revalidation_target}: {e}"
+        )
+        return False
+
+
+def trigger_multiple_revalidations(
+    paths: list[str] = None, tags: list[str] = None
+) -> dict:
+    """
+    Trigger multiple revalidations in a single call.
+
+    Args:
+        paths: List of paths to revalidate
+        tags: List of tags to revalidate
+
+    Returns:
+        dict: Summary of successful and failed revalidations
+    """
+    results = {"successful": [], "failed": [], "total": 0}
+
+    if paths:
+        for path in paths:
+            results["total"] += 1
+            if trigger_nextjs_revalidation(path=path):
+                results["successful"].append(path)
+            else:
+                results["failed"].append(path)
+
+    if tags:
+        for tag in tags:
+            results["total"] += 1
+            if trigger_nextjs_revalidation(tag=tag):
+                results["successful"].append(tag)
+            else:
+                results["failed"].append(tag)
+
+    logger.info(
+        f"Revalidation batch complete: {len(results['successful'])}/{results['total']} successful"
+    )
+
+    return results

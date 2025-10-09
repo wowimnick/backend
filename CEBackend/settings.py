@@ -61,6 +61,7 @@ ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1").split(","
 CSRF_TRUSTED_ORIGINS = os.environ.get(
     "CSRF_TRUSTED_ORIGINS", "http://localhost:5173"
 ).split(",")
+REVALIDATION_SECRET = os.environ.get("REVALIDATION_SECRET")
 CORS_ALLOWED_ORIGINS = CSRF_TRUSTED_ORIGINS
 CORS_ALLOW_CREDENTIALS = True
 CORS_EXPOSE_HEADERS = ["Content-Type", "X-CSRFToken"]
@@ -292,10 +293,10 @@ REST_FRAMEWORK = {
         "rest_framework.throttling.UserRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": {
-        "anon": "40/minute",
-        "user": "100/minute",
+        "anon": "100/minute",
+        "user": "200/minute",
         "burst": "150/minute",
-        "sensitive": "15/minute",
+        "sensitive": "25/minute",
         "chat": "30/minute",
     },
 }
@@ -322,6 +323,7 @@ SIMPLE_JWT = {
 }
 
 FRONTEND_BASE_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+
 FRONTEND_EMAIL_VERIFICATION_PATH = "/verify-email/{key}/"
 FRONTEND_PASSWORD_RESET_CONFIRM_PATH = "/reset-password/{uid}/{token}"
 REST_AUTH = {
