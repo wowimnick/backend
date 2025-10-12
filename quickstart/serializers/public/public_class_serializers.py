@@ -132,47 +132,13 @@ class PublicClassOptionWithSchedulesSerializer(PublicClassOptionSerializer):
         fields = PublicClassOptionSerializer.Meta.fields + ["schedules"]
 
 
-class PublicClassImageListSerializer(serializers.ModelSerializer):
-    """
-    Lightweight image serializer for list views - only returns thumbnail.
-    """
-
-    thumbnail_url = serializers.SerializerMethodField()
-
-    class Meta:
-        model = ClassImage
-        fields = ["imageId", "thumbnail_url"]
-        read_only_fields = fields
-
-    def _get_resized_url(self, obj, size_name):
-        """Constructs a public CloudFront URL for a resized WebP image."""
-        if not getattr(settings, "CLOUDFRONT_DOMAIN", None):
-            logger.warning("CLOUDFRONT_DOMAIN is not configured in settings.py")
-            return None
-
-        if obj.image and obj.image.name:
-            original_path = obj.image.name
-            if not original_path.startswith("originals/"):
-                return None
-            base_path, _ = os.path.splitext(original_path)
-            resized_base_path = base_path.replace(
-                "originals/", f"public/{size_name}/", 1
-            )
-            final_path = resized_base_path + ".webp"
-            return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
-        return None
-
-    def get_thumbnail_url(self, obj):
-        return self._get_resized_url(obj, "thumb")
-
-
 class PublicClassSerializer(serializers.ModelSerializer):
     """
     Serializer for the PUBLIC LIST VIEW of classes. Lean and performant.
     """
 
     options = PublicClassOptionSerializer(many=True, read_only=True)
-    images = PublicClassImageListSerializer(many=True, read_only=True)
+    images = PublicClassImageSerializer(many=True, read_only=True)
     average_rating = serializers.SerializerMethodField()
     review_count = serializers.SerializerMethodField()
     category_name = serializers.CharField(

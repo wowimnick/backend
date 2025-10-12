@@ -131,7 +131,7 @@ class AllCategoriesForBusinessViewSet(viewsets.ReadOnlyModelViewSet):
     MODIFIED: This endpoint is now cached for 15 minutes for performance.
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
     serializer_class = AdminClassCategorySerializer
     pagination_class = None
 
