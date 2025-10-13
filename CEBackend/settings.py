@@ -295,13 +295,17 @@ REST_FRAMEWORK = {
         "rest_framework.throttling.UserRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": {
-        "anon": "100/minute",
-        "user": "200/minute",
-        "burst": "150/minute",
+        "anon": "500/minute",  # ← Increased from 100 to handle builds
+        "user": "1000/minute",  # ← Increased from 200
+        "burst": "300/minute",
         "sensitive": "25/minute",
         "chat": "30/minute",
     },
 }
+
+INTERNAL_IPS = [
+    "172.21.31.174",
+]
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=2000),
