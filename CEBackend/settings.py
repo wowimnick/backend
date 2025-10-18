@@ -77,7 +77,8 @@ CSRF_COOKIE_DOMAIN = COOKIE_DOMAIN
 CSRF_COOKIE_SECURE = IS_DEPLOYED_ENV
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
-CSRF_COOKIE_HTTPONLY = False  # Must be False for JS to read the CSRF token
+CSRF_USE_SESSIONS = False
+CSRF_COOKIE_HTTPONLY = False
 CSRF_COOKIE_SAMESITE = "Lax"
 
 if IS_DEPLOYED_ENV:
@@ -150,6 +151,7 @@ MIDDLEWARE = [
     "quickstart.middleware.SeoStagingMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
+    "quickstart.middleware.DisableCSRFForJWTMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
@@ -308,21 +310,20 @@ INTERNAL_IPS = [
 ]
 
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=2000),
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),  # Reduced from 2000 minutes
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
     "ROTATE_REFRESH_TOKENS": True,
-    "AUTH_COOKIE_DOMAIN": COOKIE_DOMAIN,
     "BLACKLIST_AFTER_ROTATION": True,
     "UPDATE_LAST_LOGIN": True,
     "ALGORITHM": "HS256",
     "SIGNING_KEY": SECRET_KEY,
-    "VERIFYING_KEY": None,
     "AUTH_COOKIE": "my-app-auth",
     "AUTH_COOKIE_REFRESH": "my-refresh-token",
+    "AUTH_COOKIE_DOMAIN": COOKIE_DOMAIN,  # CRITICAL: Must match
     "AUTH_COOKIE_SECURE": IS_DEPLOYED_ENV,
     "AUTH_COOKIE_HTTP_ONLY": True,
     "AUTH_COOKIE_PATH": "/",
-    "AUTH_COOKIE_SAMESITE": "Lax",
+    "AUTH_COOKIE_SAMESITE": "Lax",  # CRITICAL: Must be Lax
     "AUTH_HEADER_TYPES": ("Bearer",),
     "USER_ID_FIELD": "userId",
     "USER_ID_CLAIM": "user_id",
