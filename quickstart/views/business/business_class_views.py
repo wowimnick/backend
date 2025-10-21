@@ -250,6 +250,36 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
             .distinct()
         )
 
+    # --- ADDED: Helper function for revalidation ---
+    def _trigger_class_revalidation(self, class_instance):
+        """Helper to trigger all necessary revalidations for a class."""
+        if not class_instance:
+            return
+
+        # 1. Revalidate by TAG (this is what actually works for cached pages)
+        if hasattr(class_instance, "slug") and class_instance.slug:
+            trigger_nextjs_revalidation(tag=f"class-{class_instance.slug}")
+
+        # 2. Also revalidate by class ID tag (if your fetcher uses it)
+        trigger_nextjs_revalidation(tag=f"class-{class_instance.classId}")
+
+        # 3. Revalidate the homepage to update the "Find a Class" section
+        trigger_nextjs_revalidation(path="/")
+
+        # 4. Revalidate cache tags to update explore/search pages
+        tags_to_revalidate = ["classes-search", "homepage-classes", "classes"]
+        if class_instance.category and hasattr(class_instance.category, "key"):
+            tags_to_revalidate.append(f"category-{class_instance.category.key}")
+        if class_instance.subcategory and hasattr(class_instance.subcategory, "key"):
+            tags_to_revalidate.append(f"subcategory-{class_instance.subcategory.key}")
+
+        for tag in tags_to_revalidate:
+            trigger_nextjs_revalidation(tag=tag)
+
+        logger.info(
+            f"Triggered revalidation for class {class_instance.pk} (slug: {class_instance.slug}) and related tags."
+        )
+
     def perform_create(self, serializer):
         """Associate the new class with the user's business and handle images/options from S3 keys."""
         user = self.request.user
@@ -277,15 +307,8 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                 )
                 self._process_images_and_options_on_create(instance, request_data)
 
-            # --- ADDED: Trigger revalidation after successful creation ---
-            if instance and hasattr(instance, "slug") and instance.slug:
-                class_path = f"/classes/{instance.slug}"
-                trigger_nextjs_revalidation(path=class_path)
-                # Also revalidate pages where this new class might appear
-                trigger_nextjs_revalidation(path="/")
-                # Example of revalidating by tag if you use them on category pages
-                # if instance.category and hasattr(instance.category, 'key'):
-                #     trigger_nextjs_revalidation(tag=f"category-{instance.category.key}")
+            # --- MODIFIED: Trigger revalidation after successful creation ---
+            self._trigger_class_revalidation(instance)
 
         except DRFValidationError as e:
             logger.warning(
@@ -377,6 +400,10 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
         instance = serializer.instance
         user = self.request.user
         request_data = self.request.data
+
+        # --- MODIFIED: Get old category/subcategory keys BEFORE update for comparison ---
+        old_category_key = instance.category.key if instance.category else None
+        old_subcategory_key = instance.subcategory.key if instance.subcategory else None
 
         with transaction.atomic():
             updated_instance = serializer.save()
@@ -470,29 +497,32 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                         {"options": f"Failed to update class options: {str(e)}"}
                     )
 
-        # --- ADDED: Trigger revalidation after successful update ---
-        if (
-            updated_instance
-            and hasattr(updated_instance, "slug")
-            and updated_instance.slug
-        ):
-            class_path = f"/classes/{updated_instance.slug}"
-            trigger_nextjs_revalidation(path=class_path)
-            trigger_nextjs_revalidation(path="/")  # Also revalidate homepage
+        # --- MODIFIED: Trigger revalidation for the updated class ---
+        self._trigger_class_revalidation(updated_instance)
+
+        # --- MODIFIED: Also revalidate old category tags if they have changed ---
+        new_category_key = (
+            updated_instance.category.key if updated_instance.category else None
+        )
+        new_subcategory_key = (
+            updated_instance.subcategory.key if updated_instance.subcategory else None
+        )
+
+        if old_category_key and old_category_key != new_category_key:
+            trigger_nextjs_revalidation(tag=f"category-{old_category_key}")
+        if old_subcategory_key and old_subcategory_key != new_subcategory_key:
+            trigger_nextjs_revalidation(tag=f"subcategory-{old_subcategory_key}")
 
     def perform_destroy(self, instance):
-        class_title = instance.title
-        class_pk = instance.pk
-        user_email = self.request.user.email
-        # --- ADDED: Get the slug before the instance is modified ---
-        class_slug = instance.slug if hasattr(instance, "slug") else None
+        # --- MODIFIED: Capture instance data before modification ---
+        class_to_revalidate = instance
 
         try:
             with transaction.atomic():
                 instance.status = "suspended"
                 instance.save(update_fields=["status"])
                 logger.info(
-                    f"Class '{class_title}' (ID: {class_pk}) status set to 'suspended' by business user {user_email}."
+                    f"Class '{class_to_revalidate.title}' (ID: {class_to_revalidate.pk}) status set to 'suspended' by business user {self.request.user.email}."
                 )
 
                 today = timezone.now().date()
@@ -508,9 +538,7 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                         status="confirmed",
                     ).select_related("user")
 
-                    cancellation_reason = (
-                        f"The class '{class_title}' is no longer available."
-                    )
+                    cancellation_reason = f"The class '{class_to_revalidate.title}' is no longer available."
                     contact_info = settings.NOTIFICATION_SETTINGS.get(
                         "reply_to", "support@classeasily.com"
                     )
@@ -539,22 +567,15 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                     )
                 else:
                     logger.info(
-                        f"No active future schedule instances found to delete for class '{class_title}' (ID: {class_pk})."
+                        f"No active future schedule instances found to delete for class '{class_to_revalidate.title}' (ID: {class_to_revalidate.pk})."
                     )
 
-            # --- ADDED: Trigger revalidation after suspension ---
-            # Revalidating the path will clear the old page from the cache.
-            # Next.js will then either show a 404 or a page indicating the class is unavailable,
-            # depending on your frontend logic.
-            if class_slug:
-                class_path = f"/classes/{class_slug}"
-                trigger_nextjs_revalidation(path=class_path)
-            # Revalidate list pages where the class would have appeared.
-            trigger_nextjs_revalidation(path="/")
+            # --- MODIFIED: Trigger revalidation after suspension ---
+            self._trigger_class_revalidation(class_to_revalidate)
 
         except Exception as e:
             logger.error(
-                f"Error during deactivation and cleanup for class {class_pk}: {str(e)}",
+                f"Error during deactivation and cleanup for class {class_to_revalidate.pk}: {str(e)}",
                 exc_info=True,
             )
             raise DRFValidationError(
@@ -563,9 +584,6 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["get"], url_path="contact-info")
     def contact_info(self, request, *args, **kwargs):
-        """
-        Retrieves the primary contact information for the user's associated business.
-        """
         user = request.user
         business = BusinessInfo.objects.filter(
             Q(owner=user)
@@ -579,7 +597,6 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["delete"], url_path="images/(?P<image_id>[^/.]+)")
     def delete_image(self, request, pk=None, image_id=None):
-        """Delete a specific class image."""
         class_instance = self.get_object()
         try:
             image = get_object_or_404(
@@ -625,12 +642,8 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
             f"Class '{class_instance.title}' status toggled from {old_status} to {new_status} by {request.user.email}"
         )
 
-        # --- ADDED: Trigger revalidation after toggling status ---
-        if hasattr(class_instance, "slug") and class_instance.slug:
-            class_path = f"/classes/{class_instance.slug}"
-            trigger_nextjs_revalidation(path=class_path)
-            # Revalidate list pages as the class may now appear or disappear
-            trigger_nextjs_revalidation(path="/")
+        # --- MODIFIED: Trigger revalidation after toggling status ---
+        self._trigger_class_revalidation(class_instance)
 
         return Response({"status": class_instance.status})
 

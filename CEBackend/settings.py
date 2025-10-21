@@ -61,7 +61,7 @@ ALLOWED_HOSTS = os.environ.get(
     "ALLOWED_HOSTS", "localhost,127.0.0.1,172.21.16.1"
 ).split(",")
 CSRF_TRUSTED_ORIGINS = os.environ.get(
-    "CSRF_TRUSTED_ORIGINS", "http://localhost:5173"
+    "CSRF_TRUSTED_ORIGINS", "http://localhost:3000"
 ).split(",")
 REVALIDATION_SECRET = os.environ.get("REVALIDATION_SECRET")
 CORS_ALLOWED_ORIGINS = CSRF_TRUSTED_ORIGINS
@@ -329,7 +329,7 @@ SIMPLE_JWT = {
     "USER_ID_CLAIM": "user_id",
 }
 
-FRONTEND_BASE_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+FRONTEND_BASE_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 
 FRONTEND_EMAIL_VERIFICATION_PATH = "/verify-email/{key}/"
 FRONTEND_PASSWORD_RESET_CONFIRM_PATH = "/reset-password/{uid}/{token}"
