@@ -37,6 +37,14 @@ def trigger_nextjs_revalidation(
     headers = {"Content-Type": "application/json"}
     payload = {"secret": settings.REVALIDATION_SECRET}
 
+    # Add Vercel bypass token if configured (for staging/protected deployments)
+    if (
+        hasattr(settings, "VERCEL_AUTOMATION_BYPASS_SECRET")
+        and settings.VERCEL_AUTOMATION_BYPASS_SECRET
+    ):
+        headers["x-vercel-protection-bypass"] = settings.VERCEL_AUTOMATION_BYPASS_SECRET
+        logger.debug("Using Vercel bypass token for revalidation")
+
     if path:
         payload["type"] = "path"
         payload["path"] = path
@@ -51,7 +59,7 @@ def trigger_nextjs_revalidation(
             base_url,
             json=payload,
             headers=headers,
-            timeout=10,  # Increased timeout slightly
+            timeout=10,
         )
         response.raise_for_status()
 
