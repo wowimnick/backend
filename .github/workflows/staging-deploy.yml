@@ -63,6 +63,7 @@ jobs:
             CSRF_TRUSTED_ORIGINS=${{ secrets.CSRF_TRUSTED_ORIGINS }}
             SECURE_SSL_REDIRECT=${{ secrets.SECURE_SSL_REDIRECT }}
             REVALIDATION_SECRET=${{ secrets.REVALIDATION_SECRET }}
+            VERCEL_AUTOMATION_BYPASS_SECRET=${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
 
             # --- Database, Cache, S3, etc. ---
             DB_ENGINE=${{ secrets.DB_ENGINE }}
