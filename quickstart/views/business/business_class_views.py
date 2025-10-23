@@ -250,7 +250,6 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
             .distinct()
         )
 
-    # --- ADDED: Helper function for revalidation ---
     def _trigger_class_revalidation(self, class_instance):
         """Helper to trigger all necessary revalidations for a class."""
         if not class_instance:
@@ -266,7 +265,13 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
         # 3. Revalidate the homepage to update the "Find a Class" section
         trigger_nextjs_revalidation(path="/")
 
-        # 4. Revalidate cache tags to update explore/search pages
+        # 4. NEW: Revalidate the business page
+        if class_instance.businessId and hasattr(class_instance.businessId, "slug"):
+            business_slug = class_instance.businessId.slug
+            trigger_nextjs_revalidation(tag=f"business-{business_slug}")
+            logger.info(f"Revalidated business page: business-{business_slug}")
+
+        # 5. Revalidate cache tags to update explore/search pages
         tags_to_revalidate = ["classes-search", "homepage-classes", "classes"]
         if class_instance.category and hasattr(class_instance.category, "key"):
             tags_to_revalidate.append(f"category-{class_instance.category.key}")
@@ -817,6 +822,11 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
                 f"Single Session Schedule and its instance created for Option ID {option.optionId} by {user.email}"
             )
 
+        # --- ADDED: Trigger revalidation for the class page ---
+        class_obj = option.classId
+        trigger_nextjs_revalidation(path=f"/classes/{class_obj.slug}")
+        logger.info(f"Revalidated class page: /classes/{class_obj.slug}")
+
     @action(detail=False, methods=["post"], url_path="bulk-create")
     def bulk_create(self, request, *args, **kwargs):
         """
@@ -907,6 +917,13 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
                 f"Bulk created {len(created_schedules)} schedules for option {option.pk} by {request.user.email} ({skipped_count} skipped)."
             )
 
+            # --- ADDED: Trigger revalidation for the class page ---
+            class_obj = option.classId
+            trigger_nextjs_revalidation(path=f"/classes/{class_obj.slug}")
+            logger.info(
+                f"Revalidated class page after bulk schedule creation: /classes/{class_obj.slug}"
+            )
+
             response_serializer = self.get_serializer(created_schedules, many=True)
             return Response(
                 {
@@ -968,10 +985,19 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
                 "Cannot delete group: one or more schedules have confirmed bookings."
             )
 
+        # Store class info before deletion
+        class_obj = option.classId
+
         deleted_count, _ = schedules_to_delete.delete()
 
         logger.info(
             f"User {user.email} deleted schedule group '{group_name}' ({deleted_count} schedules) for option {option.pk}."
+        )
+
+        # --- ADDED: Trigger revalidation for the class page ---
+        trigger_nextjs_revalidation(path=f"/classes/{class_obj.slug}")
+        logger.info(
+            f"Revalidated class page after group deletion: /classes/{class_obj.slug}"
         )
 
         return Response(
@@ -985,7 +1011,16 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
         instance = self.get_object()
         serializer.validated_data.pop("option", None)
         updated_instance = serializer.save()
+
         logger.info(f"Schedule ID {instance.pk} updated by {self.request.user.email}")
+
+        # --- ADDED: Trigger revalidation for the class page ---
+        option = instance.option
+        class_obj = option.classId
+        trigger_nextjs_revalidation(path=f"/classes/{class_obj.slug}")
+        logger.info(
+            f"Revalidated class page after schedule update: /classes/{class_obj.slug}"
+        )
 
     def perform_destroy(self, instance):
         schedule_id = instance.pk
@@ -1005,10 +1040,20 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
                 "Please cancel or reassign bookings first, or cancel individual future sessions."
             )
 
+        # Store class info before deletion
+        option = instance.option
+        class_obj = option.classId
+
         # If no confirmed bookings, proceed with deletion (which cascades to instances)
         instance.delete()
         logger.info(
             f"Schedule ID {schedule_id} deleted by {self.request.user.email} (hard delete executed)."
+        )
+
+        # --- ADDED: Trigger revalidation for the class page ---
+        trigger_nextjs_revalidation(path=f"/classes/{class_obj.slug}")
+        logger.info(
+            f"Revalidated class page after schedule deletion: /classes/{class_obj.slug}"
         )
 
 
