@@ -822,20 +822,48 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         if not request.user.has_perm("quickstart.add_classcategory"):
             self.permission_denied(request, message="You cannot create categories.")
-        # The serializer now handles the creation logic with the S3 key
-        return super().create(request, *args, **kwargs)
+
+        response = super().create(request, *args, **kwargs)
+
+        # --- ADDED: Trigger revalidation after category creation ---
+        if response.status_code == status.HTTP_201_CREATED:
+            trigger_nextjs_revalidation(path="/")
+            trigger_nextjs_revalidation(tag="classes-search")
+            trigger_nextjs_revalidation(tag="homepage-classes")
+            logger.info(f"Revalidated homepage and class pages after category creation")
+
+        return response
 
     def update(self, request, *args, **kwargs):
         if not request.user.has_perm("quickstart.change_classcategory"):
             self.permission_denied(request, message="You cannot update categories.")
+
         instance = self.get_object()
         old_name = instance.name
-        # The serializer now handles the update logic with the S3 key
+        old_key = instance.key  # Capture old key for potential revalidation
+
         response = super().update(request, *args, **kwargs)
+
         if response.status_code == status.HTTP_200_OK:
             logger.info(
                 f"Category '{old_name}' (ID: {instance.pk}) updated by Admin {request.user.email}"
             )
+
+            # --- ADDED: Trigger revalidation after category update ---
+            trigger_nextjs_revalidation(path="/")
+            trigger_nextjs_revalidation(tag="classes-search")
+            trigger_nextjs_revalidation(tag="homepage-classes")
+
+            # Revalidate old category key if it changed
+            instance.refresh_from_db()
+            if old_key != instance.key:
+                trigger_nextjs_revalidation(tag=f"category-{old_key}")
+
+            # Revalidate new/current category key
+            trigger_nextjs_revalidation(tag=f"category-{instance.key}")
+
+            logger.info(f"Revalidated homepage and class pages after category update")
+
         return response
 
     def destroy(self, request, *args, **kwargs):
@@ -855,10 +883,22 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
             )
 
         category_name = instance.name
+        category_key = instance.key  # Capture before deletion
+
         instance.delete()
+
         logger.warning(
             f"Category '{category_name}' (ID: {instance.pk}) with no classes deleted by Admin {request.user.email}"
         )
+
+        # --- ADDED: Trigger revalidation after category deletion ---
+        trigger_nextjs_revalidation(path="/")
+        trigger_nextjs_revalidation(tag="classes-search")
+        trigger_nextjs_revalidation(tag="homepage-classes")
+        trigger_nextjs_revalidation(tag=f"category-{category_key}")
+
+        logger.info(f"Revalidated homepage and class pages after category deletion")
+
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     def list(self, request, *args, **kwargs):
@@ -959,10 +999,24 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
 
         # Now, delete the old category (this will cascade to its subcategories)
         category_name = category_to_delete.name
+        category_key = category_to_delete.key  # Capture before deletion
+        new_category_key = new_category.key
+
         category_to_delete.delete()
 
         logger.warning(
             f"Category '{category_name}' (ID: {pk}) deleted after reassigning classes by Admin {request.user.email}."
+        )
+
+        # --- ADDED: Trigger revalidation after category deletion with reassignment ---
+        trigger_nextjs_revalidation(path="/")
+        trigger_nextjs_revalidation(tag="classes-search")
+        trigger_nextjs_revalidation(tag="homepage-classes")
+        trigger_nextjs_revalidation(tag=f"category-{category_key}")
+        trigger_nextjs_revalidation(tag=f"category-{new_category_key}")
+
+        logger.info(
+            f"Revalidated homepage and class pages after category reassignment and deletion"
         )
 
         return Response(
