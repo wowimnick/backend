@@ -829,6 +829,7 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
         if response.status_code == status.HTTP_201_CREATED:
             trigger_nextjs_revalidation(path="/")
             trigger_nextjs_revalidation(tag="classes-search")
+            trigger_nextjs_revalidation(tag="homepage-categories")
             trigger_nextjs_revalidation(tag="homepage-classes")
             logger.info(f"Revalidated homepage and class pages after category creation")
 
@@ -852,6 +853,8 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
             # --- ADDED: Trigger revalidation after category update ---
             trigger_nextjs_revalidation(path="/")
             trigger_nextjs_revalidation(tag="classes-search")
+            trigger_nextjs_revalidation(tag="homepage-categories")
+
             trigger_nextjs_revalidation(tag="homepage-classes")
 
             # Revalidate old category key if it changed
@@ -894,6 +897,8 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
         # --- ADDED: Trigger revalidation after category deletion ---
         trigger_nextjs_revalidation(path="/")
         trigger_nextjs_revalidation(tag="classes-search")
+        trigger_nextjs_revalidation(tag="homepage-categories")
+
         trigger_nextjs_revalidation(tag="homepage-classes")
         trigger_nextjs_revalidation(tag=f"category-{category_key}")
 
