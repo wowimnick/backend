@@ -8,6 +8,7 @@ from django.utils import timezone
 import logging
 from django.db.models import Q
 
+from quickstart.utils.revalidation import trigger_nextjs_revalidation
 from quickstart.models import (
     VerificationRequest,
     VerificationDocument,
@@ -15,7 +16,7 @@ from quickstart.models import (
     CustomUser,
     Role,
     BusinessInfo,
-)  # <<< ADDED Role, BusinessInfo
+)
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
@@ -182,6 +183,37 @@ class VerificationRequestViewSet(viewsets.ModelViewSet):
             status=status.HTTP_201_CREATED,
         )
 
+    def _trigger_business_approval_revalidation(self, business_instance):
+        """
+        Helper to trigger revalidation when a business is approved.
+        This makes the business visible on the frontend immediately.
+        """
+        if not business_instance:
+            return
+
+        try:
+            # 1. Revalidate the newly approved business page
+            if hasattr(business_instance, "slug") and business_instance.slug:
+                trigger_nextjs_revalidation(tag=f"business-{business_instance.slug}")
+
+            trigger_nextjs_revalidation(tag=f"business-{business_instance.businessId}")
+
+            # 3. Optionally revalidate homepage to feature new business
+            # Uncomment if you want immediate visibility on homepage
+            # trigger_nextjs_revalidation(path="/")
+            # trigger_nextjs_revalidation(tag="homepage-businesses")
+
+            logger.info(
+                f"Triggered revalidation for newly approved business {business_instance.businessId} "
+                f"(slug: {business_instance.slug})"
+            )
+        except Exception as e:
+            # Don't fail the approval if revalidation fails
+            logger.error(
+                f"Error triggering revalidation for approved business {business_instance.businessId}: {e}",
+                exc_info=True,
+            )
+
     @action(detail=True, methods=["post"])
     def process_verification(self, request, pk=None):
         """Endpoint for admins to approve or reject verification requests"""
@@ -197,18 +229,14 @@ class VerificationRequestViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
 
         validated_data = serializer.validated_data
-        action_input = validated_data.get("status")  # Will be 'approved' or 'rejected'
+        action_input = validated_data.get("status")
         notes = validated_data.get("notes", "")
-        rejection_reason = validated_data.get(
-            "rejection_reason", ""
-        )  # Now correctly uses the validated field
+        rejection_reason = validated_data.get("rejection_reason", "")
 
         target_db_status = None
-        if action_input == "approved":  # CORRECTED: Was 'approve'
-            target_db_status = (
-                VERIFIED_STATUS  # This correctly uses the 'verified' constant
-            )
-        elif action_input == "rejected":  # CORRECTED: Was 'reject'
+        if action_input == "approved":
+            target_db_status = VERIFIED_STATUS
+        elif action_input == "rejected":
             target_db_status = "rejected"
 
         if target_db_status is None:
@@ -221,22 +249,18 @@ class VerificationRequestViewSet(viewsets.ModelViewSet):
             )
 
         # --- Update the VerificationRequest model instance ---
-        # The VerificationRequest.save() method will handle syncing `status` to `BusinessInfo.verificationStatus`
         verification.status = target_db_status
         verification.notes = notes
-        verification.rejection_reason = (
-            rejection_reason  # Use the correct, validated reason
-        )
+        verification.rejection_reason = rejection_reason
         verification.reviewed_by = request.user
         verification.reviewed_at = timezone.now()
-        verification.save()  # This triggers the sync in VerificationRequest.save()
+        verification.save()
 
-        # --- Post-save actions (Logging, Email, Role Change, Business Activation) ---
+        # --- Post-save actions (Logging, Email, Role Change, Business Activation, Revalidation) ---
         action_code = None
         log_details = f"Verification request {verification.status}"
-        if (
-            verification.status == VERIFIED_STATUS
-        ):  # Check against consistent 'verified'
+
+        if verification.status == VERIFIED_STATUS:
             action_code = "verification_approve"
             try:
                 if verification.user and verification.business:
@@ -251,22 +275,18 @@ class VerificationRequestViewSet(viewsets.ModelViewSet):
                         target_role = Role.objects.get(name=BUSINESS_OWNER_ROLE_NAME)
                         current_role = verification.user.role
 
-                        # Determine if we should assign the new role
                         should_assign_role = False
                         if current_role is None:
-                            # If user has no role, assign the Business Owner role
                             should_assign_role = True
                             logger.info(
                                 f"User {verification.user.email} has no current role. Assigning '{target_role.name}'."
                             )
                         elif target_role.hierarchy_level > current_role.hierarchy_level:
-                            # Only assign if the Business Owner role is a promotion
                             should_assign_role = True
                             logger.info(
                                 f"Upgrading user {verification.user.email} from '{current_role.name}' (level {current_role.hierarchy_level}) to '{target_role.name}' (level {target_role.hierarchy_level})."
                             )
                         else:
-                            # Do not demote or change role if current role is of equal or higher hierarchy
                             logger.info(
                                 f"User {verification.user.email} retains current role '{current_role.name}' (level {current_role.hierarchy_level}) as it is not lower than '{target_role.name}'. No role change."
                             )
@@ -324,13 +344,14 @@ class VerificationRequestViewSet(viewsets.ModelViewSet):
                             f"Business {verification.business.businessId} was already active."
                         )
 
+                    # --- ADDED: Trigger revalidation for newly approved business ---
+                    self._trigger_business_approval_revalidation(verification.business)
+
                 else:
                     logger.error(
                         f"Cannot process approval actions for verification {verification.id}: Missing user or business link."
                     )
-            except (
-                Exception
-            ) as approval_action_error:  # Catch-all for errors during approval post-actions
+            except Exception as approval_action_error:
                 logger.error(
                     f"Error during post-approval actions for verification {verification.id}: {approval_action_error}",
                     exc_info=True,

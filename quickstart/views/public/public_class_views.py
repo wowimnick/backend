@@ -137,9 +137,9 @@ def normalize_province_name(location_text):
 
 
 class StandardResultsSetPagination(PageNumberPagination):
-    page_size = 12
+    page_size = 6
     page_size_query_param = "page_size"
-    max_page_size = 48
+    max_page_size = 24
 
 
 class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
@@ -221,6 +221,20 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         .values("price")[:1],
         output_field=DecimalField(max_digits=10, decimal_places=2),
     )
+
+    def list(self, request, *args, **kwargs):
+        response = super().list(request, *args, **kwargs)
+
+        # Log response size
+        import json
+
+        response_size = len(json.dumps(response.data))
+        logger.info(f"Response size: {response_size / 1024 / 1024:.2f} MB")
+
+        if response_size > 6000000:
+            logger.error(f"⚠️ Response exceeds 6MB! Size: {response_size} bytes")
+
+        return response
 
     def get_queryset(self):
         queryset = (

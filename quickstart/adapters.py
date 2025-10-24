@@ -31,7 +31,6 @@ class CustomAccountAdapter(DefaultAccountAdapter):
         """
         base_url = settings.FRONTEND_BASE_URL
 
-        # --- THE FIX: NO MORE FUCKING ENCODING. USE THE RAW PK. ---
         uid = user.pk
 
         logger.info(f"CustomAccountAdapter - User PK: {user.pk}")

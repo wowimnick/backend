@@ -57,10 +57,13 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 
 # --- Security & Network Settings ---
-ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
-CSRF_TRUSTED_ORIGINS = os.environ.get(
-    "CSRF_TRUSTED_ORIGINS", "http://localhost:5173"
+ALLOWED_HOSTS = os.environ.get(
+    "ALLOWED_HOSTS", "localhost,127.0.0.1,172.21.16.1"
 ).split(",")
+CSRF_TRUSTED_ORIGINS = os.environ.get(
+    "CSRF_TRUSTED_ORIGINS", "http://localhost:3000"
+).split(",")
+REVALIDATION_SECRET = os.environ.get("REVALIDATION_SECRET")
 CORS_ALLOWED_ORIGINS = CSRF_TRUSTED_ORIGINS
 CORS_ALLOW_CREDENTIALS = True
 CORS_EXPOSE_HEADERS = ["Content-Type", "X-CSRFToken"]
@@ -74,7 +77,8 @@ CSRF_COOKIE_DOMAIN = COOKIE_DOMAIN
 CSRF_COOKIE_SECURE = IS_DEPLOYED_ENV
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
-CSRF_COOKIE_HTTPONLY = False  # Must be False for JS to read the CSRF token
+CSRF_USE_SESSIONS = False
+CSRF_COOKIE_HTTPONLY = False
 CSRF_COOKIE_SAMESITE = "Lax"
 
 if IS_DEPLOYED_ENV:
@@ -99,6 +103,7 @@ STRIPE_CONNECT_WEBHOOK_SECRET = os.environ.get("STRIPE_CONNECT_WEBHOOK_SECRET")
 # Secret for the endpoint at /api/payments/webhook/
 STRIPE_PAYMENTS_WEBHOOK_SECRET = os.environ.get("STRIPE_PAYMENTS_WEBHOOK_SECRET")
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
+VERCEL_AUTOMATION_BYPASS_SECRET = os.environ["VERCEL_AUTOMATION_BYPASS_SECRET"]
 
 
 # --- Installed Apps ---
@@ -147,6 +152,7 @@ MIDDLEWARE = [
     "quickstart.middleware.SeoStagingMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
+    "quickstart.middleware.DisableCSRFForJWTMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
@@ -292,36 +298,40 @@ REST_FRAMEWORK = {
         "rest_framework.throttling.UserRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": {
-        "anon": "40/minute",
-        "user": "100/minute",
-        "burst": "150/minute",
-        "sensitive": "15/minute",
+        "anon": "500/minute",  # ← Increased from 100 to handle builds
+        "user": "1000/minute",  # ← Increased from 200
+        "burst": "300/minute",
+        "sensitive": "25/minute",
         "chat": "30/minute",
     },
 }
 
+INTERNAL_IPS = [
+    "172.21.31.174",
+]
+
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=2000),
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),  # Reduced from 2000 minutes
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
     "ROTATE_REFRESH_TOKENS": True,
-    "AUTH_COOKIE_DOMAIN": COOKIE_DOMAIN,
     "BLACKLIST_AFTER_ROTATION": True,
     "UPDATE_LAST_LOGIN": True,
     "ALGORITHM": "HS256",
     "SIGNING_KEY": SECRET_KEY,
-    "VERIFYING_KEY": None,
     "AUTH_COOKIE": "my-app-auth",
     "AUTH_COOKIE_REFRESH": "my-refresh-token",
+    "AUTH_COOKIE_DOMAIN": COOKIE_DOMAIN,  # CRITICAL: Must match
     "AUTH_COOKIE_SECURE": IS_DEPLOYED_ENV,
     "AUTH_COOKIE_HTTP_ONLY": True,
     "AUTH_COOKIE_PATH": "/",
-    "AUTH_COOKIE_SAMESITE": "Lax",
+    "AUTH_COOKIE_SAMESITE": "Lax",  # CRITICAL: Must be Lax
     "AUTH_HEADER_TYPES": ("Bearer",),
     "USER_ID_FIELD": "userId",
     "USER_ID_CLAIM": "user_id",
 }
 
-FRONTEND_BASE_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+FRONTEND_BASE_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+
 FRONTEND_EMAIL_VERIFICATION_PATH = "/verify-email/{key}/"
 FRONTEND_PASSWORD_RESET_CONFIRM_PATH = "/reset-password/{uid}/{token}"
 REST_AUTH = {

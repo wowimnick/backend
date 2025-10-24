@@ -43,6 +43,7 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 import pytz
 import logging
 
+from quickstart.utils.revalidation import trigger_nextjs_revalidation
 from quickstart.models import (
     BusinessInfo,
     Booking,
@@ -948,40 +949,87 @@ class MyBusinessProfileView(generics.RetrieveUpdateDestroyAPIView):
 
         return Response(serializer.data)
 
+    def _trigger_business_revalidation(self, business_instance):
+        """
+        Helper to trigger all necessary revalidations for a business.
+        Called after business profile updates or deletion.
+        Uses tag-based revalidation to match the caching strategy.
+        """
+        if not business_instance:
+            return
+
+        # 1. Revalidate the business page by TAG (this is what actually works for cached pages)
+        if hasattr(business_instance, "slug") and business_instance.slug:
+            trigger_nextjs_revalidation(tag=f"business-{business_instance.slug}")
+
+        # 2. Also revalidate by business ID tag (if your fetcher uses it)
+        trigger_nextjs_revalidation(tag=f"business-{business_instance.businessId}")
+
+        # 3. Revalidate all class pages belonging to this business
+        # (since class pages display business info like name, description, etc.)
+        try:
+            business_classes = ClassesMain.objects.filter(
+                businessId=business_instance,
+                status__in=["active", "inactive"],  # Don't revalidate suspended classes
+            ).only("slug", "classId")
+
+            for class_obj in business_classes:
+                if hasattr(class_obj, "slug") and class_obj.slug:
+                    # Revalidate by tag (matches the pattern used in class updates)
+                    trigger_nextjs_revalidation(tag=f"class-{class_obj.slug}")
+                    trigger_nextjs_revalidation(tag=f"class-{class_obj.classId}")
+
+        except Exception as e:
+            logger.error(
+                f"Error revalidating class pages for business {business_instance.businessId}: {e}",
+                exc_info=True,
+            )
+
+        # 4. Revalidate the businesses list/explore pages
+        trigger_nextjs_revalidation(tag="businesses-list")
+
+        # 5. Let homepage and explore pages invalidate naturally with their 1-hour cache
+        # No need to revalidate them immediately for business updates
+
+        logger.info(
+            f"Triggered revalidation for business {business_instance.businessId} "
+            f"(slug: {business_instance.slug}) and its {business_classes.count() if 'business_classes' in locals() else 0} associated class pages."
+        )
+
     def perform_update(self, serializer):
         """
-        Called by `update` method. Saves the serializer.
-        Sensitive fields are expected to be handled by `read_only_fields` in the serializer
-        or by not being included in the `fields` list for update operations.
-        The serializer's `update` method contains the specific logic for saving fields
-        (e.g., handling `businessImage` removal/update).
+        Called by `update` method. Saves the serializer and triggers revalidation.
         """
         try:
             business = serializer.save()
             logger.info(
-                f"Business Profile '{business.businessName}' (ID: {business.pk}) updated by user {self.request.user.email}"
+                f"Business Profile '{business.businessName}' (ID: {business.pk}) "
+                f"updated by user {self.request.user.email}"
             )
+
+            # --- ADDED: Trigger revalidation after successful update ---
+            self._trigger_business_revalidation(business)
+
         except Exception as e:
-            # This will typically catch database errors or model clean errors not caught by serializer validation
             logger.error(
-                f"Error in perform_update for Business (ID: {serializer.instance.pk}, User: {self.request.user.email}): {str(e)}",
+                f"Error in perform_update for Business (ID: {serializer.instance.pk}, "
+                f"User: {self.request.user.email}): {str(e)}",
                 exc_info=True,
             )
-            # Re-raise a DRFValidationError to ensure a proper 400 response if it's a save-time validation issue,
-            # or let it propagate if it's a more critical server error.
-            # For simplicity here, we'll let the generic exception handler in `update` catch it.
-            raise  # Re-raise the original exception to be caught by the caller
+            raise
 
     def perform_destroy(self, instance):
         """
         Handles the "deletion" of a business profile by the owner.
-        This is a SOFT DELETE. The business is deactivated, not removed from the database.
-        This preserves historical data and prevents orphaned Stripe accounts.
+        This is a SOFT DELETE with revalidation.
         """
         business_name = instance.businessName
         business_id = instance.businessId
         user_email = self.request.user.email
         today = timezone.now().date()
+
+        # --- ADDED: Capture business data before modification for revalidation ---
+        business_to_revalidate = instance
 
         # --- SAFETY CHECK: Block deletion if there are future, confirmed bookings ---
         has_future_bookings = Booking.objects.filter(
@@ -992,12 +1040,14 @@ class MyBusinessProfileView(generics.RetrieveUpdateDestroyAPIView):
 
         if has_future_bookings:
             logger.warning(
-                f"Attempt to delete Business Profile '{business_name}' (ID: {business_id}) by {user_email} was BLOCKED due to future confirmed bookings."
+                f"Attempt to delete Business Profile '{business_name}' (ID: {business_id}) "
+                f"by {user_email} was BLOCKED due to future confirmed bookings."
             )
-            # Use DRFValidationError to send a structured 400 error to the client.
             raise DRFValidationError(
                 {
-                    "detail": "Cannot deactivate your profile because you have future, confirmed bookings. Please cancel or complete these bookings before deactivating your business."
+                    "detail": "Cannot deactivate your profile because you have future, "
+                    "confirmed bookings. Please cancel or complete these bookings before "
+                    "deactivating your business."
                 }
             )
 
@@ -1005,13 +1055,14 @@ class MyBusinessProfileView(generics.RetrieveUpdateDestroyAPIView):
             with transaction.atomic():
                 # Step 1: Deactivate the business profile
                 instance.isActive = False
-                instance.verificationStatus = "closed"  # Use a distinct status
+                instance.verificationStatus = "closed"
                 instance.save(update_fields=["isActive", "verificationStatus"])
                 logger.warning(
-                    f"Business Profile '{business_name}' (ID: {business_id}) DEACTIVATED (soft-deleted) by owner/manager {user_email}"
+                    f"Business Profile '{business_name}' (ID: {business_id}) "
+                    f"DEACTIVATED (soft-deleted) by owner/manager {user_email}"
                 )
 
-                # Step 2: Clean up all future, scheduled (but not booked) instances for this business.
+                # Step 2: Clean up all future, scheduled (but not booked) instances
                 future_instances_to_delete = ScheduleInstance.objects.filter(
                     schedule__option__classId__businessId=instance,
                     date__gte=today,
@@ -1024,16 +1075,17 @@ class MyBusinessProfileView(generics.RetrieveUpdateDestroyAPIView):
                         instance_to_delete.delete()
                         deleted_count += 1
                     logger.info(
-                        f"Cleaned up {deleted_count} future schedule instances for deactivated business {business_id}."
+                        f"Cleaned up {deleted_count} future schedule instances for "
+                        f"deactivated business {business_id}."
                     )
 
-                # NOTE: The businessImage file on S3 is intentionally NOT deleted.
-                # This preserves it in case the user wishes to reactivate their account.
-                # A separate, manual admin process should handle permanent data purging for GDPR/compliance.
+            # --- ADDED: Trigger revalidation after successful deactivation ---
+            self._trigger_business_revalidation(business_to_revalidate)
 
         except Exception as e:
             logger.error(
-                f"Error deactivating Business Profile '{business_name}' (ID: {business_id}) by user {user_email}: {str(e)}",
+                f"Error deactivating Business Profile '{business_name}' (ID: {business_id}) "
+                f"by user {user_email}: {str(e)}",
                 exc_info=True,
             )
             raise DRFValidationError(

@@ -42,7 +42,7 @@ from rest_framework.permissions import AllowAny
 from quickstart.serializers.admin.class_management.class_management_serializers import (
     AdminClassCategorySerializer,
 )
-
+from quickstart.utils.revalidation import trigger_nextjs_revalidation
 from quickstart.utils.email_utils import send_booking_cancelled_by_other_email
 
 from quickstart.models import (
@@ -131,7 +131,7 @@ class AllCategoriesForBusinessViewSet(viewsets.ReadOnlyModelViewSet):
     MODIFIED: This endpoint is now cached for 15 minutes for performance.
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
     serializer_class = AdminClassCategorySerializer
     pagination_class = None
 
@@ -158,14 +158,13 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
     """
     ViewSet for Business Users to manage their own ClassesMain.
     Handles CRUD, image management, and status toggling.
-    MODIFIED to handle image uploads via S3 keys.
+    MODIFIED to handle image uploads via S3 keys and trigger Next.js revalidation.
     """
 
     permission_classes = [
         IsAuthenticated,
         CanManageOwnClasses,
     ]
-    # MODIFIED: JSONParser is now the primary parser for create/update.
     parser_classes = [JSONParser, FormParser, MultiPartParser]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     pagination_class = StandardResultsSetPagination
@@ -187,7 +186,6 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
     ]
     ordering = ["-updatedAt"]
 
-    # --- Subqueries for Annotations (Business Context) ---
     AVERAGE_RATING_SUBQUERY = Subquery(
         Reviews.objects.filter(classId=OuterRef("pk"))
         .values("classId")
@@ -252,6 +250,41 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
             .distinct()
         )
 
+    def _trigger_class_revalidation(self, class_instance):
+        """Helper to trigger all necessary revalidations for a class."""
+        if not class_instance:
+            return
+
+        # 1. Revalidate by TAG (this is what actually works for cached pages)
+        if hasattr(class_instance, "slug") and class_instance.slug:
+            trigger_nextjs_revalidation(tag=f"class-{class_instance.slug}")
+
+        # 2. Also revalidate by class ID tag (if your fetcher uses it)
+        trigger_nextjs_revalidation(tag=f"class-{class_instance.classId}")
+
+        # 3. Revalidate the homepage to update the "Find a Class" section
+        trigger_nextjs_revalidation(path="/")
+
+        # 4. NEW: Revalidate the business page
+        if class_instance.businessId and hasattr(class_instance.businessId, "slug"):
+            business_slug = class_instance.businessId.slug
+            trigger_nextjs_revalidation(tag=f"business-{business_slug}")
+            logger.info(f"Revalidated business page: business-{business_slug}")
+
+        # 5. Revalidate cache tags to update explore/search pages
+        tags_to_revalidate = ["classes-search", "homepage-classes", "classes"]
+        if class_instance.category and hasattr(class_instance.category, "key"):
+            tags_to_revalidate.append(f"category-{class_instance.category.key}")
+        if class_instance.subcategory and hasattr(class_instance.subcategory, "key"):
+            tags_to_revalidate.append(f"subcategory-{class_instance.subcategory.key}")
+
+        for tag in tags_to_revalidate:
+            trigger_nextjs_revalidation(tag=tag)
+
+        logger.info(
+            f"Triggered revalidation for class {class_instance.pk} (slug: {class_instance.slug}) and related tags."
+        )
+
     def perform_create(self, serializer):
         """Associate the new class with the user's business and handle images/options from S3 keys."""
         user = self.request.user
@@ -268,10 +301,6 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
         instance = None
         try:
             with transaction.atomic():
-                # The serializer now handles category/subcategory lookup.
-                # We pass the businessId and new structured location fields to its save method.
-                # NOTE: Your ClassCreateSerializer's .create() method must be updated
-                # to handle and save the 'city' and 'state' fields.
                 instance = serializer.save(
                     businessId=business,
                     status="active",
@@ -281,17 +310,17 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                 logger.info(
                     f"Class '{instance.title}' (ID: {instance.classId}) created for business '{business.businessName}' by user {user.email}"
                 )
-
-                # This helper function processes images and options from the raw request data
                 self._process_images_and_options_on_create(instance, request_data)
+
+            # --- MODIFIED: Trigger revalidation after successful creation ---
+            self._trigger_class_revalidation(instance)
 
         except DRFValidationError as e:
             logger.warning(
                 f"Validation error during class creation by {user.email}: {e.detail}"
             )
-            raise  # Re-raise the validation error
+            raise
         except Exception as e:
-            # If the instance was created but an error occurred later, delete it to prevent orphaned classes.
             if instance and instance.pk:
                 instance.delete()
             logger.error(
@@ -306,7 +335,6 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
 
     def _process_images_and_options_on_create(self, class_instance, request_data):
         """Helper to handle images (from S3 keys) and options during creation."""
-        # 1. Handle Class Images from S3 Keys
         image_s3_keys = request_data.get("image_s3_keys", [])
         cover_image_s3_key = request_data.get("cover_image_s3_key")
 
@@ -338,7 +366,6 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
             f"Bulk-created {len(image_objects_to_create)} images for class {class_instance.classId} from S3 keys."
         )
 
-        # 2. Handle Single Class Option
         options_json_string = request_data.get("options")
         if not options_json_string:
             raise DRFValidationError({"options": "Class option data is required."})
@@ -373,20 +400,22 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         """
-        Handles updates for a class, including its related images and options.
+        Handles updates for a class, its images, and options, then triggers revalidation.
         """
         instance = serializer.instance
         user = self.request.user
         request_data = self.request.data
 
+        # --- MODIFIED: Get old category/subcategory keys BEFORE update for comparison ---
+        old_category_key = instance.category.key if instance.category else None
+        old_subcategory_key = instance.subcategory.key if instance.subcategory else None
+
         with transaction.atomic():
-            # 1. Update Class Info (including new location fields from serializer)
             updated_instance = serializer.save()
             logger.info(
                 f"Class '{updated_instance.title}' (ID: {updated_instance.pk}) base fields updated by user {user.email}"
             )
 
-            # 2. Handle Image Deletions based on IDs from payload
             delete_image_ids_str = request_data.get("delete_image_ids", "[]")
             try:
                 delete_image_ids = json.loads(delete_image_ids_str)
@@ -407,7 +436,6 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                     f"Could not parse delete_image_ids: {delete_image_ids_str}"
                 )
 
-            # 3. Handle NEW Image Additions from a list of S3 keys
             new_image_s3_keys_str = request_data.get("new_image_s3_keys", "[]")
             try:
                 new_image_s3_keys = json.loads(new_image_s3_keys_str)
@@ -425,7 +453,6 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                     f"Could not parse new_image_s3_keys: {new_image_s3_keys_str}"
                 )
 
-            # 4. Handle Cover Image Assignment
             cover_image_id_str = request_data.get("cover_image_id")
             cover_image_s3_key = request_data.get("cover_image_s3_key")
 
@@ -452,7 +479,6 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                     first_image.isCover = True
                     first_image.save(update_fields=["isCover"])
 
-            # 5. Handle ClassOption Updates
             options_json_string = request_data.get("options")
             if options_json_string:
                 try:
@@ -476,24 +502,34 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                         {"options": f"Failed to update class options: {str(e)}"}
                     )
 
-    def perform_destroy(self, instance):
-        # Permissions are already checked by the view's get_object method.
-        class_title = instance.title
-        class_pk = instance.pk
-        user_email = self.request.user.email
+        # --- MODIFIED: Trigger revalidation for the updated class ---
+        self._trigger_class_revalidation(updated_instance)
 
-        # Use a transaction to ensure that suspending the class and deleting its
-        # future instances happen together or not at all.
+        # --- MODIFIED: Also revalidate old category tags if they have changed ---
+        new_category_key = (
+            updated_instance.category.key if updated_instance.category else None
+        )
+        new_subcategory_key = (
+            updated_instance.subcategory.key if updated_instance.subcategory else None
+        )
+
+        if old_category_key and old_category_key != new_category_key:
+            trigger_nextjs_revalidation(tag=f"category-{old_category_key}")
+        if old_subcategory_key and old_subcategory_key != new_subcategory_key:
+            trigger_nextjs_revalidation(tag=f"subcategory-{old_subcategory_key}")
+
+    def perform_destroy(self, instance):
+        # --- MODIFIED: Capture instance data before modification ---
+        class_to_revalidate = instance
+
         try:
             with transaction.atomic():
-                # Step 1: Soft-delete (suspend) the main class object.
                 instance.status = "suspended"
                 instance.save(update_fields=["status"])
                 logger.info(
-                    f"Class '{class_title}' (ID: {class_pk}) status set to 'suspended' by business user {user_email}."
+                    f"Class '{class_to_revalidate.title}' (ID: {class_to_revalidate.pk}) status set to 'suspended' by business user {self.request.user.email}."
                 )
 
-                # Step 2: Find all future, scheduled instances associated with this class.
                 today = timezone.now().date()
                 future_instances_to_delete = ScheduleInstance.objects.filter(
                     schedule__option__classId=instance,
@@ -502,16 +538,12 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                 )
 
                 if future_instances_to_delete.exists():
-                    # --- START: ADDED EMAIL NOTIFICATION LOGIC ---
-                    # Find all confirmed bookings associated with these future instances
                     bookings_to_cancel = Booking.objects.filter(
                         schedule_instance__in=future_instances_to_delete,
                         status="confirmed",
                     ).select_related("user")
 
-                    cancellation_reason = (
-                        f"The class '{class_title}' is no longer available."
-                    )
+                    cancellation_reason = f"The class '{class_to_revalidate.title}' is no longer available."
                     contact_info = settings.NOTIFICATION_SETTINGS.get(
                         "reply_to", "support@classeasily.com"
                     )
@@ -530,37 +562,33 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                                 f"Failed to send class suspension cancellation email for booking {booking.id}: {email_error}",
                                 exc_info=True,
                             )
-                    # --- END: ADDED EMAIL NOTIFICATION LOGIC ---
 
                     deleted_count = 0
                     for instance_to_delete in future_instances_to_delete:
-                        instance_to_delete.delete()  # This now calls the correct model method
+                        instance_to_delete.delete()
                         deleted_count += 1
                     logger.info(
                         f"Successfully deleted {deleted_count} future schedule instances for suspended class '{instance.title}' (ID: {instance.pk})."
                     )
                 else:
                     logger.info(
-                        f"No active future schedule instances found to delete for class '{class_title}' (ID: {class_pk})."
+                        f"No active future schedule instances found to delete for class '{class_to_revalidate.title}' (ID: {class_to_revalidate.pk})."
                     )
+
+            # --- MODIFIED: Trigger revalidation after suspension ---
+            self._trigger_class_revalidation(class_to_revalidate)
 
         except Exception as e:
             logger.error(
-                f"Error during deactivation and cleanup for class {class_pk}: {str(e)}",
+                f"Error during deactivation and cleanup for class {class_to_revalidate.pk}: {str(e)}",
                 exc_info=True,
             )
             raise DRFValidationError(
                 f"Could not deactivate the class and its schedules due to an error: {str(e)}"
             )
 
-    # --- Custom Actions for Business Management ---
-
     @action(detail=False, methods=["get"], url_path="contact-info")
     def contact_info(self, request, *args, **kwargs):
-        """
-        Retrieves the primary contact information for the user's associated business.
-        Used to pre-fill forms like the class creation contact step.
-        """
         user = request.user
         business = BusinessInfo.objects.filter(
             Q(owner=user)
@@ -574,7 +602,6 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["delete"], url_path="images/(?P<image_id>[^/.]+)")
     def delete_image(self, request, pk=None, image_id=None):
-        """Delete a specific class image."""
         class_instance = self.get_object()
         try:
             image = get_object_or_404(
@@ -595,18 +622,16 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
             )
             return Response(status=status.HTTP_204_NO_CONTENT)
         except Http404:
-            raise NotFound("Image not found for this class.")  # Use NotFound
+            raise NotFound("Image not found for this class.")
         except Exception as e:
             logger.error(
                 f"Error deleting image {image_id} for class {pk}: {e}", exc_info=True
             )
             raise DRFValidationError({"error": f"Failed to delete image: {e}"})
 
-    @action(
-        detail=True, methods=["patch"], url_path="toggle-active"
-    )  # More RESTful path
+    @action(detail=True, methods=["patch"], url_path="toggle-active")
     def toggle_class_active(self, request, pk=None):
-        """Toggle class active/inactive status (Business user action)."""
+        """Toggle class active/inactive status and trigger revalidation."""
         class_instance = self.get_object()
         if class_instance.status == "suspended":
             raise PermissionDenied(
@@ -621,6 +646,10 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
         logger.info(
             f"Class '{class_instance.title}' status toggled from {old_status} to {new_status} by {request.user.email}"
         )
+
+        # --- MODIFIED: Trigger revalidation after toggling status ---
+        self._trigger_class_revalidation(class_instance)
+
         return Response({"status": class_instance.status})
 
 
@@ -793,6 +822,11 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
                 f"Single Session Schedule and its instance created for Option ID {option.optionId} by {user.email}"
             )
 
+        # --- ADDED: Trigger revalidation for the class page ---
+        class_obj = option.classId
+        trigger_nextjs_revalidation(path=f"/classes/{class_obj.slug}")
+        logger.info(f"Revalidated class page: /classes/{class_obj.slug}")
+
     @action(detail=False, methods=["post"], url_path="bulk-create")
     def bulk_create(self, request, *args, **kwargs):
         """
@@ -883,6 +917,13 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
                 f"Bulk created {len(created_schedules)} schedules for option {option.pk} by {request.user.email} ({skipped_count} skipped)."
             )
 
+            # --- ADDED: Trigger revalidation for the class page ---
+            class_obj = option.classId
+            trigger_nextjs_revalidation(path=f"/classes/{class_obj.slug}")
+            logger.info(
+                f"Revalidated class page after bulk schedule creation: /classes/{class_obj.slug}"
+            )
+
             response_serializer = self.get_serializer(created_schedules, many=True)
             return Response(
                 {
@@ -944,10 +985,19 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
                 "Cannot delete group: one or more schedules have confirmed bookings."
             )
 
+        # Store class info before deletion
+        class_obj = option.classId
+
         deleted_count, _ = schedules_to_delete.delete()
 
         logger.info(
             f"User {user.email} deleted schedule group '{group_name}' ({deleted_count} schedules) for option {option.pk}."
+        )
+
+        # --- ADDED: Trigger revalidation for the class page ---
+        trigger_nextjs_revalidation(path=f"/classes/{class_obj.slug}")
+        logger.info(
+            f"Revalidated class page after group deletion: /classes/{class_obj.slug}"
         )
 
         return Response(
@@ -961,7 +1011,16 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
         instance = self.get_object()
         serializer.validated_data.pop("option", None)
         updated_instance = serializer.save()
+
         logger.info(f"Schedule ID {instance.pk} updated by {self.request.user.email}")
+
+        # --- ADDED: Trigger revalidation for the class page ---
+        option = instance.option
+        class_obj = option.classId
+        trigger_nextjs_revalidation(path=f"/classes/{class_obj.slug}")
+        logger.info(
+            f"Revalidated class page after schedule update: /classes/{class_obj.slug}"
+        )
 
     def perform_destroy(self, instance):
         schedule_id = instance.pk
@@ -981,10 +1040,20 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
                 "Please cancel or reassign bookings first, or cancel individual future sessions."
             )
 
+        # Store class info before deletion
+        option = instance.option
+        class_obj = option.classId
+
         # If no confirmed bookings, proceed with deletion (which cascades to instances)
         instance.delete()
         logger.info(
             f"Schedule ID {schedule_id} deleted by {self.request.user.email} (hard delete executed)."
+        )
+
+        # --- ADDED: Trigger revalidation for the class page ---
+        trigger_nextjs_revalidation(path=f"/classes/{class_obj.slug}")
+        logger.info(
+            f"Revalidated class page after schedule deletion: /classes/{class_obj.slug}"
         )
 
 

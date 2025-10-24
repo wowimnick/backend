@@ -1,4 +1,3 @@
-# quickstart/views/business/business_booking_views.py
 from decimal import Decimal
 from django.conf import settings
 from django.db import models, transaction
@@ -909,13 +908,10 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                 )
                 .filter(
                     # Match on user OR contact, handling nulls
-                    (
-                        Q(user_id=OuterRef("booker_user_id"))
-                        & Q(booker_user_id__isnull=False)
-                    )
+                    (Q(user_id=OuterRef("booker_user_id")) & Q(user_id__isnull=False))
                     | (
                         Q(contact_id=OuterRef("booker_contact_id"))
-                        & Q(booker_contact_id__isnull=False)
+                        & Q(contact_id__isnull=False)
                     )
                 )
                 .order_by("booking_date")

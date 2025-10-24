@@ -313,6 +313,7 @@ class UserUpdateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def patch(self, request):
+        """Handles partial updates to the user profile."""
         serializer = CustomUserDetailsSerializer(
             request.user, data=request.data, partial=True, context={"request": request}
         )
@@ -320,6 +321,13 @@ class UserUpdateView(APIView):
             serializer.save()
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def put(self, request):
+        """
+        Handles full updates by delegating to the patch method.
+        This resolves potential '405 Method Not Allowed' errors.
+        """
+        return self.patch(request)
 
 
 class LogoutView(APIView):

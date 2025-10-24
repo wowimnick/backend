@@ -32,6 +32,7 @@ from django.http import HttpResponse  # For CSV export
 import csv  # For CSV export
 import logging
 
+from quickstart.utils.revalidation import trigger_nextjs_revalidation
 from quickstart.models import (
     ClassCategory,
     ClassImage,
@@ -104,6 +105,40 @@ class CanAccessReviewAdmin(BasePermission):
         return request.user.has_perm(
             "quickstart.access_review_admin"
         )  # Make sure this permission exists
+
+
+def _trigger_class_revalidation(self, class_instance):
+    """Helper to trigger all necessary revalidations for a class."""
+    if not class_instance:
+        return
+
+    # 1. Revalidate the class detail page by tags
+    if hasattr(class_instance, "slug") and class_instance.slug:
+        trigger_nextjs_revalidation(tag=f"class-{class_instance.slug}")
+
+    trigger_nextjs_revalidation(tag=f"class-{class_instance.classId}")
+
+    # 2. Revalidate the business page if the class belongs to a business
+    if class_instance.businessId and hasattr(class_instance.businessId, "slug"):
+        business_slug = class_instance.businessId.slug
+        trigger_nextjs_revalidation(tag=f"business-{business_slug}")
+        logger.info(f"Revalidated business page: business-{business_slug}")
+
+    # 3. Revalidate homepage and search/explore pages
+    trigger_nextjs_revalidation(path="/")
+
+    tags_to_revalidate = ["classes-search", "homepage-classes", "classes"]
+    if class_instance.category and hasattr(class_instance.category, "key"):
+        tags_to_revalidate.append(f"category-{class_instance.category.key}")
+    if class_instance.subcategory and hasattr(class_instance.subcategory, "key"):
+        tags_to_revalidate.append(f"subcategory-{class_instance.subcategory.key}")
+
+    for tag in tags_to_revalidate:
+        trigger_nextjs_revalidation(tag=tag)
+
+    logger.info(
+        f"Triggered revalidation for class {class_instance.pk} (slug: {class_instance.slug}) and related tags."
+    )
 
 
 class StandardResultsSetPagination(PageNumberPagination):
@@ -323,6 +358,10 @@ class AdminClassViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
     def update(self, request, *args, **kwargs):
+        """
+        UPDATED: Add revalidation after class update
+        Add this code at the end of the existing update method, before the return statement
+        """
         if not request.user.has_perm("quickstart.change_classesmain"):
             self.permission_denied(request, message="You cannot update class details.")
 
@@ -331,8 +370,8 @@ class AdminClassViewSet(viewsets.ModelViewSet):
 
         # Use a transaction to ensure all or no changes are saved
         with transaction.atomic():
+            # ... [ALL EXISTING UPDATE LOGIC STAYS THE SAME] ...
             # 1. Update the main ClassesMain instance fields
-            # We use a serializer for validation and basic field updates
             serializer = self.get_serializer(instance, data=request_data, partial=True)
             serializer.is_valid(raise_exception=True)
             updated_instance = serializer.save()
@@ -379,11 +418,9 @@ class AdminClassViewSet(viewsets.ModelViewSet):
             # 4. Handle Cover Image Assignment
             cover_image_id = request_data.get("cover_image_id")
             if cover_image_id:
-                # Unset previous cover first
                 ClassImage.objects.filter(classId=instance, isCover=True).update(
                     isCover=False
                 )
-                # Set the new cover
                 ClassImage.objects.filter(
                     classId=instance, imageId=cover_image_id
                 ).update(isCover=True)
@@ -391,13 +428,11 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                     f"Set image {cover_image_id} as cover for class {instance.pk}."
                 )
 
-            # 5. Handle ClassOption Update (assuming one option per class for now)
+            # 5. Handle ClassOption Update
             options_json_string = request_data.get("options")
             if options_json_string:
                 try:
-                    options_data = json.loads(options_json_string)[
-                        0
-                    ]  # Get the first option object
+                    options_data = json.loads(options_json_string)[0]
                     option_instance = instance.options.first()
                     if option_instance:
                         option_serializer = ManagedClassOptionSerializer(
@@ -412,6 +447,9 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                     )
                     raise ValidationError({"options": "Invalid options data provided."})
 
+        # --- ADDED: Trigger revalidation after successful update ---
+        self._trigger_class_revalidation(updated_instance)
+
         # After the transaction, return the fully updated object
         detail_serializer = AdminClassDetailSerializer(
             instance, context={"request": request}
@@ -419,16 +457,57 @@ class AdminClassViewSet(viewsets.ModelViewSet):
         return Response(detail_serializer.data)
 
     def destroy(self, request, *args, **kwargs):
+        """
+        UPDATED: Add revalidation after class deletion
+        """
         if not request.user.has_perm("quickstart.delete_classesmain"):
             self.permission_denied(request, message="You cannot delete classes.")
 
         instance = self.get_object()
         class_title = instance.title
+
+        # Store info before deletion for revalidation
+        class_slug = instance.slug if hasattr(instance, "slug") else None
+        business_slug = (
+            instance.businessId.slug
+            if instance.businessId and hasattr(instance.businessId, "slug")
+            else None
+        )
+        category_key = (
+            instance.category.key
+            if instance.category and hasattr(instance.category, "key")
+            else None
+        )
+        subcategory_key = (
+            instance.subcategory.key
+            if instance.subcategory and hasattr(instance.subcategory, "key")
+            else None
+        )
+
         logger.warning(
             f"Class '{class_title}' (ID: {instance.pk}) deleted by Admin {request.user.email}"
         )
 
         instance.delete()
+
+        # --- ADDED: Trigger revalidation after deletion ---
+        if class_slug:
+            trigger_nextjs_revalidation(tag=f"class-{class_slug}")
+        if business_slug:
+            trigger_nextjs_revalidation(tag=f"business-{business_slug}")
+
+        trigger_nextjs_revalidation(path="/")
+        trigger_nextjs_revalidation(tag="classes-search")
+        trigger_nextjs_revalidation(tag="homepage-classes")
+        trigger_nextjs_revalidation(tag="classes")
+
+        if category_key:
+            trigger_nextjs_revalidation(tag=f"category-{category_key}")
+        if subcategory_key:
+            trigger_nextjs_revalidation(tag=f"subcategory-{subcategory_key}")
+
+        logger.info(f"Revalidated pages after deletion of class '{class_title}'")
+
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     # --- Custom Actions ---
@@ -663,8 +742,11 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-    @action(detail=True, methods=["patch"], url_path="update_class_status")
+    @action(detail=True, methods=["post"])
     def update_class_status(self, request, pk=None):
+        """
+        UPDATED: Add revalidation after status change
+        """
         if not request.user.has_perm("quickstart.change_class_status"):
             self.permission_denied(request, message="You cannot change class status.")
 
@@ -693,6 +775,9 @@ class AdminClassViewSet(viewsets.ModelViewSet):
         logger.info(
             f"Class '{class_instance.title}' (ID: {pk}) status changed from {old_status} to {new_status} by Admin {request.user.email}. Reason: {reason}"
         )
+
+        # --- ADDED: Trigger revalidation after status change ---
+        self._trigger_class_revalidation(class_instance)
 
         serializer = self.get_serializer(class_instance)
         return Response(serializer.data)
@@ -737,20 +822,51 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         if not request.user.has_perm("quickstart.add_classcategory"):
             self.permission_denied(request, message="You cannot create categories.")
-        # The serializer now handles the creation logic with the S3 key
-        return super().create(request, *args, **kwargs)
+
+        response = super().create(request, *args, **kwargs)
+
+        # --- ADDED: Trigger revalidation after category creation ---
+        if response.status_code == status.HTTP_201_CREATED:
+            trigger_nextjs_revalidation(path="/")
+            trigger_nextjs_revalidation(tag="classes-search")
+            trigger_nextjs_revalidation(tag="homepage-categories")
+            trigger_nextjs_revalidation(tag="homepage-classes")
+            logger.info(f"Revalidated homepage and class pages after category creation")
+
+        return response
 
     def update(self, request, *args, **kwargs):
         if not request.user.has_perm("quickstart.change_classcategory"):
             self.permission_denied(request, message="You cannot update categories.")
+
         instance = self.get_object()
         old_name = instance.name
-        # The serializer now handles the update logic with the S3 key
+        old_key = instance.key  # Capture old key for potential revalidation
+
         response = super().update(request, *args, **kwargs)
+
         if response.status_code == status.HTTP_200_OK:
             logger.info(
                 f"Category '{old_name}' (ID: {instance.pk}) updated by Admin {request.user.email}"
             )
+
+            # --- ADDED: Trigger revalidation after category update ---
+            trigger_nextjs_revalidation(path="/")
+            trigger_nextjs_revalidation(tag="classes-search")
+            trigger_nextjs_revalidation(tag="homepage-categories")
+
+            trigger_nextjs_revalidation(tag="homepage-classes")
+
+            # Revalidate old category key if it changed
+            instance.refresh_from_db()
+            if old_key != instance.key:
+                trigger_nextjs_revalidation(tag=f"category-{old_key}")
+
+            # Revalidate new/current category key
+            trigger_nextjs_revalidation(tag=f"category-{instance.key}")
+
+            logger.info(f"Revalidated homepage and class pages after category update")
+
         return response
 
     def destroy(self, request, *args, **kwargs):
@@ -770,10 +886,24 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
             )
 
         category_name = instance.name
+        category_key = instance.key  # Capture before deletion
+
         instance.delete()
+
         logger.warning(
             f"Category '{category_name}' (ID: {instance.pk}) with no classes deleted by Admin {request.user.email}"
         )
+
+        # --- ADDED: Trigger revalidation after category deletion ---
+        trigger_nextjs_revalidation(path="/")
+        trigger_nextjs_revalidation(tag="classes-search")
+        trigger_nextjs_revalidation(tag="homepage-categories")
+
+        trigger_nextjs_revalidation(tag="homepage-classes")
+        trigger_nextjs_revalidation(tag=f"category-{category_key}")
+
+        logger.info(f"Revalidated homepage and class pages after category deletion")
+
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     def list(self, request, *args, **kwargs):
@@ -874,10 +1004,24 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
 
         # Now, delete the old category (this will cascade to its subcategories)
         category_name = category_to_delete.name
+        category_key = category_to_delete.key  # Capture before deletion
+        new_category_key = new_category.key
+
         category_to_delete.delete()
 
         logger.warning(
             f"Category '{category_name}' (ID: {pk}) deleted after reassigning classes by Admin {request.user.email}."
+        )
+
+        # --- ADDED: Trigger revalidation after category deletion with reassignment ---
+        trigger_nextjs_revalidation(path="/")
+        trigger_nextjs_revalidation(tag="classes-search")
+        trigger_nextjs_revalidation(tag="homepage-classes")
+        trigger_nextjs_revalidation(tag=f"category-{category_key}")
+        trigger_nextjs_revalidation(tag=f"category-{new_category_key}")
+
+        logger.info(
+            f"Revalidated homepage and class pages after category reassignment and deletion"
         )
 
         return Response(

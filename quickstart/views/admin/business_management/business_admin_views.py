@@ -390,6 +390,9 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
         permission_classes=[IsAuthenticated, CanAccessBusinessAdmin],
     )
     def toggle_feature(self, request, pk=None):
+        """
+        UPDATED: Add revalidation for all business classes when featured status changes
+        """
         if not request.user.has_perm("quickstart.toggle_business_feature"):
             self.permission_denied(
                 request,
@@ -412,6 +415,7 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
                     },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+
         business.featured = featured
         business.save(update_fields=["featured"])
         action_text = "featured" if featured else "unfeatured"
@@ -419,6 +423,46 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
         details = f"Business '{business.businessName}' was {action_text} by admin."
         logger.info(f"{details} (Admin: {request.user.email})")
         self._log_business_action(business, action_code, details, request)
+
+        # --- ADDED: Trigger revalidation for business and all its classes ---
+        # 1. Revalidate the business page
+        if hasattr(business, "slug") and business.slug:
+            trigger_nextjs_revalidation(tag=f"business-{business.slug}")
+            logger.info(f"Revalidated business page: business-{business.slug}")
+
+        # 2. Revalidate all classes belonging to this business
+        business_classes = ClassesMain.objects.filter(
+            businessId=business
+        ).select_related("category", "subcategory")
+
+        class_paths = []
+        class_tags = []
+        categories_to_revalidate = set()
+
+        for class_obj in business_classes:
+            if hasattr(class_obj, "slug") and class_obj.slug:
+                class_tags.append(f"class-{class_obj.slug}")
+
+                # Also collect categories for bulk revalidation
+                if class_obj.category and hasattr(class_obj.category, "key"):
+                    categories_to_revalidate.add(f"category-{class_obj.category.key}")
+                if class_obj.subcategory and hasattr(class_obj.subcategory, "key"):
+                    categories_to_revalidate.add(
+                        f"subcategory-{class_obj.subcategory.key}"
+                    )
+
+        # Bulk revalidate all class tags
+        if class_tags:
+            all_tags_to_revalidate = (
+                class_tags
+                + list(categories_to_revalidate)
+                + ["classes-search", "homepage-classes"]
+            )
+            result = trigger_multiple_revalidations(tags=all_tags_to_revalidate)
+            logger.info(
+                f"Revalidated {result['successful']}/{result['total']} items for business {business.businessName} ({action_text})"
+            )
+
         return Response(
             {"businessId": business.businessId, "featured": business.featured}
         )

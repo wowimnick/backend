@@ -29,10 +29,7 @@ class PublicClassImageSerializer(serializers.ModelSerializer):
     Serializer for publicly displaying class images, now with optimized versions.
     """
 
-    # This correctly uses your PrivateMediaStorage to generate a pre-signed URL for the original.
     original_url = serializers.ImageField(source="image", read_only=True)
-
-    # These methods will now build the correct CloudFront URLs.
     thumbnail_url = serializers.SerializerMethodField()
     medium_url = serializers.SerializerMethodField()
     large_url = serializers.SerializerMethodField()
@@ -138,7 +135,6 @@ class PublicClassOptionWithSchedulesSerializer(PublicClassOptionSerializer):
 class PublicClassSerializer(serializers.ModelSerializer):
     """
     Serializer for the PUBLIC LIST VIEW of classes. Lean and performant.
-    It does NOT include schedules to keep the payload small.
     """
 
     options = PublicClassOptionSerializer(many=True, read_only=True)
