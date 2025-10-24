@@ -9,21 +9,6 @@ from urllib.parse import quote
 from .models import ClassesMain, ClassCategory, ClassSubcategory, BusinessInfo
 
 
-# Province mapping for URL generation
-PROVINCE_MAP = {
-    "ON": "ontario",
-    "BC": "british-columbia",
-    "QC": "quebec",
-    "AB": "alberta",
-    "MB": "manitoba",
-    "SK": "saskatchewan",
-    "NS": "nova-scotia",
-    "NB": "new-brunswick",
-    "NL": "newfoundland-and-labrador",
-    "PE": "prince-edward-island",
-}
-
-
 class StaticViewSitemap(Sitemap):
     """
     Sitemap for the main static pages of the site.
@@ -101,19 +86,12 @@ class BusinessSitemap(Sitemap):
 
 class ExplorePagesSitemap(Sitemap):
     """
-    Dynamically generates sitemap entries for explore pages.
+    Dynamically generates sitemap entries for key explore pages using ONLY query parameters.
 
-    This sitemap supports TWO URL patterns to match the frontend routing:
+    URL Pattern: /explore?category={key}&subcategory={key}&location={city, state}&lat={lat}&lng={lng}
 
-    1. Query-based URLs (for filtering):
-       /explore?category={key}&subcategory={key}&location={City,%20State}&lat={lat}&lng={lng}
-
-    2. Route-based URLs (for SEO-friendly navigation):
-       /explore/{province}/{city}
-       /explore/{province}/{city}/{category}
-       /explore/{province}/{city}/{category}/{subcategory}
-
-    All query parameters are properly URL-encoded.
+    All parameters are properly URL-encoded.
+    Categories and subcategories are ONLY in query parameters, never in the path.
     """
 
     changefreq = "daily"
@@ -143,7 +121,7 @@ class ExplorePagesSitemap(Sitemap):
         # Get all active categories
         categories = ClassCategory.objects.all()
 
-        # 2. Category pages (no location) - query-based
+        # 2. Category pages (no location)
         # e.g., /explore?category=fitness
         for cat in categories:
             cat_classes = ClassesMain.objects.filter(
@@ -164,7 +142,7 @@ class ExplorePagesSitemap(Sitemap):
                     }
                 )
 
-                # 2b. Subcategory pages (no location) - query-based
+                # 2b. Subcategory pages (no location)
                 # e.g., /explore?category=fitness&subcategory=yoga
                 for subcat in cat.subcategories.all():
                     subcat_classes = ClassesMain.objects.filter(
@@ -189,6 +167,7 @@ class ExplorePagesSitemap(Sitemap):
                         )
 
         # 3. Get active locations with coordinates from businesses
+        # Group by city/state to get unique location combinations
         active_locations = (
             BusinessInfo.objects.filter(
                 isActive=True,
@@ -210,7 +189,7 @@ class ExplorePagesSitemap(Sitemap):
             .filter(class_count__gt=0)
         )
 
-        # Process each location
+        # Create location URLs with proper URL encoding
         for loc in active_locations:
             city = loc["businessCity"]
             state = loc["businessState"]
@@ -218,26 +197,14 @@ class ExplorePagesSitemap(Sitemap):
             lng = float(loc["longitude"])
             last_updated = loc["last_updated"] or timezone.now()
 
-            # Create slugs for route-based URLs
-            city_slug = slugify(city)
-            state_upper = state.upper()
-            province_slug = PROVINCE_MAP.get(state_upper, slugify(state))
-
-            # Format location string for query-based URLs: "City, State"
+            # Format location string as "City, State" and URL encode it
             location_str = f"{city}, {state}"
             encoded_location = quote(location_str)
 
-            # 4a. Route-based location URL (SEO-friendly)
-            # e.g., /explore/ontario/toronto
-            route_location_url = f"/explore/{province_slug}/{city_slug}"
-            urls.append({"url": route_location_url, "lastmod": last_updated})
-
-            # 4b. Query-based location URL (with lat/lng for filtering)
+            # 4. Location-only pages - properly URL encoded
             # e.g., /explore?location=Toronto%2C%20ON&lat=43.65&lng=-79.38
-            query_location_url = (
-                f"/explore?location={encoded_location}&lat={lat}&lng={lng}"
-            )
-            urls.append({"url": query_location_url, "lastmod": last_updated})
+            location_url = f"/explore?location={encoded_location}&lat={lat}&lng={lng}"
+            urls.append({"url": location_url, "lastmod": last_updated})
 
             # 5. Location + Category combinations
             for cat in categories:
@@ -252,17 +219,17 @@ class ExplorePagesSitemap(Sitemap):
 
                 if cat_loc_classes.exists():
                     cat_loc_latest = cat_loc_classes.order_by("-updatedAt").first()
-                    cat_loc_lastmod = (
-                        cat_loc_latest.updatedAt if cat_loc_latest else timezone.now()
+                    cat_loc_url = f"/explore?category={cat.key}&location={encoded_location}&lat={lat}&lng={lng}"
+                    urls.append(
+                        {
+                            "url": cat_loc_url,
+                            "lastmod": (
+                                cat_loc_latest.updatedAt
+                                if cat_loc_latest
+                                else timezone.now()
+                            ),
+                        }
                     )
-
-                    # 5a. Route-based: /explore/{province}/{city}/{category}
-                    route_cat_url = f"/explore/{province_slug}/{city_slug}/{cat.key}"
-                    urls.append({"url": route_cat_url, "lastmod": cat_loc_lastmod})
-
-                    # 5b. Query-based: /explore?category=fitness&location=Toronto%2C%20ON&lat=43.65&lng=-79.38
-                    query_cat_url = f"/explore?category={cat.key}&location={encoded_location}&lat={lat}&lng={lng}"
-                    urls.append({"url": query_cat_url, "lastmod": cat_loc_lastmod})
 
                     # 6. Location + Category + Subcategory combinations
                     for subcat in cat.subcategories.all():
@@ -280,22 +247,16 @@ class ExplorePagesSitemap(Sitemap):
                             subcat_loc_latest = subcat_loc_classes.order_by(
                                 "-updatedAt"
                             ).first()
-                            subcat_loc_lastmod = (
-                                subcat_loc_latest.updatedAt
-                                if subcat_loc_latest
-                                else timezone.now()
-                            )
-
-                            # 6a. Route-based: /explore/{province}/{city}/{category}/{subcategory}
-                            route_subcat_url = f"/explore/{province_slug}/{city_slug}/{cat.key}/{subcat.key}"
+                            subcat_loc_url = f"/explore?category={cat.key}&subcategory={subcat.key}&location={encoded_location}&lat={lat}&lng={lng}"
                             urls.append(
-                                {"url": route_subcat_url, "lastmod": subcat_loc_lastmod}
-                            )
-
-                            # 6b. Query-based: /explore?category=fitness&subcategory=yoga&location=...
-                            query_subcat_url = f"/explore?category={cat.key}&subcategory={subcat.key}&location={encoded_location}&lat={lat}&lng={lng}"
-                            urls.append(
-                                {"url": query_subcat_url, "lastmod": subcat_loc_lastmod}
+                                {
+                                    "url": subcat_loc_url,
+                                    "lastmod": (
+                                        subcat_loc_latest.updatedAt
+                                        if subcat_loc_latest
+                                        else timezone.now()
+                                    ),
+                                }
                             )
 
         return urls
