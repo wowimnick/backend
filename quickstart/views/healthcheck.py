@@ -92,7 +92,7 @@ def robots_txt_view(request):
             "# Disallow all other business paths",
             "Disallow: /business/*/",
             "",
-            "Sitemap: https://www.classeasily.com/sitemap.xml",
+            "Sitemap: https://classeasily.com/sitemap.xml",
         ]
 
     return HttpResponse("\n".join(lines), content_type="text/plain")
