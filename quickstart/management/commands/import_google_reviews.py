@@ -81,24 +81,42 @@ class Command(BaseCommand):
             type=str,
             help="The path to the JSON file containing the reviews.",
         )
+        parser.add_argument(
+            "--skip-images",
+            action="store_true",
+            help="Skip downloading images (for testing)",
+        )
 
     @transaction.atomic
     def handle(self, *args, **options):
         business_id = options["business_id"]
         json_file_path = options["json_file"]
+        skip_images = options.get("skip_images", False)
 
-        self.stdout.write(
-            f"Starting import process for business ID: {business_id} from file: {json_file_path}"
-        )
+        self.stdout.write(f"\n{'='*80}")
+        self.stdout.write(self.style.SUCCESS("🚀 STARTING GOOGLE REVIEWS IMPORT"))
+        self.stdout.write(f"{'='*80}")
+        self.stdout.write(f"Business ID: {business_id}")
+        self.stdout.write(f"JSON file: {json_file_path}")
+        self.stdout.write(f"Skip images: {skip_images}")
+        self.stdout.write(f"{'='*80}\n")
 
         try:
             business = BusinessInfo.objects.get(businessId=business_id)
+            self.stdout.write(
+                self.style.SUCCESS(f"✓ Found business: {business.businessName}")
+            )
         except BusinessInfo.DoesNotExist:
             raise CommandError(f'Business with ID "{business_id}" does not exist.')
 
         try:
             with open(json_file_path, "r", encoding="utf-8") as f:
                 reviews_data = json.load(f)
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"✓ Loaded JSON file with {len(reviews_data)} reviews"
+                )
+            )
         except FileNotFoundError:
             raise CommandError(f'File not found at "{json_file_path}".')
         except json.JSONDecodeError:
@@ -111,25 +129,31 @@ class Command(BaseCommand):
         created_count = 0
         skipped_count = 0
         error_count = 0
+        image_success_count = 0
+        image_fail_count = 0
 
-        for review_item in reviews_data:
+        self.stdout.write(f"\n{'─'*80}")
+        self.stdout.write("📝 Processing reviews...")
+        self.stdout.write(f"{'─'*80}\n")
+
+        for idx, review_item in enumerate(reviews_data, 1):
             google_review_id = review_item.get("reviewId")
+
+            self.stdout.write(
+                f"\n[{idx}/{len(reviews_data)}] Processing review: {google_review_id}"
+            )
 
             # Skip if there's no unique ID
             if not google_review_id:
-                self.stderr.write(
-                    self.style.WARNING(f"Skipping a review due to missing 'reviewId'.")
+                self.stdout.write(
+                    self.style.WARNING(f"  ⚠️  Skipping - missing 'reviewId'")
                 )
                 skipped_count += 1
                 continue
 
             # Skip reviews with no text content
             if not review_item.get("text"):
-                self.stdout.write(
-                    self.style.NOTICE(
-                        f"Skipping review {google_review_id} because it has no text content."
-                    )
-                )
+                self.stdout.write(self.style.NOTICE(f"  ⚠️  Skipping - no text content"))
                 skipped_count += 1
                 continue
 
@@ -156,52 +180,148 @@ class Command(BaseCommand):
                         "image_urls": [],  # Default to empty list
                     },
                 )
+
                 if created:
+                    self.stdout.write(self.style.SUCCESS(f"  ✓ Created new review"))
                     created_count += 1
 
-                    # --- Download and save avatar ---
-                    avatar_url = review_item.get("reviewerPhotoUrl")
-                    if avatar_url:
-                        avatar_content = download_image(avatar_url)
-                        if avatar_content:
-                            filename = get_filename_from_url(
-                                avatar_url, f"{google_review_id}_avatar"
-                            )
-                            review_instance.reviewer_avatar.save(
-                                filename, avatar_content, save=True
-                            )
+                    if not skip_images:
+                        # --- Download and save avatar ---
+                        avatar_url = review_item.get("reviewerPhotoUrl")
+                        if avatar_url:
+                            self.stdout.write(f"  📥 Downloading avatar...")
+                            avatar_content = download_image(avatar_url)
+                            if avatar_content:
+                                filename = get_filename_from_url(
+                                    avatar_url, f"{google_review_id}_avatar"
+                                )
+                                review_instance.reviewer_avatar.save(
+                                    filename, avatar_content, save=True
+                                )
+                                saved_path = review_instance.reviewer_avatar.name
+                                self.stdout.write(
+                                    self.style.SUCCESS(
+                                        f"     ✓ Saved avatar to: {saved_path}"
+                                    )
+                                )
 
-                    # --- Download and save review images ---
-                    s3_image_keys = []
-                    review_image_urls = review_item.get("reviewImageUrls", [])
-                    for i, image_url in enumerate(review_image_urls):
-                        image_content = download_image(image_url)
-                        if image_content:
-                            filename = get_filename_from_url(
-                                image_url, f"{google_review_id}_image_{i}"
-                            )
-                            # Save directly to storage and get the key/path
-                            s3_key = default_storage.save(
-                                f"public/reviews/{filename}", image_content
-                            )
-                            s3_image_keys.append(s3_key)
+                                # Verify path format
+                                if not saved_path.startswith("originals/"):
+                                    self.stdout.write(
+                                        self.style.ERROR(
+                                            f"     ✗ WARNING: Avatar path should start with 'originals/' but is: {saved_path}"
+                                        )
+                                    )
 
-                    if s3_image_keys:
-                        review_instance.image_urls = s3_image_keys
-                        review_instance.save(update_fields=["image_urls"])
+                                image_success_count += 1
+                            else:
+                                self.stdout.write(
+                                    self.style.WARNING(
+                                        f"     ⚠️  Failed to download avatar"
+                                    )
+                                )
+                                image_fail_count += 1
+                        else:
+                            self.stdout.write(f"  ℹ️  No avatar URL provided")
+
+                        # --- Download and save review images ---
+                        review_image_urls = review_item.get("reviewImageUrls", [])
+                        if review_image_urls:
+                            self.stdout.write(
+                                f"  📥 Downloading {len(review_image_urls)} review image(s)..."
+                            )
+                            s3_image_keys = []
+
+                            for i, image_url in enumerate(review_image_urls, 1):
+                                self.stdout.write(
+                                    f"     Image {i}/{len(review_image_urls)}..."
+                                )
+                                image_content = download_image(image_url)
+                                if image_content:
+                                    filename = get_filename_from_url(
+                                        image_url, f"{google_review_id}_image_{i}"
+                                    )
+                                    # Save directly to storage and get the key/path
+                                    s3_key = default_storage.save(
+                                        f"originals/reviews/{filename}", image_content
+                                    )
+                                    s3_image_keys.append(s3_key)
+                                    self.stdout.write(
+                                        self.style.SUCCESS(
+                                            f"        ✓ Saved to: {s3_key}"
+                                        )
+                                    )
+
+                                    # Verify path format
+                                    if not s3_key.startswith("originals/"):
+                                        self.stdout.write(
+                                            self.style.ERROR(
+                                                f"        ✗ WARNING: Image path should start with 'originals/' but is: {s3_key}"
+                                            )
+                                        )
+
+                                    image_success_count += 1
+                                else:
+                                    self.stdout.write(
+                                        self.style.WARNING(
+                                            f"        ⚠️  Failed to download"
+                                        )
+                                    )
+                                    image_fail_count += 1
+
+                            if s3_image_keys:
+                                review_instance.image_urls = s3_image_keys
+                                review_instance.save(update_fields=["image_urls"])
+                                self.stdout.write(
+                                    self.style.SUCCESS(
+                                        f"     ✓ Saved {len(s3_image_keys)} image path(s) to database"
+                                    )
+                                )
+                        else:
+                            self.stdout.write(f"  ℹ️  No review images")
+                    else:
+                        self.stdout.write(
+                            self.style.NOTICE(
+                                "  ⚠️  Skipping images (--skip-images flag)"
+                            )
+                        )
 
                 else:
-                    skipped_count += 1  # Already exists
+                    self.stdout.write(
+                        self.style.NOTICE(f"  ⚠️  Already exists - skipping")
+                    )
+                    skipped_count += 1
+
             except Exception as e:
-                self.stderr.write(
-                    self.style.ERROR(f"Error processing review {google_review_id}: {e}")
-                )
+                self.stdout.write(self.style.ERROR(f"  ✗ Error: {e}"))
+                logger.exception(f"Error processing review {google_review_id}")
                 error_count += 1
 
-        self.stdout.write(self.style.SUCCESS("--------------------"))
-        self.stdout.write(self.style.SUCCESS("Import process complete!"))
-        self.stdout.write(f"Successfully created: {created_count} reviews.")
+        # Final report
+        self.stdout.write(f"\n{'='*80}")
+        self.stdout.write(self.style.SUCCESS("📊 IMPORT COMPLETE!"))
+        self.stdout.write(f"{'='*80}")
+        self.stdout.write(f"✅ Successfully created: {created_count} review(s)")
         self.stdout.write(
-            f"Skipped (already exist or invalid): {skipped_count} reviews."
+            f"⏭️  Skipped (already exist or invalid): {skipped_count} review(s)"
         )
-        self.stdout.write(f"Errors: {error_count} reviews.")
+        self.stdout.write(f"❌ Errors: {error_count} review(s)")
+
+        if not skip_images:
+            self.stdout.write(f"\n📷 Image Statistics:")
+            self.stdout.write(
+                f"✅ Successfully downloaded: {image_success_count} image(s)"
+            )
+            self.stdout.write(f"❌ Failed downloads: {image_fail_count} image(s)")
+
+        self.stdout.write(f"\n💡 Next Steps:")
+        self.stdout.write(f"1. Run debug command to verify image paths:")
+        self.stdout.write(
+            f"   python manage.py debug_review_images --business_id={business_id}"
+        )
+        self.stdout.write(f"2. Check if Lambda has processed the images:")
+        self.stdout.write(
+            f"   python manage.py debug_review_images --business_id={business_id} --check-s3"
+        )
+        self.stdout.write(f"3. View CloudWatch logs to see Lambda execution")
+        self.stdout.write(f"{'='*80}\n")

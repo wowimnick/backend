@@ -2676,7 +2676,7 @@ class ImportedGoogleReview(models.Model):
     comment = models.TextField(blank=True, null=True)
     review_date = models.DateTimeField(null=True, blank=True)
     reviewer_avatar = models.ImageField(
-        upload_to="public/reviews/", blank=True, null=True
+        upload_to="originals/reviews/", blank=True, null=True
     )
     owner_response = models.TextField(blank=True, null=True)
     owner_response_date = models.DateTimeField(null=True, blank=True)

@@ -1,7 +1,10 @@
 import os
+import logging
 from django.conf import settings
 from rest_framework import serializers
 from quickstart.models import CustomUser, ImportedGoogleReview, Reviews
+
+logger = logging.getLogger(__name__)
 
 
 class ReviewSubmissionSerializer(serializers.ModelSerializer):
@@ -64,14 +67,21 @@ class UserReviewSerializer(serializers.ModelSerializer):
 
     def get_avatar_thumb_url(self, obj):
         if not obj.avatar or not obj.avatar.name:
+            logger.debug(f"UserReviewSerializer: No avatar for user {obj.id}")
             return None
         original_path = obj.avatar.name
+        logger.debug(f"UserReviewSerializer: Original avatar path: {original_path}")
         if not original_path.startswith("originals/"):
+            logger.debug(
+                f"UserReviewSerializer: Avatar not in originals/, returning None"
+            )
             return None
         # Remove original extension and add .webp
         base_path, _ = os.path.splitext(original_path)
         resized_path = base_path.replace("originals/", "public/thumb/", 1) + ".webp"
-        return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
+        final_url = f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
+        logger.info(f"UserReviewSerializer: Returning avatar URL: {final_url}")
+        return final_url
 
 
 class PublicReviewSerializer(serializers.ModelSerializer):
@@ -102,8 +112,14 @@ class PublicReviewSerializer(serializers.ModelSerializer):
         """
         if obj.image and obj.image.name:
             original_path = obj.image.name
+            logger.debug(
+                f"PublicReviewSerializer: Original image path: {original_path}, size: {size_name}"
+            )
 
             if not original_path.startswith("originals/"):
+                logger.debug(
+                    f"PublicReviewSerializer: Image not in originals/, returning None"
+                )
                 return None
 
             # 1. Get the base path of the original image, without its extension
@@ -121,8 +137,15 @@ class PublicReviewSerializer(serializers.ModelSerializer):
             final_path = resized_base_path + ".webp"
 
             # 4. Construct the full URL
-            return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
+            final_url = f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
+            logger.info(
+                f"PublicReviewSerializer: Returning {size_name} URL: {final_url}"
+            )
+            return final_url
 
+        logger.debug(
+            f"PublicReviewSerializer: No image found for review {obj.reviewId}"
+        )
         return None
 
     def get_image_thumb_url(self, obj):
@@ -135,34 +158,138 @@ class PublicReviewSerializer(serializers.ModelSerializer):
 class ImportedGoogleReviewSerializer(serializers.ModelSerializer):
     """Serializer for displaying imported Google Reviews."""
 
-    reviewer_avatar_url = serializers.ImageField(
-        source="reviewer_avatar", read_only=True
-    )
-    image_urls = serializers.SerializerMethodField()
+    # FIXED: Changed field names to match frontend expectations
+    reviewer_avatar_url = (
+        serializers.SerializerMethodField()
+    )  # was reviewer_avatar_thumb_url
+    image_urls = (
+        serializers.SerializerMethodField()
+    )  # Primary field - returns medium URLs
+
+    # Keep these for backward compatibility
+    image_thumb_urls = serializers.SerializerMethodField()
+    image_medium_urls = serializers.SerializerMethodField()
 
     class Meta:
         model = ImportedGoogleReview
         fields = [
             "google_review_id",
             "reviewer_name",
-            "reviewer_avatar_url",
+            "reviewer_avatar_url",  # CHANGED to match frontend
             "rating",
             "comment",
             "review_date",
             "owner_response",
-            "image_urls",
+            "image_urls",  # CHANGED - primary field
+            "image_thumb_urls",
+            "image_medium_urls",
             "source",
         ]
 
-    def get_image_urls(self, obj):
+    def get_reviewer_avatar_url(self, obj):
         """
-        Constructs full public URLs for the stored image keys.
+        Returns the thumbnail WebP URL for the reviewer avatar.
+        RENAMED from get_reviewer_avatar_thumb_url to match frontend expectations.
         """
-        if not obj.image_urls or not isinstance(obj.image_urls, list):
+        logger.info(
+            f"ImportedGoogleReviewSerializer: Processing avatar for review {obj.google_review_id}"
+        )
+
+        if not obj.reviewer_avatar or not obj.reviewer_avatar.name:
+            logger.debug(
+                f"ImportedGoogleReviewSerializer: No avatar for review {obj.google_review_id}"
+            )
+            return None
+
+        original_path = obj.reviewer_avatar.name
+        logger.info(
+            f"ImportedGoogleReviewSerializer: Original avatar path: {original_path}"
+        )
+
+        # If it's already in public/, return as-is (legacy data)
+        if original_path.startswith("public/"):
+            final_url = f"{settings.CLOUDFRONT_DOMAIN}/{original_path}"
+            logger.info(
+                f"ImportedGoogleReviewSerializer: Legacy avatar, returning: {final_url}"
+            )
+            return final_url
+
+        # If it's in originals/, convert to thumb WebP
+        if original_path.startswith("originals/"):
+            base_path, _ = os.path.splitext(original_path)
+            thumb_path = base_path.replace("originals/", "public/thumb/", 1) + ".webp"
+            final_url = f"{settings.CLOUDFRONT_DOMAIN}/{thumb_path}"
+            logger.info(
+                f"ImportedGoogleReviewSerializer: Converted avatar to: {final_url}"
+            )
+            return final_url
+
+        logger.warning(
+            f"ImportedGoogleReviewSerializer: Avatar path doesn't start with public/ or originals/: {original_path}"
+        )
+        return None
+
+    def _convert_to_processed_urls(self, image_keys, size_name):
+        """
+        Converts originals/ paths to public/SIZE/ WebP URLs.
+        """
+        logger.info(
+            f"ImportedGoogleReviewSerializer: Converting {len(image_keys) if image_keys else 0} images to {size_name}"
+        )
+
+        if not image_keys or not isinstance(image_keys, list):
+            logger.debug(f"ImportedGoogleReviewSerializer: No image_keys or not a list")
             return []
 
-        # Use the default storage to get the public URL for each stored key.
-        # This correctly handles S3/CloudFront domain configuration.
-        from django.core.files.storage import default_storage
+        processed_urls = []
+        for idx, key in enumerate(image_keys):
+            logger.debug(
+                f"ImportedGoogleReviewSerializer: Processing image {idx}: {key}"
+            )
+            if key.startswith("originals/"):
+                base_path, _ = os.path.splitext(key)
+                processed_path = (
+                    base_path.replace("originals/", f"public/{size_name}/", 1) + ".webp"
+                )
+                final_url = f"{settings.CLOUDFRONT_DOMAIN}/{processed_path}"
+                logger.info(
+                    f"ImportedGoogleReviewSerializer: Converted image {idx} to: {final_url}"
+                )
+                processed_urls.append(final_url)
+            else:
+                logger.warning(
+                    f"ImportedGoogleReviewSerializer: Image {idx} doesn't start with originals/: {key}"
+                )
 
-        return [default_storage.url(key) for key in obj.image_urls]
+        logger.info(
+            f"ImportedGoogleReviewSerializer: Returning {len(processed_urls)} {size_name} URLs"
+        )
+        return processed_urls
+
+    def get_image_urls(self, obj):
+        """
+        Returns medium WebP URLs for review images.
+        PRIMARY FIELD - Frontend expects 'image_urls' as the main array.
+        """
+        logger.info(
+            f"ImportedGoogleReviewSerializer: get_image_urls (PRIMARY) called for review {obj.google_review_id}"
+        )
+        return self._convert_to_processed_urls(obj.image_urls, "medium")
+
+    def get_image_thumb_urls(self, obj):
+        """
+        Returns thumbnail WebP URLs for review images.
+        """
+        logger.info(
+            f"ImportedGoogleReviewSerializer: get_image_thumb_urls called for review {obj.google_review_id}"
+        )
+        return self._convert_to_processed_urls(obj.image_urls, "thumb")
+
+    def get_image_medium_urls(self, obj):
+        """
+        Returns medium WebP URLs for review images.
+        """
+        logger.info(
+            f"ImportedGoogleReviewSerializer: get_image_medium_urls called for review {obj.google_review_id}"
+        )
+        return self._convert_to_processed_urls(obj.image_urls, "medium")
