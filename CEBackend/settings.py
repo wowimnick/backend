@@ -177,13 +177,35 @@ DATABASES = {
 
 
 # --- Caching & Channels (Redis) ---
-CACHE_URL = os.environ.get("CACHE_URL", "redis://localhost:6379/0")
+# Use staging Redis for both staging and production with separate databases
+DJANGO_ENV = os.environ.get("DJANGO_ENV", "local")
+
+# Get base Redis URL (without database number)
+REDIS_BASE_URL = os.environ.get("REDIS_HOST", "redis://localhost:6379")
+
+# Assign different Redis databases based on environment
+# Staging uses databases 0, 1, 2
+# Production uses databases 3, 4, 5
+if DJANGO_ENV == "prod":
+    CACHE_DB = "3"
+    CELERY_BROKER_DB = "4"
+    CELERY_RESULT_DB = "5"
+    CHANNELS_DB = "3"  # Can share with cache
+else:  # staging or local
+    CACHE_DB = "0"
+    CELERY_BROKER_DB = "1"
+    CELERY_RESULT_DB = "2"
+    CHANNELS_DB = "0"  # Can share with cache
+
+CACHE_URL = f"{REDIS_BASE_URL}/{CACHE_DB}"
+
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {"hosts": [CACHE_URL]},
+        "CONFIG": {"hosts": [f"{REDIS_BASE_URL}/{CHANNELS_DB}"]},
     },
 }
+
 if DEBUG:
     # Use a simple in-memory cache for local development
     CACHES = {
@@ -205,16 +227,15 @@ else:
                     else {}
                 ),
             },
-            "KEY_PREFIX": "classeasily",
+            "KEY_PREFIX": f"classeasily_{DJANGO_ENV}",  # Environment-specific prefix
         }
     }
 
 
 # --- Enhanced Celery Configuration for Rate Limiting ---
-CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/1")
-CELERY_RESULT_BACKEND = os.environ.get(
-    "CELERY_RESULT_BACKEND", "redis://localhost:6379/2"
-)
+# Use environment-specific Redis databases
+CELERY_BROKER_URL = f"{REDIS_BASE_URL}/{CELERY_BROKER_DB}"
+CELERY_RESULT_BACKEND = f"{REDIS_BASE_URL}/{CELERY_RESULT_DB}"
 
 CELERY_BROKER_TRANSPORT_OPTIONS = {
     "global_keyprefix": "{celery}:",
