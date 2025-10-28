@@ -179,24 +179,22 @@ DATABASES = {
 # --- Caching & Channels (Redis) ---
 DJANGO_ENV = os.environ.get("DJANGO_ENV", "local")
 
-# Get base cache URL and strip off any existing database number
-CACHE_BASE = (
-    os.environ.get("CACHE_URL", "redis://localhost:6379").rstrip("/").split("/")[0]
+# LOG EVERYTHING
+import sys
+
+print(f"========== REDIS CONFIG DEBUG ==========", file=sys.stderr)
+print(f"DJANGO_ENV: {DJANGO_ENV}", file=sys.stderr)
+print(f"Raw CACHE_URL: {os.environ.get('CACHE_URL')}", file=sys.stderr)
+print(f"Raw CELERY_BROKER_URL: {os.environ.get('CELERY_BROKER_URL')}", file=sys.stderr)
+print(
+    f"Raw CELERY_RESULT_BACKEND: {os.environ.get('CELERY_RESULT_BACKEND')}",
+    file=sys.stderr,
 )
-# Rebuild the base URL properly
-if "://" in CACHE_BASE:
-    # It's already just the host part, good
-    pass
-else:
-    # Get everything before the last slash
-    parts = (
-        os.environ.get("CACHE_URL", "redis://localhost:6379").rstrip("/").rsplit("/", 1)
-    )
-    CACHE_BASE = (
-        parts[0]
-        if len(parts) > 1 and parts[1].isdigit()
-        else os.environ.get("CACHE_URL", "redis://localhost:6379").rstrip("/")
-    )
+
+# Get base cache URL and strip off any existing database number
+CACHE_BASE = os.environ.get("CACHE_URL", "redis://localhost:6379/0").rsplit("/", 1)[0]
+
+print(f"CACHE_BASE after rsplit: {CACHE_BASE}", file=sys.stderr)
 
 # Use different database numbers for staging vs prod
 if DJANGO_ENV == "prod":
@@ -208,6 +206,11 @@ else:
     CELERY_BROKER_URL = f"{CACHE_BASE}/1"
     CELERY_RESULT_BACKEND = f"{CACHE_BASE}/2"
 
+print(f"Final CACHE_URL: {CACHE_URL}", file=sys.stderr)
+print(f"Final CELERY_BROKER_URL: {CELERY_BROKER_URL}", file=sys.stderr)
+print(f"Final CELERY_RESULT_BACKEND: {CELERY_RESULT_BACKEND}", file=sys.stderr)
+print(f"========================================", file=sys.stderr)
+
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
@@ -216,7 +219,6 @@ CHANNEL_LAYERS = {
 }
 
 if DEBUG:
-    # Use a simple in-memory cache for local development
     CACHES = {
         "default": {
             "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
