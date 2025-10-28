@@ -185,16 +185,19 @@ import sys
 print(f"========== REDIS CONFIG DEBUG ==========", file=sys.stderr)
 print(f"DJANGO_ENV: {DJANGO_ENV}", file=sys.stderr)
 print(f"Raw CACHE_URL: {os.environ.get('CACHE_URL')}", file=sys.stderr)
-print(f"Raw CELERY_BROKER_URL: {os.environ.get('CELERY_BROKER_URL')}", file=sys.stderr)
-print(
-    f"Raw CELERY_RESULT_BACKEND: {os.environ.get('CELERY_RESULT_BACKEND')}",
-    file=sys.stderr,
-)
 
-# Get base cache URL and strip off any existing database number
-CACHE_BASE = os.environ.get("CACHE_URL", "redis://localhost:6379/0").rsplit("/", 1)[0]
+# Get base URL - just remove any trailing database number if present
+raw_url = os.environ.get("CACHE_URL", "redis://localhost:6379/0")
+# Split by '/' and check if last part is a digit (database number)
+parts = raw_url.split("/")
+if len(parts) > 3 and parts[-1].isdigit():
+    # Has a database number at the end, remove it
+    CACHE_BASE = "/".join(parts[:-1])
+else:
+    # No database number, use as-is
+    CACHE_BASE = raw_url
 
-print(f"CACHE_BASE after rsplit: {CACHE_BASE}", file=sys.stderr)
+print(f"CACHE_BASE: {CACHE_BASE}", file=sys.stderr)
 
 # Use different database numbers for staging vs prod
 if DJANGO_ENV == "prod":
