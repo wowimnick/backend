@@ -179,31 +179,34 @@ DATABASES = {
 # --- Caching & Channels (Redis) ---
 DJANGO_ENV = os.environ.get("DJANGO_ENV", "local")
 
-# Use different database numbers for staging vs prod on the SAME Redis instance
-if DJANGO_ENV == "prod":
-    # Production uses databases 3, 4, 5 on staging Redis
-    CACHE_URL = (
-        os.environ.get("CACHE_URL", "redis://localhost:6379/0").rsplit("/", 1)[0] + "/3"
-    )
-    CELERY_BROKER_URL = (
-        os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/1").rsplit("/", 1)[
-            0
-        ]
-        + "/4"
-    )
-    CELERY_RESULT_BACKEND = (
-        os.environ.get("CELERY_RESULT_BACKEND", "redis://localhost:6379/2").rsplit(
-            "/", 1
-        )[0]
-        + "/5"
-    )
+# Get base cache URL and strip off any existing database number
+CACHE_BASE = (
+    os.environ.get("CACHE_URL", "redis://localhost:6379").rstrip("/").split("/")[0]
+)
+# Rebuild the base URL properly
+if "://" in CACHE_BASE:
+    # It's already just the host part, good
+    pass
 else:
-    # Staging and local use databases 0, 1, 2 as normal
-    CACHE_URL = os.environ.get("CACHE_URL", "redis://localhost:6379/0")
-    CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/1")
-    CELERY_RESULT_BACKEND = os.environ.get(
-        "CELERY_RESULT_BACKEND", "redis://localhost:6379/2"
+    # Get everything before the last slash
+    parts = (
+        os.environ.get("CACHE_URL", "redis://localhost:6379").rstrip("/").rsplit("/", 1)
     )
+    CACHE_BASE = (
+        parts[0]
+        if len(parts) > 1 and parts[1].isdigit()
+        else os.environ.get("CACHE_URL", "redis://localhost:6379").rstrip("/")
+    )
+
+# Use different database numbers for staging vs prod
+if DJANGO_ENV == "prod":
+    CACHE_URL = f"{CACHE_BASE}/3"
+    CELERY_BROKER_URL = f"{CACHE_BASE}/4"
+    CELERY_RESULT_BACKEND = f"{CACHE_BASE}/5"
+else:
+    CACHE_URL = f"{CACHE_BASE}/0"
+    CELERY_BROKER_URL = f"{CACHE_BASE}/1"
+    CELERY_RESULT_BACKEND = f"{CACHE_BASE}/2"
 
 CHANNEL_LAYERS = {
     "default": {
