@@ -39,6 +39,7 @@ from quickstart.models import (
     ClassSubcategory,
     ClassesMain,
     ClassOption,
+    ImportedGoogleReview,
     Payment,
     Schedule,
     ScheduleInstance,
@@ -189,6 +190,7 @@ class AdminClassViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         """
         Get queryset for admin class views, annotated with necessary metrics.
+        UPDATED: Now includes Google reviews in review count
         """
         if not self.request.user.has_perm("quickstart.view_classesmain"):
             logger.warning(
@@ -224,12 +226,23 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 .values("avg"),
                 output_field=FloatField(),
             )
+
+            # Platform review count
             approved_review_count_subquery = Subquery(
                 Reviews.objects.filter(classId=OuterRef("pk"), status="approved")
                 .values("classId")
                 .annotate(c=Count("pk"))
                 .values("c"),
                 output_field=Count("pk").output_field,
+            )
+
+            # NEW: Google review count
+            google_review_count_subquery = Subquery(
+                ImportedGoogleReview.objects.filter(business=OuterRef("businessId"))
+                .values("business")
+                .annotate(count=Count("id"))
+                .values("count")[:1],
+                output_field=fields.IntegerField(),
             )
 
             min_price_subquery = Subquery(
@@ -261,7 +274,6 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 output_field=Count("pk").output_field,
             )
 
-            # --- FIX: Changed service_fee_amount to platform_fee_amount ---
             platform_revenue_subquery = Subquery(
                 Payment.objects.filter(
                     booking__schedule_instance__schedule__option__classId=OuterRef(
@@ -269,10 +281,8 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                     ),
                     status="succeeded",
                 )
-                .values(
-                    "booking__schedule_instance__schedule__option__classId"
-                )  # Group by class
-                .annotate(total_fees=Sum("platform_fee_amount"))  # Changed field name
+                .values("booking__schedule_instance__schedule__option__classId")
+                .annotate(total_fees=Sum("platform_fee_amount"))
                 .values("total_fees")[:1],
                 output_field=DecimalField(),
             )
@@ -283,10 +293,19 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 average_rating=Coalesce(
                     approved_rating_subquery, Value(0.0), output_field=FloatField()
                 ),
-                review_count=Coalesce(
+                platform_review_count=Coalesce(
                     approved_review_count_subquery,
                     Value(0),
                     output_field=Count("pk").output_field,
+                ),
+                google_review_count=Coalesce(
+                    google_review_count_subquery,
+                    Value(0),
+                    output_field=fields.IntegerField(),
+                ),
+                review_count=ExpressionWrapper(
+                    F("platform_review_count") + F("google_review_count"),
+                    output_field=fields.IntegerField(),
                 ),
                 min_price=Coalesce(
                     min_price_subquery,
@@ -515,15 +534,14 @@ class AdminClassViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["get"])
     def analytics(self, request):
         """
-        Provides high-level statistics for the Class Management dashboard,
-        including class, category, and subcategory overviews.
+        Provides high-level statistics for the Class Management dashboard.
+        UPDATED: Now includes schedule warnings and Google reviews
         """
         if not request.user.has_perm("quickstart.view_class_analytics"):
             self.permission_denied(request, message="You cannot view class analytics.")
 
         try:
             # --- Class Stats ---
-            # Filter for active classes now includes checking the business status
             active_classes_count = ClassesMain.objects.filter(
                 status="active", businessId__isActive=True
             ).count()
@@ -538,11 +556,77 @@ class AdminClassViewSet(viewsets.ModelViewSet):
             )
             status_counts = {item["status"]: item["count"] for item in status_counts_qs}
 
-            # --- Review Stats (Aggregated) ---
-            avg_rating_result = Reviews.objects.filter(status="approved").aggregate(
+            # --- NEW: Schedule Warning Stats ---
+            one_week_from_now = timezone.now() + timedelta(days=7)
+
+            classes_with_low_schedules = []
+            active_classes = base_qs.filter(
+                status="active", businessId__isActive=True
+            ).select_related("businessId", "businessId__owner")
+
+            for cls in active_classes:
+                # Get latest schedule instance
+                latest_instance = (
+                    ScheduleInstance.objects.filter(
+                        schedule__option__classId=cls, date__gte=timezone.now().date()
+                    )
+                    .order_by("-date")
+                    .first()
+                )
+
+                if (
+                    latest_instance is None
+                    or latest_instance.date < one_week_from_now.date()
+                ):
+                    classes_with_low_schedules.append(
+                        {
+                            "classId": cls.classId,
+                            "title": cls.title,
+                            "businessName": (
+                                cls.businessId.businessName if cls.businessId else "N/A"
+                            ),
+                            "businessEmail": (
+                                cls.businessId.owner.email
+                                if cls.businessId and cls.businessId.owner
+                                else "N/A"
+                            ),
+                            "lastScheduleDate": (
+                                latest_instance.date.isoformat()
+                                if latest_instance
+                                else None
+                            ),
+                            "daysRemaining": (
+                                (latest_instance.date - timezone.now().date()).days
+                                if latest_instance
+                                else 0
+                            ),
+                        }
+                    )
+
+            schedule_warnings_count = len(classes_with_low_schedules)
+
+            # --- UPDATED: Review Stats (Platform + Google) ---
+            platform_reviews = Reviews.objects.filter(status="approved")
+            platform_avg_rating = platform_reviews.aggregate(
                 avg=Coalesce(Avg("rating"), Value(0.0))
-            )
-            avg_rating = avg_rating_result["avg"]
+            )["avg"]
+            platform_review_count = platform_reviews.count()
+
+            google_reviews = ImportedGoogleReview.objects.all()
+            google_avg_rating = google_reviews.aggregate(
+                avg=Coalesce(Avg("rating"), Value(0.0))
+            )["avg"]
+            google_review_count = google_reviews.count()
+
+            # Combined weighted average
+            total_review_count = platform_review_count + google_review_count
+            if total_review_count > 0:
+                combined_avg_rating = (
+                    (platform_avg_rating * platform_review_count)
+                    + (google_avg_rating * google_review_count)
+                ) / total_review_count
+            else:
+                combined_avg_rating = 0.0
 
             # Define the filter to be reused
             active_class_filter = Q(
@@ -592,7 +676,6 @@ class AdminClassViewSet(viewsets.ModelViewSet):
             )
 
             # --- Top 5 Performers (Bookings & Ratings) ---
-            # (No changes needed here as they are based on bookings/ratings, not just "active" status)
             popular_classes_qs = (
                 ClassesMain.objects.annotate(
                     bookings_count=Count(
@@ -631,8 +714,13 @@ class AdminClassViewSet(viewsets.ModelViewSet):
             return Response(
                 {
                     "totalClasses": total_classes,
-                    "activeClasses": active_classes_count,  # This count is now accurate
-                    "averageRating": round(avg_rating, 1),
+                    "activeClasses": active_classes_count,
+                    "averageRating": round(combined_avg_rating, 1),
+                    "totalReviews": total_review_count,
+                    "platformReviews": platform_review_count,
+                    "googleReviews": google_review_count,
+                    "scheduleWarningsCount": schedule_warnings_count,
+                    "classesWithLowSchedules": classes_with_low_schedules[:10],
                     "totalCategories": total_categories,
                     "totalSubcategories": total_subcategories,
                     "categoryClassCounts": list(category_counts_qs),
@@ -649,138 +737,6 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 {"error": "Could not generate analytics"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-
-    @action(detail=False, methods=["get"])
-    def export(self, request):
-        if not request.user.has_perm("quickstart.export_class_data"):
-            self.permission_denied(request, message="You cannot export class data.")
-
-        try:
-            queryset = self.filter_queryset(self.get_queryset())
-            response = HttpResponse(content_type="text/csv")
-            response["Content-Disposition"] = (
-                'attachment; filename="classes_export.csv"'
-            )
-            writer = csv.writer(response)
-
-            headers = [
-                "Class ID",
-                "Title",
-                "Business Name",
-                "Category",
-                "Subcategory",
-                "Status",
-                "Average Rating",
-                "Review Count",
-                "Active Schedules Count",
-                "Min Price",
-                "Max Price",
-                "Location",
-                "Business Featured",
-                "Created At",
-            ]
-            writer.writerow(headers)
-
-            class_data = queryset.values_list(
-                "classId",
-                "title",
-                "business_name",
-                "category__name",
-                "subcategory__name",
-                "status",
-                "average_rating",
-                "review_count",
-                "active_schedules_count",
-                "min_price",
-                "max_price",
-                "location",
-                "business_featured",
-                "createdAt",
-            )
-
-            for data_tuple in class_data:
-                (
-                    classId,
-                    title,
-                    business_name,
-                    category_name,
-                    subcategory_name,
-                    status_val,  # Renamed status to status_val
-                    avg_rating,
-                    review_count,
-                    active_schedules_count,
-                    min_price,
-                    max_price,
-                    location,
-                    business_featured,
-                    createdAt,
-                ) = data_tuple
-
-                writer.writerow(
-                    [
-                        classId,
-                        title,
-                        business_name,
-                        category_name or "N/A",
-                        subcategory_name or "N/A",
-                        status_val,  # Use status_val
-                        round(avg_rating or 0.0, 1),
-                        review_count or 0,
-                        active_schedules_count or 0,
-                        f"{min_price:.2f}" if min_price is not None else "N/A",
-                        f"{max_price:.2f}" if max_price is not None else "N/A",
-                        location,
-                        "Yes" if business_featured else "No",
-                        createdAt.strftime("%Y-%m-%d %H:%M:%S") if createdAt else "",
-                    ]
-                )
-            return response
-        except Exception as e:
-            logger.error(f"Error exporting class data: {e}", exc_info=True)
-            return Response(
-                {"error": "Failed to export class data"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-    @action(detail=True, methods=["post"])
-    def update_class_status(self, request, pk=None):
-        """
-        UPDATED: Add revalidation after status change
-        """
-        if not request.user.has_perm("quickstart.change_class_status"):
-            self.permission_denied(request, message="You cannot change class status.")
-
-        class_instance = self.get_object()
-
-        new_status = request.data.get("status")
-        reason = request.data.get("reason", "")
-
-        valid_statuses = [choice[0] for choice in ClassesMain.STATUS_CHOICES]
-        if new_status not in valid_statuses:
-            return Response(
-                {
-                    "error": f'Invalid status value. Must be one of: {", ".join(valid_statuses)}'
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        old_status = class_instance.status
-        if old_status == new_status:
-            serializer = self.get_serializer(class_instance)
-            return Response(serializer.data)
-
-        class_instance.status = new_status
-        class_instance.save(update_fields=["status"])
-
-        logger.info(
-            f"Class '{class_instance.title}' (ID: {pk}) status changed from {old_status} to {new_status} by Admin {request.user.email}. Reason: {reason}"
-        )
-
-        # --- ADDED: Trigger revalidation after status change ---
-        self._trigger_class_revalidation(class_instance)
-
-        serializer = self.get_serializer(class_instance)
-        return Response(serializer.data)
 
 
 # --- AdminCategoryViewSet ---
