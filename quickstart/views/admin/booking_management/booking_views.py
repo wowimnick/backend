@@ -122,6 +122,7 @@ class AdminBookingViewSet(viewsets.ModelViewSet):
                 # This turns many small queries into a single, larger, more efficient JOIN query.
                 "schedule_instance__schedule__option__classId__businessId",
                 "user__role",  # Also join user and their role
+                "contact",  # Also join contact for guest bookings
             )
             .prefetch_related(
                 # Use prefetch_related for reverse relationships (like payments).
