@@ -163,7 +163,7 @@ class AdminBookingListSerializer(serializers.ModelSerializer):
         allow_null=True,
     )
     user_name = serializers.SerializerMethodField()
-    user_email = serializers.CharField(source="user.email", read_only=True)
+    user_email = serializers.SerializerMethodField()
     user_avatar_thumb_url = serializers.SerializerMethodField()
     business_name = serializers.CharField(
         source="schedule_instance.schedule.option.classId.businessId.businessName",
@@ -209,14 +209,30 @@ class AdminBookingListSerializer(serializers.ModelSerializer):
         ]
 
     def get_user_name(self, obj):
+        # Handle registered users
         if obj.user:
             return f"{obj.user.first_name} {obj.user.last_name}".strip()
+        # Handle guest bookings via contact
+        elif obj.contact:
+            return f"{obj.contact.first_name} {obj.contact.last_name}".strip()
         return "N/A"
 
+    def get_user_email(self, obj):
+        # Handle registered users
+        if obj.user:
+            return obj.user.email
+        # Handle guest bookings via contact
+        elif obj.contact:
+            return obj.contact.email
+        return None
+
     def get_user_avatar_thumb_url(self, obj):
+        # Guest contacts don't have avatars
+        if not obj.user:
+            return None
+
         if (
-            not obj.user
-            or not obj.user.avatar
+            not obj.user.avatar
             or not hasattr(obj.user.avatar, "name")
             or not obj.user.avatar.name
         ):
