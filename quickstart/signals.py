@@ -734,11 +734,13 @@ def create_default_business_role(sender, instance, created, **kwargs):
     if created:
         # List of all codenames for permissions a business owner can assign
         business_permission_codenames = [
+            "access_business_dashboard",
             "manage_own_classes",
             "manage_own_schedule_instances",
             "view_own_business_bookings",
             "manage_own_business_profile",
             "manage_business_staff",
+            "manage_business_roles",
             "view_business_revenue_analytics",
             "export_business_revenue_data",
             "view_business_students",
@@ -749,6 +751,7 @@ def create_default_business_role(sender, instance, created, **kwargs):
             "view_own_business_reviews",
             "add_business_review_response",
             "manage_own_business_discounts",
+            "receive_booking_notifications",
         ]
 
         # Fetch all the relevant permission objects in one query
