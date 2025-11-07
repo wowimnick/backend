@@ -19,6 +19,12 @@ from .public.public_business_views import (
     PublicBusinessInfoViewSet,
 )
 
+from quickstart.views.business.business_course_views import (
+    PublicCourseViewSet,
+    StudentCourseEnrollmentViewSet,
+    BusinessCourseManagementViewSet,
+)
+
 from .public.guest_booking_views import GuestBookingCancellationView
 
 from .public.public_class_views import (
@@ -133,6 +139,10 @@ __all__ = [
     "PublicScheduleViewSet",
     "PublicCategoryViewSet",
     "AllCategoriesForBusinessViewSet",
+    # Course Views
+    "PublicCourseViewSet",
+    "StudentCourseEnrollmentViewSet",
+    "BusinessCourseManagementViewSet",
     # Favorite Views
     "MyFavoritesListView",
     # Student Views

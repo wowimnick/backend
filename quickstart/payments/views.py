@@ -17,6 +17,7 @@ from django.conf import settings
 from django.db.models.functions import Coalesce
 from django.db.models import Sum
 from quickstart.models import (
+    CourseEnrollment,
     CustomUser,
     Booking,
     Discount,
@@ -587,6 +588,124 @@ class ProcessBookingWebhook(APIView):
 
         return Response(status=status.HTTP_200_OK)
 
+    def handle_course_payment_success(self, payment_intent, webhook_id):
+        """
+        Handle successful payment for a course enrollment.
+        Updates CourseEnrollment and all session Bookings.
+
+        This is called from handle_successful_payment when enrollment_type is "Full Course".
+        """
+        try:
+            with transaction.atomic():
+                # Get booking group ID from metadata
+                booking_group_id = payment_intent.metadata.get("booking_group_id")
+                if not booking_group_id:
+                    logger.error(
+                        f"[{webhook_id}] No booking_group_id in payment intent metadata"
+                    )
+                    raise DRFValidationError(
+                        "Missing booking_group_id in payment metadata"
+                    )
+
+                # Get enrollment
+                try:
+                    enrollment = CourseEnrollment.objects.select_for_update().get(
+                        booking_group_id=booking_group_id
+                    )
+                except CourseEnrollment.DoesNotExist:
+                    logger.error(
+                        f"[{webhook_id}] CourseEnrollment not found for booking_group_id {booking_group_id}"
+                    )
+                    raise DRFValidationError(
+                        f"Course enrollment not found for booking group {booking_group_id}"
+                    )
+
+                # Update enrollment status
+                enrollment.status = "active"
+                enrollment.total_amount_paid = (
+                    Decimal(str(payment_intent.amount_received)) / 100
+                )
+                enrollment.save(update_fields=["status", "total_amount_paid"])
+
+                logger.info(
+                    f"[{webhook_id}] Updated CourseEnrollment {enrollment.id} to active, amount: ${enrollment.total_amount_paid}"
+                )
+
+                # Get all bookings for this course
+                bookings = list(
+                    Booking.objects.select_for_update()
+                    .filter(booking_group_id=booking_group_id)
+                    .order_by("course_session_number")
+                )
+
+                if not bookings:
+                    logger.error(
+                        f"[{webhook_id}] No bookings found for booking_group_id {booking_group_id}"
+                    )
+                    raise DRFValidationError(f"No bookings found for course enrollment")
+
+                # Calculate price per session
+                session_price = enrollment.total_amount_paid / len(bookings)
+                session_price = session_price.quantize(Decimal("0.01"))
+
+                # Update all bookings
+                for booking in bookings:
+                    booking.status = "confirmed"
+                    booking.payment_status = "paid"
+                    booking.amount_paid = session_price
+
+                    # Generate reference only for first session
+                    if (
+                        booking.course_session_number == 1
+                        and not booking.user_facing_reference
+                    ):
+                        booking.user_facing_reference = (
+                            booking._generate_user_facing_reference()
+                        )
+
+                # Bulk update for efficiency
+                Booking.objects.bulk_update(
+                    bookings,
+                    [
+                        "status",
+                        "payment_status",
+                        "amount_paid",
+                        "user_facing_reference",
+                    ],
+                )
+
+                logger.info(
+                    f"[{webhook_id}] Successfully processed payment for course enrollment {enrollment.id}, "
+                    f"updated {len(bookings)} session bookings"
+                )
+
+                # TODO: Send confirmation email (when email system is ready)
+                # from quickstart.utils.email_utils import send_course_enrollment_confirmation_email
+                # send_course_enrollment_confirmation_email(enrollment)
+
+                # Create payment record
+                from quickstart.models import Payment
+
+                payment_record = Payment.objects.create(
+                    booking=bookings[0],  # Link to first booking
+                    stripe_payment_intent_id=payment_intent.id,
+                    amount=enrollment.total_amount_paid,
+                    status="succeeded",
+                )
+
+                logger.info(
+                    f"[{webhook_id}] Created payment record {payment_record.id} for course enrollment"
+                )
+
+                return {"message": "Course payment processed successfully"}
+
+        except Exception as e:
+            logger.error(
+                f"[{webhook_id}] Error processing course payment success: {e}",
+                exc_info=True,
+            )
+            raise
+
     def handle_successful_payment(self, payment_intent, webhook_id):
         if Payment.objects.filter(
             stripe_payment_intent_id=payment_intent.id, status="succeeded"
@@ -595,6 +714,14 @@ class ProcessBookingWebhook(APIView):
                 f"[{webhook_id}] DUPLICATE: PI {payment_intent.id} already processed."
             )
             return {"message": "Already processed"}
+
+        enrollment_type = payment_intent.metadata.get("enrollment_type")
+
+        if enrollment_type == "Full Course":
+            logger.info(
+                f"[{webhook_id}] Detected course payment, routing to course handler"
+            )
+            return self.handle_course_payment_success(payment_intent, webhook_id)
 
         with transaction.atomic():
             try:

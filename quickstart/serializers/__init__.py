@@ -21,6 +21,13 @@ from .business.business_management_serializers import (
     colors,
 )
 
+from .business.business_course_serializers import (
+    PublicCourseScheduleSerializer,
+    CourseEnrollmentSerializer,
+    CourseEnrollmentDetailSerializer,
+    CourseBookingCreateSerializer,
+)
+
 from .business.business_crm_serializers import ContactImportUploadSerializer
 
 from .business.business_class_serializers import (
@@ -150,6 +157,11 @@ __all__ = [
     "PublicClassOptionSerializer",
     "PublicScheduleSerializer",
     "PublicClassDetailSerializer",
+    # Course Serializers
+    "PublicCourseScheduleSerializer",
+    "CourseEnrollmentSerializer",
+    "CourseEnrollmentDetailSerializer",
+    "CourseBookingCreateSerializer",
     # Blog Serializers
     "PublicBlogAuthorSerializer",
     "PublicBlogCategorySerializer",
