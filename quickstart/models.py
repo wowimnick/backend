@@ -1577,6 +1577,30 @@ class ClassOption(models.Model):
         help_text="Percentage of refund if cancellation policy conditions are met (0-100).",
     )
 
+    # --- ADDED: Fields for Mid-Course Drop Policy (Only for Full Course) ---
+    allowMidCourseDrops = models.BooleanField(
+        default=False,
+        help_text="If true, students can drop out after the course has started for a partial refund.",
+    )
+    midCourseCancellationPolicy = models.CharField(
+        max_length=30,
+        choices=CANCELLATION_POLICY_CHOICES,
+        null=True,
+        blank=True,
+        help_text="The cancellation policy that applies if a student drops mid-course.",
+    )
+    midCourseCancellationCustomHours = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Custom notice period in hours for mid-course drops.",
+    )
+    midCourseCancellationRefundPercentage = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+        help_text="Percentage of remaining sessions' value to be refunded for mid-course drops.",
+    )
+
     createdAt = models.DateTimeField(auto_now_add=True)
     updatedAt = models.DateTimeField(auto_now=True)
 

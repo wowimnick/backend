@@ -23,6 +23,42 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+class BusinessCourseSerializer(serializers.ModelSerializer):
+    """Business view of their courses"""
+
+    class_title = serializers.CharField(source="option.parent_class_title")
+    enrolled_students = serializers.SerializerMethodField()
+    total_revenue = serializers.SerializerMethodField()
+    session_count = serializers.IntegerField(source="instances.count", read_only=True)
+
+    class Meta:
+        model = Schedule
+        fields = [
+            "id",
+            "class_title",
+            "start_date",
+            "end_date",
+            "day",
+            "time",
+            "duration",
+            "price",
+            "maxParticipants",
+            "session_count",
+            "enrolled_students",
+            "total_revenue",
+        ]
+
+    def get_enrolled_students(self, obj):
+        return CourseEnrollment.objects.filter(
+            schedule=obj, status__in=["pending", "active"]
+        ).count()
+
+    def get_total_revenue(self, obj):
+        return CourseEnrollment.objects.filter(
+            schedule=obj, status__in=["active", "completed"]
+        ).aggregate(total=Sum("total_amount_paid"))["total"] or Decimal("0.00")
+
+
 # ============================================================================
 # Course Schedule Serializers (Public - for browsing)
 # ============================================================================

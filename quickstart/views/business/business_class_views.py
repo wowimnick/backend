@@ -28,12 +28,14 @@ from django.db.models import (
     Value,
     DecimalField,
     Exists,
-)  # Added Sum, Value, DecimalField
+    Case,
+    When,
+    ExpressionWrapper,
+)
 from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
 from rest_framework.pagination import PageNumberPagination
 from django.core.files.storage import default_storage
-from django.http import Http404
 import logging
 import json
 from django.utils import timezone
@@ -56,6 +58,7 @@ from quickstart.models import (
     ScheduleInstance,
     Booking,
     Reviews,
+    ImportedGoogleReview,
 )
 
 from quickstart.serializers import (
@@ -186,18 +189,35 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
     ]
     ordering = ["-updatedAt"]
 
-    AVERAGE_RATING_SUBQUERY = Subquery(
-        Reviews.objects.filter(classId=OuterRef("pk"))
-        .values("classId")
-        .annotate(avg_rating=Avg("rating"))
-        .values("avg_rating")[:1],
-        output_field=DecimalField(max_digits=3, decimal_places=1),
-    )
+    # --- Subqueries for Review Counts ---
     REVIEW_COUNT_SUBQUERY = Subquery(
         Reviews.objects.filter(classId=OuterRef("pk"))
         .values("classId")
         .annotate(count=Count("reviewId"))
         .values("count")[:1],
+        output_field=IntegerField(),
+    )
+    GOOGLE_REVIEW_COUNT_SUBQUERY = Subquery(
+        ImportedGoogleReview.objects.filter(business=OuterRef("businessId"))
+        .values("business")
+        .annotate(count=Count("id"))
+        .values("count")[:1],
+        output_field=IntegerField(),
+    )
+
+    # --- Subqueries for Review Score Sums ---
+    NATIVE_RATING_SUM_SUBQUERY = Subquery(
+        Reviews.objects.filter(classId=OuterRef("pk"))
+        .values("classId")
+        .annotate(total=Sum("rating"))
+        .values("total")[:1],
+        output_field=IntegerField(),
+    )
+    GOOGLE_RATING_SUM_SUBQUERY = Subquery(
+        ImportedGoogleReview.objects.filter(business=OuterRef("businessId"))
+        .values("business")
+        .annotate(total=Sum("rating"))
+        .values("total")[:1],
         output_field=IntegerField(),
     )
 
@@ -234,10 +254,12 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                 ),
             )
             .annotate(
-                average_rating=Coalesce(
-                    self.AVERAGE_RATING_SUBQUERY, Value(Decimal("0.0"))
+                native_review_count=Coalesce(self.REVIEW_COUNT_SUBQUERY, Value(0)),
+                google_review_count=Coalesce(
+                    self.GOOGLE_REVIEW_COUNT_SUBQUERY, Value(0)
                 ),
-                review_count=Coalesce(self.REVIEW_COUNT_SUBQUERY, Value(0)),
+                native_rating_sum=Coalesce(self.NATIVE_RATING_SUM_SUBQUERY, Value(0)),
+                google_rating_sum=Coalesce(self.GOOGLE_RATING_SUM_SUBQUERY, Value(0)),
                 last_schedule_date=Subquery(
                     ScheduleInstance.objects.filter(
                         schedule__option__classId=OuterRef("pk"),
@@ -246,6 +268,23 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                     .order_by("-date")
                     .values("date")[:1]
                 ),
+            )
+            .annotate(
+                review_count=F("native_review_count") + F("google_review_count"),
+                total_rating_sum=F("native_rating_sum") + F("google_rating_sum"),
+            )
+            .annotate(
+                average_rating=Case(
+                    When(
+                        review_count__gt=0,
+                        then=ExpressionWrapper(
+                            F("total_rating_sum") * 1.0 / F("review_count"),
+                            output_field=DecimalField(max_digits=3, decimal_places=1),
+                        ),
+                    ),
+                    default=Value(Decimal("0.0")),
+                    output_field=DecimalField(max_digits=3, decimal_places=1),
+                )
             )
             .distinct()
         )

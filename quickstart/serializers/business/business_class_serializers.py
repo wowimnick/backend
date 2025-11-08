@@ -423,6 +423,10 @@ class ManagedClassOptionSerializer(serializers.ModelSerializer):
             "cancellationPolicy",
             "cancellationCustomHours",
             "cancellationRefundPercentage",
+            "allowMidCourseDrops",
+            "midCourseCancellationPolicy",
+            "midCourseCancellationCustomHours",
+            "midCourseCancellationRefundPercentage",
             "price_type",
             "createdAt",
             "updatedAt",
@@ -453,6 +457,19 @@ class ManagedClassOptionSerializer(serializers.ModelSerializer):
             "price_type": {
                 "default": ClassOption._meta.get_field("price_type").get_default()
             },
+            "allowMidCourseDrops": {
+                "default": ClassOption._meta.get_field(
+                    "allowMidCourseDrops"
+                ).get_default()
+            },
+            "midCourseCancellationPolicy": {"required": False},
+            "midCourseCancellationCustomHours": {"required": False},
+            "midCourseCancellationRefundPercentage": {
+                "required": False,
+                "default": ClassOption._meta.get_field(
+                    "cancellationRefundPercentage"
+                ).get_default(),
+            },
         }
 
     def validate(self, data):
@@ -474,6 +491,37 @@ class ManagedClassOptionSerializer(serializers.ModelSerializer):
             if custom_hours < 1:
                 raise serializers.ValidationError(
                     {"cancellationCustomHours": "Custom hours must be at least 1."}
+                )
+
+        # --- ADDED: Validation for mid-course drop policies ---
+        allow_drops = data.get(
+            "allowMidCourseDrops",
+            getattr(self.instance, "allowMidCourseDrops", False),
+        )
+        mid_course_policy = data.get("midCourseCancellationPolicy")
+        mid_course_custom_hours = data.get("midCourseCancellationCustomHours")
+
+        # If drops are allowed, a policy is required.
+        if allow_drops and not mid_course_policy:
+            raise serializers.ValidationError(
+                {
+                    "midCourseCancellationPolicy": "A cancellation policy is required if mid-course drops are allowed."
+                }
+            )
+
+        # If the mid-course policy is 'custom', custom hours must be provided.
+        if allow_drops and mid_course_policy == "custom":
+            if mid_course_custom_hours is None:
+                raise serializers.ValidationError(
+                    {
+                        "midCourseCancellationCustomHours": "Custom hours are required for a 'custom' mid-course drop policy."
+                    }
+                )
+            if mid_course_custom_hours < 1:
+                raise serializers.ValidationError(
+                    {
+                        "midCourseCancellationCustomHours": "Mid-course custom hours must be at least 1."
+                    }
                 )
 
         return data
