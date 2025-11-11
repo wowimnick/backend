@@ -240,34 +240,35 @@ class ScheduleSerializer(serializers.ModelSerializer):
                 "Option context is required for schedule validation."
             )
 
+        # On update, check for confirmed bookings before allowing critical changes
+        if self.instance and self.instance.pk:
+            has_bookings = getattr(self.instance, "has_confirmed_bookings", None)
+            # If annotation isn't present, query it directly
+            if has_bookings is None:
+                has_bookings = Booking.objects.filter(
+                    schedule_instance__schedule=self.instance, status="confirmed"
+                ).exists()
+
+            if has_bookings:
+                # These fields define the core structure of a course and shouldn't be changed
+                # once people have booked.
+                immutable_fields = ["start_date", "end_date", "day", "time"]
+                for field in immutable_fields:
+                    # Check if the field is in the input data and if it's different from the instance's current value
+                    if data.get(field) is not None and data.get(field) != getattr(
+                        self.instance, field
+                    ):
+                        raise serializers.ValidationError(
+                            {
+                                field: f"Cannot change the {field.replace('_', ' ')} because this course schedule has confirmed bookings."
+                            }
+                        )
+
         booking_type = option.booking_type
         start_date = data.get("start_date")
         end_date = data.get("end_date")
         date_field = data.get("date")
         day = data.get("day")
-
-        if self.instance and self.instance.pk:
-            critical_fields_being_changed = any(
-                data.get(field) is not None
-                and data.get(field) != getattr(self.instance, field)
-                for field in [
-                    "day",
-                    "time",
-                    "duration",
-                    "price",
-                    "start_date",
-                    "end_date",
-                    "date",
-                ]
-            )
-            if critical_fields_being_changed:
-                if Booking.objects.filter(
-                    schedule_instance__schedule=self.instance, status="confirmed"
-                ).exists():
-                    raise serializers.ValidationError(
-                        "This schedule has confirmed bookings and critical details (like date, time, price) cannot be changed. "
-                        "Please cancel the existing schedule and create a new one if significant changes are needed."
-                    )
 
         if booking_type == "Full Course":
             if not all([start_date, end_date, day]):
@@ -285,13 +286,15 @@ class ScheduleSerializer(serializers.ModelSerializer):
                     {"start_date": "New course cannot start in the past."}
                 )
 
-        else:
+        else:  # Single Session
             if not date_field:
                 raise serializers.ValidationError(
                     "Date is required for single sessions."
                 )
+            # Auto-set day from date for single sessions
             if date_field and not data.get("day"):
                 data["day"] = date_field.strftime("%a")
+            # Check for past date only on creation
             if (
                 self.instance is None or self.instance.pk is None
             ) and date_field < timezone.now().date():
@@ -310,12 +313,16 @@ class ScheduleSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {"maxParticipants": "Max participants must be at least 1."}
                 )
+            # On update, ensure new capacity isn't less than current bookings
             if self.instance and self.instance.pk:
-                current_booked_sum = Booking.objects.filter(
-                    schedule_instance__schedule=self.instance, status="confirmed"
-                ).aggregate(total_booked=Coalesce(Sum("participants"), 0))[
-                    "total_booked"
-                ]
+                current_booked_sum = getattr(self.instance, "booked_participants", None)
+                if current_booked_sum is None:
+                    current_booked_sum = Booking.objects.filter(
+                        schedule_instance__schedule=self.instance,
+                        status="confirmed",
+                    ).aggregate(total_booked=Coalesce(Sum("participants"), 0))[
+                        "total_booked"
+                    ]
                 if new_max_participants < current_booked_sum:
                     raise serializers.ValidationError(
                         {

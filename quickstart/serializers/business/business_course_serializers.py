@@ -99,6 +99,16 @@ class PublicCourseScheduleSerializer(serializers.ModelSerializer):
     available_spots = serializers.SerializerMethodField()
     sessions = serializers.SerializerMethodField()
 
+    cancellationPolicy = serializers.CharField(
+        source="option.cancellationPolicy", read_only=True
+    )
+    cancellationCustomHours = serializers.IntegerField(
+        source="option.cancellationCustomHours", read_only=True
+    )
+    cancellationRefundPercentage = serializers.IntegerField(
+        source="option.cancellationRefundPercentage", read_only=True
+    )
+
     class Meta:
         model = Schedule
         fields = [
