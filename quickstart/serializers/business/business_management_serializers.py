@@ -64,6 +64,7 @@ class UpcomingClassSerializer(serializers.Serializer):
     time = serializers.CharField()
     current_occupancy = serializers.IntegerField()
     max_occupancy = serializers.IntegerField()
+    booking_type = serializers.CharField(required=False)
 
 
 class PopularClassSerializer(serializers.Serializer):
