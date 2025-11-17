@@ -9,7 +9,7 @@ from rest_framework.exceptions import ValidationError as DRFValidationError
 from decimal import Decimal, InvalidOperation
 import json
 import logging
-import pytz  # For timezone choices
+import pytz  
 
 from quickstart.models import (
     BusinessInfo,
@@ -26,7 +26,7 @@ from datetime import (
     timedelta,
     time,
     datetime,
-)  # Added datetime for founding_year validation
+) 
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
@@ -991,9 +991,8 @@ class BusinessDiscountSerializer(serializers.ModelSerializer):
     target_class_name = serializers.CharField(
         source="target_class.title", read_only=True
     )
-    target_class_option_name = serializers.CharField(
-        source="target_class_option.classId.title", read_only=True
-    )
+    # MODIFIED: Added classId to option name for context
+    target_class_option_name = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Discount
@@ -1035,10 +1034,17 @@ class BusinessDiscountSerializer(serializers.ModelSerializer):
             "name": {"required": True},
             "discount_type": {"required": True},
             "value": {"required": True},
-            "code": {
-                "validators": []
-            },  # Remove default unique validator to handle in .validate()
+            "code": {"validators": []},
+            # MODIFIED: Ensure targets are not required at a base level
+            "target_class": {"required": False},
+            "target_schedule_group_name": {"required": False},
+            "target_class_option": {"required": False},
         }
+
+    def get_target_class_option_name(self, obj):
+        if obj.target_class_option:
+            return f"{obj.target_class_option.booking_type} for {obj.target_class_option.classId.title}"
+        return None
 
     def validate_code(self, value):
         if not value:
@@ -1054,7 +1060,6 @@ class BusinessDiscountSerializer(serializers.ModelSerializer):
         ).first()
 
         if not business:
-            # This should ideally not happen if view permissions are correct, but it's a safe check.
             raise serializers.ValidationError(
                 "You are not associated with a business to create coupons for."
             )
@@ -1078,61 +1083,61 @@ class BusinessDiscountSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Discount value must be positive.")
         return value
 
+    # MODIFIED: Overhauled validate method for new scope logic
     def validate(self, data):
-        scope = data.get("scope")
+        scope = data.get(
+            "scope",
+            self.instance.scope if self.instance else Discount.DiscountScope.BUSINESS,
+        )
 
-        if scope == "class":
-            if not data.get("target_class"):
+        user = self.context["request"].user
+        business = BusinessInfo.objects.filter(
+            Q(owner=user)
+            | Q(staff_members__user=user, staff_members__status="accepted")
+        ).first()
+        if not business:
+            raise serializers.ValidationError(
+                "Could not determine your business context."
+            )
+
+        if scope == Discount.DiscountScope.BUSINESS:
+            data["target_class"] = None
+            data["target_schedule_group_name"] = None
+            data["target_class_option"] = None
+        elif scope == Discount.DiscountScope.CLASS:
+            target_class = data.get("target_class")
+            if not target_class:
                 raise serializers.ValidationError(
-                    {"target_class": "An entire class must be selected for this scope."}
+                    {"target_class": "A class must be selected for this scope."}
+                )
+            if target_class.businessId != business:
+                raise serializers.ValidationError(
+                    {"target_class": "This class does not belong to your business."}
                 )
             data["target_schedule_group_name"] = None
             data["target_class_option"] = None
-
-        elif scope == "schedule_group":
-            if not data.get("target_schedule_group_name") or not data.get(
-                "target_class_option"
-            ):
+        elif scope == Discount.DiscountScope.SCHEDULE_GROUP:
+            target_option = data.get("target_class_option")
+            target_group_name = data.get("target_schedule_group_name")
+            if not target_group_name or not target_option:
                 raise serializers.ValidationError(
                     {
                         "target_schedule_group_name": "A schedule group name and class option are required for this scope.",
                         "target_class_option": "A class option is required for this scope.",
                     }
                 )
-            data["target_class"] = None
+            if target_option.classId.businessId != business:
+                raise serializers.ValidationError(
+                    {
+                        "target_class_option": "This class option does not belong to your business."
+                    }
+                )
 
         valid_from = data.get("valid_from")
         valid_to = data.get("valid_to")
-        if valid_to and valid_from and valid_to < valid_from:
+        if valid_from and valid_to and valid_to < valid_from:
             raise serializers.ValidationError(
                 {"valid_to": "'Valid to' date cannot be before 'Valid from' date."}
-            )
-
-        # Ensure the selected targets belong to the user's business
-        user = self.context["request"].user
-        business = BusinessInfo.objects.filter(
-            Q(owner=user)
-            | Q(staff_members__user=user, staff_members__status="accepted")
-        ).first()
-
-        if not business:
-            raise serializers.ValidationError(
-                "Could not determine your business context."
-            )
-
-        if data.get("target_class") and data["target_class"].businessId != business:
-            raise serializers.ValidationError(
-                {"target_class": "This class does not belong to your business."}
-            )
-
-        if (
-            data.get("target_class_option")
-            and data["target_class_option"].classId.businessId != business
-        ):
-            raise serializers.ValidationError(
-                {
-                    "target_class_option": "This class option does not belong to your business."
-                }
             )
 
         return data

@@ -2431,7 +2431,9 @@ class Discount(models.Model):
         PERCENTAGE = "percentage", "Percentage"
         FIXED_AMOUNT = "fixed_amount", "Fixed Amount"
 
+    # MODIFIED: Added 'BUSINESS' scope
     class DiscountScope(models.TextChoices):
+        BUSINESS = "business", "Entire Business"
         CLASS = "class", "Entire Class"
         SCHEDULE_GROUP = "schedule_group", "Specific Schedule Group"
 
@@ -2458,10 +2460,11 @@ class Discount(models.Model):
         help_text="The value of the discount (e.g., 20.00 for 20% or 10.00 for $10).",
     )
 
+    # MODIFIED: Changed default scope
     scope = models.CharField(
         max_length=20,
         choices=DiscountScope.choices,
-        default=DiscountScope.CLASS,
+        default=DiscountScope.BUSINESS,
         help_text="What this discount applies to.",
     )
     target_class = models.ForeignKey(
@@ -2487,7 +2490,9 @@ class Discount(models.Model):
     )
 
     is_active = models.BooleanField(default=True, db_index=True)
-    valid_from = models.DateTimeField(default=timezone.now)
+    valid_from = models.DateTimeField(
+        null=True, blank=True, help_text="Leave blank for no start date."
+    )
     valid_to = models.DateTimeField(
         null=True, blank=True, help_text="Leave blank for no expiration date."
     )
@@ -2520,23 +2525,31 @@ class Discount(models.Model):
         return (
             f"{self.name} ({self.code or 'Automatic'}) for {self.business.businessName}"
         )
-
+    
+    # MODIFIED: Overhauled clean method for new scope logic
     def clean(self):
         if self.code:
             self.code = self.code.upper().strip()
+            
         if self.discount_type == self.DiscountType.PERCENTAGE and self.value > 100:
             raise ValidationError("Percentage value cannot be greater than 100.")
-        if self.scope == self.DiscountScope.CLASS and not self.target_class:
-            raise ValidationError(
-                "A 'target_class' must be specified for a class-scoped discount."
-            )
-        if self.scope == self.DiscountScope.SCHEDULE_GROUP and not (
-            self.target_schedule_group_name and self.target_class_option
-        ):
-            raise ValidationError(
-                "Both 'target_schedule_group_name' and 'target_class_option' are required for schedule group discounts."
-            )
-        if self.valid_to and self.valid_from > self.valid_to:
+
+        # --- Scope Validation ---
+        if self.scope == self.DiscountScope.BUSINESS:
+            if self.target_class or self.target_schedule_group_name or self.target_class_option:
+                raise ValidationError("Targets (class, option, group) must not be set for a business-wide discount.")
+        
+        elif self.scope == self.DiscountScope.CLASS:
+            if not self.target_class:
+                raise ValidationError("A 'target_class' must be specified for a class-scoped discount.")
+            if self.target_schedule_group_name or self.target_class_option:
+                raise ValidationError("Schedule group and option must not be set for a class-scoped discount.")
+        
+        elif self.scope == self.DiscountScope.SCHEDULE_GROUP:
+            if not (self.target_schedule_group_name and self.target_class_option):
+                raise ValidationError("Both 'target_schedule_group_name' and 'target_class_option' are required for schedule group discounts.")
+
+        if self.valid_to and self.valid_from and self.valid_from > self.valid_to:
             raise ValidationError("'Valid to' date must be after 'Valid from' date.")
 
     def save(self, *args, **kwargs):
