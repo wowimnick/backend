@@ -11,6 +11,8 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.exceptions import ValidationError
 from decimal import Decimal
+from django.contrib.postgres.aggregates import ArrayAgg
+from django.db.models import Min
 import uuid
 
 from quickstart.utils.permissions import CanManageOwnClasses
@@ -198,18 +200,18 @@ class PublicCourseViewSet(viewsets.ReadOnlyModelViewSet):
     """
     ViewSet for browsing available courses (public access).
     Students can view course details before enrolling.
-
-    Endpoints:
-    - GET /api/courses/ - List all available courses
-    - GET /api/courses/{id}/ - Get course details
     """
 
     serializer_class = PublicCourseScheduleSerializer
     permission_classes = [AllowAny]
+    pagination_class = None
 
     def get_queryset(self):
-        """Get all active course schedules that haven't started yet"""
-        queryset = (
+        """
+        THE FIX: This method is now completely overhauled to group schedules
+        that belong to the same course offering (same option, dates, time, price).
+        """
+        base_queryset = (
             Schedule.objects.filter(
                 option__booking_type="Full Course",
                 option__classId__businessId__isActive=True,
@@ -221,18 +223,39 @@ class PublicCourseViewSet(viewsets.ReadOnlyModelViewSet):
             .order_by("start_date", "time")
         )
 
-        # Optional filtering
+        # Optional filtering by class_id or business_id
         class_id = self.request.query_params.get("class_id")
         if class_id:
-            queryset = queryset.filter(option__classId__classId=class_id)
+            base_queryset = base_queryset.filter(option__classId__classId=class_id)
 
         business_id = self.request.query_params.get("business_id")
         if business_id:
-            queryset = queryset.filter(
+            base_queryset = base_queryset.filter(
                 option__classId__businessId__businessId=business_id
             )
 
-        return queryset
+        # --- THE CORE FIX: Grouping and Aggregation ---
+        # Define the fields that uniquely identify a single course offering
+        grouping_fields = [
+            'option',
+            'start_date',
+            'end_date',
+            'time',
+            'duration',
+            'price',
+            'maxParticipants',
+            'minParticipants',
+        ]
+
+        # Group by these fields and aggregate the days and schedule IDs
+        grouped_queryset = base_queryset.values(*grouping_fields).annotate(
+            # Collect all days of the week into an array
+            days=ArrayAgg('day', distinct=True),
+            # Get a single, representative ID for the entire group for booking purposes
+            id=Min('id'),
+        )
+
+        return grouped_queryset.order_by('start_date', 'time')
 
 
 # ============================================================================
@@ -277,25 +300,6 @@ class StudentCourseEnrollmentViewSet(viewsets.ModelViewSet):
         """
         Enroll student in a course.
         Creates CourseEnrollment and all session Bookings atomically.
-
-        Request body:
-        {
-            "schedule_id": 123,
-            "participants": 1,
-            "participant_details": [{"name": "John Doe"}],
-            "notes": "Excited to start!"
-        }
-
-        Response:
-        {
-            "enrollment_id": "uuid",
-            "booking_group_id": "uuid",
-            "total_price": "240.00",
-            "total_sessions": 8,
-            "first_session_date": "2025-11-15",
-            "last_session_date": "2026-01-10",
-            "requires_payment": true
-        }
         """
         serializer = CourseBookingCreateSerializer(
             data=request.data, context={"request": request}
@@ -303,43 +307,61 @@ class StudentCourseEnrollmentViewSet(viewsets.ModelViewSet):
 
         try:
             with transaction.atomic():
-                # Validate (includes locking and capacity check)
                 serializer.is_valid(raise_exception=True)
+                
+                # 'validated_schedule' is the representative schedule from the group
+                representative_schedule = serializer.context["validated_schedule"]
 
-                # Get validated objects from context
-                schedule = serializer.context["validated_schedule"]
-                instances = serializer.context["validated_instances"]
+                # --- THE FIX: Find all sibling schedules in the multi-day group ---
+                group_schedules = Schedule.objects.filter(
+                    option=representative_schedule.option,
+                    start_date=representative_schedule.start_date,
+                    end_date=representative_schedule.end_date,
+                    time=representative_schedule.time,
+                    price=representative_schedule.price
+                )
 
-                # Generate booking group ID
+                # Collect all instances from all schedules in the group
+                all_instances_in_group = []
+                for schedule in group_schedules:
+                    # Perform capacity check for each schedule in the group
+                    available_spots = schedule.maxParticipants - (schedule.course_enrollments.filter(status__in=['active', 'pending']).aggregate(total=Coalesce(Sum('participants'), 0))['total'])
+                    if available_spots < serializer.validated_data["participants"]:
+                         raise ValidationError(f"Not enough spots available for the session on {schedule.day}.")
+                    
+                    all_instances_in_group.extend(list(schedule.instances.filter(status='scheduled').order_by('date')))
+                
+                # Sort all collected instances by date to ensure correct session numbering
+                all_instances_in_group.sort(key=lambda x: x.date)
+
+                if not all_instances_in_group:
+                    raise ValidationError("This course has no upcoming sessions to book.")
+
                 booking_group_id = uuid.uuid4()
-
-                # Get cancellation policy from option
-                option = schedule.option
-
-                # Create CourseEnrollment
+                option = representative_schedule.option
                 participants = serializer.validated_data["participants"]
+                
+                # Create a SINGLE CourseEnrollment record
                 enrollment = CourseEnrollment.objects.create(
-                    schedule=schedule,
+                    # NOTE: We link it to the representative schedule, but it covers the whole group
+                    schedule=representative_schedule, 
                     user=request.user,
                     booking_group_id=booking_group_id,
-                    total_sessions=len(instances),
+                    total_sessions=len(all_instances_in_group),
                     participants=participants,
                     status="pending",
-                    total_amount_paid=Decimal("0.00"),  # Updated after payment
+                    total_amount_paid=Decimal("0.00"),
                     cancellation_policy=option.cancellationPolicy,
                     cancellation_custom_hours=option.cancellationCustomHours,
                     cancellation_refund_percentage=option.cancellationRefundPercentage,
                 )
 
-                # Create bookings for all sessions
-                participant_details = serializer.validated_data.get(
-                    "participant_details", []
-                )
+                participant_details = serializer.validated_data.get("participant_details", [])
                 notes = serializer.validated_data.get("notes", "")
 
                 bookings = []
-                for session_num, instance in enumerate(instances, start=1):
-                    booking = Booking(
+                for session_num, instance in enumerate(all_instances_in_group, start=1):
+                    bookings.append(Booking(
                         user=request.user,
                         schedule_instance=instance,
                         enrollment_type="Full Course",
@@ -348,31 +370,29 @@ class StudentCourseEnrollmentViewSet(viewsets.ModelViewSet):
                         participants=participants,
                         participant_details=participant_details,
                         notes=notes,
-                        amount_paid=Decimal("0.00"),  # Will be split after payment
+                        amount_paid=Decimal("0.00"),
                         status="pending",
                         payment_status="pending",
                         cancellation_policy=enrollment.cancellation_policy,
                         cancellation_custom_hours=enrollment.cancellation_custom_hours,
                         cancellation_refund_percentage=enrollment.cancellation_refund_percentage,
-                    )
-                    bookings.append(booking)
+                    ))
 
-                # Bulk create for efficiency
                 created_bookings = Booking.objects.bulk_create(bookings)
+                # ... (rest of the logic remains the same)
 
                 logger.info(
                     f"Created course enrollment {enrollment.id} with {len(created_bookings)} "
-                    f"session bookings for user {request.user.email}"
+                    f"session bookings for user {request.user.email} covering {group_schedules.count()} weekly schedules."
                 )
 
-                # Return enrollment details with payment info
                 response_data = {
                     "enrollment_id": str(enrollment.id),
                     "booking_group_id": str(booking_group_id),
-                    "total_price": float(schedule.price),
-                    "total_sessions": len(instances),
-                    "first_session_date": instances[0].date,
-                    "last_session_date": instances[-1].date,
+                    "total_price": float(representative_schedule.price),
+                    "total_sessions": len(all_instances_in_group),
+                    "first_session_date": all_instances_in_group[0].date,
+                    "last_session_date": all_instances_in_group[-1].date,
                     "requires_payment": True,
                 }
 

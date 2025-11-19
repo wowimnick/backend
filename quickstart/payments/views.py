@@ -275,12 +275,14 @@ class CreatePaymentIntentView(APIView):
                         f"[{request_id}] Created single pending Booking: {first_booking.id}"
                     )
 
+                currency_code = getattr(settings, "STRIPE_CURRENCY", "cad")
+
                 pending_payment = Payment.objects.create(
                     booking=first_booking,
-                    stripe_payment_intent_id="temp",  # Placeholder
+                    stripe_payment_intent_id="temp", 
                     amount=grand_total,
                     tax_amount=tax_amount,
-                    currency=settings.STRIPE_CURRENCY.upper(),
+                    currency=currency_code.upper(),
                     status="pending",
                 )
                 logger.info(
@@ -311,7 +313,7 @@ class CreatePaymentIntentView(APIView):
             try:
                 intent = stripe.PaymentIntent.create(
                     amount=total_amount_for_stripe_cents,
-                    currency=settings.STRIPE_CURRENCY.lower(),
+                    currency=currency_code.lower(), 
                     payment_method_types=["card"],
                     metadata={k: v for k, v in metadata.items() if v is not None},
                 )

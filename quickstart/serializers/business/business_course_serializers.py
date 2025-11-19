@@ -7,6 +7,7 @@ from rest_framework import serializers
 from django.db import transaction
 from django.utils import timezone
 from django.db.models import Sum, Count
+from django.db.models.functions import Coalesce
 from decimal import Decimal
 import uuid
 
@@ -64,119 +65,66 @@ class BusinessCourseSerializer(serializers.ModelSerializer):
 # ============================================================================
 
 
-class PublicCourseScheduleSerializer(serializers.ModelSerializer):
+class PublicCourseScheduleSerializer(serializers.Serializer):
     """
-    Serializer for displaying course schedule details to students.
-    Used in course listing and detail views.
+    Serializer for publicly viewing available course schedules.
+    Now handles aggregated/grouped data from the ViewSet.
     """
+    # Define fields to match the annotated queryset
+    id = serializers.IntegerField() # This is the representative schedule ID
+    option = serializers.IntegerField()
+    start_date = serializers.DateField()
+    end_date = serializers.DateField()
+    time = serializers.TimeField()
+    duration = serializers.IntegerField()
+    price = serializers.DecimalField(max_digits=10, decimal_places=2)
+    maxParticipants = serializers.IntegerField()
+    minParticipants = serializers.IntegerField()
+    days = serializers.ListField(child=serializers.CharField()) # The array of days
 
-    class_id = serializers.IntegerField(source="option.classId.classId", read_only=True)
-    class_title = serializers.CharField(
-        source="option.parent_class_title", read_only=True
-    )
-    class_description = serializers.CharField(
-        source="option.parent_class_description", read_only=True
-    )
-    level = serializers.CharField(source="option.level", read_only=True)
-    equipment = serializers.ListField(source="option.equipment", read_only=True)
-
-    business_id = serializers.IntegerField(
-        source="option.classId.businessId.businessId", read_only=True
-    )
-    business_name = serializers.CharField(
-        source="option.classId.businessId.businessName", read_only=True
-    )
-    business_timezone = serializers.CharField(
-        source="option.classId.businessId.business_timezone", read_only=True
-    )
-
-    location = serializers.CharField(source="option.classId.location", read_only=True)
-    city = serializers.CharField(source="option.classId.city", read_only=True)
-    state = serializers.CharField(source="option.classId.state", read_only=True)
-
-    session_count = serializers.SerializerMethodField()
+    # SerializerMethodFields to get related data and calculate availability
+    class_title = serializers.SerializerMethodField()
     enrolled_count = serializers.SerializerMethodField()
     available_spots = serializers.SerializerMethodField()
-    sessions = serializers.SerializerMethodField()
+    session_count = serializers.SerializerMethodField()
 
-    cancellationPolicy = serializers.CharField(
-        source="option.cancellationPolicy", read_only=True
-    )
-    cancellationCustomHours = serializers.IntegerField(
-        source="option.cancellationCustomHours", read_only=True
-    )
-    cancellationRefundPercentage = serializers.IntegerField(
-        source="option.cancellationRefundPercentage", read_only=True
-    )
-
-    class Meta:
-        model = Schedule
-        fields = [
-            "id",
-            "class_id",
-            "class_title",
-            "class_description",
-            "level",
-            "equipment",
-            "business_id",
-            "business_name",
-            "business_timezone",
-            "location",
-            "city",
-            "state",
-            "start_date",
-            "end_date",
-            "day",
-            "time",
-            "duration",
-            "price",
-            "maxParticipants",
-            "session_count",
-            "enrolled_count",
-            "available_spots",
-            "sessions",
-            "cancellationPolicy",
-            "cancellationCustomHours",
-            "cancellationRefundPercentage",
-        ]
-        read_only_fields = fields
-
-    def get_session_count(self, obj):
-        """Count future scheduled sessions"""
-        return obj.instances.filter(
-            status="scheduled", date__gte=timezone.now().date()
-        ).count()
+    def get_class_title(self, obj):
+        # The 'obj' is a dictionary from the .values() queryset
+        try:
+            # We fetch the related option object using the option ID from the group
+            option_obj = ClassOption.objects.get(pk=obj['option'])
+            return option_obj.classId.title
+        except ClassOption.DoesNotExist:
+            return "Unknown Class"
 
     def get_enrolled_count(self, obj):
-        """Count total enrolled participants across all active enrollments"""
-        return (
-            CourseEnrollment.objects.filter(
-                schedule=obj, status__in=["pending", "active"]
-            ).aggregate(total=Sum("participants"))["total"]
-            or 0
-        )
+        # Sum enrollments from ALL schedules in this group
+        return CourseEnrollment.objects.filter(
+            schedule__option_id=obj['option'],
+            schedule__start_date=obj['start_date'],
+            schedule__end_date=obj['end_date'],
+            schedule__time=obj['time'],
+            status__in=['active', 'pending']
+        ).aggregate(
+            total_participants=Coalesce(Sum('participants'), 0)
+        )['total_participants']
 
     def get_available_spots(self, obj):
-        """Calculate remaining capacity"""
         enrolled = self.get_enrolled_count(obj)
-        return max(0, obj.maxParticipants - enrolled)
+        return obj['maxParticipants'] - enrolled
 
-    def get_sessions(self, obj):
-        """Get list of upcoming course sessions (limit to first 20 for performance)"""
-        instances = obj.instances.filter(
-            status="scheduled", date__gte=timezone.now().date()
-        ).order_by("date", "time")[:20]
-
-        return [
-            {
-                "session_number": i + 1,
-                "date": inst.date,
-                "time": inst.time,
-                "duration": inst.duration,
-            }
-            for i, inst in enumerate(instances)
-        ]
-
+    def get_session_count(self, obj):
+        # Calculate total sessions based on days
+        total_sessions = 0
+        schedules = Schedule.objects.filter(
+            option_id=obj['option'],
+            start_date=obj['start_date'],
+            end_date=obj['end_date'],
+            time=obj['time'],
+        )
+        for schedule in schedules:
+            total_sessions += schedule.instances.count()
+        return total_sessions
 
 # ============================================================================
 # Course Enrollment Serializers (Student-facing)
