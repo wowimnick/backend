@@ -111,7 +111,14 @@ class CreatePaymentIntentView(APIView):
                 # Retrieve validated instances from context to use them
                 instance = serializer.context.get("validated_instance")
                 option = instance.schedule.option
-                booking_type = option.booking_type
+                
+                # Determine booking_type based on serializer context
+                future_instances = serializer.context.get("future_course_instances")
+                if future_instances:
+                    booking_type = "Full Course"
+                else:
+                    booking_type = option.booking_type
+                
                 business = instance.schedule.option.classId.businessId
 
             logger.info(
@@ -142,7 +149,7 @@ class CreatePaymentIntentView(APIView):
             )
 
             all_instances = (
-                serializer.context.get("future_course_instances", [instance])
+                future_instances
                 if booking_type == "Full Course"
                 else [instance]
             )
@@ -233,33 +240,39 @@ class CreatePaymentIntentView(APIView):
                             logger.info(f"[{request_id}] Created ACTIVE Free CourseEnrollment: {enrollment.id}")
 
                             bookings_to_create = []
+                            # Track generated refs to prevent collisions within the batch
+                            generated_refs = set()
+
                             for session_num, inst in enumerate(all_instances, start=1):
-                                bookings_to_create.append(
-                                    Booking(
-                                        user=request.user if not is_guest else None,
-                                        contact=guest_contact if is_guest else None,
-                                        schedule_instance=inst,
-                                        enrollment_type="Full Course",
-                                        booking_group_id=booking_group_id,
-                                        course_session_number=session_num,
-                                        participants=participants,
-                                        participant_details=participant_details,
-                                        notes=notes,
-                                        amount_paid=Decimal("0.00"),
-                                        status="confirmed", # Directly confirmed
-                                        payment_status="paid",
-                                        cancellation_policy=enrollment.cancellation_policy,
-                                        cancellation_custom_hours=enrollment.cancellation_custom_hours,
-                                        cancellation_refund_percentage=enrollment.cancellation_refund_percentage,
-                                    )
+                                b = Booking(
+                                    user=request.user if not is_guest else None,
+                                    contact=guest_contact if is_guest else None,
+                                    schedule_instance=inst,
+                                    enrollment_type="Full Course",
+                                    booking_group_id=booking_group_id,
+                                    course_session_number=session_num,
+                                    participants=participants,
+                                    participant_details=participant_details,
+                                    notes=notes,
+                                    amount_paid=Decimal("0.00"),
+                                    status="confirmed", # Directly confirmed
+                                    payment_status="paid",
+                                    cancellation_policy=enrollment.cancellation_policy,
+                                    cancellation_custom_hours=enrollment.cancellation_custom_hours,
+                                    cancellation_refund_percentage=enrollment.cancellation_refund_percentage,
                                 )
+                                # Generate reference for EACH booking
+                                while True:
+                                    ref = b._generate_user_facing_reference()
+                                    if ref not in generated_refs:
+                                        b.user_facing_reference = ref
+                                        generated_refs.add(ref)
+                                        break
+                                bookings_to_create.append(b)
+
                             created_bookings = Booking.objects.bulk_create(bookings_to_create)
                             first_booking = created_bookings[0]
-                            
-                            # Generate ref for first booking
-                            first_booking.user_facing_reference = first_booking._generate_user_facing_reference()
-                            first_booking.save(update_fields=['user_facing_reference'])
-                            logger.info(f"[{request_id}] Bulk-created {len(created_bookings)} CONFIRMED free Bookings.")
+                            logger.info(f"[{request_id}] Bulk-created {len(created_bookings)} CONFIRMED free Bookings with references.")
 
                         else: # Single Session
                             first_booking = Booking.objects.create(
@@ -731,20 +744,22 @@ class ProcessBookingWebhook(APIView):
                 session_price = enrollment.total_amount_paid / len(bookings)
                 session_price = session_price.quantize(Decimal("0.01"))
 
-                # Update all bookings
+                # Update all bookings with CONFIRMED status and references
+                generated_refs = set()
+                
                 for booking in bookings:
                     booking.status = "confirmed"
                     booking.payment_status = "paid"
                     booking.amount_paid = session_price
 
-                    # Generate reference only for first session
-                    if (
-                        booking.course_session_number == 1
-                        and not booking.user_facing_reference
-                    ):
-                        booking.user_facing_reference = (
-                            booking._generate_user_facing_reference()
-                        )
+                    # Generate reference for ALL sessions if missing
+                    if not booking.user_facing_reference:
+                        while True:
+                            ref = booking._generate_user_facing_reference()
+                            if ref not in generated_refs:
+                                booking.user_facing_reference = ref
+                                generated_refs.add(ref)
+                                break
 
                 # Bulk update for efficiency
                 Booking.objects.bulk_update(
@@ -759,7 +774,7 @@ class ProcessBookingWebhook(APIView):
 
                 logger.info(
                     f"[{webhook_id}] Successfully processed payment for course enrollment {enrollment.id}, "
-                    f"updated {len(bookings)} session bookings"
+                    f"updated {len(bookings)} session bookings with references"
                 )
 
                 # TODO: Send confirmation email (when email system is ready)
