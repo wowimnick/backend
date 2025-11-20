@@ -113,6 +113,8 @@ class CreatePaymentIntentView(APIView):
                 option = instance.schedule.option
                 
                 # Determine booking_type based on serializer context
+                # If future_course_instances exists, the serializer validated it as a Course
+                # because the frontend explicitly requested 'isCourse: True'.
                 future_instances = serializer.context.get("future_course_instances")
                 if future_instances:
                     booking_type = "Full Course"
@@ -689,7 +691,7 @@ class ProcessBookingWebhook(APIView):
         Handle successful payment for a course enrollment.
         Updates CourseEnrollment and all session Bookings.
 
-        This is called from handle_successful_payment when enrollment_type is "Full Course".
+        This is called from handle_successful_payment when booking_type is "Full Course".
         """
         try:
             with transaction.atomic():
@@ -744,7 +746,7 @@ class ProcessBookingWebhook(APIView):
                 session_price = enrollment.total_amount_paid / len(bookings)
                 session_price = session_price.quantize(Decimal("0.01"))
 
-                # Update all bookings with CONFIRMED status and references
+                # Update all bookings
                 generated_refs = set()
                 
                 for booking in bookings:
@@ -813,7 +815,8 @@ class ProcessBookingWebhook(APIView):
             )
             return {"message": "Already processed"}
 
-        enrollment_type = payment_intent.metadata.get("enrollment_type")
+        # FIX: Use correct metadata key 'booking_type' as sent by CreatePaymentIntentView
+        enrollment_type = payment_intent.metadata.get("booking_type")
 
         if enrollment_type == "Full Course":
             logger.info(
