@@ -1,5 +1,3 @@
-# quickstart/payments/views.py
-
 import traceback
 from unittest.mock import MagicMock
 import uuid
@@ -199,12 +197,158 @@ class CreatePaymentIntentView(APIView):
             grand_total = subtotal_after_discount + tax_amount
             total_amount_for_stripe_cents = int(grand_total * 100)
 
-            if total_amount_for_stripe_cents < 50 and grand_total > 0:
+            # --- Check for Stripe Minimum (only if price > 0) ---
+            if 0 < total_amount_for_stripe_cents < 50:
                 return Response(
                     {"error": "The final amount is too low to process."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
+            # ==========================================
+            #  FREE BOOKING FLOW (Price is 0)
+            # ==========================================
+            if total_amount_for_stripe_cents == 0:
+                logger.info(f"[{request_id}] Processing FREE booking (Total: $0.00).")
+
+                first_booking = None
+                booking_group_id = None
+                
+                try:
+                    with transaction.atomic():
+                        if booking_type == "Full Course":
+                            booking_group_id = uuid.uuid4()
+                            enrollment = CourseEnrollment.objects.create(
+                                schedule=instance.schedule,
+                                user=request.user if not is_guest else None,
+                                contact=guest_contact if is_guest else None,
+                                booking_group_id=booking_group_id,
+                                total_sessions=len(all_instances),
+                                participants=participants,
+                                status="active",  # Directly active
+                                total_amount_paid=Decimal("0.00"),
+                                cancellation_policy=option.cancellationPolicy,
+                                cancellation_custom_hours=option.cancellationCustomHours,
+                                cancellation_refund_percentage=option.cancellationRefundPercentage,
+                            )
+                            logger.info(f"[{request_id}] Created ACTIVE Free CourseEnrollment: {enrollment.id}")
+
+                            bookings_to_create = []
+                            for session_num, inst in enumerate(all_instances, start=1):
+                                bookings_to_create.append(
+                                    Booking(
+                                        user=request.user if not is_guest else None,
+                                        contact=guest_contact if is_guest else None,
+                                        schedule_instance=inst,
+                                        enrollment_type="Full Course",
+                                        booking_group_id=booking_group_id,
+                                        course_session_number=session_num,
+                                        participants=participants,
+                                        participant_details=participant_details,
+                                        notes=notes,
+                                        amount_paid=Decimal("0.00"),
+                                        status="confirmed", # Directly confirmed
+                                        payment_status="paid",
+                                        cancellation_policy=enrollment.cancellation_policy,
+                                        cancellation_custom_hours=enrollment.cancellation_custom_hours,
+                                        cancellation_refund_percentage=enrollment.cancellation_refund_percentage,
+                                    )
+                                )
+                            created_bookings = Booking.objects.bulk_create(bookings_to_create)
+                            first_booking = created_bookings[0]
+                            
+                            # Generate ref for first booking
+                            first_booking.user_facing_reference = first_booking._generate_user_facing_reference()
+                            first_booking.save(update_fields=['user_facing_reference'])
+                            logger.info(f"[{request_id}] Bulk-created {len(created_bookings)} CONFIRMED free Bookings.")
+
+                        else: # Single Session
+                            first_booking = Booking.objects.create(
+                                schedule_instance=instance,
+                                user=request.user if not is_guest else None,
+                                contact=guest_contact if is_guest else None,
+                                participants=participants,
+                                participant_details=participant_details,
+                                notes=notes,
+                                amount_paid=Decimal("0.00"),
+                                status="confirmed", # Directly confirmed
+                                payment_status="paid",
+                                enrollment_type="Single Session",
+                                cancellation_policy=option.cancellationPolicy,
+                                cancellation_refund_percentage=option.cancellationRefundPercentage,
+                                cancellation_custom_hours=option.cancellationCustomHours,
+                            )
+                            first_booking.user_facing_reference = first_booking._generate_user_facing_reference()
+                            first_booking.save(update_fields=['user_facing_reference'])
+                            logger.info(f"[{request_id}] Created CONFIRMED single free Booking: {first_booking.id}")
+
+                        if is_guest:
+                            first_booking.cancellation_token = uuid.uuid4()
+                            first_booking.save(update_fields=['cancellation_token'])
+
+                        # Create 'Succeeded' Payment Record for 0 amount (for bookkeeping)
+                        Payment.objects.create(
+                            booking=first_booking,
+                            stripe_payment_intent_id=f"free_booking_{uuid.uuid4()}", 
+                            amount=Decimal("0.00"),
+                            tax_amount=Decimal("0.00"),
+                            currency="CAD",
+                            status="succeeded",
+                            metadata={
+                                "is_free": True, 
+                                "notes": notes, 
+                                "applied_discount_id": str(discount_to_apply.id) if discount_to_apply else None
+                            }
+                        )
+                        logger.info(f"[{request_id}] Created $0.00 Payment record.")
+
+                    # --- Emails ---
+                    recipient_user = request.user if not is_guest else None
+                    recipient_contact = guest_contact if is_guest else None
+
+                    if recipient_user:
+                        logger.info(f"[{request_id}] Sending free booking confirmation email to User.")
+                        send_booking_confirmation_email(recipient_user, first_booking)
+                    elif recipient_contact:
+                         logger.info(f"[{request_id}] Sending free booking confirmation email to Guest.")
+                         send_booking_confirmation_email(recipient_contact, first_booking)
+                    
+                    if business.newBookingNotification:
+                        logger.info(f"[{request_id}] Sending new booking notification to business.")
+                        recipients = {business.owner}
+                        staff_to_notify = BusinessStaff.objects.filter(
+                            business=business,
+                            status="accepted",
+                            role__permissions__codename="receive_booking_notifications",
+                        ).select_related("user")
+                        
+                        for staff in staff_to_notify:
+                            if staff.user: recipients.add(staff.user)
+                        
+                        for r in recipients:
+                            if r and r.email:
+                                send_business_new_booking_email(r, first_booking)
+
+                    response_data = {
+                        "booking_id": first_booking.id,
+                        "user_facing_reference": first_booking.user_facing_reference,
+                        "booking_group_id": str(booking_group_id) if booking_group_id else None,
+                        "participant_details": participant_details,
+                        "status": "confirmed",
+                        "message": "Free booking confirmed successfully."
+                    }
+                    logger.info(f"[{request_id}] ===== CreatePaymentIntentView SUCCESS (FREE) =====")
+                    return Response(response_data)
+                
+                except Exception as e:
+                    logger.error(f"[{request_id}] Error processing free booking: {str(e)}", exc_info=True)
+                    return Response(
+                        {"error": "An error occurred while processing the free booking."},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
+
+            # ==========================================
+            #  PAID BOOKING FLOW (Standard Stripe)
+            # ==========================================
             # --- Create Pending Database Records ---
             first_booking = None
             booking_group_id = None
