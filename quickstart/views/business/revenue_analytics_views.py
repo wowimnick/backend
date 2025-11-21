@@ -91,39 +91,34 @@ class RevenueAnalyticsView(views.APIView):
             raise ValidationError("Error processing date range.")
 
     def get_valid_bookings_queryset(
-        self, business, start_date, end_date, class_id=None
-    ):
-        if not business:
-            return Booking.objects.none()
-        base_bookings = Booking.objects.filter(
-            schedule_instance__schedule__option__classId__businessId=business,
-            booking_date__range=[start_date, end_date],
-            payment_status="paid",
-        ).select_related(
-            "schedule_instance__schedule__option__classId",
-            "schedule_instance__schedule__option",
-            "user",
-        )
+            self, business, start_date, end_date, class_id=None
+        ):
+            """
+            Returns all bookings that contribute to revenue (paid).
+            UPDATED: Now includes ALL bookings for a course, because revenue is split 1/N
+            across them. We no longer filter for just the first booking.
+            """
+            if not business:
+                return Booking.objects.none()
 
-        if class_id:  # Apply class filter if provided
-            base_bookings = base_bookings.filter(
-                schedule_instance__schedule__option__classId_id=class_id
-            )
-
-        first_course_booking_ids = Subquery(
-            Booking.objects.filter(
-                booking_group_id=OuterRef("booking_group_id"),
+            # We include status='forfeited' implicitly because they have payment_status='paid'.
+            # We exclude status='cancelled' (refunded) because they have payment_status='refunded'.
+            base_bookings = Booking.objects.filter(
                 schedule_instance__schedule__option__classId__businessId=business,
                 booking_date__range=[start_date, end_date],
-                payment_status="paid",
+                payment_status="paid",  # This captures 'confirmed', 'completed' and 'forfeited'
+            ).select_related(
+                "schedule_instance__schedule__option__classId",
+                "schedule_instance__schedule__option",
+                "user",
             )
-            .order_by("booking_date", "id")
-            .values("id")[:1]
-        )
-        valid_bookings_qs = base_bookings.filter(
-            Q(booking_group_id__isnull=True) | Q(id=first_course_booking_ids)
-        )
-        return valid_bookings_qs
+
+            if class_id:
+                base_bookings = base_bookings.filter(
+                    schedule_instance__schedule__option__classId_id=class_id
+                )
+            
+            return base_bookings
 
     def _get_fee_rate_for_business(self, business):
         """Helper to get the fee rate from the business's tier with fallbacks."""
@@ -315,7 +310,7 @@ class RevenueAnalyticsView(views.APIView):
                     Value(Decimal("0.0")),
                     output_field=DecimalField(),
                 ),
-                # Conditionally sum revenue for platform bookings (source is null or not 'widget')
+                # Conditionally sum revenue for platform bookings
                 platform_revenue=Coalesce(
                     Sum(
                         "amount",
@@ -346,6 +341,10 @@ class RevenueAnalyticsView(views.APIView):
             )
         )
 
+        # --- FIX: Get fee rate and calculate breakdown ---
+        platform_fee_rate = self._get_fee_rate_for_business(business)
+        HST_RATE = Decimal("0.13")
+
         result = []
         for item in class_revenue_data:
             class_id = item["booking__schedule_instance__schedule__option__classId"]
@@ -353,6 +352,12 @@ class RevenueAnalyticsView(views.APIView):
                 gross_rev = item["total_gross_revenue"]
                 widget_rev = item["widget_revenue"]
                 platform_rev = item["platform_revenue"]
+                
+                # Calculate Net/Fees
+                gross_pre_tax = (gross_rev / (Decimal("1.0") + HST_RATE))
+                fees = gross_pre_tax * platform_fee_rate
+                net = gross_pre_tax - fees
+
                 result.append(
                     {
                         "id": class_id,
@@ -360,6 +365,9 @@ class RevenueAnalyticsView(views.APIView):
                         "gross_revenue": float(gross_rev),
                         "widget_revenue": float(widget_rev),
                         "platform_revenue": float(platform_rev),
+                        # ADDED THESE KEYS TO FIX THE EXPORT ERROR
+                        "platform_fees": float(fees),
+                        "net_revenue": float(net),
                     }
                 )
         return result
@@ -476,19 +484,8 @@ class RevenueAnalyticsView(views.APIView):
                     f"{start_date_utc.date().strftime('%Y-%m-%d')} to {end_date_utc.date().strftime('%Y-%m-%d')}",
                 ]
             )
-            if class_id_filter:
-                try:
-                    filtered_class_name = ClassesMain.objects.get(
-                        pk=class_id_filter, businessId=business
-                    ).title
-                    writer.writerow(["Filtered by Class:", filtered_class_name])
-                except ClassesMain.DoesNotExist:
-                    writer.writerow(
-                        ["Filtered by Class ID:", class_id_filter, "(Name not found)"]
-                    )
-            writer.writerow([])
-
-            # Fetch the base metrics from the existing function
+            
+            # --- 1. Metrics Summary ---
             metrics = self.calculate_metrics(
                 business, start_date_utc, end_date_utc, class_id_filter
             )
@@ -496,13 +493,9 @@ class RevenueAnalyticsView(views.APIView):
             fee_percentage = platform_fee_rate * 100
             fee_percentage_text = f"{fee_percentage:.0f}%"
 
-            # --- IMPROVEMENT: Create an explicit, accountant-friendly summary for the CSV ---
-            # The 'total_gross_revenue' from metrics includes tax. We'll break it down.
-            # Assuming a constant 13% HST rate for the summary calculation.
             HST_RATE = Decimal("0.13")
             total_amount_collected = Decimal(str(metrics["total_gross_revenue"]))
 
-            # Calculate pre-tax revenue and tax collected
             gross_sales_pre_tax = (total_amount_collected / (1 + HST_RATE)).quantize(
                 Decimal("0.01")
             )
@@ -510,7 +503,6 @@ class RevenueAnalyticsView(views.APIView):
                 total_amount_collected - gross_sales_pre_tax
             ).quantize(Decimal("0.01"))
 
-            # Recalculate fees and net revenue based on the pre-tax amount for accuracy
             platform_fees_pre_tax = (gross_sales_pre_tax * platform_fee_rate).quantize(
                 Decimal("0.01")
             )
@@ -541,30 +533,9 @@ class RevenueAnalyticsView(views.APIView):
             writer.writerow(
                 ["Estimated Net Revenue (Pre-Tax)", f"${net_revenue_pre_tax:.2f}"]
             )
-            writer.writerow([])  # Add a spacer row
-            writer.writerow(["Additional Metrics", "Value"])
-            writer.writerow(
-                [
-                    "Average Order Value (incl. Tax)",
-                    f"${metrics['average_order_value']:.2f}",
-                ]
-            )
-            writer.writerow(
-                [
-                    "Revenue Per Booker (incl. Tax)",
-                    f"${metrics['revenue_per_booker']:.2f}",
-                ]
-            )
-            writer.writerow(["Revenue Growth (%)", f"{metrics['revenue_growth']:.1f}%"])
-            writer.writerow(
-                [
-                    "Revenue Per Participant Spot (incl. Tax)",
-                    f"${metrics['revenue_per_spot']:.2f}",
-                ]
-            )
             writer.writerow([])
-
-            # --- Daily Trends & Class Revenue (No change needed here) ---
+            
+            # --- 2. Daily Trends ---
             trends = self.get_revenue_trends(
                 business, start_date_utc, end_date_utc, class_id_filter
             )
@@ -581,6 +552,7 @@ class RevenueAnalyticsView(views.APIView):
                 )
             writer.writerow([])
 
+            # --- 3. Class Revenue ---
             class_revenue = self.get_class_revenue(
                 business, start_date_utc, end_date_utc, class_id_filter
             )
@@ -599,11 +571,11 @@ class RevenueAnalyticsView(views.APIView):
                 )
             writer.writerow([])
 
-            # --- Detailed Transaction Report (Already enhanced) ---
+            # --- 4. Detailed Transaction Report (FIXED LOGIC) ---
             writer.writerow(["Detailed Transaction Report for Accounting"])
             writer.writerow(
                 [
-                    "Booking Reference",
+                    "Booking Ref",
                     "Booking Date (UTC)",
                     "Class Date (Local)",
                     "Class Name",
@@ -617,7 +589,7 @@ class RevenueAnalyticsView(views.APIView):
                     "HST on Platform Fee (ITC for Business)",
                     "Net Payout to Business",
                     "Payment Status",
-                    "Booking Status",
+                    "Booking Status"
                 ]
             )
 
@@ -633,7 +605,7 @@ class RevenueAnalyticsView(views.APIView):
             )
 
             for booking in detailed_bookings_qs:
-                payment = booking.payments.first()
+                # Retrieve booker details
                 booker_name, booker_email = ("N/A", "N/A")
                 if booking.user:
                     booker_name = (
@@ -644,24 +616,22 @@ class RevenueAnalyticsView(views.APIView):
                     booker_name = f"{booking.contact.first_name} {booking.contact.last_name}".strip()
                     booker_email = booking.contact.email
 
-                if payment:
-                    subtotal, tax_collected, total_paid = (
-                        payment.amount - payment.tax_amount,
-                        payment.tax_amount,
-                        payment.amount,
-                    )
-                    platform_fee_pre_tax, hst_on_fee, net_payout = (
-                        payment.platform_fee_amount,
-                        payment.platform_fee_tax,
-                        payment.net_payout_amount,
-                    )
-                else:  # Fallback for older data
-                    total_paid = booking.amount_paid
-                    subtotal = total_paid / (1 + HST_RATE)
-                    tax_collected = total_paid - subtotal
-                    platform_fee_pre_tax = subtotal * platform_fee_rate
-                    hst_on_fee = platform_fee_pre_tax * HST_RATE
-                    net_payout = total_paid - (platform_fee_pre_tax + hst_on_fee)
+                # --- CRITICAL FIX: Use Booking values, NOT Payment values ---
+                # This ensures course sessions show $113 each, not $565 each.
+                total_paid = booking.amount_paid
+                net_payout = booking.allocated_net_payout
+                
+                # Calculate breakdowns based on the SPLIT booking amount
+                subtotal = total_paid / (Decimal("1.0") + HST_RATE)
+                tax_collected = total_paid - subtotal
+                
+                # Calculate fees based on the SPLIT amount
+                platform_fee_pre_tax = subtotal * platform_fee_rate
+                hst_on_fee = platform_fee_pre_tax * HST_RATE
+
+                # Fallback for older data where allocated_net_payout might be 0
+                if net_payout == Decimal("0.00") and total_paid > 0:
+                     net_payout = total_paid - (platform_fee_pre_tax + hst_on_fee + tax_collected)
 
                 writer.writerow(
                     [
