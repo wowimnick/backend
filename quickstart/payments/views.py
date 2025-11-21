@@ -779,23 +779,106 @@ class ProcessBookingWebhook(APIView):
                     f"updated {len(bookings)} session bookings with references"
                 )
 
-                # TODO: Send confirmation email (when email system is ready)
-                # from quickstart.utils.email_utils import send_course_enrollment_confirmation_email
-                # send_course_enrollment_confirmation_email(enrollment)
+                # --- Payment Record Update ---
+                # Retrieve the existing pending payment record created during CreatePaymentIntentView
+                try:
+                    payment_record = Payment.objects.select_for_update().get(
+                        stripe_payment_intent_id=payment_intent.id
+                    )
+                except Payment.DoesNotExist:
+                    logger.error(f"[{webhook_id}] Payment record for PI {payment_intent.id} not found during course success handling.")
+                    raise DRFValidationError("Payment record not found.")
 
-                # Create payment record
-                from quickstart.models import Payment
+                # Metadata extraction
+                metadata = payment_intent.metadata
+                grand_total = Decimal(payment_intent.amount_received) / 100
+                total_tax = Decimal(metadata.get("tax_amount", "0.00"))
+                subtotal_after_discount = Decimal(metadata.get("subtotal_after_discount", "0.00"))
+                
+                # Business & Fee Logic
+                business = enrollment.schedule.option.classId.businessId
 
-                payment_record = Payment.objects.create(
-                    booking=bookings[0],  # Link to first booking
-                    stripe_payment_intent_id=payment_intent.id,
-                    amount=enrollment.total_amount_paid,
-                    status="succeeded",
+                if metadata.get("booking_source") == "widget":
+                    fee_percentage = Decimal("6.00")
+                else:
+                    fee_percentage = (
+                        business.partner_tier.fee_percentage
+                        if business.partner_tier
+                        else PartnerTier.objects.get(is_default=True).fee_percentage
+                    )
+
+                service_fee_rate = fee_percentage / Decimal("100.0")
+                platform_fee_amount = (subtotal_after_discount * service_fee_rate).quantize(Decimal("0.01"))
+                platform_fee_tax = (platform_fee_amount * HST_RATE).quantize(Decimal("0.01"))
+                business_payout_tax = total_tax - platform_fee_tax
+                business_net_revenue = subtotal_after_discount - platform_fee_amount
+                net_payout_to_business = business_net_revenue + business_payout_tax
+
+                # Update Payment fields
+                payment_record.status = "succeeded"
+                payment_record.amount = grand_total
+                payment_record.tax_amount = total_tax
+                payment_record.platform_fee_amount = platform_fee_amount
+                payment_record.platform_fee_tax = platform_fee_tax
+                payment_record.net_payout_amount = net_payout_to_business
+                payment_record.metadata = {"original_stripe_metadata": dict(metadata)}
+                
+                # Stripe Charge Details
+                charge_details = (
+                    stripe.Charge.retrieve(payment_intent.latest_charge)
+                    if payment_intent.latest_charge
+                    else None
                 )
+                
+                payment_record.stripe_charge_id = payment_intent.latest_charge
+                
+                if charge_details:
+                    payment_record.receipt_url = charge_details.receipt_url
+                    if charge_details.payment_method_details.card:
+                        payment_record.card_brand = charge_details.payment_method_details.card.brand
+                        payment_record.card_last4 = charge_details.payment_method_details.card.last4
+
+                payment_record.save()
 
                 logger.info(
-                    f"[{webhook_id}] Created payment record {payment_record.id} for course enrollment"
+                    f"[{webhook_id}] Updated payment record {payment_record.id} for course enrollment"
                 )
+
+                # --- Emails ---
+                # Use the first booking to identify the recipient
+                first_booking = bookings[0]
+                recipient_user = first_booking.user
+                recipient_contact = first_booking.contact
+
+                if recipient_user:
+                    logger.info(
+                        f"[{webhook_id}] Sending booking confirmation email to User."
+                    )
+                    send_booking_confirmation_email(recipient_user, first_booking)
+                elif recipient_contact:
+                    logger.info(
+                        f"[{webhook_id}] Sending booking confirmation email to Guest."
+                    )
+                    send_booking_confirmation_email(recipient_contact, first_booking)
+
+                if business.newBookingNotification:
+                    logger.info(
+                        f"[{webhook_id}] Sending new booking notification to business."
+                    )
+                    recipients = {business.owner}
+                    staff_to_notify = BusinessStaff.objects.filter(
+                        business=business,
+                        status="accepted",
+                        role__permissions__codename="receive_booking_notifications",
+                    ).select_related("user")
+
+                    for staff in staff_to_notify:
+                        if staff.user:
+                            recipients.add(staff.user)
+
+                    for recipient in recipients:
+                        if recipient and recipient.email:
+                            send_business_new_booking_email(recipient, first_booking)
 
                 return {"message": "Course payment processed successfully"}
 
