@@ -90,17 +90,22 @@ class BusinessPayoutViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=["get"], url_path="summary")
     def summary(self, request, *args, **kwargs):
         """
-        Provides a summary of the business's current payout status.
+        Provides a summary of the business's current payout status using
+        booking-based calculations for accuracy with courses.
         """
         business = self.get_business_context()
 
-        pending_payout_aggregation = Payment.objects.filter(
-            booking__schedule_instance__schedule__option__classId__businessId=business,
-            booking__status="completed",
-            booking__payment_status="paid",
-            booking__payout_status="pending",
-            status="succeeded",
-        ).aggregate(total_pending=Coalesce(Sum("net_payout_amount"), Decimal("0.00")))
+        # Calculate pending payouts by summing the allocated share of COMPLETED bookings
+        # that haven't been paid out yet.
+        pending_payout_aggregation = Booking.objects.filter(
+            schedule_instance__schedule__option__classId__businessId=business,
+            status__in=["confirmed", "completed", "forfeited"],
+            payment_status="paid",    
+            payout_status="pending",  
+        ).aggregate(
+            total_pending=Coalesce(Sum("allocated_net_payout"), Decimal("0.00"))
+        )
+        
         pending_payout_amount = pending_payout_aggregation["total_pending"]
 
         last_payout = (

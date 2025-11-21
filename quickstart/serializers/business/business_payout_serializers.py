@@ -17,6 +17,9 @@ class PayoutBookingSerializer(serializers.ModelSerializer):
         source="schedule_instance.date", read_only=True
     )
     net_amount_for_payout = serializers.SerializerMethodField()
+    enrollment_type = serializers.CharField(source="enrollment_type", read_only=True)
+    course_session_number = serializers.IntegerField(source="course_session_number", read_only=True)
+    total_sessions = serializers.SerializerMethodField()
 
     class Meta:
         model = Booking
@@ -26,7 +29,16 @@ class PayoutBookingSerializer(serializers.ModelSerializer):
             "class_name",
             "session_date",
             "net_amount_for_payout",
+            "enrollment_type",
+            "course_session_number",
+            "total_sessions"
         ]
+
+    def get_total_sessions(self, obj):
+        if obj.enrollment_type == "Full Course" and obj.booking_group_id:
+            # Optimization: This could be pre-fetched, but for now:
+            return obj.sibling_bookings.count() + 1
+        return 1
 
     def get_net_amount_for_payout(self, obj):
         """

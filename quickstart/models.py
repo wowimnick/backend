@@ -2209,6 +2209,7 @@ class Booking(models.Model):
             ("confirmed", "Confirmed"),
             ("cancelled", "Cancelled"),
             ("completed", "Completed"),
+            ("forfeited", "Forfeited"),
         ],
         default="pending",
     )
@@ -2224,6 +2225,12 @@ class Booking(models.Model):
         default="pending",
         db_index=True,
         help_text="Tracks the payout status for this specific booking.",
+    )
+    allocated_net_payout = models.DecimalField(
+        max_digits=10, 
+        decimal_places=2, 
+        default=Decimal("0.00"),
+        help_text="The portion of the net payout allocated to this specific session."
     )
     discounts = models.ManyToManyField(
         "Discount", through="AppliedDiscount", related_name="bookings"

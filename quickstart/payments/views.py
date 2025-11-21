@@ -689,21 +689,15 @@ class ProcessBookingWebhook(APIView):
     def handle_course_payment_success(self, payment_intent, webhook_id):
         """
         Handle successful payment for a course enrollment.
-        Updates CourseEnrollment and all session Bookings.
-
-        This is called from handle_successful_payment when booking_type is "Full Course".
+        Updates CourseEnrollment and all session Bookings with 1/N payout allocation.
         """
         try:
             with transaction.atomic():
                 # Get booking group ID from metadata
                 booking_group_id = payment_intent.metadata.get("booking_group_id")
                 if not booking_group_id:
-                    logger.error(
-                        f"[{webhook_id}] No booking_group_id in payment intent metadata"
-                    )
-                    raise DRFValidationError(
-                        "Missing booking_group_id in payment metadata"
-                    )
+                    logger.error(f"[{webhook_id}] No booking_group_id in payment intent metadata")
+                    raise DRFValidationError("Missing booking_group_id in payment metadata")
 
                 # Get enrollment
                 try:
@@ -711,23 +705,13 @@ class ProcessBookingWebhook(APIView):
                         booking_group_id=booking_group_id
                     )
                 except CourseEnrollment.DoesNotExist:
-                    logger.error(
-                        f"[{webhook_id}] CourseEnrollment not found for booking_group_id {booking_group_id}"
-                    )
-                    raise DRFValidationError(
-                        f"Course enrollment not found for booking group {booking_group_id}"
-                    )
+                    logger.error(f"[{webhook_id}] CourseEnrollment not found for booking_group_id {booking_group_id}")
+                    raise DRFValidationError(f"Course enrollment not found for booking group {booking_group_id}")
 
                 # Update enrollment status
                 enrollment.status = "active"
-                enrollment.total_amount_paid = (
-                    Decimal(str(payment_intent.amount_received)) / 100
-                )
+                enrollment.total_amount_paid = Decimal(str(payment_intent.amount_received)) / 100
                 enrollment.save(update_fields=["status", "total_amount_paid"])
-
-                logger.info(
-                    f"[{webhook_id}] Updated CourseEnrollment {enrollment.id} to active, amount: ${enrollment.total_amount_paid}"
-                )
 
                 # Get all bookings for this course
                 bookings = list(
@@ -737,67 +721,18 @@ class ProcessBookingWebhook(APIView):
                 )
 
                 if not bookings:
-                    logger.error(
-                        f"[{webhook_id}] No bookings found for booking_group_id {booking_group_id}"
-                    )
                     raise DRFValidationError(f"No bookings found for course enrollment")
 
-                # Calculate price per session
-                session_price = enrollment.total_amount_paid / len(bookings)
-                session_price = session_price.quantize(Decimal("0.01"))
-
-                # Update all bookings
-                generated_refs = set()
+                # --- 1/N Calculation Logic ---
                 
-                for booking in bookings:
-                    booking.status = "confirmed"
-                    booking.payment_status = "paid"
-                    booking.amount_paid = session_price
-
-                    # Generate reference for ALL sessions if missing
-                    if not booking.user_facing_reference:
-                        while True:
-                            ref = booking._generate_user_facing_reference()
-                            if ref not in generated_refs:
-                                booking.user_facing_reference = ref
-                                generated_refs.add(ref)
-                                break
-
-                # Bulk update for efficiency
-                Booking.objects.bulk_update(
-                    bookings,
-                    [
-                        "status",
-                        "payment_status",
-                        "amount_paid",
-                        "user_facing_reference",
-                    ],
-                )
-
-                logger.info(
-                    f"[{webhook_id}] Successfully processed payment for course enrollment {enrollment.id}, "
-                    f"updated {len(bookings)} session bookings with references"
-                )
-
-                # --- Payment Record Update ---
-                # Retrieve the existing pending payment record created during CreatePaymentIntentView
-                try:
-                    payment_record = Payment.objects.select_for_update().get(
-                        stripe_payment_intent_id=payment_intent.id
-                    )
-                except Payment.DoesNotExist:
-                    logger.error(f"[{webhook_id}] Payment record for PI {payment_intent.id} not found during course success handling.")
-                    raise DRFValidationError("Payment record not found.")
-
-                # Metadata extraction
+                # 1. Retrieve Financials from Metadata (calculated in CreatePaymentIntentView)
                 metadata = payment_intent.metadata
-                grand_total = Decimal(payment_intent.amount_received) / 100
-                total_tax = Decimal(metadata.get("tax_amount", "0.00"))
                 subtotal_after_discount = Decimal(metadata.get("subtotal_after_discount", "0.00"))
-                
-                # Business & Fee Logic
-                business = enrollment.schedule.option.classId.businessId
+                total_tax = Decimal(metadata.get("tax_amount", "0.00"))
+                grand_total = Decimal(payment_intent.amount_received) / 100
 
+                # 2. Calculate Business Net Revenue (Total Net Payout)
+                business = enrollment.schedule.option.classId.businessId
                 if metadata.get("booking_source") == "widget":
                     fee_percentage = Decimal("6.00")
                 else:
@@ -810,18 +745,78 @@ class ProcessBookingWebhook(APIView):
                 service_fee_rate = fee_percentage / Decimal("100.0")
                 platform_fee_amount = (subtotal_after_discount * service_fee_rate).quantize(Decimal("0.01"))
                 platform_fee_tax = (platform_fee_amount * HST_RATE).quantize(Decimal("0.01"))
+                
+                # This is the total bucket of money the business is owed for the whole course
                 business_payout_tax = total_tax - platform_fee_tax
                 business_net_revenue = subtotal_after_discount - platform_fee_amount
-                net_payout_to_business = business_net_revenue + business_payout_tax
+                total_net_payout_to_business = business_net_revenue + business_payout_tax
 
-                # Update Payment fields
+                # 3. Calculate Share Per Booking
+                booking_count = len(bookings)
+                if booking_count > 0:
+                    share_per_booking = (total_net_payout_to_business / booking_count).quantize(Decimal("0.01"))
+                    
+                    # Handle rounding remainders (e.g. 100 / 3 = 33.33, 33.33, 33.33 -> Remainder 0.01)
+                    total_allocated = share_per_booking * booking_count
+                    remainder = total_net_payout_to_business - total_allocated
+                else:
+                    share_per_booking = Decimal("0.00")
+                    remainder = Decimal("0.00")
+
+                # 4. Update Bookings
+                generated_refs = set()
+                
+                # Calculate session price for display (customer facing amount)
+                session_price = (enrollment.total_amount_paid / booking_count).quantize(Decimal("0.01"))
+
+                for index, booking in enumerate(bookings):
+                    booking.status = "confirmed"
+                    booking.payment_status = "paid"
+                    booking.amount_paid = session_price
+                    
+                    # Assign the calculated payout share
+                    booking.allocated_net_payout = share_per_booking
+                    
+                    # Add the penny remainder to the first booking
+                    if index == 0:
+                        booking.allocated_net_payout += remainder
+
+                    # Generate reference if missing
+                    if not booking.user_facing_reference:
+                        while True:
+                            ref = booking._generate_user_facing_reference()
+                            if ref not in generated_refs:
+                                booking.user_facing_reference = ref
+                                generated_refs.add(ref)
+                                break
+
+                Booking.objects.bulk_update(
+                    bookings,
+                    [
+                        "status",
+                        "payment_status",
+                        "amount_paid",
+                        "user_facing_reference",
+                        "allocated_net_payout", # <--- IMPORTANT: Saving the new field
+                    ],
+                )
+
+                # --- Payment Record Update (For Bookkeeping) ---
+                try:
+                    payment_record = Payment.objects.select_for_update().get(
+                        stripe_payment_intent_id=payment_intent.id
+                    )
+                except Payment.DoesNotExist:
+                    raise DRFValidationError("Payment record not found.")
+
                 payment_record.status = "succeeded"
                 payment_record.amount = grand_total
                 payment_record.tax_amount = total_tax
                 payment_record.platform_fee_amount = platform_fee_amount
                 payment_record.platform_fee_tax = platform_fee_tax
-                payment_record.net_payout_amount = net_payout_to_business
+                payment_record.net_payout_amount = total_net_payout_to_business # Total for the whole course
                 payment_record.metadata = {"original_stripe_metadata": dict(metadata)}
+                payment_record.stripe_charge_id = payment_intent.latest_charge
                 
                 # Stripe Charge Details
                 charge_details = (
@@ -829,9 +824,6 @@ class ProcessBookingWebhook(APIView):
                     if payment_intent.latest_charge
                     else None
                 )
-                
-                payment_record.stripe_charge_id = payment_intent.latest_charge
-                
                 if charge_details:
                     payment_record.receipt_url = charge_details.receipt_url
                     if charge_details.payment_method_details.card:
@@ -840,31 +832,17 @@ class ProcessBookingWebhook(APIView):
 
                 payment_record.save()
 
-                logger.info(
-                    f"[{webhook_id}] Updated payment record {payment_record.id} for course enrollment"
-                )
-
-                # --- Emails ---
-                # Use the first booking to identify the recipient
+                # --- Emails & Notifications (Existing logic) ---
                 first_booking = bookings[0]
                 recipient_user = first_booking.user
                 recipient_contact = first_booking.contact
 
                 if recipient_user:
-                    logger.info(
-                        f"[{webhook_id}] Sending booking confirmation email to User."
-                    )
                     send_booking_confirmation_email(recipient_user, first_booking)
                 elif recipient_contact:
-                    logger.info(
-                        f"[{webhook_id}] Sending booking confirmation email to Guest."
-                    )
                     send_booking_confirmation_email(recipient_contact, first_booking)
 
                 if business.newBookingNotification:
-                    logger.info(
-                        f"[{webhook_id}] Sending new booking notification to business."
-                    )
                     recipients = {business.owner}
                     staff_to_notify = BusinessStaff.objects.filter(
                         business=business,
@@ -873,22 +851,18 @@ class ProcessBookingWebhook(APIView):
                     ).select_related("user")
 
                     for staff in staff_to_notify:
-                        if staff.user:
-                            recipients.add(staff.user)
+                        if staff.user: recipients.add(staff.user)
 
                     for recipient in recipients:
                         if recipient and recipient.email:
                             send_business_new_booking_email(recipient, first_booking)
 
+                logger.info(f"[{webhook_id}] 1/N Payout processed. Total Net: {total_net_payout_to_business}, Per Booking: {share_per_booking}")
                 return {"message": "Course payment processed successfully"}
 
         except Exception as e:
-            logger.error(
-                f"[{webhook_id}] Error processing course payment success: {e}",
-                exc_info=True,
-            )
+            logger.error(f"[{webhook_id}] Error processing course payment success: {e}", exc_info=True)
             raise
-
     def handle_successful_payment(self, payment_intent, webhook_id):
         if Payment.objects.filter(
             stripe_payment_intent_id=payment_intent.id, status="succeeded"

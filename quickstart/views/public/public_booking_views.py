@@ -12,7 +12,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
 
 # Adjust import paths as needed
-from quickstart.models import Booking, ScheduleInstance, Reviews, ClassImage
+from quickstart.models import Booking, ScheduleInstance, Reviews, ClassImage, BusinessStaff
 from quickstart.serializers import (
     BookingCreateSerializer,
     StudentBookingSerializer,
