@@ -414,7 +414,7 @@ class MyBusinessOverviewView(APIView):
                     status="scheduled",
                     schedule__option__classId__status="active",
                 )
-                .select_related("schedule__option__classId")
+                .select_related("schedule__option", "schedule__option__classId")
                 .annotate(
                     current_participant_spots=Coalesce(
                         Subquery(
@@ -446,7 +446,7 @@ class MyBusinessOverviewView(APIView):
             today_snapshot_data["today_total_bookings"] = (
                 today_agg["total_bookings"] or 0
             )
-            today_snapshot_data["today_total_participants"] = (
+            today_snapshot_data["total_participants"] = (
                 today_agg["total_participants"] or 0
             )
 
@@ -460,6 +460,7 @@ class MyBusinessOverviewView(APIView):
                         "time": display_datetime_str,
                         "current_occupancy": inst.current_participant_spots,
                         "max_occupancy": inst.max_participants,
+                        "booking_type": inst.schedule.option.booking_type,
                     }
                 )
 

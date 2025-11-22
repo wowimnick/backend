@@ -1,0 +1,106 @@
+{# templates/emails/course_confirmation_user.html #}
+{% extends "emails/base_email.html" %}
+{% load i18n tz string_filters %}
+
+{% block title %}
+    {% trans "You're Enrolled in the Course!" %}
+{% endblock title %}
+
+{% block content %}
+    <h1>{% trans "You're Enrolled!" %}</h1>
+    
+    <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
+    
+    <p>
+        {% trans "Great news! Your enrollment for the full course" %} 
+        <strong>{{ related_data.class_title|default:"[Course Title]" }}</strong> 
+        {% trans "has been confirmed." %}
+    </p>
+    
+    <p>{% trans "Get ready to start your learning journey. Here are the details of your course:" %}</p>
+
+    <div class="detail-box">
+        <h2>{% trans "Course Summary" %}</h2>
+        
+        {% if booking.user_facing_reference %}
+        <div class="detail-item">
+            <strong>{% trans "Reference ID:" %}</strong> {{ booking.user_facing_reference }}
+        </div>
+        {% endif %}
+        
+        <div class="detail-item">
+            <strong>{% trans "Course:" %}</strong> {{ related_data.class_title|default:"N/A" }}
+        </div>
+
+        {% if enrollment %}
+            <div class="detail-item">
+                <strong>{% trans "Start Date:" %}</strong> {{ enrollment.schedule.start_date|date:"l, F j, Y" }}
+            </div>
+            <div class="detail-item">
+                <strong>{% trans "End Date:" %}</strong> {{ enrollment.schedule.end_date|date:"l, F j, Y" }}
+            </div>
+            <div class="detail-item">
+                <strong>{% trans "Sessions:" %}</strong> {{ enrollment.total_sessions }} {% trans "Total Sessions" %}
+            </div>
+            {% if enrollment.schedule.time %}
+            <div class="detail-item">
+                <strong>{% trans "Weekly Time:" %}</strong> {{ enrollment.schedule.day }}s at {{ enrollment.schedule.time|time:"P" }}
+            </div>
+            {% endif %}
+        {% else %}
+            {# Fallback if enrollment object is missing but we know it is a course #}
+            <div class="detail-item">
+                <strong>{% trans "Schedule:" %}</strong> {{ related_data.schedule_summary|default:"See details in dashboard" }}
+            </div>
+        {% endif %}
+
+        <div class="detail-item">
+            <strong>{% trans "Location:" %}</strong> {{ related_data.class_location|default:"N/A" }}
+        </div>
+        
+        <div class="detail-item">
+            <strong>{% trans "Provider:" %}</strong> {{ related_data.business_name|default:"N/A" }}
+        </div>
+        
+        {% if booking.participants > 0 %}
+        <div class="detail-item" style="margin-top: 12px;">
+            <strong>{% trans "Participants:" %}</strong>
+            <ul style="margin: 4px 0 0 0; padding-left: 20px; color: #555;">
+                {% for participant in booking.participant_details %}
+                    <li>{{ participant.name|default:"Unnamed Participant" }}</li>
+                {% empty %}
+                    <li>{{ booking.participants }} {% trans "Participant(s)" %}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+    </div>
+
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+        <tr>
+            <td align="center" class="button-td">
+                {% if is_guest and guest_cancellation_url %}
+                     <a href="{{ guest_cancellation_url }}" target="_blank" class="button">{% trans 'View Enrollment' %}</a>
+                {% else %}
+                    <a href="{{ manage_bookings_url }}" target="_blank" class="button">{% trans 'View My Course' %}</a>
+                {% endif %}
+            </td>
+        </tr>
+    </table>
+
+    <p>
+        {% trans "You can view the specific dates for all individual sessions in your dashboard." %}
+    </p>
+    
+    <p>
+        {% trans "We look forward to seeing you there!" %}
+        <br />
+        {% trans "The ClassEasily Team" %}
+    </p>
+{% endblock content %}
+
+{% block footer_recipient %}
+    {% if recipient_email and recipient_email != "N/A" %}
+        <p>Course confirmation sent to {{ recipient_email }}.</p>
+    {% endif %}
+{% endblock footer_recipient %}

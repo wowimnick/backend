@@ -10,7 +10,6 @@ from django.utils import timezone
 from quickstart.tasks.email_tasks import send_transactional_email_task
 from typing import Any, Dict, List, Optional
 import pytz
-import logging
 
 from CEBackend.celery import app as celery_app
 
@@ -27,6 +26,7 @@ from ..models import (
     ClassesMain,
     Schedule,
     Contact,
+    CourseEnrollment
 )
 
 logger = logging.getLogger(__name__)
@@ -46,6 +46,7 @@ def _get_booking_related_data(booking: Booking) -> dict:
         "class_location": "N/A",
         "business_timezone": "UTC",
         "business_contact_email": settings.DEFAULT_FROM_EMAIL,
+        "schedule_summary": "N/A",
     }
     try:
         schedule_instance = getattr(booking, "schedule_instance", None)
@@ -74,6 +75,10 @@ def _get_booking_related_data(booking: Booking) -> dict:
         data["business_contact_email"] = getattr(
             business, "studentContactEmail", settings.DEFAULT_FROM_EMAIL
         )
+        
+        # Basic schedule summary for courses
+        if schedule.day and schedule.time:
+            data["schedule_summary"] = f"{schedule.day}s at {schedule.time.strftime('%I:%M %p')}"
 
     except AttributeError as e:
         logger.error(
@@ -153,10 +158,10 @@ def _generate_ics_content(
             },
         )
 
-        if user and user.email:
+        if user and hasattr(user, "email") and user.email:
             attendee_name = (
                 user.get_full_name()
-                if isinstance(user, CustomUser)
+                if hasattr(user, "get_full_name")
                 else f"{user.first_name} {user.last_name}"
             )
             attendee_cn = vText(attendee_name or user.email)
@@ -294,7 +299,7 @@ def send_booking_confirmation_email(user, booking: Booking):
         or not booking
     ):
         logger.error(
-            f"send_booking_confirmation_email HALTED: Invalid recipient or booking. Recipient valid: {bool(recipient)}, Recipient has email: {hasattr(recipient, 'email')}, Email: {getattr(recipient, 'email', 'N/A')}, Booking valid: {bool(booking)}"
+            f"send_booking_confirmation_email HALTED: Invalid recipient or booking. Recipient valid: {bool(recipient)}, Booking valid: {bool(booking)}"
         )
         return
 
@@ -320,7 +325,7 @@ def send_booking_confirmation_email(user, booking: Booking):
 
     is_guest_flag = not isinstance(recipient, CustomUser)
     logger.info(f"Determined recipient is_guest status: {is_guest_flag}")
-
+    
     context = {
         "user": recipient,
         "booking": booking,
@@ -345,6 +350,24 @@ def send_booking_confirmation_email(user, booking: Booking):
             f"Guest booking {booking.id} is missing a cancellation token for the email."
         )
 
+    # Determine Template based on enrollment type
+    if booking.enrollment_type == "Full Course":
+        template_name = "emails/course_confirmation_user.html"
+        subject_prefix = "Course Enrollment Confirmed:"
+        
+        # Attempt to fetch course enrollment details
+        if booking.booking_group_id:
+            try:
+                enrollment = CourseEnrollment.objects.get(booking_group_id=booking.booking_group_id)
+                context["enrollment"] = enrollment
+                logger.info(f"Attached CourseEnrollment {enrollment.id} to email context.")
+            except CourseEnrollment.DoesNotExist:
+                logger.warning(f"CourseEnrollment missing for booking_group_id {booking.booking_group_id}")
+                context["enrollment"] = None
+    else:
+        template_name = "emails/booking_confirmation_user.html"
+        subject_prefix = "Booking Confirmed:"
+
     ics_content_str = _generate_ics_content(booking, related_data, recipient)
     email_attachments = None
     if ics_content_str:
@@ -368,14 +391,14 @@ def send_booking_confirmation_email(user, booking: Booking):
         logger.warning(f"Could not generate ICS attachment for booking {booking.id}")
 
     logger.info(
-        f"Proceeding to call send_templated_email for booking {booking.id} to {recipient.email}"
+        f"Proceeding to call send_templated_email for booking {booking.id} using template '{template_name}' to {recipient.email}"
     )
 
     send_templated_email(
         recipient_list=[recipient.email],
-        template_name="emails/booking_confirmation_user.html",
+        template_name=template_name,
         context=context,
-        subject=f"Your Booking for {related_data.get('class_title', '[Class Title]')} is Confirmed!",
+        subject=f"{subject_prefix} {related_data.get('class_title', '[Class Title]')}",
         attachments=email_attachments,
     )
 
@@ -415,15 +438,6 @@ def send_business_staff_invitation_email(invitation: BusinessStaff):
 def send_bulk_templated_emails(email_data_list, delay_between_batches=1.0):
     """
     Send multiple templated emails with rate limiting.
-
-    Args:
-        email_data_list: List of dictionaries, each containing:
-            - recipient_list: List of email addresses
-            - template_name: Path to HTML template
-            - context: Template context
-            - subject: Email subject (optional)
-            - from_email: Sender email (optional)
-        delay_between_batches: Delay between batches in seconds
     """
     from quickstart.tasks.email_tasks import send_bulk_emails_task
 
@@ -442,7 +456,6 @@ def send_bulk_templated_emails(email_data_list, delay_between_batches=1.0):
 
             subject = email_data.get("subject") or "Notification from ClassEasily"
 
-            # Ensure subject length
             max_subject_length = getattr(settings, "EMAIL_RATE_LIMIT_SETTINGS", {}).get(
                 "MAX_SUBJECT_LENGTH", 1900
             )
@@ -477,7 +490,6 @@ def send_bulk_templated_emails(email_data_list, delay_between_batches=1.0):
         return None
 
 
-# Updated welcome email function with explicit subject
 def send_welcome_email(user):
     """Sends the welcome email to a newly registered user."""
     if not user or not user.email:
@@ -499,11 +511,9 @@ def send_welcome_email(user):
     )
 
 
-# Function to test email sending with rate limiting
 def test_email_rate_limiting():
     """
     Test function to verify email rate limiting is working.
-    This should be run from Django management command.
     """
     test_emails = []
     for i in range(5):
@@ -525,27 +535,15 @@ def test_email_rate_limiting():
 
 def send_account_security_email(
     user, change_type, new_email=None, subject=None
-):  # Added subject param
+): 
     """
     Sends a security notification after password or email change.
-
-    Args:
-        user (CustomUser): The user object.
-        change_type (str): "password" or "email_update" or "email_added".
-        new_email (str, optional): The new email address (if change_type involves new email).
-        subject (str, optional): Explicit subject line.
     """
     if not user or not user.email:
         logger.warning("Attempted to send security email to invalid user.")
         return
 
-    # Determine the recipient address carefully
-    # For password changes or adding secondary, notify primary
-    # For email *updates*, notify the *new* primary email address
-    recipient = user.email  # Default to current user email
-    # If the user's email itself was just updated, the 'user' object might
-    # already reflect the NEW email. Confirm this based on where it's called.
-    # The allauth signal provides both old and new, which is helpful.
+    recipient = user.email  
 
     logger.info(
         f"Preparing security email (type: {change_type}) for user {user.userId} to {recipient}"
@@ -554,15 +552,15 @@ def send_account_security_email(
     context = {
         "user": user,
         "change_type": change_type,
-        "change_time": timezone.now(),  # Use current time for notification
-        "recipient_email": recipient,  # Pass for footer context
-        "new_email_address": new_email,  # Pass new email if type involves it
+        "change_time": timezone.now(),
+        "recipient_email": recipient,
+        "new_email_address": new_email,
     }
     send_templated_email(
         recipient_list=[recipient],
         template_name="emails/account_security_change.html",
         context=context,
-        subject=subject,  # Pass explicit subject
+        subject=subject,
     )
 
 
@@ -577,7 +575,6 @@ def send_booking_cancellation_user_email(user, booking: Booking, refund_details:
         return
 
     related_data = _get_booking_related_data(booking)
-    # Log error if class_title is missing but proceed with sending
     if not related_data.get("class_title"):
         logger.error(
             f"Could not access class_title for booking {booking.id} when sending user cancellation email."
@@ -588,8 +585,7 @@ def send_booking_cancellation_user_email(user, booking: Booking, refund_details:
     )
 
     explore_url = f"{settings.FRONTEND_BASE_URL}/explore"
-
-    # The 'booking' object itself contains booking.participants and booking.participant_details
+    
     context = {
         "user": user,
         "booking": booking,
@@ -598,11 +594,22 @@ def send_booking_cancellation_user_email(user, booking: Booking, refund_details:
         "recipient_email": user.email,
         "related_data": related_data,
     }
+    
+    # Choose template and subject based on type
+    if booking.enrollment_type == "Full Course":
+        template_name = "emails/course_cancellation_user.html"
+        subject_prefix = "Course Drop Confirmed:"
+        logger.info(f"Using Course Cancellation template for booking {booking.id}")
+    else:
+        template_name = "emails/booking_cancellation_user.html"
+        subject_prefix = "Booking Cancelled:"
+        logger.info(f"Using Single Session Cancellation template for booking {booking.id}")
+
     send_templated_email(
         recipient_list=[user.email],
-        template_name="emails/booking_cancellation_user.html",
+        template_name=template_name,
         context=context,
-        subject=f"Your Booking for {related_data.get('class_title', '[Class Title]')} Has Been Cancelled",
+        subject=f"{subject_prefix} {related_data.get('class_title', '[Class Title]')}",
     )
     logger.info(
         f"User booking cancellation email prepared/queued for booking {booking.id}"
@@ -630,7 +637,6 @@ def send_booking_cancelled_by_other_email(
         logger.error(
             f"Could not access related data for booking {booking.id} when sending 'cancelled by other' email."
         )
-        # Proceed with sending, template handles defaults
 
     logger.info(
         f"Preparing 'cancelled by other' email for booking {booking.id} to user {user.email}"
@@ -638,7 +644,6 @@ def send_booking_cancelled_by_other_email(
 
     explore_url = f"{settings.FRONTEND_BASE_URL}/explore"
 
-    # The 'booking' object itself contains booking.participants and booking.participant_details
     context = {
         "user": user,
         "booking": booking,
@@ -653,7 +658,7 @@ def send_booking_cancelled_by_other_email(
         recipient_list=[user.email],
         template_name="emails/booking_cancelled_by_other.html",
         context=context,
-        subject=f"Update: Your Booking for {related_data.get('class_title', '[Class Title]')} Was Cancelled",
+        subject=f"Important: Your Class {related_data.get('class_title', '[Class Title]')} Was Cancelled",
     )
     logger.info(f"'Cancelled by other' email prepared/queued for booking {booking.id}")
 
@@ -692,11 +697,22 @@ def send_booking_reminder_email(user, booking: Booking):
         "recipient_email": user.email,
         "related_data": related_data,
     }
+    
+    # Pass course session context if available
+    if booking.enrollment_type == "Full Course" and booking.course_session_number:
+        context["is_course_session"] = True
+        subject_prefix = f"Reminder: Session {booking.course_session_number} of"
+        logger.info(f"Formatting reminder for Course Session #{booking.course_session_number}")
+    else:
+        context["is_course_session"] = False
+        subject_prefix = "Reminder: Your Class"
+        logger.info("Formatting reminder for Single Session")
+
     send_templated_email(
         recipient_list=[user.email],
         template_name="emails/booking_reminder_user.html",
         context=context,
-        subject=f"Reminder: Your Class '{related_data.get('class_title', '[Class Title]')}' is Soon!",
+        subject=f"{subject_prefix} {related_data.get('class_title', '[Class Title]')} is Soon!",
     )
     logger.info(f"Booking reminder email prepared/queued for booking {booking.id}")
 
@@ -759,9 +775,8 @@ def send_review_submission_confirmation_email(user: CustomUser, review: Reviews)
         )
         return
 
-    class_name = "N/A"  # Default value
+    class_name = "N/A"
     try:
-        # Attempt to access the related class title
         if review.classId and review.classId.title:
             class_name = review.classId.title
             logger.debug(
@@ -771,30 +786,23 @@ def send_review_submission_confirmation_email(user: CustomUser, review: Reviews)
             logger.warning(
                 f"review.classId or review.classId.title is missing for review {review.reviewId}. Using default '{class_name}'."
             )
-
     except AttributeError as e:
         logger.error(
             f"AttributeError getting class_name for review {review.reviewId}: {e}",
             exc_info=True,
         )
-        # class_name remains "N/A"
 
     logger.info(
         f"Preparing review submission confirmation email for review {review.reviewId} to user {user.email} with class_name='{class_name}'"
     )
 
-    logger.debug(
-        f"Email Context Check (Review Confirm) for Review {review.reviewId}: User={user.email}, ClassNameContextValue='{class_name}'"
-    )
-
     context = {
         "user": user,
         "review": review,
-        "class_name": class_name,  # Pass the determined class_name
-        "recipient_email": user.email,  # Explicitly set
+        "class_name": class_name, 
+        "recipient_email": user.email,
     }
 
-    # Use the determined class_name in the subject as well
     subject_class_name = class_name if class_name != "N/A" else "[Class Name]"
     send_templated_email(
         recipient_list=[user.email],
@@ -854,9 +862,6 @@ def send_review_response_notification_email(user: CustomUser, review: Reviews):
     logger.info(
         f"Review response notification prepared/queued for review {review.reviewId}"
     )
-
-
-# --- Support Ticket Related Email Trigger Functions ---
 
 
 def send_support_ticket_created_email(user: CustomUser, ticket: SupportTicket):
@@ -1007,15 +1012,13 @@ def send_business_verification_rejected_email(
     contact_email = settings.NOTIFICATION_SETTINGS.get(
         "reply_to", "support@classeasily.com"
     )
-    # settings_url = f"{settings.FRONTEND_BASE_URL}/dashboard/settings" # Example URL
 
     context = {
         "user": user,
         "business": business,
         "verification_request": verification_request,
         "contact_email": contact_email,
-        # 'settings_url': settings_url,
-        "recipient_email": user.email,  # Explicitly set
+        "recipient_email": user.email,
     }
     send_templated_email(
         recipient_list=[user.email],
@@ -1110,9 +1113,6 @@ def send_business_student_cancellation_email(
     logger.info(
         f"Student cancellation notification email prepared/queued for booking {booking.id}"
     )
-
-
-# --- NEW EMAIL FUNCTIONS ---
 
 
 def send_payout_initiated_email(business_user: CustomUser, payout: Payout):
@@ -1232,7 +1232,6 @@ def send_request_for_review_email(user: CustomUser, booking: Booking):
     )
 
     related_data = _get_booking_related_data(booking)
-    # Corrected URL per user request to point to the main "My Classes" page
     review_url = f"{settings.FRONTEND_BASE_URL}/my-classes"
     context = {
         "user": user,
@@ -1328,7 +1327,6 @@ def send_booking_rescheduled_by_business_email(
         logger.error(
             f"Could not access related data for booking {booking.id} when sending reschedule notification."
         )
-        # Proceed with sending, template handles defaults
 
     logger.info(
         f"Preparing booking rescheduled email for booking {booking.id} to user {user.email}"

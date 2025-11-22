@@ -43,16 +43,49 @@ class BookingCreateSerializer(serializers.Serializer):
 
         first_slot = value[0]
         slot_id = first_slot.get("id")
+        is_course = first_slot.get("isCourse", False) # Check the flag sent by frontend
+        
+        # Store this flag in context so the main validate method knows the user's intent
+        self.context["is_course_request"] = is_course 
 
         if not slot_id:
             raise DRFValidationError("Slot ID is required for the first selected slot.")
+        
         try:
-            # We will validate existence here, but the race-condition-proof check happens in validate()
-            instance = ScheduleInstance.objects.select_related(
-                "schedule__option__classId"
-            ).get(id=slot_id)
+            instance = None
+            
+            # FIX START: Handle Schedule ID vs Instance ID
+            if is_course:
+                # If it's a course, slot_id is likely the Schedule ID. 
+                # We need to find the first upcoming Instance for this Schedule.
+                try:
+                    # Find the first scheduled instance for this schedule on or after today
+                    instance = ScheduleInstance.objects.filter(
+                        schedule_id=slot_id,
+                        status='scheduled',
+                        date__gte=timezone.now().date()
+                    ).order_by('date', 'time').first()
+
+                    if not instance:
+                        # Fallback: If no future instance, try finding the Schedule to verify it exists
+                        if Schedule.objects.filter(id=slot_id).exists():
+                            raise DRFValidationError("No upcoming sessions available for this course.")
+                        else:
+                            raise DRFValidationError("Invalid Course Schedule ID.")
+                            
+                except Exception as e:
+                     logger.error(f"Error finding course instance: {e}")
+                     raise DRFValidationError("Error locating course session.")
+            else:
+                # Standard logic: slot_id is a ScheduleInstance ID
+                instance = ScheduleInstance.objects.select_related(
+                    "schedule__option__classId"
+                ).get(id=slot_id)
+            # FIX END
+
             self.context["initial_instance"] = instance
             return value
+
         except ScheduleInstance.DoesNotExist:
             raise DRFValidationError("Invalid schedule instance ID.")
         except (ValueError, TypeError):
@@ -65,6 +98,9 @@ class BookingCreateSerializer(serializers.Serializer):
         participants_count = data.get("participants", 1)
         participant_details = data.get("participant_details", [])
         initial_instance = self.context.get("initial_instance")
+        
+        # Retrieve the intent flag we saved earlier
+        is_course_request = self.context.get("is_course_request", False)
 
         if not initial_instance:
             raise DRFValidationError(
@@ -110,8 +146,8 @@ class BookingCreateSerializer(serializers.Serializer):
         try:
             # The transaction.atomic() block was moved to the view to ensure the lock is held until creation.
             # Lock the specific ScheduleInstance row(s) for the duration of this transaction.
-            # Any other transaction trying to lock the same row will be forced to wait.
-            if initial_instance.schedule.option.booking_type == "Full Course":
+            # We check both the DB booking_type AND the frontend intent flag.
+            if initial_instance.schedule.option.booking_type == "Full Course" or is_course_request:
                 # Lock all future instances of the course
                 locked_instances = list(
                     ScheduleInstance.objects.select_for_update().filter(
@@ -163,7 +199,9 @@ class BookingCreateSerializer(serializers.Serializer):
 
         # Store the locked and validated instances in the context for the create() method.
         self.context["validated_instance"] = instances_to_book[0]
-        if initial_instance.schedule.option.booking_type == "Full Course":
+        
+        # If we are treating this as a course, populate the future instances list
+        if initial_instance.schedule.option.booking_type == "Full Course" or is_course_request:
             self.context["future_course_instances"] = instances_to_book
 
         return data

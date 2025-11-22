@@ -1,42 +1,61 @@
 {# templates/emails/booking_cancellation_user.html #}
 {% extends "emails/base_email.html" %}
 {% load i18n tz %}
+
 {% block title %}
   {% trans "Booking Cancelled" %}
 {% endblock title %}
+
 {% block content %}
-  <h1>{% trans "Your Booking Has Been Cancelled" %}</h1>
+  <h1>{% trans "Booking Cancelled" %}</h1>
+  
   <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
+  
   <p>
-    This email confirms that you have successfully cancelled your booking for
-    <strong>{{ related_data.class_title|default:"[Class Title]" }}</strong>
-    scheduled for {{ booking.schedule_instance.date|date:"F j, Y" }} at {{ booking.schedule_instance.time|time:"P" }}.
+    This confirms that you have successfully cancelled your booking for
+    <strong>{{ related_data.class_title|default:"[Class Title]" }}</strong>.
   </p>
-  {% if refund_details %}
-    <p>{{ refund_details }} {% trans "Please allow 3-5 business days for the refund to appear in your account." %}</p>
-  {% else %}
-    <p>{% trans "As per the cancellation policy for this class, no refund was issued for this cancellation." %}</p>
-  {% endif %}
+
+  <div class="detail-box">
+    <h2>{% trans "Cancellation Summary" %}</h2>
+    
+    <div class="detail-item">
+        <strong>{% trans "Date Cancelled:" %}</strong> {{ booking.cancelled_at|default:booking.updated_at|date:"F j, Y" }}
+    </div>
+    
+    <div class="detail-item">
+        <strong>{% trans "Original Class Date:" %}</strong> {{ booking.schedule_instance.date|date:"l, F j, Y" }} at {{ booking.schedule_instance.time|time:"P" }}
+    </div>
+
+    <div class="detail-item" style="margin-top: 12px;">
+        <strong>{% trans "Refund Status:" %}</strong>
+        {% if refund_details %}
+            {{ refund_details }}
+        {% else %}
+            {% trans "Processed according to cancellation policy." %}
+        {% endif %}
+    </div>
+  </div>
+
   <p>
-    {% trans "If you have any questions about the cancellation policy, please contact the business directly or our support team." %}
+    {% trans "If you have any questions about the policy or your refund, please contact the business directly." %}
   </p>
-  <table role="presentation"
-         border="0"
-         cellpadding="0"
-         cellspacing="0"
-         width="100%">
+
+  <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
     <tr>
       <td align="center" class="button-td">
         <a href="{{ explore_url }}" target="_blank" class="button">{% trans 'Find Another Class' %}</a>
       </td>
     </tr>
   </table>
+
   <p>
     {% trans "We hope to see you in another class soon!" %}
     <br />
     {% trans "The ClassEasily Team" %}
   </p>
 {% endblock content %}
+
 {% block footer_recipient %}
   {% if recipient_email and recipient_email != "N/A" %}
     <p>Cancellation confirmation sent to {{ recipient_email }}. Booking ID: {{ booking.id }}</p>

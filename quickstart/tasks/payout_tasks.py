@@ -40,18 +40,18 @@ def update_completed_booking_status():
 def process_daily_payouts():
     """
     Groups paid-out bookings by business and initiates Stripe transfers
-    based on the pre-calculated net_payout_amount.
+    based on the allocated_net_payout stored on each booking.
     """
     logger.info("--- Starting Daily Payout Processing Task ---")
 
+    # Find bookings that are finished and paid by customer, but not paid to business
     bookings_to_payout = (
         Booking.objects.filter(
-            status="completed",
-            payment_status="paid",
-            payout_status="pending",
+            status__in=["completed", "forfeited"], 
+            payment_status="paid",   
+            payout_status="pending", 
         )
         .select_related("schedule_instance__schedule__option__classId__businessId")
-        .prefetch_related("payments")
     )
 
     if not bookings_to_payout.exists():
@@ -59,31 +59,33 @@ def process_daily_payouts():
         return "No bookings to pay out."
 
     payouts_by_business = {}
+    
     for booking in bookings_to_payout:
         business = booking.schedule_instance.schedule.option.classId.businessId
-        if business.stripe_account_id:
-            payouts_by_business.setdefault(
-                business.stripe_account_id,
-                {
-                    "business_instance": business,
-                    "total_payout": Decimal("0.0"),
-                    "booking_ids": [],
-                },
-            )
+        
+        # Skip if business not connected to Stripe
+        if not business.stripe_account_id:
+            continue
+            
+        # Initialize grouping structure
+        payouts_by_business.setdefault(
+            business.stripe_account_id,
+            {
+                "business_instance": business,
+                "total_payout": Decimal("0.0"),
+                "booking_ids": [],
+            },
+        )
 
-            payment = booking.payments.filter(status="succeeded").first()
-            if payment:
-                # Use the pre-calculated net_payout_amount from the Payment model
-                payouts_by_business[business.stripe_account_id][
-                    "total_payout"
-                ] += payment.net_payout_amount
-                payouts_by_business[business.stripe_account_id]["booking_ids"].append(
-                    booking.id
-                )
-            else:
-                logger.warning(
-                    f"Booking {booking.id} skipped for payout: no associated successful payment record found."
-                )
+        # Accumulate the 1/N share calculated at booking time
+        if booking.allocated_net_payout > 0:
+            payouts_by_business[business.stripe_account_id]["total_payout"] += booking.allocated_net_payout
+            payouts_by_business[business.stripe_account_id]["booking_ids"].append(booking.id)
+        else:
+            # Handle $0 bookings (free or fully discounted)
+            # We still mark them processed so they don't stay pending forever
+            booking.payout_status = "processed"
+            booking.save(update_fields=["payout_status"])
 
     logger.info(f"Found {len(payouts_by_business)} businesses to process payouts for.")
 
@@ -95,10 +97,11 @@ def process_daily_payouts():
         net_payout_amount = data["total_payout"]
         booking_ids = data["booking_ids"]
 
+        # If total is 0 or too low (e.g., only free bookings were completed), skip transfer
         if net_payout_amount <= Decimal("0.50"):
-            logger.warning(
-                f"Skipping payout for Business {business.businessId} as net amount ${net_payout_amount} is too low."
-            )
+            if booking_ids:
+                # Just mark them processed if we aren't sending money
+                Booking.objects.filter(id__in=booking_ids).update(payout_status="processed")
             continue
 
         payout_record = None
@@ -163,7 +166,7 @@ def process_daily_payouts():
 
                 successful_payouts += 1
                 logger.info(
-                    f"SUCCESS: Created Stripe Transfer {transfer.id} for Business {business.businessId}. Payout record {payout_record.id} updated: temp ID '{temp_transfer_id}' → real ID '{transfer.id}', status → 'paid'."
+                    f"SUCCESS: Created Stripe Transfer {transfer.id} for Business {business.businessId}. Amount: ${net_payout_amount}"
                 )
 
         except stripe.error.StripeError as stripe_error:
@@ -171,89 +174,94 @@ def process_daily_payouts():
             if payout_record:
                 payout_record.status = "failed"
                 payout_record.save(update_fields=["status"])
-                logger.error(
-                    f"STRIPE ERROR for Business {business.businessId}: {stripe_error}. Payout record {payout_record.id} marked as 'failed'."
-                )
-            else:
-                logger.error(
-                    f"STRIPE ERROR for Business {business.businessId}: {stripe_error}. No payout record created."
-                )
+                logger.error(f"STRIPE ERROR for Business {business.businessId}: {stripe_error}")
 
         except Exception as general_error:
             failed_payouts += 1
             if payout_record:
                 payout_record.status = "failed"
                 payout_record.save(update_fields=["status"])
-                logger.error(
-                    f"GENERAL ERROR for Business {business.businessId}: {general_error}. Payout record {payout_record.id} marked as 'failed'.",
-                    exc_info=True,
-                )
-            else:
-                logger.error(
-                    f"GENERAL ERROR for Business {business.businessId}: {general_error}. No payout record created.",
-                    exc_info=True,
-                )
+            logger.error(f"GENERAL ERROR for Business {business.businessId}: {general_error}", exc_info=True)
 
     return f"Payout process finished. Successful: {successful_payouts}. Failed: {failed_payouts}."
 
-
 @shared_task(name="tasks.process_daily_refunds")
 def process_daily_refunds():
-    """
-    A daily Celery task to find bookings pending a refund and process them via Stripe.
-    """
     logger.info("--- Starting Daily Refund Processing Task ---")
 
     bookings_to_refund = Booking.objects.filter(payment_status="refund_pending")
 
     if not bookings_to_refund.exists():
-        logger.info("No bookings pending refund today.")
         return "No refunds to process."
 
-    logger.info(f"Found {bookings_to_refund.count()} bookings to process for refunds.")
     successful_refunds, failed_refunds = 0, 0
 
     for booking in bookings_to_refund:
         try:
             with transaction.atomic():
                 locked_booking = Booking.objects.select_for_update().get(id=booking.id)
+                
+                # Basic validation checks
                 if locked_booking.payment_status != "refund_pending":
                     continue
-
+                
                 payment = locked_booking.payments.filter(
                     status__in=["succeeded", "partially_refunded"]
                 ).first()
+
                 if not payment:
-                    logger.error(
-                        f"Cannot process refund for Booking {locked_booking.id}: No successful payment record found."
-                    )
                     locked_booking.payment_status = "refund_failed"
                     locked_booking.save(update_fields=["payment_status"])
                     failed_refunds += 1
                     continue
 
+                # --- 1. CORRECT CALCULATION LOGIC ---
+                # Use the booking's specific allocated value, not the whole payment
+                base_value = locked_booking.amount_paid
+                
                 refund_percentage = (
                     Decimal(locked_booking.cancellation_refund_percentage) / 100
                 )
-                amount_to_refund = payment.available_refund_amount * refund_percentage
+                amount_to_refund = (base_value * refund_percentage).quantize(Decimal("0.01"))
 
+                # Safety cap against Stripe balance
+                if amount_to_refund > payment.available_refund_amount:
+                    amount_to_refund = payment.available_refund_amount
+
+                # --- 2. OPTION B LOGIC: ZERO REFUND HANDLING ---
                 if amount_to_refund < Decimal("0.50"):
-                    logger.warning(
-                        f"Refund for Booking {locked_booking.id} is too small (${amount_to_refund}). Marking as refunded without transaction."
+                    logger.info(
+                        f"Booking {locked_booking.id}: Refund amount is ${amount_to_refund}. "
+                        "Marking as 'forfeited' (Business keeps funds)."
                     )
-                    locked_booking.payment_status = "refunded"
-                    locked_booking.save(update_fields=["payment_status"])
+                    
+                    # CRITICAL: Switch status so Payout Task picks it up
+                    locked_booking.status = "forfeited" 
+                    
+                    # Reset payment status so Payout Task accepts it
+                    locked_booking.payment_status = "paid" 
+                    
+                    # Log the reason
+                    locked_booking.cancellation_reason = (
+                        f"Cancelled (Non-refundable). Refund calculated: ${amount_to_refund}"
+                    )
+                    
+                    locked_booking.save(update_fields=[
+                        "status", 
+                        "payment_status", 
+                        "cancellation_reason"
+                    ])
+                    
                     successful_refunds += 1
                     continue
 
-                # Process the refund with Stripe
+                # --- 3. STANDARD REFUND (If > $0.50) ---
                 stripe_refund = stripe.Refund.create(
                     payment_intent=payment.stripe_payment_intent_id,
                     amount=int(amount_to_refund * 100),
-                    reason="customer_request",
+                    reason="requested_by_customer",
                 )
 
-                # Update the associated Payment record
                 payment.refunded_amount += Decimal(stripe_refund.amount) / 100
                 if payment.available_refund_amount <= Decimal("0.00"):
                     payment.status = "refunded"
@@ -261,28 +269,13 @@ def process_daily_refunds():
                     payment.status = "partially_refunded"
                 payment.save(update_fields=["refunded_amount", "status"])
 
-                # Update the booking status
                 locked_booking.payment_status = "refunded"
                 locked_booking.save(update_fields=["payment_status"])
 
                 successful_refunds += 1
-                logger.info(
-                    f"Successfully processed refund of ${amount_to_refund:.2f} for Booking {locked_booking.id}. Payment {payment.id} updated."
-                )
 
-        except stripe.error.StripeError as e:
-            logger.error(
-                f"Stripe Error processing refund for Booking {booking.id}: {e}"
-            )
-            booking.payment_status = "refund_failed"
-            booking.save(update_fields=["payment_status"])
-            failed_refunds += 1
         except Exception as e:
-            logger.error(
-                f"Unexpected error processing refund for Booking {booking.id}: {e}",
-                exc_info=True,
-            )
+            logger.error(f"Error refunding Booking {booking.id}: {e}", exc_info=True)
             failed_refunds += 1
-            # Let the transaction rollback, so it will be retried tomorrow
 
-    return f"Refund process finished. Successful: {successful_refunds}. Failed: {failed_refunds}."
+    return f"Refunds processed. Success: {successful_refunds}, Failed: {failed_refunds}"

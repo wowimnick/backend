@@ -1,66 +1,68 @@
 {# templates/emails/booking_cancelled_by_other.html #}
 {% extends "emails/base_email.html" %}
 {% load i18n tz %}
+
 {% block title %}
-    {% trans "Important Update: Your Booking Was Cancelled" %}
+    {% trans "Important: Your Class was Cancelled" %}
 {% endblock title %}
+
 {% block content %}
     {% with booker=booking.user|default:booking.contact %}
-        <h1>{% trans "Important Update Regarding Your Booking" %}</h1>
+        <h1>{% trans "Class Cancellation Notice" %}</h1>
+        
         <p>{% blocktrans with first_name=booker.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
+        
         <p>
             We are writing to inform you that your booking for <strong>{{ related_data.class_title|default:"the class" }}</strong>
-            scheduled for {{ booking.schedule_instance.date|date:"F j, Y" }} at {{ booking.schedule_instance.time|time:"P" }}
+            scheduled for {{ booking.schedule_instance.date|date:"l, F j, Y" }} at {{ booking.schedule_instance.time|time:"P" }}
             has been cancelled by {{ cancelled_by }}.
         </p>
-        {% if reason %}
-            <p>
-                <strong>{% trans "Reason provided:" %}</strong> {{ reason }}
-            </p>
-        {% else %}
-            <p>{% trans "No specific reason was provided for the cancellation." %}</p>
-        {% endif %}
-        {% if booking.participants > 1 %}
-            <p>
-                This booking was for {{ booking.participants }} participants, including:
-                <ul style="margin-top: 5px; padding-left: 20px;">
-                    {% for participant in booking.participant_details %}
-                        <li>{{ participant.name|default:"Unnamed Participant" }}</li>
-                    {% empty %}
-                        <li>{% trans "Participant details were not specified." %}</li>
-                    {% endfor %}
-                </ul>
-            </p>
-        {% else %}
-            <p>
-                {# --- VARIABLE FIX START --- #}
-                {% with booker_name=booker.first_name|add:" "|add:booker.last_name %}
-                    {# --- VARIABLE FIX END --- #}
-                    {% trans "This booking was for 1 participant" %} ({{ booking.participant_details.0.name|default:booker_name|default:"you" }}).
-                {% endwith %}
-            </p>
-        {% endif %}
-        {% with amount_paid=booking.amount_paid|floatformat:2 %}
-            <p>
-                {% blocktrans %}A full refund for the amount paid (${{ amount_paid }}) has been automatically processed. Please allow 3-5 business days for this to appear in your account.{% endblocktrans %}
-            </p>
-        {% endwith %}
+
+        <div class="detail-box">
+            <h2>{% trans "Details" %}</h2>
+            
+            <div class="detail-item">
+                <strong>{% trans "Reason:" %}</strong>
+                {% if reason %}
+                    {{ reason }}
+                {% else %}
+                    {% trans "Unavailable" %}
+                {% endif %}
+            </div>
+
+            {% if booking.participants > 1 %}
+                <div class="detail-item" style="margin-top: 8px;">
+                    <strong>{% trans "Impacted Participants:" %}</strong>
+                    <ul style="margin: 4px 0 0 0; padding-left: 20px; color: #555;">
+                        {% for participant in booking.participant_details %}
+                            <li>{{ participant.name|default:"Unnamed Participant" }}</li>
+                        {% empty %}
+                            <li>{{ booking.participants }} {% trans "Participants" %}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            {% endif %}
+            
+            <div class="detail-item" style="margin-top: 12px; color: #10b981;">
+                <strong>{% trans "Refund:" %}</strong>
+                {% blocktrans with amount=booking.amount_paid|floatformat:2 %}A full refund of ${{ amount }} has been processed.{% endblocktrans %}
+            </div>
+        </div>
+
         {% with contact=contact_info|default:"our support team" %}
             <p>
-                {% blocktrans %}We sincerely apologize for any inconvenience this may cause. If you have questions regarding this cancellation, please contact {{ contact }}.{% endblocktrans %}
+                {% blocktrans %}We apologize for the inconvenience. If you have questions, please contact {{ contact }}.{% endblocktrans %}
             </p>
         {% endwith %}
-        <table role="presentation"
-               border="0"
-               cellpadding="0"
-               cellspacing="0"
-               width="100%">
+
+        <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
             <tr>
                 <td align="center" class="button-td">
                     <a href="{{ explore_url }}" target="_blank" class="button">{% trans 'Find Another Class' %}</a>
                 </td>
             </tr>
         </table>
+
         <p>
             {% trans "Thanks for your understanding," %}
             <br />
@@ -68,6 +70,7 @@
         </p>
     {% endwith %}
 {% endblock content %}
+
 {% block footer_recipient %}
     {% if recipient_email and recipient_email != "N/A" %}
         <p>Cancellation notice sent to {{ recipient_email }}. Booking ID: {{ booking.id }}</p>

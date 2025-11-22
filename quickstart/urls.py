@@ -104,6 +104,9 @@ from quickstart.views import (
     ValidateInvitationTokenView,
     ContactImportViewSet,
     GuestBookingCancellationView,
+    PublicCourseViewSet,
+    StudentCourseEnrollmentViewSet,
+    BusinessCourseManagementViewSet,
 )
 
 from quickstart.views.widget.widget_views import (
@@ -142,6 +145,21 @@ business_management_router.register(
 business_management_router.register(
     r"classes", BusinessClassViewSet, basename="business-class"
 )
+business_management_router.register(
+    r"courses", PublicCourseViewSet, basename="public-courses"
+)
+business_management_router.register(
+    r"student/course-enrollments",
+    StudentCourseEnrollmentViewSet,
+    basename="student-course-enrollments",
+)
+
+business_management_router.register(
+    r"course-management",
+    BusinessCourseManagementViewSet,
+    basename="business-course-management",
+)
+
 business_management_router.register(
     r"discounts", BusinessDiscountViewSet, basename="business-discount"
 )

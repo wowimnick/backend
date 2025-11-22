@@ -194,7 +194,6 @@ class ScheduleInstanceSerializer(serializers.ModelSerializer):
 class ScheduleSerializer(serializers.ModelSerializer):
     """Serializer for creating/managing schedules within a class option."""
 
-    # These fields are now efficiently provided by the annotated queryset
     booked_participants = serializers.IntegerField(read_only=True)
     total_revenue = serializers.DecimalField(
         max_digits=10, decimal_places=2, read_only=True
@@ -234,41 +233,43 @@ class ScheduleSerializer(serializers.ModelSerializer):
         extra_kwargs = {"option": {"write_only": True}}
 
     def validate(self, data):
-        option = data.get("option") or getattr(self.instance, "option", None)
+        # 1. Resolve Option and Instance Context
+        instance = self.instance
+        option = data.get("option") or getattr(instance, "option", None)
+        
         if not option:
             raise serializers.ValidationError(
                 "Option context is required for schedule validation."
             )
 
+        # 2. Resolve Fields (Incoming Data -> Fallback to Instance -> None)
         booking_type = option.booking_type
-        start_date = data.get("start_date")
-        end_date = data.get("end_date")
-        date_field = data.get("date")
-        day = data.get("day")
+        
+        start_date = data.get("start_date", getattr(instance, "start_date", None) if instance else None)
+        end_date = data.get("end_date", getattr(instance, "end_date", None) if instance else None)
+        date_field = data.get("date", getattr(instance, "date", None) if instance else None)
+        day = data.get("day", getattr(instance, "day", None) if instance else None)
+        
+        # 3. Critical Change Protection (If bookings exist)
+        if instance and instance.pk:
+            has_bookings = getattr(instance, "has_confirmed_bookings", None)
+            if has_bookings is None:
+                has_bookings = Booking.objects.filter(
+                    schedule_instance__schedule=instance, status="confirmed"
+                ).exists()
 
-        if self.instance and self.instance.pk:
-            critical_fields_being_changed = any(
-                data.get(field) is not None
-                and data.get(field) != getattr(self.instance, field)
-                for field in [
-                    "day",
-                    "time",
-                    "duration",
-                    "price",
-                    "start_date",
-                    "end_date",
-                    "date",
-                ]
-            )
-            if critical_fields_being_changed:
-                if Booking.objects.filter(
-                    schedule_instance__schedule=self.instance, status="confirmed"
-                ).exists():
-                    raise serializers.ValidationError(
-                        "This schedule has confirmed bookings and critical details (like date, time, price) cannot be changed. "
-                        "Please cancel the existing schedule and create a new one if significant changes are needed."
-                    )
+            if has_bookings:
+                immutable_fields = ["start_date", "end_date", "day", "time"]
+                for field in immutable_fields:
+                    # Check if field is present in data AND differs from stored value
+                    if field in data and data[field] != getattr(instance, field):
+                        raise serializers.ValidationError(
+                            {
+                                field: f"Cannot change the {field.replace('_', ' ')} because this schedule has confirmed bookings."
+                            }
+                        )
 
+        # 4. Logic Validation based on Booking Type
         if booking_type == "Full Course":
             if not all([start_date, end_date, day]):
                 raise serializers.ValidationError(
@@ -278,66 +279,101 @@ class ScheduleSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     "Course end date must be after start date."
                 )
-            if (
-                self.instance is None or self.instance.pk is None
-            ) and start_date < timezone.now().date():
+            # Only check past dates on creation, not update
+            if not instance and start_date < timezone.now().date():
                 raise serializers.ValidationError(
                     {"start_date": "New course cannot start in the past."}
                 )
 
-        else:
+        else:  # Single Session
             if not date_field:
                 raise serializers.ValidationError(
                     "Date is required for single sessions."
                 )
             if date_field and not data.get("day"):
                 data["day"] = date_field.strftime("%a")
-            if (
-                self.instance is None or self.instance.pk is None
-            ) and date_field < timezone.now().date():
+            if not instance and date_field < timezone.now().date():
                 raise serializers.ValidationError(
                     {"date": "New session cannot be scheduled in the past."}
                 )
 
-        if data.get("duration", 60) < 15:
+        # 5. Common Validations
+        if data.get("duration", getattr(instance, "duration", 60)) < 15:
             raise serializers.ValidationError(
                 {"duration": "Duration must be at least 15 minutes."}
             )
 
-        new_max_participants = data.get("maxParticipants")
-        if new_max_participants is not None:
-            if new_max_participants < 1:
+        new_max = data.get("maxParticipants")
+        if new_max is not None:
+            if new_max < 1:
                 raise serializers.ValidationError(
                     {"maxParticipants": "Max participants must be at least 1."}
                 )
-            if self.instance and self.instance.pk:
-                current_booked_sum = Booking.objects.filter(
-                    schedule_instance__schedule=self.instance, status="confirmed"
-                ).aggregate(total_booked=Coalesce(Sum("participants"), 0))[
-                    "total_booked"
-                ]
-                if new_max_participants < current_booked_sum:
+            # Ensure capacity isn't lowered below current booking count
+            if instance:
+                current_booked = getattr(instance, "booked_participants", None)
+                if current_booked is None:
+                    current_booked = Booking.objects.filter(
+                        schedule_instance__schedule=instance,
+                        status="confirmed",
+                    ).aggregate(total=Coalesce(Sum("participants"), 0))["total"]
+                
+                if new_max < current_booked:
                     raise serializers.ValidationError(
                         {
-                            "maxParticipants": f"Cannot set capacity below current confirmed bookings ({current_booked_sum})."
+                            "maxParticipants": f"Cannot set capacity below confirmed bookings ({current_booked})."
                         }
                     )
 
         if data.get("price", 0) < 0:
             raise serializers.ValidationError({"price": "Price cannot be negative."})
 
-        min_participants = data.get(
-            "minParticipants", getattr(self.instance, "minParticipants", 1)
-        )
-        max_participants = data.get(
-            "maxParticipants", getattr(self.instance, "maxParticipants", 1)
-        )
-        if min_participants > max_participants:
+        min_p = data.get("minParticipants", getattr(instance, "minParticipants", 1))
+        max_p = data.get("maxParticipants", getattr(instance, "maxParticipants", 10))
+        
+        if min_p > max_p:
             raise serializers.ValidationError(
                 "Minimum participants cannot exceed maximum capacity."
             )
 
         return data
+
+    def update(self, instance, validated_data):
+        """
+        Handle updates, including regenerating instances if course dates/days change.
+        """
+        # Check if core scheduling fields are changing
+        old_start = instance.start_date
+        old_end = instance.end_date
+        old_day = instance.day
+        old_time = instance.time
+        
+        # Perform the standard update
+        instance = super().update(instance, validated_data)
+        
+        is_course = instance.option.booking_type == "Full Course"
+        
+        # Logic to regenerate instances if dates/times changed for a Course
+        if is_course:
+            core_changed = (
+                instance.start_date != old_start or 
+                instance.end_date != old_end or 
+                instance.day != old_day or
+                instance.time != old_time
+            )
+            
+            if core_changed:
+                # Delete future instances (validation already ensured no bookings exist)
+                today = timezone.now().date()
+                instance.instances.filter(
+                    date__gte=today, 
+                    status='scheduled'
+                ).delete()
+                
+                # Regenerate based on new settings
+                instance.generate_course_instances()
+                
+        return instance
 
 
 class BulkScheduleCreateSerializer(serializers.Serializer):
@@ -423,6 +459,10 @@ class ManagedClassOptionSerializer(serializers.ModelSerializer):
             "cancellationPolicy",
             "cancellationCustomHours",
             "cancellationRefundPercentage",
+            "allowMidCourseDrops",
+            "midCourseCancellationPolicy",
+            "midCourseCancellationCustomHours",
+            "midCourseCancellationRefundPercentage",
             "price_type",
             "createdAt",
             "updatedAt",
@@ -453,6 +493,19 @@ class ManagedClassOptionSerializer(serializers.ModelSerializer):
             "price_type": {
                 "default": ClassOption._meta.get_field("price_type").get_default()
             },
+            "allowMidCourseDrops": {
+                "default": ClassOption._meta.get_field(
+                    "allowMidCourseDrops"
+                ).get_default()
+            },
+            "midCourseCancellationPolicy": {"required": False},
+            "midCourseCancellationCustomHours": {"required": False},
+            "midCourseCancellationRefundPercentage": {
+                "required": False,
+                "default": ClassOption._meta.get_field(
+                    "cancellationRefundPercentage"
+                ).get_default(),
+            },
         }
 
     def validate(self, data):
@@ -474,6 +527,37 @@ class ManagedClassOptionSerializer(serializers.ModelSerializer):
             if custom_hours < 1:
                 raise serializers.ValidationError(
                     {"cancellationCustomHours": "Custom hours must be at least 1."}
+                )
+
+        # --- ADDED: Validation for mid-course drop policies ---
+        allow_drops = data.get(
+            "allowMidCourseDrops",
+            getattr(self.instance, "allowMidCourseDrops", False),
+        )
+        mid_course_policy = data.get("midCourseCancellationPolicy")
+        mid_course_custom_hours = data.get("midCourseCancellationCustomHours")
+
+        # If drops are allowed, a policy is required.
+        if allow_drops and not mid_course_policy:
+            raise serializers.ValidationError(
+                {
+                    "midCourseCancellationPolicy": "A cancellation policy is required if mid-course drops are allowed."
+                }
+            )
+
+        # If the mid-course policy is 'custom', custom hours must be provided.
+        if allow_drops and mid_course_policy == "custom":
+            if mid_course_custom_hours is None:
+                raise serializers.ValidationError(
+                    {
+                        "midCourseCancellationCustomHours": "Custom hours are required for a 'custom' mid-course drop policy."
+                    }
+                )
+            if mid_course_custom_hours < 1:
+                raise serializers.ValidationError(
+                    {
+                        "midCourseCancellationCustomHours": "Mid-course custom hours must be at least 1."
+                    }
                 )
 
         return data

@@ -1524,7 +1524,7 @@ class ClassOption(models.Model):
 
     BOOKING_TYPES = [
         ("Single Session", "Single Session"),
-        # ("Full Course", "Full Course"), # Kept for potential future use
+        ("Full Course", "Full Course"),
     ]
     booking_type = models.CharField(
         max_length=20, choices=BOOKING_TYPES, default="Single Session"
@@ -1549,6 +1549,9 @@ class ClassOption(models.Model):
     # Additional Info
     equipment = models.JSONField(default=list, blank=True)
     tags = models.JSONField(default=list, blank=True)
+    course_session_count = models.PositiveIntegerField(
+        null=True, blank=True, help_text="Calculated: Number of sessions in the course"
+    )
 
     CANCELLATION_POLICY_CHOICES = [
         ("flexible", "Flexible (up to 1 hour before)"),
@@ -1572,6 +1575,30 @@ class ClassOption(models.Model):
         default=100,
         validators=[MinValueValidator(0), MaxValueValidator(100)],
         help_text="Percentage of refund if cancellation policy conditions are met (0-100).",
+    )
+
+    # --- ADDED: Fields for Mid-Course Drop Policy (Only for Full Course) ---
+    allowMidCourseDrops = models.BooleanField(
+        default=False,
+        help_text="If true, students can drop out after the course has started for a partial refund.",
+    )
+    midCourseCancellationPolicy = models.CharField(
+        max_length=30,
+        choices=CANCELLATION_POLICY_CHOICES,
+        null=True,
+        blank=True,
+        help_text="The cancellation policy that applies if a student drops mid-course.",
+    )
+    midCourseCancellationCustomHours = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Custom notice period in hours for mid-course drops.",
+    )
+    midCourseCancellationRefundPercentage = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+        help_text="Percentage of remaining sessions' value to be refunded for mid-course drops.",
     )
 
     createdAt = models.DateTimeField(auto_now_add=True)
@@ -1850,6 +1877,161 @@ class Schedule(models.Model):
         ]
 
 
+class CourseEnrollment(models.Model):
+    """
+    Tracks a student's enrollment in a multi-session course.
+    Acts as the master record for all sessions, linked via booking_group_id.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    schedule = models.ForeignKey(
+        Schedule,
+        on_delete=models.CASCADE,
+        related_name="course_enrollments",
+        help_text="The schedule that defines this course",
+    )
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="course_enrollments",
+    )
+
+    contact = models.ForeignKey(
+        "Contact",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="course_enrollments",
+        help_text="For guest enrollments",
+    )
+
+    # This UUID links all session bookings together
+    booking_group_id = models.UUIDField(
+        unique=True,
+        db_index=True,
+        help_text="Links all Booking records for this course",
+    )
+
+    # Course status tracking
+    STATUS_CHOICES = [
+        ("pending", "Pending Payment"),
+        ("active", "Active - In Progress"),
+        ("completed", "Completed Successfully"),
+        ("cancelled", "Cancelled Before Start"),
+        ("dropped", "Dropped Mid-Course"),
+    ]
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+
+    # Financial tracking
+    total_amount_paid = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="Total amount paid for the entire course",
+    )
+
+    # Progress tracking
+    sessions_completed = models.PositiveIntegerField(
+        default=0, help_text="Number of sessions the student has attended"
+    )
+    total_sessions = models.PositiveIntegerField(
+        help_text="Total number of sessions in the course"
+    )
+
+    # Participants (stored at enrollment level)
+    participants = models.IntegerField(
+        validators=[MinValueValidator(1)],
+        help_text="Number of participants in this enrollment",
+    )
+
+    # Dates
+    enrollment_date = models.DateTimeField(auto_now_add=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    # Cancellation details
+    cancellation_reason = models.TextField(blank=True)
+
+    # Snapshot of cancellation policy at enrollment time
+    cancellation_policy = models.CharField(max_length=30)
+    cancellation_custom_hours = models.PositiveIntegerField(null=True, blank=True)
+    cancellation_refund_percentage = models.PositiveIntegerField(default=100)
+
+    class Meta:
+        db_table = "course_enrollments"
+        indexes = [
+            models.Index(fields=["user", "status"]),
+            models.Index(fields=["schedule", "status"]),
+            models.Index(fields=["booking_group_id"]),
+            models.Index(fields=["enrollment_date"]),
+        ]
+        permissions = [
+            ("view_course_analytics", "Can view course analytics"),
+            ("manage_course_enrollments", "Can manage course enrollments"),
+        ]
+
+    def __str__(self):
+        user_identifier = (
+            self.user.email
+            if self.user
+            else (self.contact.email if self.contact else "Unknown")
+        )
+        course_name = self.schedule.option.parent_class_title
+        return f"{user_identifier} - {course_name} ({self.get_status_display()})"
+
+    def clean(self):
+        """Validation"""
+        if self.user is None and self.contact is None:
+            raise ValidationError(
+                "A course enrollment must be linked to either a user or a contact."
+            )
+        if self.schedule.option.booking_type != "Full Course":
+            raise ValidationError(
+                "CourseEnrollment can only be created for Full Course schedules."
+            )
+
+    @property
+    def progress_percentage(self):
+        """Calculate completion percentage"""
+        if self.total_sessions == 0:
+            return 0
+        return int((self.sessions_completed / self.total_sessions) * 100)
+
+    @property
+    def next_session(self):
+        """Get the next upcoming session for this enrollment"""
+        today = timezone.now().date()
+        return (
+            Booking.objects.filter(
+                booking_group_id=self.booking_group_id,
+                status__in=["confirmed", "pending"],
+                schedule_instance__date__gte=today,
+                schedule_instance__status="scheduled",
+            )
+            .select_related("schedule_instance")
+            .order_by("schedule_instance__date", "schedule_instance__time")
+            .first()
+        )
+
+    @property
+    def all_session_bookings(self):
+        """Get all bookings for this course, ordered by session number"""
+        return (
+            Booking.objects.filter(booking_group_id=self.booking_group_id)
+            .select_related("schedule_instance")
+            .order_by("course_session_number")
+        )
+
+    def mark_completed(self):
+        """Mark the course as completed"""
+        self.status = "completed"
+        self.completed_at = timezone.now()
+        self.save(update_fields=["status", "completed_at"])
+
+
 class ScheduleInstance(models.Model):
     """Specific occurrence of a schedule"""
 
@@ -1974,6 +2156,11 @@ class Booking(models.Model):
         max_length=20, unique=True, editable=False, db_index=True, null=True, blank=True
     )
     booking_group_id = models.UUIDField(null=True, blank=True)
+    course_session_number = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="For courses: which session number (1, 2, 3...)",
+    )
     schedule_instance = models.ForeignKey(
         "ScheduleInstance",
         on_delete=models.SET_NULL,
@@ -2022,6 +2209,7 @@ class Booking(models.Model):
             ("confirmed", "Confirmed"),
             ("cancelled", "Cancelled"),
             ("completed", "Completed"),
+            ("forfeited", "Forfeited"),
         ],
         default="pending",
     )
@@ -2037,6 +2225,12 @@ class Booking(models.Model):
         default="pending",
         db_index=True,
         help_text="Tracks the payout status for this specific booking.",
+    )
+    allocated_net_payout = models.DecimalField(
+        max_digits=10, 
+        decimal_places=2, 
+        default=Decimal("0.00"),
+        help_text="The portion of the net payout allocated to this specific session."
     )
     discounts = models.ManyToManyField(
         "Discount", through="AppliedDiscount", related_name="bookings"
@@ -2133,6 +2327,36 @@ class Booking(models.Model):
             self.user_facing_reference = self._generate_user_facing_reference()
         super().save(*args, **kwargs)
 
+    @property
+    def is_course_booking(self):
+        """Check if this booking is part of a course"""
+        return self.enrollment_type == "Full Course"
+
+    @property
+    def course_enrollment(self):
+        """Get the CourseEnrollment for this booking"""
+        if not self.booking_group_id:
+            return None
+        try:
+            from quickstart.models import CourseEnrollment
+
+            return CourseEnrollment.objects.filter(
+                booking_group_id=self.booking_group_id
+            ).first()
+        except:
+            return None
+
+    @property
+    def sibling_bookings(self):
+        """Get all other bookings in the same course"""
+        if not self.booking_group_id or not self.is_course_booking:
+            return Booking.objects.none()
+        return (
+            Booking.objects.filter(booking_group_id=self.booking_group_id)
+            .exclude(id=self.id)
+            .order_by("course_session_number")
+        )
+
     class Meta:
         db_table = "bookings"
         indexes = [
@@ -2143,7 +2367,8 @@ class Booking(models.Model):
             models.Index(fields=["status"]),
             models.Index(fields=["booking_group_id"]),
             models.Index(fields=["payout_status"]),
-            models.Index(fields=["user_facing_reference"]),  # Index new field
+            models.Index(fields=["user_facing_reference"]),
+            models.Index(fields=["booking_group_id", "course_session_number"]),
             models.Index(fields=["contact"]),
         ]
         permissions = [
@@ -2213,7 +2438,9 @@ class Discount(models.Model):
         PERCENTAGE = "percentage", "Percentage"
         FIXED_AMOUNT = "fixed_amount", "Fixed Amount"
 
+    # MODIFIED: Added 'BUSINESS' scope
     class DiscountScope(models.TextChoices):
+        BUSINESS = "business", "Entire Business"
         CLASS = "class", "Entire Class"
         SCHEDULE_GROUP = "schedule_group", "Specific Schedule Group"
 
@@ -2240,10 +2467,11 @@ class Discount(models.Model):
         help_text="The value of the discount (e.g., 20.00 for 20% or 10.00 for $10).",
     )
 
+    # MODIFIED: Changed default scope
     scope = models.CharField(
         max_length=20,
         choices=DiscountScope.choices,
-        default=DiscountScope.CLASS,
+        default=DiscountScope.BUSINESS,
         help_text="What this discount applies to.",
     )
     target_class = models.ForeignKey(
@@ -2269,7 +2497,9 @@ class Discount(models.Model):
     )
 
     is_active = models.BooleanField(default=True, db_index=True)
-    valid_from = models.DateTimeField(default=timezone.now)
+    valid_from = models.DateTimeField(
+        null=True, blank=True, help_text="Leave blank for no start date."
+    )
     valid_to = models.DateTimeField(
         null=True, blank=True, help_text="Leave blank for no expiration date."
     )
@@ -2302,23 +2532,31 @@ class Discount(models.Model):
         return (
             f"{self.name} ({self.code or 'Automatic'}) for {self.business.businessName}"
         )
-
+    
+    # MODIFIED: Overhauled clean method for new scope logic
     def clean(self):
         if self.code:
             self.code = self.code.upper().strip()
+            
         if self.discount_type == self.DiscountType.PERCENTAGE and self.value > 100:
             raise ValidationError("Percentage value cannot be greater than 100.")
-        if self.scope == self.DiscountScope.CLASS and not self.target_class:
-            raise ValidationError(
-                "A 'target_class' must be specified for a class-scoped discount."
-            )
-        if self.scope == self.DiscountScope.SCHEDULE_GROUP and not (
-            self.target_schedule_group_name and self.target_class_option
-        ):
-            raise ValidationError(
-                "Both 'target_schedule_group_name' and 'target_class_option' are required for schedule group discounts."
-            )
-        if self.valid_to and self.valid_from > self.valid_to:
+
+        # --- Scope Validation ---
+        if self.scope == self.DiscountScope.BUSINESS:
+            if self.target_class or self.target_schedule_group_name or self.target_class_option:
+                raise ValidationError("Targets (class, option, group) must not be set for a business-wide discount.")
+        
+        elif self.scope == self.DiscountScope.CLASS:
+            if not self.target_class:
+                raise ValidationError("A 'target_class' must be specified for a class-scoped discount.")
+            if self.target_schedule_group_name or self.target_class_option:
+                raise ValidationError("Schedule group and option must not be set for a class-scoped discount.")
+        
+        elif self.scope == self.DiscountScope.SCHEDULE_GROUP:
+            if not (self.target_schedule_group_name and self.target_class_option):
+                raise ValidationError("Both 'target_schedule_group_name' and 'target_class_option' are required for schedule group discounts.")
+
+        if self.valid_to and self.valid_from and self.valid_from > self.valid_to:
             raise ValidationError("'Valid to' date must be after 'Valid from' date.")
 
     def save(self, *args, **kwargs):

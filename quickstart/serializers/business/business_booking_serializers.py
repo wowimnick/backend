@@ -266,6 +266,7 @@ class BusinessBookingDetailSerializer(serializers.ModelSerializer):
     is_rescheduled = serializers.BooleanField(read_only=True)
     rescheduled_at = serializers.DateTimeField(read_only=True)
     original_session_details = serializers.SerializerMethodField()
+    course_schedule = serializers.SerializerMethodField()
 
     class Meta:
         model = Booking
@@ -296,6 +297,7 @@ class BusinessBookingDetailSerializer(serializers.ModelSerializer):
             "is_rescheduled",
             "rescheduled_at",
             "original_session_details",
+            "course_schedule",
         ]
         read_only_fields = fields
 
@@ -402,4 +404,27 @@ class BusinessBookingDetailSerializer(serializers.ModelSerializer):
         logger.info(
             f"No payment information found for Booking ID {obj.id} (Group ID: {obj.booking_group_id}) after checks."
         )
+        return None
+
+    def get_course_schedule(self, obj):
+        if obj.enrollment_type == "Full Course" and obj.booking_group_id:
+            # Fetch all sibling bookings for this group
+            siblings = Booking.objects.filter(
+                booking_group_id=obj.booking_group_id
+            ).select_related('schedule_instance').order_by(
+                'schedule_instance__date', 
+                'schedule_instance__time'
+            )
+            
+            schedule = []
+            for index, booking in enumerate(siblings):
+                instance = booking.schedule_instance
+                schedule.append({
+                    "session_number": index + 1,
+                    "date": instance.date,
+                    "time": instance.time,
+                    "status": booking.status,
+                    "is_current": booking.id == obj.id
+                })
+            return schedule
         return None
