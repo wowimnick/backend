@@ -1,0 +1,63 @@
+{# templates/emails/course_cancellation_user.html #}
+{% extends "emails/base_email.html" %}
+{% load i18n tz %}
+
+{% block title %}
+  {% trans "Course Enrollment Dropped" %}
+{% endblock title %}
+
+{% block content %}
+  <h1>{% trans "Course Drop Confirmed" %}</h1>
+  
+  <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
+  
+  <p>
+    We're sorry to see you go. This email confirms that you have successfully dropped the course
+    <strong>{{ related_data.class_title|default:"[Course Title]" }}</strong>.
+  </p>
+
+  <div class="detail-box">
+    <h2>{% trans "Cancellation Details" %}</h2>
+    
+    <div class="detail-item">
+        <strong>{% trans "Course:" %}</strong> {{ related_data.class_title|default:"[Course Title]" }}
+    </div>
+
+    <div class="detail-item">
+        <strong>{% trans "Date Dropped:" %}</strong> {{ booking.cancelled_at|default:booking.updated_at|date:"F j, Y" }}
+    </div>
+
+    <div class="detail-item" style="margin-top: 12px;">
+        <strong>{% trans "Refund Status:" %}</strong>
+        {% if refund_details %}
+            {{ refund_details }}
+        {% else %}
+            {% trans "Refund processed based on the remaining sessions and course policy." %}
+        {% endif %}
+    </div>
+  </div>
+
+  <p>
+    {% trans "You have been removed from all remaining sessions of this course." %}
+  </p>
+
+  <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+    <tr>
+      <td align="center" class="button-td">
+        <a href="{{ explore_url }}" target="_blank" class="button">{% trans 'Browse Other Courses' %}</a>
+      </td>
+    </tr>
+  </table>
+
+  <p>
+    {% trans "We hope you'll join us again in the future." %}
+    <br />
+    {% trans "The ClassEasily Team" %}
+  </p>
+{% endblock content %}
+
+{% block footer_recipient %}
+  {% if recipient_email and recipient_email != "N/A" %}
+    <p>Course drop confirmation sent to {{ recipient_email }}.</p>
+  {% endif %}
+{% endblock footer_recipient %}

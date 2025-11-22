@@ -592,6 +592,9 @@ def notify_users_of_new_schedule(sender, instance: Schedule, created, **kwargs):
     """
     After a new Schedule is created, find users who have favorited the parent
     class and send them a bulk email notification.
+
+    Includes debouncing to prevent spamming users when multiple schedules
+    are added in a batch (e.g. 20 weeks of Monday classes).
     """
     from .utils.email_utils import send_favorited_class_new_dates_email
 
@@ -617,24 +620,37 @@ def notify_users_of_new_schedule(sender, instance: Schedule, created, **kwargs):
         if not users_who_favorited.exists():
             return
 
-        # --- MODIFIED BLOCK ---
-        # The complex email_data_list and call to send_bulk_templated_emails has been replaced
-        # with a simple loop that calls the correct, direct email utility function.
-
         sent_count = 0
+        skipped_count = 0
+
         for user in users_who_favorited:
             if user.email:
-                # This is the correct, direct utility function to use.
+                # --- DEBOUNCING LOGIC ---
+                # Cache key unique to User + Class combination
+                cache_key = (
+                    f"fav_new_dates_sent_{user.userId}_{class_main.classId}"
+                )
+
+                # Check if we already sent an email for this class to this user recently
+                if cache.get(cache_key):
+                    skipped_count += 1
+                    continue
+
+                # If not, send the email and set the cache
                 send_favorited_class_new_dates_email(
                     user=user, class_main=class_main, new_schedule=instance
                 )
+                
+                # Set cache to prevent another email for 2 hours (7200 seconds)
+                # This assumes that batch uploads happen within this window.
+                cache.set(cache_key, True, timeout=7200) 
                 sent_count += 1
 
         if sent_count > 0:
             logger.info(
-                f"Queued {sent_count} 'favorite class new dates' emails for class {class_main.classId}."
+                f"Queued {sent_count} 'favorite class new dates' emails for class {class_main.classId}. "
+                f"Skipped {skipped_count} due to debouncing."
             )
-        # --- END MODIFIED BLOCK ---
 
     except Exception as e:
         logger.error(
