@@ -5,108 +5,85 @@
     {% trans "Your Booking Confirmation!" %}
 {% endblock title %}
 {% block content %}
-    <h1>{% trans "Booking Confirmed! Get Ready to Learn!" %}</h1>
+    <h1>{% trans "Booking Confirmed!" %}</h1>
     <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
     <p>
-        {% trans "Your booking for the class" %} <strong>{{ related_data.class_title|default:"[Class Title]" }}</strong> {% trans "is confirmed." %}
-        {% blocktrans %}We're excited for you to join!{% endblocktrans %}
+        {% trans "You are confirmed for" %} <strong>{{ related_data.class_title|default:"[Class Title]" }}</strong>.
     </p>
-    <div style="background-color: #f9fafb;
-                border: 1px solid #e5e7eb;
-                border-radius: 8px;
-                padding: 16px;
-                margin: 20px 0">
-        <h2 style="font-size: 18px;
-                   font-weight: 600;
-                   color: #111827;
-                   margin-top: 0;
-                   margin-bottom: 12px">{% trans "Booking Summary:" %}</h2>
-        {% if booking.user_facing_reference %}
-            <p style="margin-bottom: 6px;">
-                <strong>{% trans "Booking Reference:" %}</strong> {{ booking.user_facing_reference }}
-            </p>
-        {% elif booking.id %}
-            <p style="margin-bottom: 6px;">
-                <strong>{% trans "Booking ID:" %}</strong> #{{ booking.id }}
-            </p>
-        {% else %}
-            <p style="margin-bottom: 6px;">
-                <strong>{% trans "Booking Confirmed" %}</strong>
-            </p>
-        {% endif %}
-        <p style="margin-bottom: 6px;">
-            <strong>{% trans "Class:" %}</strong> {{ related_data.class_title|default:"N/A" }}
-        </p>
+    
+    <div style="background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin: 20px 0">
+        
         {% if booking.schedule_instance %}
-            <p style="margin-bottom: 6px;">
-                <strong>{% trans "Date:" %}</strong> {{ booking.schedule_instance.date|date:"l, F j, Y" }}
-            </p>
-            <p style="margin-bottom: 6px;">
-                <strong>{% trans "Time:" %}</strong>
-                {{ booking.schedule_instance.time|time:"P" }}
-                {% if related_data.business_timezone and related_data.business_timezone != "Etc/UTC" %}
-                    {% if not is_guest and user.user_timezone and user.user_timezone != related_data.business_timezone %}
-                        ({{ related_data.business_timezone|humanize_timezone }})
-                    {% elif is_guest or not user.user_timezone %}
-                        ({{ related_data.business_timezone|humanize_timezone }})
-                    {% endif %}
+        <div style="text-align: center; padding-bottom: 16px; margin-bottom: 16px; border-bottom: 1px dashed #d1d5db;">
+            <div style="font-size: 14px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">{% trans "When" %}</div>
+            <div style="font-size: 20px; font-weight: 700; color: #111827;">
+                {{ booking.schedule_instance.date|date:"l, F j" }}
+            </div>
+            <div style="font-size: 18px; font-weight: 600; color: #374151; margin-top: 4px;">
+                {{ booking.schedule_instance.time|time:"g:i A" }} - 
+                {{ booking.schedule_instance.time|add_minutes:booking.schedule_instance.duration|time:"g:i A" }}
+            </div>
+            {% if related_data.business_timezone %}
+                <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">
+                    Timezone: {{ related_data.business_timezone|humanize_timezone }}
+                </div>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        <div style="margin-top: 12px;">
+            {% if booking.user_facing_reference %}
+                <p style="margin-bottom: 8px;">
+                    <strong>{% trans "Reference:" %}</strong> {{ booking.user_facing_reference }}
+                </p>
+            {% endif %}
+            
+            <p style="margin-bottom: 8px;">
+                <strong>{% trans "Class:" %}</strong> {{ related_data.class_title|default:"N/A" }}
+                {% if related_data.option_title and related_data.option_title != "Single Session" %}
+                    <span style="color: #6b7280;">({{ related_data.option_title }})</span>
                 {% endif %}
             </p>
-            <p style="margin-bottom: 6px;">
-                <strong>{% trans "Duration:" %}</strong> {{ booking.schedule_instance.duration }} {% trans "minutes" %}
+
+            <p style="margin-bottom: 8px;">
+                <strong>{% trans "Location:" %}</strong> {{ related_data.class_location|default:"N/A" }}
             </p>
-        {% else %}
-            <p style="margin-bottom: 6px;">
-                <strong>{% trans "Date & Time:" %}</strong> {% trans "Details unavailable" %}
+
+            <p style="margin-bottom: 8px;">
+                <strong>{% trans "Provider:" %}</strong> {{ related_data.business_name|default:"N/A" }}
             </p>
-        {% endif %}
-        <p style="margin-bottom: 6px;">
-            <strong>{% trans "Location:" %}</strong> {{ related_data.class_location|default:"N/A" }}
-        </p>
-        <p style="margin-bottom: 6px;">
-            <strong>{% trans "Business:" %}</strong> {{ related_data.business_name|default:"N/A" }}
-        </p>
-        <p style="margin-bottom: 6px;">
-            <strong>{% trans "Total Participants:" %}</strong> {{ booking.participants }}
-        </p>
-        {% if booking.participant_details and booking.participants > 0 %}
-            <p style="margin-bottom: 2px;">
-                <strong>{% trans "Participant Names:" %}</strong>
+
+            <p style="margin-bottom: 0;">
+                <strong>{% trans "Total Paid:" %}</strong> ${{ booking.amount_paid|floatformat:2 }}
+                <span style="color: #6b7280; font-size: 13px;">
+                    ({{ booking.participants }} {% if booking.participants > 1 %}participants{% else %}participant{% endif %})
+                </span>
             </p>
-            <ul style="margin-top: 0; margin-bottom: 6px; padding-left: 20px;">
-                {% for participant in booking.participant_details %}
-                    <li>{{ participant.name|default:"Unnamed Participant" }}</li>
-                {% endfor %}
-            </ul>
-        {% endif %}
-        <p style="margin-bottom: 0;">
-            <strong>{% trans "Amount Paid:" %}</strong> ${{ booking.amount_paid|floatformat:2 }}
-        </p>
+        </div>
     </div>
-    <table role="presentation"
-           border="0"
-           cellpadding="0"
-           cellspacing="0"
-           width="100%">
+
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
         <tr>
             <td align="center" class="button-td">
                 {% if is_guest and guest_cancellation_url %}
-                    <a href="{{ guest_cancellation_url }}" target="_blank" class="button">{% trans 'Cancel This Booking' %}</a>
+                    <a href="{{ guest_cancellation_url }}" target="_blank" class="button">{% trans 'Manage Booking' %}</a>
                 {% else %}
-                    <a href="{{ manage_bookings_url }}" target="_blank" class="button">{% trans 'View Your Bookings' %}</a>
+                    <a href="{{ manage_bookings_url }}" target="_blank" class="button">{% trans 'View Details' %}</a>
                 {% endif %}
             </td>
         </tr>
     </table>
+    
     <p>
         {% if is_guest and guest_cancellation_url %}
-            {% blocktrans %}You can cancel this booking using the button above, subject to the business's cancellation policy.{% endblocktrans %}
+            {% blocktrans %}Need to cancel? You can use the button above, subject to the business's cancellation policy.{% endblocktrans %}
         {% else %}
-            {% blocktrans %}You can view or manage this booking, including cancellation options (subject to the business's policy), from your 'My Classes' page.{% endblocktrans %}
+            {% blocktrans %}You can view directions or manage this booking from your 'My Classes' page.{% endblocktrans %}
         {% endif %}
     </p>
+    
     <p>
-        {% trans "We look to seeing you!" %}
+        {% trans "See you in class!" %}
         <br />
         {% trans "The ClassEasily Team" %}
     </p>

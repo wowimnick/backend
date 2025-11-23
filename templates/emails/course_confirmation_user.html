@@ -17,8 +17,6 @@
         {% trans "has been confirmed." %}
     </p>
     
-    <p>{% trans "Get ready to start your learning journey. Here are the details of your course:" %}</p>
-
     <div class="detail-box">
         <h2>{% trans "Course Summary" %}</h2>
         
@@ -32,55 +30,66 @@
             <strong>{% trans "Course:" %}</strong> {{ related_data.class_title|default:"N/A" }}
         </div>
 
-        {% if enrollment %}
-            <div class="detail-item">
-                <strong>{% trans "Start Date:" %}</strong> {{ enrollment.schedule.start_date|date:"l, F j, Y" }}
-            </div>
-            <div class="detail-item">
-                <strong>{% trans "End Date:" %}</strong> {{ enrollment.schedule.end_date|date:"l, F j, Y" }}
-            </div>
-            <div class="detail-item">
-                <strong>{% trans "Sessions:" %}</strong> {{ enrollment.total_sessions }} {% trans "Total Sessions" %}
-            </div>
-            {% if enrollment.schedule.time %}
-            <div class="detail-item">
-                <strong>{% trans "Weekly Time:" %}</strong> {{ enrollment.schedule.day }}s at {{ enrollment.schedule.time|time:"P" }}
-            </div>
-            {% endif %}
-        {% else %}
-            {# Fallback if enrollment object is missing but we know it is a course #}
-            <div class="detail-item">
-                <strong>{% trans "Schedule:" %}</strong> {{ related_data.schedule_summary|default:"See details in dashboard" }}
-            </div>
-        {% endif %}
+        <div class="detail-item">
+            <strong>{% trans "Provider:" %}</strong> {{ related_data.business_name|default:"N/A" }}
+        </div>
 
         <div class="detail-item">
             <strong>{% trans "Location:" %}</strong> {{ related_data.class_location|default:"N/A" }}
         </div>
+
+        {% if enrollment %}
+            <div class="detail-item">
+                <strong>{% trans "Duration:" %}</strong> {{ enrollment.schedule.start_date|date:"M j" }} - {{ enrollment.schedule.end_date|date:"M j, Y" }}
+            </div>
+            <div class="detail-item">
+                <strong>{% trans "Total Sessions:" %}</strong> {{ enrollment.total_sessions }}
+            </div>
+        {% endif %}
         
-        <div class="detail-item">
-            <strong>{% trans "Provider:" %}</strong> {{ related_data.business_name|default:"N/A" }}
-        </div>
-        
-        {% if booking.participants > 0 %}
+        {% if booking.participants > 1 %}
         <div class="detail-item" style="margin-top: 12px;">
-            <strong>{% trans "Participants:" %}</strong>
-            <ul style="margin: 4px 0 0 0; padding-left: 20px; color: #555;">
-                {% for participant in booking.participant_details %}
-                    <li>{{ participant.name|default:"Unnamed Participant" }}</li>
-                {% empty %}
-                    <li>{{ booking.participants }} {% trans "Participant(s)" %}</li>
-                {% endfor %}
-            </ul>
+            <strong>{% trans "Participants:" %}</strong> {{ booking.participants }}
         </div>
         {% endif %}
     </div>
+
+    {% if course_sessions %}
+    <div style="margin: 24px 0;">
+        <h3 style="font-size: 18px; color: #111827; margin-bottom: 12px;">{% trans "Your Course Schedule" %}</h3>
+        <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse; font-size: 14px;">
+            <thead>
+                <tr style="border-bottom: 2px solid #e5e7eb;">
+                    <th align="left" style="padding: 8px 4px; color: #6b7280; font-weight: 600;">#</th>
+                    <th align="left" style="padding: 8px 4px; color: #6b7280; font-weight: 600;">{% trans "Date" %}</th>
+                    <th align="left" style="padding: 8px 4px; color: #6b7280; font-weight: 600;">{% trans "Time" %}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for session in course_sessions %}
+                <tr style="border-bottom: 1px solid #f3f4f6;">
+                    <td style="padding: 12px 4px;">{{ session.course_session_number }}</td>
+                    <td style="padding: 12px 4px; font-weight: 500;">
+                        {{ session.schedule_instance.date|date:"D, M j, Y" }}
+                    </td>
+                    <td style="padding: 12px 4px;">
+                        {{ session.schedule_instance.time|time:"g:i A" }}
+                        {% if related_data.business_timezone %}
+                            <span style="font-size: 11px; color: #9ca3af;">({{ related_data.business_timezone|humanize_timezone }})</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
 
     <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
         <tr>
             <td align="center" class="button-td">
                 {% if is_guest and guest_cancellation_url %}
-                     <a href="{{ guest_cancellation_url }}" target="_blank" class="button">{% trans 'View Enrollment' %}</a>
+                     <a href="{{ guest_cancellation_url }}" target="_blank" class="button">{% trans 'Manage Enrollment' %}</a>
                 {% else %}
                     <a href="{{ manage_bookings_url }}" target="_blank" class="button">{% trans 'View My Course' %}</a>
                 {% endif %}
@@ -88,10 +97,6 @@
         </tr>
     </table>
 
-    <p>
-        {% trans "You can view the specific dates for all individual sessions in your dashboard." %}
-    </p>
-    
     <p>
         {% trans "We look forward to seeing you there!" %}
         <br />

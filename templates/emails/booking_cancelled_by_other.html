@@ -3,7 +3,7 @@
 {% load i18n tz %}
 
 {% block title %}
-    {% trans "Important: Your Class was Cancelled" %}
+    {% trans "Important: Class Session Cancelled" %}
 {% endblock title %}
 
 {% block content %}
@@ -13,7 +13,13 @@
         <p>{% blocktrans with first_name=booker.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
         
         <p>
-            We are writing to inform you that your booking for <strong>{{ related_data.class_title|default:"the class" }}</strong>
+            We are writing to inform you that 
+            {% if booking.course_session_number %}
+                <strong>Session {{ booking.course_session_number }}</strong> of your course
+            {% else %}
+                your booking for
+            {% endif %}
+            <strong>{{ related_data.class_title|default:"the class" }}</strong>
             scheduled for {{ booking.schedule_instance.date|date:"l, F j, Y" }} at {{ booking.schedule_instance.time|time:"P" }}
             has been cancelled by {{ cancelled_by }}.
         </p>
@@ -29,25 +35,27 @@
                     {% trans "Unavailable" %}
                 {% endif %}
             </div>
-
-            {% if booking.participants > 1 %}
-                <div class="detail-item" style="margin-top: 8px;">
-                    <strong>{% trans "Impacted Participants:" %}</strong>
-                    <ul style="margin: 4px 0 0 0; padding-left: 20px; color: #555;">
-                        {% for participant in booking.participant_details %}
-                            <li>{{ participant.name|default:"Unnamed Participant" }}</li>
-                        {% empty %}
-                            <li>{{ booking.participants }} {% trans "Participants" %}</li>
-                        {% endfor %}
-                    </ul>
-                </div>
-            {% endif %}
             
             <div class="detail-item" style="margin-top: 12px; color: #10b981;">
                 <strong>{% trans "Refund:" %}</strong>
-                {% blocktrans with amount=booking.amount_paid|floatformat:2 %}A full refund of ${{ amount }} has been processed.{% endblocktrans %}
+                {% blocktrans with amount=booking.amount_paid|floatformat:2 %}A refund of ${{ amount }} has been processed for this session.{% endblocktrans %}
             </div>
         </div>
+
+        {# --- NEW SECTION: UPCOMING SESSIONS --- #}
+        {% if upcoming_sessions %}
+        <div style="margin: 20px 0; background-color: #f0fdf4; border: 1px solid #bbf7d0; padding: 16px; border-radius: 8px;">
+            <h3 style="margin-top: 0; font-size: 16px; color: #166534;">{% trans "Don't worry, the course continues!" %}</h3>
+            <p style="margin-bottom: 8px; color: #14532d;">{% trans "Your next upcoming sessions are:" %}</p>
+            <ul style="padding-left: 20px; color: #14532d; margin-bottom: 0;">
+                {% for next_sess in upcoming_sessions %}
+                    <li style="margin-bottom: 4px;">
+                        <strong>{{ next_sess.schedule_instance.date|date:"D, M j" }}:</strong> Session {{ next_sess.course_session_number }}
+                    </li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
 
         {% with contact=contact_info|default:"our support team" %}
             <p>

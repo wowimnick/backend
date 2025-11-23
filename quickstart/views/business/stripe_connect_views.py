@@ -9,10 +9,10 @@ from rest_framework.exceptions import NotFound
 from rest_framework.throttling import ScopedRateThrottle
 from django.db.models import Q
 
-from quickstart.models import BusinessInfo  # Ensure this path is correct
+from quickstart.models import BusinessInfo
 from quickstart.utils.permissions import (
     CanManageOwnBusinessProfile,
-)  # Ensure this path is correct
+)
 
 import logging
 
@@ -123,7 +123,7 @@ class StripeConnectView(views.APIView):
                     "type": "express",
                     "country": getattr(
                         business, "businessCountry", "CA"
-                    ),  # Example: business.businessCountry or default
+                    ),
                     "email": business.studentContactEmail or business.owner.email,
                     "capabilities": {
                         "card_payments": {"requested": True},
@@ -137,22 +137,9 @@ class StripeConnectView(views.APIView):
                         "classeasily_business_id": str(business.businessId),
                         "classeasily_owner_email": str(business.owner.email),
                     },
+                    # REMOVED: Logic that auto-selected business_type, company, or individual.
+                    # Stripe will now ask the user to select their business type during onboarding.
                 }
-
-                if (
-                    business.businessType
-                    and business.businessType.lower() == "individual"
-                ):
-                    owner = business.owner
-                    account_params["business_type"] = "individual"
-                    account_params["individual"] = {
-                        "first_name": owner.first_name,
-                        "last_name": owner.last_name,
-                        "email": owner.email,
-                    }
-                else:
-                    account_params["business_type"] = "company"
-                    account_params["company"] = {"name": business.businessName}
 
                 logger.info(
                     f"StripeConnect: Attempting to create Stripe Express account with params: {account_params}"
@@ -248,8 +235,6 @@ class StripeConnectView(views.APIView):
                 f"GET Endpoint: Current DB status is '{business.stripe_account_status}'."
             )
 
-            # FIX: Use attribute access, which is compatible with both the real Stripe object
-            # and the MagicMock used in testing.
             requirements = getattr(account, "requirements", {})
             disabled_reason = getattr(account, "disabled_reason", None)
 

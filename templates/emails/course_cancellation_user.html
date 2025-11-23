@@ -3,28 +3,45 @@
 {% load i18n tz %}
 
 {% block title %}
-  {% trans "Course Enrollment Dropped" %}
+  {% if is_single_session_drop %}
+    {% trans "Course Session Cancelled" %}
+  {% else %}
+    {% trans "Course Enrollment Dropped" %}
+  {% endif %}
 {% endblock title %}
 
 {% block content %}
-  <h1>{% trans "Course Drop Confirmed" %}</h1>
+  {% if is_single_session_drop %}
+      <h1>{% trans "Session Cancelled" %}</h1>
+  {% else %}
+      <h1>{% trans "Course Drop Confirmed" %}</h1>
+  {% endif %}
   
   <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
   
-  <p>
-    We're sorry to see you go. This email confirms that you have successfully dropped the course
-    <strong>{{ related_data.class_title|default:"[Course Title]" }}</strong>.
-  </p>
+  {% if is_single_session_drop %}
+    <p>
+        {% trans "You have successfully cancelled" %} <strong>Session {{ booking.course_session_number }}</strong> 
+        {% trans "of the course" %} <strong>{{ related_data.class_title|default:"[Course Title]" }}</strong>.
+    </p>
+  {% else %}
+    <p>
+        {% trans "We're sorry to see you go. This email confirms that you have successfully dropped the course" %}
+        <strong>{{ related_data.class_title|default:"[Course Title]" }}</strong>.
+    </p>
+  {% endif %}
 
   <div class="detail-box">
     <h2>{% trans "Cancellation Details" %}</h2>
     
-    <div class="detail-item">
-        <strong>{% trans "Course:" %}</strong> {{ related_data.class_title|default:"[Course Title]" }}
-    </div>
+    {% if is_single_session_drop %}
+        <div class="detail-item">
+            <strong>{% trans "Cancelled Session Date:" %}</strong> {{ booking.schedule_instance.date|date:"l, F j, Y" }}
+        </div>
+    {% endif %}
 
     <div class="detail-item">
-        <strong>{% trans "Date Dropped:" %}</strong> {{ booking.cancelled_at|default:booking.updated_at|date:"F j, Y" }}
+        <strong>{% trans "Date Processed:" %}</strong> {{ booking.cancelled_at|default:booking.updated_at|date:"F j, Y" }}
     </div>
 
     <div class="detail-item" style="margin-top: 12px;">
@@ -32,25 +49,40 @@
         {% if refund_details %}
             {{ refund_details }}
         {% else %}
-            {% trans "Refund processed based on the remaining sessions and course policy." %}
+            {% trans "Refund processed based on policy." %}
         {% endif %}
     </div>
   </div>
 
-  <p>
-    {% trans "You have been removed from all remaining sessions of this course." %}
-  </p>
+  {# --- NEW SECTION: UPCOMING SESSIONS (If just one dropped) --- #}
+  {% if is_single_session_drop and upcoming_sessions %}
+    <div style="margin: 24px 0;">
+        <h3 style="font-size: 16px; color: #111827; margin-bottom: 8px;">{% trans "Your Next Upcoming Sessions:" %}</h3>
+        <ul style="padding-left: 20px; color: #374151;">
+            {% for next_sess in upcoming_sessions %}
+                <li style="margin-bottom: 4px;">
+                    <strong>Session {{ next_sess.course_session_number }}:</strong> {{ next_sess.schedule_instance.date|date:"D, M j" }} at {{ next_sess.schedule_instance.time|time:"g:i A" }}
+                </li>
+            {% endfor %}
+        </ul>
+        <p style="font-size: 13px; color: #6b7280;">{% trans "Check your dashboard for the full schedule." %}</p>
+    </div>
+  {% elif not is_single_session_drop %}
+      <p>
+        {% trans "You have been removed from all remaining sessions of this course." %}
+      </p>
+  {% endif %}
 
   <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
     <tr>
       <td align="center" class="button-td">
-        <a href="{{ explore_url }}" target="_blank" class="button">{% trans 'Browse Other Courses' %}</a>
+        <a href="{{ explore_url }}" target="_blank" class="button">{% trans 'Browse Other Classes' %}</a>
       </td>
     </tr>
   </table>
 
   <p>
-    {% trans "We hope you'll join us again in the future." %}
+    {% trans "We hope to see you soon." %}
     <br />
     {% trans "The ClassEasily Team" %}
   </p>
@@ -58,6 +90,6 @@
 
 {% block footer_recipient %}
   {% if recipient_email and recipient_email != "N/A" %}
-    <p>Course drop confirmation sent to {{ recipient_email }}.</p>
+    <p>Cancellation confirmation sent to {{ recipient_email }}.</p>
   {% endif %}
 {% endblock footer_recipient %}
