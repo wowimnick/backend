@@ -1,0 +1,57 @@
+{# templates/emails/business_schedule_expiry_warning.html #}
+{% extends "emails/base_email.html" %}
+{% load i18n %}
+
+{% block title %}
+    {% trans "Action Required: Classes Ending Soon" %}
+{% endblock title %}
+
+{% block content %}
+    <h1>{% trans "Time to Update Your Schedule!" %}</h1>
+    
+    <p>{% blocktrans with first_name=business_user.first_name|default:"Business Owner" %}Hi {{ first_name }},{% endblocktrans %}</p>
+    
+    <p>
+        {% trans "We noticed that the following classes have run out of scheduled sessions or are ending within the next 14 days. To ensure students can keep booking, please add new sessions soon." %}
+    </p>
+
+    <div style="background-color: #fff1f2; border: 1px solid #fecdd3; border-radius: 8px; padding: 16px; margin: 20px 0">
+        <h2 style="font-size: 18px; font-weight: 600; color: #9f1239; margin-top: 0; margin-bottom: 12px">
+            {% trans "Classes Needing Attention:" %}
+        </h2>
+        
+        <ul style="padding-left: 20px; margin-bottom: 0; color: #881337;">
+            {% for item in expiring_classes %}
+                <li style="margin-bottom: 8px;">
+                    <strong>{{ item.title }}</strong>
+                    <br/>
+                    <span style="font-size: 14px; color: #4b5563;">
+                        {% if item.last_date %}
+                            {% trans "Last scheduled session:" %} {{ item.last_date|date:"F j, Y" }}
+                        {% else %}
+                            {% trans "No future sessions scheduled." %}
+                        {% endif %}
+                    </span>
+                </li>
+            {% endfor %}
+        </ul>
+    </div>
+
+    <p>{% trans "Keeping your schedule up to date helps improve your search ranking and ensures you don't miss out on bookings." %}</p>
+
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+        <tr>
+            <td align="center" class="button-td">
+                <a href="{{ dashboard_url }}" target="_blank" class="button">{% trans 'Manage Classes' %}</a>
+            </td>
+        </tr>
+    </table>
+
+    <p>
+        {% trans "The ClassEasily Team" %}
+    </p>
+{% endblock content %}
+
+{% block footer_recipient %}
+    <p>Schedule notification sent to {{ business_user.email }}</p>
+{% endblock footer_recipient %}

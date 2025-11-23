@@ -288,7 +288,12 @@ CELERY_BEAT_SCHEDULE = {
         "task": "quickstart.tasks.send_upcoming_booking_reminders",
         "schedule": crontab(minute=0, hour="*"),  # Run at the start of every hour
     },
+    "notify-expiring-schedules-weekly": {
+        "task": "quickstart.tasks.notify_businesses_of_expiring_schedules",
+        "schedule": crontab(day_of_week="monday", hour=9, minute=0), # Mondays at 9 AM UTC
+    },
 }
+
 
 
 # Email-specific settings
