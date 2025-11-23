@@ -438,7 +438,7 @@ class CreatePaymentIntentView(APIView):
 
                 pending_payment = Payment.objects.create(
                     booking=first_booking,
-                    stripe_payment_intent_id="temp", 
+                    stripe_payment_intent_id=f"temp_{uuid.uuid4()}", 
                     amount=grand_total,
                     tax_amount=tax_amount,
                     currency=currency_code.upper(),
@@ -472,8 +472,8 @@ class CreatePaymentIntentView(APIView):
             try:
                 intent = stripe.PaymentIntent.create(
                     amount=total_amount_for_stripe_cents,
-                    currency=currency_code.lower(), 
-                    payment_method_types=["card"],
+                    currency=currency_code.lower(),
+                    automatic_payment_methods={"enabled": True},
                     metadata={k: v for k, v in metadata.items() if v is not None},
                 )
 
