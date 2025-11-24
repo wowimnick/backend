@@ -1,84 +1,89 @@
 from celery import shared_task
 from django.utils import timezone
 from datetime import timedelta
-from django.db.models import Sum, Count, CharField
-from django.db.models.functions import Coalesce, Cast
-from decimal import Decimal
-
-from quickstart.models import BusinessInfo, Booking
-from quickstart.utils.email_utils import send_performance_summary_email
+from django.db.models import Max, Q
+from django.template.loader import render_to_string
+from django.conf import settings
+from collections import defaultdict
+from quickstart.models import BusinessInfo, ClassesMain
+from quickstart.tasks.email_tasks import send_transactional_email_task
 import logging
 
 logger = logging.getLogger(__name__)
 
-
 @shared_task
-def send_weekly_performance_summaries():
+def notify_businesses_of_expiring_schedules():
     """
-    Sends a weekly performance summary to all active and verified businesses.
+    Checks for active classes that have no future instances or 
+    whose last instance is within the next 14 days.
+    Sends a consolidated email to the business owner.
     """
     today = timezone.now().date()
-    end_date = today - timedelta(days=1)
-    start_date = end_date - timedelta(days=6)  # Full 7 day period
+    warning_threshold = today + timedelta(days=14)
+    
+    logger.info("Starting schedule expiry check task.")
 
-    active_businesses = BusinessInfo.objects.filter(
-        isActive=True, verificationStatus="verified"
-    )
-    logger.info(
-        f"Starting weekly performance summary task for {active_businesses.count()} businesses."
-    )
+    # 1. Query active classes and annotate with the date of their *last* scheduled instance
+    # We filter for classes where that max date is either None (no schedules) 
+    # or less than our warning threshold.
+    classes_needing_schedules = ClassesMain.objects.filter(
+        status='active',
+        businessId__isActive=True
+    ).annotate(
+        last_scheduled_date=Max('options__schedules__instances__date')
+    ).filter(
+        Q(last_scheduled_date__lte=warning_threshold) | Q(last_scheduled_date__isnull=True)
+    ).select_related('businessId', 'businessId__owner')
 
-    for business in active_businesses:
+    if not classes_needing_schedules.exists():
+        return "No classes found needing schedule updates."
+
+    # 2. Group classes by Business to send 1 email per business
+    business_map = defaultdict(list)
+    
+    for cls in classes_needing_schedules:
+        # If the class has options but no schedules ever created, last_scheduled_date is None.
+        # If it has schedules but they are all in the past, last_scheduled_date is < today.
+        # If it has future schedules but they run out soon, last_scheduled_date is < threshold.
+        
+        # Optimization: We can filter out classes that are 'active' but might be old/abandoned 
+        # if they haven't had a schedule in > 1 year, depending on requirements. 
+        # For now, we assume if it's marked 'active', the user cares about it.
+        
+        business_map[cls.businessId].append({
+            'title': cls.title,
+            'last_date': cls.last_scheduled_date
+        })
+
+    email_count = 0
+
+    # 3. Iterate through grouped data and send emails
+    for business, class_list in business_map.items():
+        owner = business.owner
+        if not owner or not owner.email:
+            continue
+
+        # Prepare context for the template
+        context = {
+            'business_user': owner,
+            'expiring_classes': class_list,
+            'dashboard_url': f"{settings.FRONTEND_BASE_URL}/business/classes",
+            'settings': settings # To access frontend url in base template
+        }
+
+        html_content = render_to_string("emails/business_schedule_expiry_warning.html", context)
+        
+        # Send email
         try:
-            # Calculate stats for the last 7 days
-            bookings_in_period = Booking.objects.filter(
-                schedule_instance__schedule__option__classId__businessId=business,
-                booking_date__date__range=[start_date, end_date],
+            send_transactional_email_task.delay(
+                to=owner.email,
+                subject=f"Action Required: {len(class_list)} of your classes are ending soon",
+                html=html_content,
+                from_email=settings.DEFAULT_FROM_EMAIL
             )
-
-            total_revenue = bookings_in_period.filter(
-                status__in=["confirmed", "completed"], payment_status="paid"
-            ).aggregate(total=Sum("amount_paid"))["total"] or Decimal("0.00")
-
-            new_bookings_count = bookings_in_period.count()
-            # MODIFIED: Correctly count unique users OR contacts
-            unique_students_count = (
-                bookings_in_period.annotate(
-                    booker_identifier=Coalesce(
-                        Cast("user_id", output_field=CharField()),
-                        Cast("contact_id", output_field=CharField()),
-                    )
-                )
-                .values("booker_identifier")
-                .distinct()
-                .count()
-            )
-
-            summary_data = {
-                "total_revenue": f"{total_revenue:.2f}",
-                "new_bookings": new_bookings_count,
-                "unique_students": unique_students_count,
-                "start_date": start_date.strftime("%b %d"),
-                "end_date": end_date.strftime("%b %d, %Y"),
-            }
-
-            # Find all recipients (owner + managers)
-            recipients = {business.owner} | set(business.managers.all())
-            for user in recipients:
-                if user and user.email:
-                    send_performance_summary_email(
-                        business_user=user,
-                        summary_data=summary_data,
-                        period="Weekly",
-                    )
-            logger.info(
-                f"Queued weekly summary for business '{business.businessName}' (ID: {business.businessId})."
-            )
-
+            email_count += 1
+            logger.info(f"Queued schedule expiry warning for business {business.businessName} ({len(class_list)} classes)")
         except Exception as e:
-            logger.error(
-                f"Failed to generate performance summary for business {business.businessId}: {e}",
-                exc_info=True,
-            )
+            logger.error(f"Failed to queue schedule warning email for {owner.email}: {e}")
 
-    return f"Finished sending weekly performance summaries for {active_businesses.count()} businesses."
+    return f"Processed schedule expiry check. Sent emails to {email_count} businesses."

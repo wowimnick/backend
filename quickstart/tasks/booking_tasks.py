@@ -3,13 +3,51 @@ import pytz
 from celery import shared_task
 from django.utils import timezone
 from datetime import timedelta
+import stripe
 from django.core.cache import cache
-
-from quickstart.models import Booking
+from quickstart.models import Booking, Payment
+from django.conf import settings
 from quickstart.utils.email_utils import send_booking_reminder_email
 import logging
 
+stripe.api_key = settings.STRIPE_SECRET_KEY
 logger = logging.getLogger(__name__)
+
+def release_expired_spots():
+    # 1. Define timeout (e.g., 15 minutes allowed for checkout)
+    timeout_threshold = timezone.now() - timedelta(minutes=15)
+
+    # 2. Find stale bookings
+    stale_bookings = Booking.objects.filter(
+        status='pending',
+        booking_date__lt=timeout_threshold
+    )
+
+    if not stale_bookings.exists():
+        return
+
+    logger.info(f"Found {stale_bookings.count()} stale bookings to release.")
+
+    for booking in stale_bookings:
+        # 3. Cancel Stripe Intent (Optional but good practice)
+        # Find the associated pending payment
+        payment = booking.payments.filter(status='pending').first()
+        if payment and payment.stripe_payment_intent_id and not payment.stripe_payment_intent_id.startswith('temp'):
+            try:
+                stripe.PaymentIntent.cancel(payment.stripe_payment_intent_id)
+            except stripe.error.StripeError:
+                # Intent might already be cancelled or succeeded
+                pass
+            
+            payment.status = 'failed'
+            payment.failure_message = 'Booking timer expired'
+            payment.save()
+
+        # 4. Mark Booking as Cancelled (Releases the spot)
+        booking.status = 'cancelled'
+        booking.cancellation_reason = 'Checkout timer expired'
+        booking.cancelled_at = timezone.now()
+        booking.save()
 
 
 @shared_task

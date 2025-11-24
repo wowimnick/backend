@@ -1,6 +1,6 @@
 {# templates/emails/booking_reminder_user.html #}
 {% extends "emails/base_email.html" %}
-{% load i18n tz %}
+{% load i18n tz string_filters %}
 
 {% block title %}
     {% if is_course_session %}
@@ -26,33 +26,52 @@
         </p>
     {% endif %}
 
-    <div class="detail-box">
-        <h2>{% trans "Class Details" %}</h2>
+    <div style="background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin: 20px 0">
         
-        <div class="detail-item">
-            <strong>{% trans "Class:" %}</strong> {{ related_data.class_title|default:"N/A" }}
+        {# --- PROMINENT DATE DISPLAY --- #}
+        <div style="text-align: center; padding-bottom: 16px; margin-bottom: 16px; border-bottom: 1px dashed #d1d5db;">
+            <div style="font-size: 14px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">
+                {% if is_course_session %}
+                    {% trans "Next Session" %}
+                {% else %}
+                    {% trans "When" %}
+                {% endif %}
+            </div>
+            <div style="font-size: 20px; font-weight: 700; color: #111827;">
+                {{ booking.schedule_instance.date|date:"l, F j" }}
+            </div>
+            <div style="font-size: 18px; font-weight: 600; color: #374151; margin-top: 4px;">
+                {{ booking.schedule_instance.time|time:"g:i A" }} - 
+                {{ booking.schedule_instance.time|add_minutes:booking.schedule_instance.duration|time:"g:i A" }}
+            </div>
+            {% if related_data.business_timezone %}
+                <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">
+                    Timezone: {{ related_data.business_timezone|humanize_timezone }}
+                </div>
+            {% endif %}
         </div>
-        
-        {% if is_course_session %}
-        <div class="detail-item" style="color: #ff385c;">
-            <strong>{% trans "Session:" %}</strong> #{{ booking.course_session_number }}
-        </div>
-        {% endif %}
+        {# --- END PROMINENT DATE --- #}
 
-        <div class="detail-item">
-            <strong>{% trans "Date:" %}</strong> {{ booking.schedule_instance.date|date:"l, F j, Y" }}
-        </div>
-        
-        <div class="detail-item">
-            <strong>{% trans "Time:" %}</strong> {{ booking.schedule_instance.time|time:"P" }}
-        </div>
-        
-        <div class="detail-item">
-            <strong>{% trans "Location:" %}</strong> {{ related_data.class_location|default:"N/A" }}
-        </div>
-        
-        <div class="detail-item">
-            <strong>{% trans "Participants:" %}</strong> {{ booking.participants }}
+        <div style="margin-top: 12px;">
+            <div class="detail-item">
+                <strong>{% trans "Class:" %}</strong> {{ related_data.class_title|default:"N/A" }}
+            </div>
+            
+            {% if is_course_session %}
+            <div class="detail-item" style="color: #ff385c;">
+                <strong>{% trans "Session:" %}</strong> #{{ booking.course_session_number }}
+            </div>
+            {% endif %}
+            
+            <div class="detail-item">
+                <strong>{% trans "Location:" %}</strong> {{ related_data.class_location|default:"N/A" }}
+            </div>
+            
+            {% if booking.participants > 1 %}
+            <div class="detail-item">
+                <strong>{% trans "Participants:" %}</strong> {{ booking.participants }}
+            </div>
+            {% endif %}
         </div>
     </div>
 

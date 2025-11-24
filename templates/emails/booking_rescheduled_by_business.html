@@ -1,65 +1,87 @@
 {# templates/emails/booking_rescheduled_by_business.html #}
 {% extends "emails/base_email.html" %}
-{% load i18n tz %}
+{% load i18n tz string_filters %}
+
 {% block title %}
-    {% trans "Important: Your Booking Has Been Rescheduled" %}
+    {% if booking.course_session_number %}
+        {% trans "Update: Course Session Rescheduled" %}
+    {% else %}
+        {% trans "Update: Booking Rescheduled" %}
+    {% endif %}
 {% endblock title %}
+
 {% block content %}
     {% with booker=booking.user|default:booking.contact %}
-        <h1>{% trans "Important Update Regarding Your Booking" %}</h1>
+        <h1>{% trans "Important Schedule Update" %}</h1>
         <p>{% blocktrans with first_name=booker.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
+        
         <p>
-            Please note that the business, <strong>{{ related_data.business_name|default:"the business" }}</strong>, has rescheduled your booking for the class: <strong>{{ related_data.class_title|default:"[Class Title]" }}</strong>.
+            Please note that the business, <strong>{{ related_data.business_name|default:"the business" }}</strong>, has rescheduled 
+            
+            {# --- COURSE SPECIFIC LOGIC --- #}
+            {% if booking.course_session_number %}
+                <strong>Session {{ booking.course_session_number }}</strong> of the course:
+            {% else %}
+                your booking for the class:
+            {% endif %}
+            {# ----------------------------- #}
+            
+            <strong>{{ related_data.class_title|default:"[Class Title]" }}</strong>.
         </p>
-        <div style="background-color: #f9fafb;
-                    border: 1px solid #e5e7eb;
-                    border-radius: 8px;
-                    padding: 16px;
-                    margin: 20px 0">
-            <h2 style="font-size: 18px;
-                       font-weight: 600;
-                       color: #111827;
-                       margin-top: 0;
-                       margin-bottom: 12px">{% trans "Booking Change Details:" %}</h2>
-            <div style="margin-bottom: 12px;
-                        padding-bottom: 12px;
-                        border-bottom: 1px dashed #e5e7eb">
-                <p style="margin: 0 0 4px 0; color: #ef4444;">
-                    <strong>{% trans "Previous Time:" %}</strong>
-                </p>
-                <p style="margin: 0; text-decoration: line-through;">
-                    {{ old_instance.date|date:"l, F j, Y" }} at {{ old_instance.time|time:"P" }}
-                </p>
+        
+        <div style="background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin: 20px 0">
+            <h2 style="font-size: 18px; font-weight: 600; color: #111827; margin-top: 0; margin-bottom: 16px; text-align: center;">{% trans "Schedule Change" %}</h2>
+            
+            {# --- OLD TIME --- #}
+            <div style="margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid #e5e7eb; text-align: center; opacity: 0.7;">
+                <div style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: #ef4444; font-weight: 700; margin-bottom: 4px;">
+                    {% trans "Previous Time" %}
+                </div>
+                <div style="font-size: 16px; text-decoration: line-through; color: #6b7280;">
+                    {{ old_instance.date|date:"l, F j" }} at {{ old_instance.time|time:"g:i A" }}
+                </div>
             </div>
-            <div>
-                <p style="margin: 0 0 4px 0; color: #16a34a;">
-                    <strong>{% trans "New Time:" %}</strong>
-                </p>
-                <p style="margin: 0;">
-                    <strong>{{ new_instance.date|date:"l, F j, Y" }} at {{ new_instance.time|time:"P" }}</strong>
-                </p>
+
+            {# --- NEW TIME --- #}
+            <div style="text-align: center;">
+                <div style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: #16a34a; font-weight: 700; margin-bottom: 4px;">
+                    {% trans "New Time" %}
+                </div>
+                <div style="font-size: 18px; font-weight: 700; color: #111827;">
+                    {{ new_instance.date|date:"l, F j" }}
+                </div>
+                <div style="font-size: 16px; font-weight: 600; color: #374151; margin-top: 2px;">
+                    {{ new_instance.time|time:"g:i A" }} - 
+                    {{ new_instance.time|add_minutes:new_instance.duration|time:"g:i A" }}
+                </div>
+                {% if related_data.business_timezone %}
+                    <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">
+                        ({{ related_data.business_timezone|humanize_timezone }})
+                    </div>
+                {% endif %}
             </div>
         </div>
+
         <p>
             {% blocktrans %}Your booking has been automatically transferred to the new time slot. No action is required on your part if you can attend the new session.{% endblocktrans %}
         </p>
+        
         <p>
             {% blocktrans %}If you are unable to make the new time, please view your booking details to see available cancellation or rescheduling options, which are subject to the business's policy.{% endblocktrans %}
         </p>
-        <table role="presentation"
-               border="0"
-               cellpadding="0"
-               cellspacing="0"
-               width="100%">
+        
+        <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
             <tr>
                 <td align="center" class="button-td">
                     <a href="{{ manage_bookings_url }}" target="_blank" class="button">{% trans 'View My Bookings' %}</a>
                 </td>
             </tr>
         </table>
+        
         <p>
             {% blocktrans with business_email=related_data.business_contact_email|default:"the business" %}We apologize for any inconvenience this change may cause. If you have any questions, please contact {{ business_email }} directly.{% endblocktrans %}
         </p>
+        
         <p>
             {% trans "Thanks for your understanding," %}
             <br />
@@ -67,6 +89,7 @@
         </p>
     {% endwith %}
 {% endblock content %}
+
 {% block footer_recipient %}
     {% if recipient_email and recipient_email != "N/A" %}
         <p>Reschedule notice sent to {{ recipient_email }}. Booking ID: {{ booking.id }}</p>

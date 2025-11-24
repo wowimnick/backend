@@ -237,6 +237,62 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         return response
 
     def get_queryset(self):
+        # 1. Define Subqueries for Platform Data (Existing)
+        # We ensure these return Decimal/Integer types to prevent SQL casting errors
+        p_avg_subquery = Subquery(
+            Reviews.objects.filter(classId=OuterRef("pk"), status="approved")
+            .values("classId")
+            .annotate(avg_rating=Avg("rating"))
+            .values("avg_rating")[:1],
+            output_field=DecimalField(max_digits=3, decimal_places=2),
+        )
+        p_count_subquery = Subquery(
+            Reviews.objects.filter(classId=OuterRef("pk"), status="approved")
+            .values("classId")
+            .annotate(count=Count("reviewId"))
+            .values("count")[:1],
+            output_field=IntegerField(),
+        )
+
+        # 2. Define Subqueries for Google Data (New)
+        # Note: We filter by businessId because Google reviews are attached to the Business, not the specific class
+        g_avg_subquery = Subquery(
+            ImportedGoogleReview.objects.filter(business=OuterRef("businessId"))
+            .values("business")
+            .annotate(avg=Avg("rating"))
+            .values("avg")[:1],
+            output_field=DecimalField(max_digits=3, decimal_places=2),
+        )
+        g_count_subquery = Subquery(
+            ImportedGoogleReview.objects.filter(business=OuterRef("businessId"))
+            .values("business")
+            .annotate(count=Count("id"))
+            .values("count")[:1],
+            output_field=IntegerField(),
+        )
+
+        # 3. Define Price Subqueries (Existing)
+        min_session_price_subquery = Subquery(
+            Schedule.objects.filter(
+                option__classId=OuterRef("pk"),
+                option__booking_type="Single Session",
+                date__gte=timezone.now().date(),
+            )
+            .order_by("price")
+            .values("price")[:1],
+            output_field=DecimalField(max_digits=10, decimal_places=2),
+        )
+        min_course_price_subquery = Subquery(
+            Schedule.objects.filter(
+                option__classId=OuterRef("pk"),
+                option__booking_type="Full Course",
+                end_date__gte=timezone.now().date(),
+            )
+            .order_by("price")
+            .values("price")[:1],
+            output_field=DecimalField(max_digits=10, decimal_places=2),
+        )
+
         queryset = (
             ClassesMain.objects.select_related("businessId", "category", "subcategory")
             .prefetch_related(
@@ -251,21 +307,48 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 businessId__isActive=True,
                 businessId__verificationStatus="verified",
             )
+            # 4. Annotate Raw Counts and Ratings
             .annotate(
-                average_rating=Coalesce(
-                    self.AVERAGE_RATING_SUBQUERY, Value(Decimal("0.0"))
+                # Coalesce ensures we get 0 instead of NULL if no reviews exist
+                p_rating_raw=Coalesce(p_avg_subquery, Value(Decimal("0.00"))),
+                p_count_raw=Coalesce(p_count_subquery, Value(0)),
+                g_rating_raw=Coalesce(g_avg_subquery, Value(Decimal("0.00"))),
+                g_count_raw=Coalesce(g_count_subquery, Value(0)),
+            )
+            # 5. Calculate Combined Totals (Used for Ranking)
+            .annotate(
+                # Total Reviews = Platform + Google
+                review_count=ExpressionWrapper(
+                    F("p_count_raw") + F("g_count_raw"),
+                    output_field=IntegerField()
                 ),
-                review_count=Coalesce(self.REVIEW_COUNT_SUBQUERY, Value(0)),
-                min_session_price=Coalesce(self.MIN_SESSION_PRICE_SUBQUERY, None),
-                min_course_price=Coalesce(self.MIN_COURSE_PRICE_SUBQUERY, None),
+                
+                # Calculate Weighted Sum: (P_Rating * P_Count) + (G_Rating * G_Count)
+                weighted_sum=ExpressionWrapper(
+                    (F("p_rating_raw") * F("p_count_raw")) + (F("g_rating_raw") * F("g_count_raw")),
+                    output_field=DecimalField(max_digits=10, decimal_places=2)
+                ),
+            )
+            # 6. Calculate Final Average Rating
+            .annotate(
+                average_rating=Case(
+                    When(review_count=0, then=Value(Decimal("0.0"))),
+                    default=ExpressionWrapper(
+                        F("weighted_sum") / F("review_count"),
+                        output_field=DecimalField(max_digits=3, decimal_places=1)
+                    ),
+                    output_field=DecimalField(max_digits=3, decimal_places=1)
+                ),
+                # Existing Price fields
+                min_session_price=Coalesce(min_session_price_subquery, None),
+                min_course_price=Coalesce(min_course_price_subquery, None),
                 image_count=Count("images", distinct=True),
             )
         )
 
+        # 7. Specific Logic for Retrieve Action (Detail View)
         if self.action == "retrieve":
-            logger.debug(
-                f"Action is 'retrieve', prefetching schedules for class detail."
-            )
+            logger.debug("Action is 'retrieve', prefetching schedules for class detail.")
             queryset = queryset.prefetch_related(
                 Prefetch(
                     "options__schedules",
@@ -275,6 +358,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     ).order_by("date", "time"),
                 )
             )
+            
         return queryset.distinct()
 
     def _calculate_relevance_score(self, queryset):

@@ -355,15 +355,23 @@ def send_booking_confirmation_email(user, booking: Booking):
         template_name = "emails/course_confirmation_user.html"
         subject_prefix = "Course Enrollment Confirmed:"
         
-        # Attempt to fetch course enrollment details
+        # --- NEW LOGIC: Fetch full course session list ---
         if booking.booking_group_id:
             try:
                 enrollment = CourseEnrollment.objects.get(booking_group_id=booking.booking_group_id)
                 context["enrollment"] = enrollment
-                logger.info(f"Attached CourseEnrollment {enrollment.id} to email context.")
+                
+                # Fetch all sessions to list specific dates
+                course_sessions = Booking.objects.filter(
+                    booking_group_id=booking.booking_group_id
+                ).select_related('schedule_instance').order_by('course_session_number')
+                
+                context["course_sessions"] = course_sessions
+                logger.info(f"Attached {course_sessions.count()} session dates to email context.")
             except CourseEnrollment.DoesNotExist:
                 logger.warning(f"CourseEnrollment missing for booking_group_id {booking.booking_group_id}")
                 context["enrollment"] = None
+                context["course_sessions"] = []
     else:
         template_name = "emails/booking_confirmation_user.html"
         subject_prefix = "Booking Confirmed:"
@@ -593,12 +601,43 @@ def send_booking_cancellation_user_email(user, booking: Booking, refund_details:
         "explore_url": explore_url,
         "recipient_email": user.email,
         "related_data": related_data,
+        "upcoming_sessions": []
     }
     
     # Choose template and subject based on type
     if booking.enrollment_type == "Full Course":
         template_name = "emails/course_cancellation_user.html"
-        subject_prefix = "Course Drop Confirmed:"
+        
+        # Determine if it's a full drop or single session
+        # If the CourseEnrollment is "dropped" or "cancelled", it's the whole thing
+        # If just this booking is "cancelled", it's a single session
+        
+        is_single_session_drop = False
+        try:
+            # Check if user has other active bookings in this group
+            if booking.booking_group_id:
+                active_siblings = Booking.objects.filter(
+                    booking_group_id=booking.booking_group_id,
+                    status='confirmed'
+                ).count()
+                if active_siblings > 0:
+                    is_single_session_drop = True
+                    subject_prefix = f"Session {booking.course_session_number} Cancelled:"
+                    
+                    # Fetch upcoming sessions
+                    next_sessions = Booking.objects.filter(
+                        booking_group_id=booking.booking_group_id,
+                        status='confirmed',
+                        schedule_instance__date__gt=booking.schedule_instance.date
+                    ).select_related('schedule_instance').order_by('course_session_number')[:3]
+                    context["upcoming_sessions"] = next_sessions
+                else:
+                    subject_prefix = "Course Drop Confirmed:"
+        except Exception as e:
+            logger.error(f"Error determining drop type for email: {e}")
+            subject_prefix = "Cancellation Confirmed:"
+
+        context["is_single_session_drop"] = is_single_session_drop
         logger.info(f"Using Course Cancellation template for booking {booking.id}")
     else:
         template_name = "emails/booking_cancellation_user.html"
@@ -653,7 +692,25 @@ def send_booking_cancelled_by_other_email(
         "explore_url": explore_url,
         "recipient_email": user.email,
         "related_data": related_data,
+        "upcoming_sessions": []
     }
+    
+    # --- NEW LOGIC: Fetch upcoming sessions if it's a course session ---
+    if booking.enrollment_type == "Full Course" and booking.booking_group_id:
+        try:
+            # Check for active future sessions in the same course
+            upcoming_sessions = Booking.objects.filter(
+                booking_group_id=booking.booking_group_id,
+                status='confirmed',
+                schedule_instance__date__gt=booking.schedule_instance.date
+            ).select_related('schedule_instance').order_by('course_session_number')[:3]
+            
+            context['upcoming_sessions'] = upcoming_sessions
+            if upcoming_sessions.exists():
+                logger.info(f"Found {upcoming_sessions.count()} upcoming sessions to list in cancellation email.")
+        except Exception as e:
+            logger.warning(f"Failed to fetch upcoming sessions for cancellation email: {e}")
+
     send_templated_email(
         recipient_list=[user.email],
         template_name="emails/booking_cancelled_by_other.html",
