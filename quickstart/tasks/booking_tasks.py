@@ -13,6 +13,7 @@ import logging
 stripe.api_key = settings.STRIPE_SECRET_KEY
 logger = logging.getLogger(__name__)
 
+@shared_task  
 def release_expired_spots():
     # 1. Define timeout (e.g., 15 minutes allowed for checkout)
     timeout_threshold = timezone.now() - timedelta(minutes=15)
@@ -24,20 +25,21 @@ def release_expired_spots():
     )
 
     if not stale_bookings.exists():
-        return
+        # Optional: reduce log noise by only logging if something was actually cleaned
+        return 
 
     logger.info(f"Found {stale_bookings.count()} stale bookings to release.")
 
     for booking in stale_bookings:
-        # 3. Cancel Stripe Intent (Optional but good practice)
-        # Find the associated pending payment
+        # 3. Cancel Stripe Intent
         payment = booking.payments.filter(status='pending').first()
         if payment and payment.stripe_payment_intent_id and not payment.stripe_payment_intent_id.startswith('temp'):
             try:
                 stripe.PaymentIntent.cancel(payment.stripe_payment_intent_id)
-            except stripe.error.StripeError:
+                logger.info(f"Cancelled Stripe Intent {payment.stripe_payment_intent_id}")
+            except stripe.error.StripeError as e:
                 # Intent might already be cancelled or succeeded
-                pass
+                logger.warning(f"Could not cancel intent {payment.stripe_payment_intent_id}: {e}")
             
             payment.status = 'failed'
             payment.failure_message = 'Booking timer expired'
