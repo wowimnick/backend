@@ -534,7 +534,80 @@ class CreatePaymentIntentView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+class UpdatePaymentIntentView(APIView):
+    permission_classes = [] # Public endpoint, secured by the Payment Intent ID logic
 
+    def post(self, request):
+        payment_intent_id = request.data.get("payment_intent_id")
+        
+        # 1. Validation
+        if not payment_intent_id:
+            return Response({"error": "Payment Intent ID is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            with transaction.atomic():
+                # 2. Find the pending Payment record
+                payment = Payment.objects.select_related('booking', 'booking__contact').get(
+                    stripe_payment_intent_id=payment_intent_id,
+                    status='pending' # Only allow updates if still pending
+                )
+                booking = payment.booking
+                
+                # 3. Extract new data from request
+                new_email = request.data.get("guest_email")
+                new_name = request.data.get("guest_full_name")
+                new_phone = request.data.get("guest_phone")
+                new_notes = request.data.get("notes")
+                new_participants = request.data.get("participant_details")
+                new_discount_id = request.data.get("applied_discount_id")
+
+                # 4. Update the Booking
+                if new_notes is not None:
+                    booking.notes = new_notes
+                if new_participants is not None:
+                    booking.participant_details = new_participants
+                
+                # 5. Update the Guest Contact (if it exists)
+                # Note: If this is a logged-in user, booking.contact might be None, handled below
+                if booking.contact:
+                    if new_email: booking.contact.email = new_email
+                    if new_name: 
+                        # Simple split for first/last name
+                        parts = new_name.split(' ', 1)
+                        booking.contact.first_name = parts[0]
+                        booking.contact.last_name = parts[1] if len(parts) > 1 else ''
+                    if new_phone: booking.contact.phone_number = new_phone
+                    booking.contact.save()
+                
+                booking.save()
+
+                # 6. Recalculate Totals (If discount changed) - Optional logic
+                # If you allow changing discounts at this stage, you'd recalculate here.
+                # For Apple Pay contact updates, usually price doesn't change unless shipping involved.
+
+                # 7. Update Stripe Metadata
+                # We must update Stripe so the Webhook sees the correct email later
+                stripe.PaymentIntent.modify(
+                    payment_intent_id,
+                    metadata={
+                        "guest_email": new_email,
+                        "guest_name": new_name,
+                        "notes": new_notes,
+                        # Update other metadata fields as necessary
+                    }
+                )
+
+                # 8. Update Payment record to reflect any new totals or just touch updated_at
+                payment.save()
+
+            return Response({"status": "updated", "booking_id": booking.id}, status=status.HTTP_200_OK)
+
+        except Payment.DoesNotExist:
+            return Response({"error": "Payment intent not found or not pending"}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            logger.error(f"Error updating payment intent: {e}", exc_info=True)
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
 class ProcessBookingWebhook(APIView):
     authentication_classes = []
     permission_classes = []
