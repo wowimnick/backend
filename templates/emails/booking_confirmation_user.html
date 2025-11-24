@@ -60,6 +60,19 @@
                     ({{ booking.participants }} {% if booking.participants > 1 %}participants{% else %}participant{% endif %})
                 </span>
             </p>
+
+            {% if booking.participant_details %}
+                <div style="margin-top: 12px; border-top: 1px dashed #d1d5db; padding-top: 12px;">
+                    <strong style="font-size: 14px; color: #111827;">{% trans "Attendees:" %}</strong>
+                    <ul style="margin: 4px 0 0 0; padding-left: 20px; color: #4b5563; font-size: 14px;">
+                        {% for p in booking.participant_details %}
+                            {% if p.name %}
+                                <li style="margin-bottom: 2px;">{{ p.name }}</li>
+                            {% endif %}
+                        {% endfor %}
+                    </ul>
+                </div>
+            {% endif %}
         </div>
     </div>
 
