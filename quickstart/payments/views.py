@@ -113,8 +113,6 @@ class CreatePaymentIntentView(APIView):
                 option = instance.schedule.option
                 
                 # Determine booking_type based on serializer context
-                # If future_course_instances exists, the serializer validated it as a Course
-                # because the frontend explicitly requested 'isCourse: True'.
                 future_instances = serializer.context.get("future_course_instances")
                 if future_instances:
                     booking_type = "Full Course"
@@ -224,6 +222,7 @@ class CreatePaymentIntentView(APIView):
                 
                 try:
                     with transaction.atomic():
+                        created_bookings = []
                         if booking_type == "Full Course":
                             booking_group_id = uuid.uuid4()
                             enrollment = CourseEnrollment.objects.create(
@@ -274,6 +273,10 @@ class CreatePaymentIntentView(APIView):
 
                             created_bookings = Booking.objects.bulk_create(bookings_to_create)
                             first_booking = created_bookings[0]
+                            # Ensure the object we hold has the reference
+                            if not first_booking.user_facing_reference:
+                                first_booking.user_facing_reference = bookings_to_create[0].user_facing_reference
+                            
                             logger.info(f"[{request_id}] Bulk-created {len(created_bookings)} CONFIRMED free Bookings with references.")
 
                         else: # Single Session
@@ -292,13 +295,48 @@ class CreatePaymentIntentView(APIView):
                                 cancellation_refund_percentage=option.cancellationRefundPercentage,
                                 cancellation_custom_hours=option.cancellationCustomHours,
                             )
+                            # Manually generate and save reference immediately
                             first_booking.user_facing_reference = first_booking._generate_user_facing_reference()
                             first_booking.save(update_fields=['user_facing_reference'])
+                            created_bookings = [first_booking]
                             logger.info(f"[{request_id}] Created CONFIRMED single free Booking: {first_booking.id}")
 
-                        if is_guest:
+                        if is_guest and first_booking:
                             first_booking.cancellation_token = uuid.uuid4()
                             first_booking.save(update_fields=['cancellation_token'])
+
+                        # --- HANDLE DISCOUNT REDEMPTION (FREE FLOW) ---
+                        if discount_to_apply:
+                            discount_to_apply.redeem()
+                            
+                            if booking_type == "Full Course":
+                                booking_count = len(created_bookings)
+                                if booking_count > 0:
+                                    # Distribute the discount amount (which equaled the subtotal to make it free)
+                                    share_discount = (calculated_discount_amount / booking_count).quantize(Decimal("0.01"))
+                                    total_allocated_discount = share_discount * booking_count
+                                    remainder_discount = calculated_discount_amount - total_allocated_discount
+                                    
+                                    applied_discounts = []
+                                    for index, booking in enumerate(created_bookings):
+                                        amount = share_discount
+                                        if index == 0:
+                                            amount += remainder_discount
+                                        
+                                        applied_discounts.append(AppliedDiscount(
+                                            booking=booking,
+                                            discount=discount_to_apply,
+                                            amount_saved=amount
+                                        ))
+                                    AppliedDiscount.objects.bulk_create(applied_discounts)
+                            else:
+                                # Single Session
+                                AppliedDiscount.objects.create(
+                                    booking=first_booking,
+                                    discount=discount_to_apply,
+                                    amount_saved=calculated_discount_amount
+                                )
+                            logger.info(f"[{request_id}] Redeemed discount {discount_to_apply.code} for free booking(s).")
 
                         # Create 'Succeeded' Payment Record for 0 amount (for bookkeeping)
                         Payment.objects.create(
