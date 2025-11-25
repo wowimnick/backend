@@ -9,11 +9,17 @@ import sys
 from datetime import timedelta
 from celery.schedules import crontab
 from pathlib import Path
+import platform
 
 if os.name == "nt":  # This checks if the OS is Windows ('nt')
     GDAL_LIBRARY_PATH = r"C:\OSGeo4W\bin\gdal311.dll"
     GEOS_LIBRARY_PATH = r"C:\OSGeo4W\bin\geos_c.dll"
     PROJ_LIBRARY_PATH = r"C:\OSGeo4W\bin\proj_9.dll"
+
+if platform.system() == "Darwin":  # macOS
+    GDAL_LIBRARY_PATH = "/opt/homebrew/opt/gdal/lib/libgdal.dylib"
+    GEOS_LIBRARY_PATH = "/opt/homebrew/opt/geos/lib/libgeos_c.dylib"
+    PROJ_LIBRARY_PATH = "/opt/homebrew/opt/proj/lib/libproj.dylib"
 
 # --- Environment Loading ---
 # For containerized environments (like Docker), environment variables are passed
