@@ -802,6 +802,7 @@ class ProcessBookingWebhook(APIView):
         """
         Handle successful payment for a course enrollment.
         Updates CourseEnrollment and all session Bookings with 1/N payout allocation.
+        Redeems discounts if applicable.
         """
         try:
             with transaction.atomic():
@@ -909,9 +910,42 @@ class ProcessBookingWebhook(APIView):
                         "payment_status",
                         "amount_paid",
                         "user_facing_reference",
-                        "allocated_net_payout", # <--- IMPORTANT: Saving the new field
+                        "allocated_net_payout",
                     ],
                 )
+
+                # --- Handle Discount Redemption ---
+                applied_discount_id = metadata.get("applied_discount_id")
+                total_discount_amount = Decimal(metadata.get("discount_amount", "0.00"))
+
+                if applied_discount_id:
+                    try:
+                        discount = Discount.objects.select_for_update().get(pk=applied_discount_id)
+                        discount.redeem()  # Increments usage_count atomically
+
+                        # Distribute the applied discount amount across bookings for record-keeping
+                        if booking_count > 0:
+                            share_discount = (total_discount_amount / booking_count).quantize(Decimal("0.01"))
+                            total_allocated_discount = share_discount * booking_count
+                            remainder_discount = total_discount_amount - total_allocated_discount
+                            
+                            applied_discounts = []
+                            for index, booking in enumerate(bookings):
+                                amount = share_discount
+                                if index == 0:
+                                    amount += remainder_discount
+                                
+                                applied_discounts.append(AppliedDiscount(
+                                    booking=booking,
+                                    discount=discount,
+                                    amount_saved=amount
+                                ))
+                            
+                            AppliedDiscount.objects.bulk_create(applied_discounts)
+                            logger.info(f"[{webhook_id}] Redeemed discount {discount.code} for course (Group: {booking_group_id}).")
+
+                    except Discount.DoesNotExist:
+                        logger.warning(f"[{webhook_id}] Discount ID {applied_discount_id} found in metadata but not in DB.")
 
                 # --- Payment Record Update (For Bookkeeping) ---
                 try:
@@ -975,6 +1009,7 @@ class ProcessBookingWebhook(APIView):
         except Exception as e:
             logger.error(f"[{webhook_id}] Error processing course payment success: {e}", exc_info=True)
             raise
+
     def handle_successful_payment(self, payment_intent, webhook_id):
         if Payment.objects.filter(
             stripe_payment_intent_id=payment_intent.id, status="succeeded"
@@ -1033,6 +1068,24 @@ class ProcessBookingWebhook(APIView):
             pending_booking.save()
             logger.info(f"[{webhook_id}] Booking {pending_booking.id} confirmed.")
 
+            # --- Handle Discount Redemption (Single Session) ---
+            applied_discount_id = metadata.get("applied_discount_id")
+            discount_amount = Decimal(metadata.get("discount_amount", "0.00"))
+
+            if applied_discount_id:
+                try:
+                    discount = Discount.objects.select_for_update().get(pk=applied_discount_id)
+                    discount.redeem() # Increments usage_count atomically
+                    
+                    AppliedDiscount.objects.create(
+                        booking=pending_booking,
+                        discount=discount,
+                        amount_saved=discount_amount
+                    )
+                    logger.info(f"[{webhook_id}] Redeemed discount {discount.code} for booking {pending_booking.id}")
+                except Discount.DoesNotExist:
+                    logger.warning(f"[{webhook_id}] Discount {applied_discount_id} not found during webhook processing.")
+
             # --- CALCULATE FEES AND UPDATE PAYMENT RECORD ---
             grand_total = Decimal(payment_intent.amount_received) / 100
             total_tax = Decimal(metadata.get("tax_amount", "0.00"))
@@ -1041,7 +1094,6 @@ class ProcessBookingWebhook(APIView):
             )
             business = initial_instance.schedule.option.classId.businessId
 
-            # MODIFICATION: Check for the widget flag to determine the fee percentage.
             if metadata.get("booking_source") == "widget":
                 fee_percentage = Decimal("6.00")
                 logger.info(
@@ -1153,7 +1205,6 @@ class ProcessBookingWebhook(APIView):
             "booking_id": pending_booking.id,
             "user_facing_reference": pending_booking.user_facing_reference,
         }
-
 class BookingStatusByPaymentIntentView(APIView):
     # Allow unauthenticated access, as guests will use this endpoint.
     permission_classes = []
