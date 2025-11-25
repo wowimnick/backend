@@ -41,9 +41,6 @@
             
             <p style="margin-bottom: 8px;">
                 <strong>{% trans "Class:" %}</strong> {{ related_data.class_title|default:"N/A" }}
-                {% if related_data.option_title and related_data.option_title != "Single Session" %}
-                    <span style="color: #6b7280;">({{ related_data.option_title }})</span>
-                {% endif %}
             </p>
 
             <p style="margin-bottom: 8px;">

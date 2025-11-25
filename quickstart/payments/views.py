@@ -559,13 +559,8 @@ class UpdatePaymentIntentView(APIView):
                 new_notes = request.data.get("notes")
                 new_participants = request.data.get("participant_details")
 
-                # 2. Update Booking Fields
-                if new_notes is not None:
-                    booking.notes = new_notes
-                if new_participants is not None:
-                    booking.participant_details = new_participants
-                
-                # 3. CRITICAL FIX: Handle Contact Collision
+                # 2. Handle Contact Collision & Updates
+                updated_contact = booking.contact
                 if booking.contact and new_email:
                     # Check if the "Real" email already exists as a contact for this business
                     existing_contact = Contact.objects.filter(
@@ -576,7 +571,7 @@ class UpdatePaymentIntentView(APIView):
                     if existing_contact:
                         # CASE A: Contact exists. Switch booking to point to the EXISTING contact.
                         old_temp_contact = booking.contact
-                        booking.contact = existing_contact
+                        updated_contact = existing_contact
                         
                         # Update the existing contact with latest name/phone
                         if new_name:
@@ -592,7 +587,7 @@ class UpdatePaymentIntentView(APIView):
                             old_temp_contact.delete()
                     else:
                         # CASE B: Contact does not exist. Update the current placeholder contact.
-                        booking.contact.email = new_email
+                        if new_email: booking.contact.email = new_email
                         if new_name: 
                             parts = new_name.split(' ', 1)
                             booking.contact.first_name = parts[0]
@@ -600,8 +595,38 @@ class UpdatePaymentIntentView(APIView):
                         if new_phone:
                             booking.contact.phone_number = new_phone
                         booking.contact.save()
+                        updated_contact = booking.contact
+
+                # 3. Update Booking(s) - Handle Single vs. Course Batch
+                bookings_to_update = []
+                if booking.booking_group_id:
+                    # If this is a course, we must update ALL bookings in the group
+                    bookings_to_update = Booking.objects.filter(booking_group_id=booking.booking_group_id)
+                else:
+                    # Single session
+                    bookings_to_update = [booking]
+
+                # Prepare common update fields
+                update_fields = {}
+                if new_notes is not None:
+                    update_fields['notes'] = new_notes
+                if new_participants is not None:
+                    update_fields['participant_details'] = new_participants
                 
-                booking.save()
+                # If contact changed (Case A), we must link all bookings to the new contact
+                if updated_contact and updated_contact.id != booking.contact_id:
+                     update_fields['contact'] = updated_contact
+
+                # Perform the update
+                if update_fields:
+                    if booking.booking_group_id:
+                        # For QuerySet
+                        Booking.objects.filter(booking_group_id=booking.booking_group_id).update(**update_fields)
+                    else:
+                        # For single instance
+                        for field, value in update_fields.items():
+                            setattr(booking, field, value)
+                        booking.save()
 
                 # 4. Update Stripe Metadata (So webhook has backup data)
                 stripe.PaymentIntent.modify(
@@ -1128,3 +1153,132 @@ class ProcessBookingWebhook(APIView):
             "booking_id": pending_booking.id,
             "user_facing_reference": pending_booking.user_facing_reference,
         }
+
+class BookingStatusByPaymentIntentView(APIView):
+    # Allow unauthenticated access, as guests will use this endpoint.
+    permission_classes = []
+
+    def get(self, request, payment_intent_id):
+        if not payment_intent_id:
+            return Response(
+                {"error": "Payment Intent ID is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # --- MODIFICATION START ---
+        # For guests, we require the client_secret as a temporary auth token.
+        is_guest = not request.user or not request.user.is_authenticated
+        client_secret = request.query_params.get("client_secret")
+
+        if is_guest and not client_secret:
+            logger.warning(
+                f"Guest status check for PI {payment_intent_id} failed: missing client_secret."
+            )
+            return Response(
+                {"error": "Authorization required."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+        # --- MODIFICATION END ---
+
+        try:
+            payment = (
+                Payment.objects.select_related("booking")
+                .filter(stripe_payment_intent_id=payment_intent_id)
+                .first()
+            )
+
+            if not payment:
+                logger.info(
+                    f"Booking status check for PI {payment_intent_id}: Payment record not found yet (webhook might be pending)."
+                )
+                return Response(
+                    {
+                        "status": "pending_webhook",
+                        "message": "Booking confirmation is processing.",
+                    },
+                    status=status.HTTP_202_ACCEPTED,
+                )
+
+            # --- MODIFICATION START: Updated Security Check ---
+            # Now we verify the owner of the booking in two ways:
+            # 1. If a user is logged in, they must be the owner of the booking.
+            # 2. If it's a guest, the provided client_secret must match the one from Stripe.
+
+            is_authorized = False
+            if not is_guest:
+                # Logged-in user check
+                if payment.booking and payment.booking.user == request.user:
+                    is_authorized = True
+            else:
+                # Guest check using client_secret
+                try:
+                    retrieved_intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+                    if retrieved_intent.client_secret == client_secret:
+                        is_authorized = True
+                except stripe.error.StripeError as e:
+                    logger.error(
+                        f"Stripe API error checking client_secret for PI {payment_intent_id}: {e}"
+                    )
+
+            if not is_authorized:
+                logger.warning(
+                    f"User/Guest attempted to access booking status for PI {payment_intent_id} without authorization."
+                )
+                return Response(
+                    {"error": "Forbidden."}, status=status.HTTP_403_FORBIDDEN
+                )
+            # --- MODIFICATION END ---
+
+            if payment.status == "succeeded" and payment.booking:
+                booking = payment.booking
+                logger.info(
+                    f"Booking status check for PI {payment_intent_id}: Found successful payment and booking {booking.id} (Ref: {booking.user_facing_reference})."
+                )
+                return Response(
+                    {
+                        "status": "confirmed",
+                        "booking_id": booking.id,
+                        "user_facing_reference": booking.user_facing_reference,
+                        "booking_group_id": (
+                            str(booking.booking_group_id)
+                            if booking.booking_group_id
+                            else None
+                        ),
+                        "participant_details": booking.participant_details,
+                        "message": "Booking confirmed.",
+                    },
+                    status=status.HTTP_200_OK,
+                )
+            elif payment.status == "failed":
+                logger.warning(
+                    f"Booking status check for PI {payment_intent_id}: Payment failed."
+                )
+                return Response(
+                    {
+                        "status": "payment_failed",
+                        "message": "Payment processing failed.",
+                        "failure_message": payment.failure_message,
+                    },
+                    status=status.HTTP_200_OK,
+                )
+            else:
+                logger.info(
+                    f"Booking status check for PI {payment_intent_id}: Payment status is '{payment.status}'."
+                )
+                return Response(
+                    {
+                        "status": "processing",
+                        "message": f"Booking confirmation is still processing (Payment status: {payment.status}).",
+                    },
+                    status=status.HTTP_202_ACCEPTED,
+                )
+
+        except Exception as e:
+            logger.error(
+                f"Error fetching booking status for PI {payment_intent_id}: {e}",
+                exc_info=True,
+            )
+            return Response(
+                {"error": "An error occurred while fetching booking status."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
