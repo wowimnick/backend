@@ -2570,7 +2570,7 @@ class Discount(models.Model):
         """
         if not self.is_active:
             return (False, "This coupon is no longer active.")
-        if self.valid_from > timezone.now():
+        if self.valid_from and self.valid_from > timezone.now():
             return (False, "This coupon is not yet active.")
         if self.valid_to and self.valid_to < timezone.now():
             return (False, "This coupon has expired.")
