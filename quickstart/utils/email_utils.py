@@ -325,6 +325,32 @@ def send_booking_confirmation_email(user, booking: Booking):
 
     is_guest_flag = not isinstance(recipient, CustomUser)
     logger.info(f"Determined recipient is_guest status: {is_guest_flag}")
+
+    formatted_time_range = "N/A"
+    formatted_timezone_display = related_data.get("business_timezone", "UTC")
+
+    if booking.schedule_instance:
+        try:
+            # 1. Calculate End Time
+            start_time = booking.schedule_instance.time
+            duration_minutes = booking.schedule_instance.duration
+            
+            # Combine with today's date just to do the math easily
+            dummy_date = datetime.now().date()
+            start_dt = datetime.combine(dummy_date, start_time)
+            end_dt = start_dt + timedelta(minutes=duration_minutes)
+            
+            # Format: "7:00 PM - 8:00 PM"
+            time_str_start = start_dt.strftime("%-I:%M %p") # Use %I for zero-padded if %-I not supported on Windows
+            time_str_end = end_dt.strftime("%-I:%M %p")
+            formatted_time_range = f"{time_str_start} - {time_str_end}"
+
+            # 2. Format Timezone (e.g., "America/New_York" -> "America/New York")
+            if formatted_timezone_display:
+                formatted_timezone_display = formatted_timezone_display.replace("_", " ")
+        except Exception as e:
+            logger.error(f"Error formatting dates for email: {e}")
+            formatted_time_range = str(booking.schedule_instance.time)
     
     context = {
         "user": recipient,
@@ -335,6 +361,9 @@ def send_booking_confirmation_email(user, booking: Booking):
         "related_data": related_data,
         "payment": payment,
         "is_guest": is_guest_flag,
+        # Add new variables to context
+        "formatted_time_range": formatted_time_range,
+        "formatted_timezone_display": formatted_timezone_display,
     }
 
     if context["is_guest"] and booking.cancellation_token:
