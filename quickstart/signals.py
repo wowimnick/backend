@@ -204,11 +204,23 @@ def create_booking_notification(sender, instance, created, **kwargs):
 
     content_type = ContentType.objects.get_for_model(instance)
 
+    # --- FIX: Determine Booker Name safely (User or Guest Contact) ---
+    booker_name = "Unknown Guest"
+    if instance.user:
+        booker_name = instance.user.get_full_name() or instance.user.email
+    elif instance.contact:
+        # Construct name from contact
+        name_parts = [
+            n for n in [instance.contact.first_name, instance.contact.last_name] if n
+        ]
+        booker_name = " ".join(name_parts) if name_parts else instance.contact.email
+    # -----------------------------------------------------------------
+
     # CASE 1: New Confirmed Booking Notification for Business
     if created and instance.status == "confirmed":
-        # FIXED: Removed reference to option.title, using class_title (from ClassesMain) only
+        # FIXED: Use safe booker_name variable
         message_for_business = (
-            f"New booking from {instance.user.get_full_name() or instance.user.email} "
+            f"New booking from {booker_name} "
             f"for '{class_title}' "
             f"on {instance.schedule_instance.date.strftime('%b %d')}."
         )
@@ -286,10 +298,10 @@ def create_booking_notification(sender, instance, created, **kwargs):
             logger.info(
                 f"Identified student cancellation for booking {instance.id} based on reason: '{instance.cancellation_reason}'"
             )
-            # FIXED: Removed reference to option.title, using class_title (from ClassesMain) only
+            # FIXED: Use safe booker_name variable
             message_for_business = (
                 f"Booking for '{class_title}' "
-                f"on {instance.schedule_instance.date.strftime('%b %d')} by {instance.user.get_full_name() or instance.user.email} was cancelled by the student."
+                f"on {instance.schedule_instance.date.strftime('%b %d')} by {booker_name} was cancelled by the student."
             )
             link_web_for_business = f"/app/business/bookings/{instance.id}"
 
@@ -331,11 +343,6 @@ def create_booking_notification(sender, instance, created, **kwargs):
                     logger.info(
                         f"In-app student cancellation notification created for manager {manager.email} for booking {instance.id}"
                     )
-        # else: # Optional: Notify business if they cancelled it? Or just log
-        # logger.info(f"Booking {instance.id} cancelled, but reason '{instance.cancellation_reason}' did not match student keywords for business notification.")
-
-        # TODO: Add notification FOR THE STUDENT if the business cancels the booking.
-
 
 @receiver(post_save, sender=Reviews)
 def create_review_notification(sender, instance, created, **kwargs):
