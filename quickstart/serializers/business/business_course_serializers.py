@@ -24,8 +24,70 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+# ============================================================================
+# Course Management Serializers (Business Facing)
+# ============================================================================
+
+class CourseScheduleManagementSerializer(serializers.ModelSerializer):
+    """
+    Serializer for Creating and Updating Course Schedules.
+    Allows past dates for updates (to fix typos) but strictly validates 
+    capacity changes.
+    """
+    class_option_id = serializers.IntegerField(write_only=True, required=False)
+    session_count = serializers.IntegerField(source="instances.count", read_only=True)
+    enrolled_students = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Schedule
+        fields = [
+            "id",
+            "class_option_id",
+            "start_date",
+            "end_date",
+            "day",
+            "time",
+            "duration",
+            "price",
+            "maxParticipants",
+            "minParticipants",
+            "session_count",
+            "enrolled_students",
+        ]
+
+    def get_enrolled_students(self, obj):
+        return obj.course_enrollments.filter(status__in=["pending", "active"]).count()
+
+    def validate_start_date(self, value):
+        """
+        Allow past start dates only if:
+        1. We are updating an existing record (self.instance is set).
+        2. Or if creating a Full Course (optional, but safer to block past for new courses).
+        """
+        if self.instance:
+            return value
+        
+        # For new courses, strictly require future dates
+        if value < timezone.now().date():
+             raise serializers.ValidationError("New courses cannot start in the past.")
+        
+        return value
+
+    def validate_maxParticipants(self, value):
+        if self.instance:
+            current_enrolled = self.instance.course_enrollments.filter(
+                status__in=["pending", "active"]
+            ).aggregate(total=Sum('participants'))['total'] or 0
+            
+            if value < current_enrolled:
+                raise serializers.ValidationError(
+                    f"Cannot reduce capacity to {value}. There are currently {current_enrolled} enrolled participants."
+                )
+        return value
+
+
 class BusinessCourseSerializer(serializers.ModelSerializer):
-    """Business view of their courses"""
+    """Business view of their courses (Read-Only/List View)"""
 
     class_title = serializers.CharField(source="option.parent_class_title")
     enrolled_students = serializers.SerializerMethodField()
@@ -80,7 +142,7 @@ class PublicCourseScheduleSerializer(serializers.Serializer):
     price = serializers.DecimalField(max_digits=10, decimal_places=2)
     maxParticipants = serializers.IntegerField()
     minParticipants = serializers.IntegerField()
-    days = serializers.ListField(child=serializers.CharField()) # The array of days
+    days = serializers.SerializerMethodField() 
 
     # SerializerMethodFields to get related data and calculate availability
     class_title = serializers.SerializerMethodField()
@@ -97,6 +159,26 @@ class PublicCourseScheduleSerializer(serializers.Serializer):
         except ClassOption.DoesNotExist:
             return "Unknown Class"
 
+    def get_days(self, obj):
+        """
+        Sorts the raw list of days from the database into chronological order.
+        """
+        raw_days = obj.get('days', [])
+        
+        # Map days to integers for sorting
+        day_order = {
+            "Monday": 0, "Mon": 0,
+            "Tuesday": 1, "Tue": 1,
+            "Wednesday": 2, "Wed": 2,
+            "Thursday": 3, "Thu": 3,
+            "Friday": 4, "Fri": 4,
+            "Saturday": 5, "Sat": 5,
+            "Sunday": 6, "Sun": 6
+        }
+        
+        # Sort the list based on the map (unknown values go to the end)
+        return sorted(raw_days, key=lambda d: day_order.get(d, 7))
+    
     def get_enrolled_count(self, obj):
         # Sum enrollments from ALL schedules in this group
         return CourseEnrollment.objects.filter(

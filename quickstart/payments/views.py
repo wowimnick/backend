@@ -14,6 +14,7 @@ import stripe
 from django.conf import settings
 from django.db.models.functions import Coalesce
 from django.db.models import Sum
+# Added Schedule to imports
 from quickstart.models import (
     CourseEnrollment,
     CustomUser,
@@ -23,6 +24,7 @@ from quickstart.models import (
     PartnerTier,
     Payment,
     ScheduleInstance,
+    Schedule, 
     Contact,
     BusinessStaff,
 )
@@ -112,12 +114,10 @@ class CreatePaymentIntentView(APIView):
                 instance = serializer.context.get("validated_instance")
                 option = instance.schedule.option
                 
-                # Determine booking_type based on serializer context
-                future_instances = serializer.context.get("future_course_instances")
-                if future_instances:
-                    booking_type = "Full Course"
-                else:
-                    booking_type = option.booking_type
+                # Determine booking_type based on Option configuration
+                # The serializer might assume Single Session if not explicitly told, 
+                # but we trust the Option configuration for the final decision.
+                booking_type = option.booking_type
                 
                 business = instance.schedule.option.classId.businessId
 
@@ -148,15 +148,52 @@ class CreatePaymentIntentView(APIView):
                 "participant_details", []
             )
 
-            all_instances = (
-                future_instances
-                if booking_type == "Full Course"
-                else [instance]
-            )
+            # --- CRITICAL FIX: FETCH ALL SIBLING SCHEDULES FOR COURSES ---
+            all_instances = []
+            
+            if booking_type == "Full Course":
+                # If Full Course, we must find ALL schedules that match this group
+                # (Same Option, Start Date, End Date, Time, Price)
+                representative_schedule = instance.schedule
+                
+                sibling_schedules = Schedule.objects.filter(
+                    option=representative_schedule.option,
+                    start_date=representative_schedule.start_date,
+                    end_date=representative_schedule.end_date,
+                    time=representative_schedule.time,
+                    price=representative_schedule.price
+                )
+                
+                # Fetch ALL future instances for ALL these schedules
+                all_instances = list(ScheduleInstance.objects.filter(
+                    schedule__in=sibling_schedules,
+                    status='scheduled',
+                    date__gte=timezone.now().date()
+                ).order_by('date'))
+                
+                if not all_instances:
+                    return Response(
+                         {"error": "No upcoming sessions found for this course."},
+                         status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                # RE-VALIDATE CAPACITY for siblings
+                # The serializer only checked the instance the user clicked.
+                # We must ensure the other days (e.g., Wednesday) also have space.
+                for group_inst in all_instances:
+                    if not group_inst.can_accommodate(participants):
+                         return Response(
+                            {"error": f"Session on {group_inst.date} does not have enough capacity."},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+            else:
+                # Single Session - just use the validated instance
+                all_instances = [instance]
 
             # --- Pricing and Discount Calculation ---
             if booking_type == "Full Course":
-                # For a course, the price is fixed on the Schedule, not per-instance
+                # For a course, the price is fixed on the Schedule per student, not per session.
+                # We use the representative instance's schedule price.
                 subtotal = Decimal(instance.schedule.price) * participants
             else:
                 # For single sessions, sum the price of each instance
@@ -1097,6 +1134,9 @@ class ProcessBookingWebhook(APIView):
             pending_booking.status = "confirmed"
             pending_booking.payment_status = "paid"
 
+            if not pending_booking.user_facing_reference:
+                pending_booking.user_facing_reference = pending_booking._generate_user_facing_reference()
+
             if pending_booking.contact and not pending_booking.user:
                 pending_booking.cancellation_token = uuid.uuid4()
                 logger.info(
@@ -1243,6 +1283,7 @@ class ProcessBookingWebhook(APIView):
             "booking_id": pending_booking.id,
             "user_facing_reference": pending_booking.user_facing_reference,
         }
+    
 class BookingStatusByPaymentIntentView(APIView):
     # Allow unauthenticated access, as guests will use this endpoint.
     permission_classes = []
@@ -1254,7 +1295,6 @@ class BookingStatusByPaymentIntentView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # --- MODIFICATION START ---
         # For guests, we require the client_secret as a temporary auth token.
         is_guest = not request.user or not request.user.is_authenticated
         client_secret = request.query_params.get("client_secret")
@@ -1267,7 +1307,6 @@ class BookingStatusByPaymentIntentView(APIView):
                 {"error": "Authorization required."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
-        # --- MODIFICATION END ---
 
         try:
             payment = (
@@ -1288,11 +1327,7 @@ class BookingStatusByPaymentIntentView(APIView):
                     status=status.HTTP_202_ACCEPTED,
                 )
 
-            # --- MODIFICATION START: Updated Security Check ---
-            # Now we verify the owner of the booking in two ways:
-            # 1. If a user is logged in, they must be the owner of the booking.
-            # 2. If it's a guest, the provided client_secret must match the one from Stripe.
-
+            # Security Check
             is_authorized = False
             if not is_guest:
                 # Logged-in user check
@@ -1316,7 +1351,6 @@ class BookingStatusByPaymentIntentView(APIView):
                 return Response(
                     {"error": "Forbidden."}, status=status.HTTP_403_FORBIDDEN
                 )
-            # --- MODIFICATION END ---
 
             if payment.status == "succeeded" and payment.booking:
                 booking = payment.booking

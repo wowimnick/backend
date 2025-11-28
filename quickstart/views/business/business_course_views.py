@@ -12,8 +12,10 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.exceptions import ValidationError
 from decimal import Decimal
 from django.contrib.postgres.aggregates import ArrayAgg
-from django.db.models import Min
+from django.db.models import Min, Sum
+from django.db.models.functions import Coalesce
 import uuid
+import datetime
 
 from quickstart.utils.permissions import CanManageOwnClasses
 from quickstart.models import (
@@ -28,6 +30,8 @@ from quickstart.serializers.business.business_course_serializers import (
     CourseEnrollmentSerializer,
     CourseEnrollmentDetailSerializer,
     CourseBookingCreateSerializer,
+    CourseScheduleManagementSerializer,
+    BusinessCourseSerializer,
 )
 
 import logging
@@ -62,25 +66,22 @@ class BusinessCourseManagementViewSet(viewsets.ModelViewSet):
             .order_by("-start_date")
         )
 
+    def get_serializer_class(self):
+        if self.action in ["create", "update", "partial_update"]:
+            return CourseScheduleManagementSerializer
+        return BusinessCourseSerializer
+
     def create(self, request, *args, **kwargs):
         """
         Create a new course schedule.
-
-        Request:
-        {
-            "class_option_id": 123,
-            "start_date": "2025-11-15",
-            "end_date": "2026-01-10",
-            "day": "Mon",
-            "time": "18:00:00",
-            "duration": 60,
-            "price": 240.00,
-            "max_participants": 15
-        }
         """
-        with transaction.atomic():
-            class_option_id = request.data.get("class_option_id")
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
 
+        class_option_id = data.get("class_option_id")
+
+        with transaction.atomic():
             # Validate option exists and is a course
             try:
                 option = ClassOption.objects.select_for_update().get(
@@ -100,17 +101,19 @@ class BusinessCourseManagementViewSet(viewsets.ModelViewSet):
             # Create schedule
             schedule = Schedule.objects.create(
                 option=option,
-                start_date=request.data.get("start_date"),
-                end_date=request.data.get("end_date"),
-                day=request.data.get("day"),
-                time=request.data.get("time"),
-                duration=request.data.get("duration", 60),
-                price=request.data.get("price"),
-                maxParticipants=request.data.get("max_participants", 15),
-                minParticipants=request.data.get("min_participants", 1),
+                start_date=data.get("start_date"),
+                end_date=data.get("end_date"),
+                day=data.get("day"),
+                time=data.get("time"),
+                duration=data.get("duration", 60),
+                price=data.get("price"),
+                maxParticipants=data.get("maxParticipants", 15),
+                minParticipants=data.get("minParticipants", 1),
             )
 
             # Generate all course instances
+            # Note: Model method might generate past instances if start_date is in past.
+            # This is acceptable for "Full Course" if businesses are backfilling data or adding a day mid-course.
             instances = schedule.generate_course_instances()
 
             # Update course session count
@@ -130,6 +133,78 @@ class BusinessCourseManagementViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_201_CREATED,
             )
 
+    def update(self, request, *args, **kwargs):
+        """
+        Update an existing course schedule.
+        SAFETY ENFORCEMENT:
+        - If bookings exist: Block Day, Time, Start Date, End Date, Duration changes.
+        - Allowed updates: Name, Price, Max Participants (increase only).
+        """
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        
+        has_active_bookings = instance.bookings.filter(status='confirmed').exists()
+        
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        with transaction.atomic():
+            # 1. ENFORCE LOCKDOWN
+            if has_active_bookings:
+                # Check for attempts to change structural fields
+                errors = {}
+                
+                # Check Dates
+                if 'start_date' in data and data['start_date'] != instance.start_date:
+                    errors['start_date'] = "Cannot change start date of a course with active students."
+                
+                if 'end_date' in data and data['end_date'] != instance.end_date:
+                    # Specifically blocking shortening OR extending to keep it simple and safe as requested
+                    errors['end_date'] = "Cannot change end date of a course with active students."
+
+                # Check Day
+                if 'day' in data and data['day'] != instance.day:
+                    errors['day'] = "Cannot change the day of a course with active students."
+                
+                # Check Time
+                if 'time' in data and data['time'] != instance.time:
+                    errors['time'] = "Cannot change the time of a course with active students."
+
+                if errors:
+                    raise ValidationError(errors)
+
+            # 2. Perform the update (for allowed fields like Price, Name, Capacity)
+            self.perform_update(serializer)
+            instance.refresh_from_db()
+
+            # 3. Propagate Price/Capacity changes to FUTURE instances
+            # Even if locked, we allow changing price for future drop-ins or new enrollments
+            future_instances = instance.instances.filter(date__gte=timezone.now().date(), status='scheduled')
+            for inst in future_instances:
+                changed = False
+                if inst.price != instance.price:
+                    inst.price = instance.price
+                    changed = True
+                
+                # Capacity is already validated in serializer to be >= current enrollment
+                if inst.max_participants != instance.maxParticipants:
+                    inst.max_participants = instance.maxParticipants
+                    changed = True
+                
+                if changed:
+                    inst.save()
+
+        return Response(serializer.data)
+
+    def perform_destroy(self, instance):
+        """
+        Prevent deletion if there are active bookings.
+        """
+        if instance.bookings.filter(status='confirmed').exists():
+            raise ValidationError("Cannot delete a course schedule with confirmed bookings. Please cancel the course instead.")
+        instance.delete()
+
     @action(detail=True, methods=["get"])
     def enrollments(self, request, pk=None):
         """Get all enrollments for this course"""
@@ -139,11 +214,6 @@ class BusinessCourseManagementViewSet(viewsets.ModelViewSet):
             CourseEnrollment.objects.filter(schedule=schedule)
             .select_related("user", "contact")
             .order_by("-enrollment_date")
-        )
-
-        # Serialize and return
-        from quickstart.serializers.business.business_course_serializers import (
-            CourseEnrollmentSerializer,
         )
 
         serializer = CourseEnrollmentSerializer(enrollments, many=True)
@@ -208,8 +278,7 @@ class PublicCourseViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         """
-        THE FIX: This method is now completely overhauled to group schedules
-        that belong to the same course offering (same option, dates, time, price).
+        Groups schedules that belong to the same course offering.
         """
         base_queryset = (
             Schedule.objects.filter(
@@ -217,7 +286,8 @@ class PublicCourseViewSet(viewsets.ReadOnlyModelViewSet):
                 option__classId__businessId__isActive=True,
                 start_date__isnull=False,
                 end_date__isnull=False,
-                start_date__gte=timezone.now().date(),
+                # We generally only show courses that haven't fully finished yet
+                end_date__gte=timezone.now().date(),
             )
             .select_related("option__classId__businessId", "option")
             .order_by("start_date", "time")
@@ -234,8 +304,7 @@ class PublicCourseViewSet(viewsets.ReadOnlyModelViewSet):
                 option__classId__businessId__businessId=business_id
             )
 
-        # --- THE CORE FIX: Grouping and Aggregation ---
-        # Define the fields that uniquely identify a single course offering
+        # Group by these fields and aggregate the days and schedule IDs
         grouping_fields = [
             'option',
             'start_date',
@@ -312,7 +381,7 @@ class StudentCourseEnrollmentViewSet(viewsets.ModelViewSet):
                 # 'validated_schedule' is the representative schedule from the group
                 representative_schedule = serializer.context["validated_schedule"]
 
-                # --- THE FIX: Find all sibling schedules in the multi-day group ---
+                # Find all sibling schedules in the multi-day group
                 group_schedules = Schedule.objects.filter(
                     option=representative_schedule.option,
                     start_date=representative_schedule.start_date,
@@ -325,10 +394,16 @@ class StudentCourseEnrollmentViewSet(viewsets.ModelViewSet):
                 all_instances_in_group = []
                 for schedule in group_schedules:
                     # Perform capacity check for each schedule in the group
-                    available_spots = schedule.maxParticipants - (schedule.course_enrollments.filter(status__in=['active', 'pending']).aggregate(total=Coalesce(Sum('participants'), 0))['total'])
+                    # Aggregate total participants from course enrollments
+                    current_enrolled = schedule.course_enrollments.filter(
+                        status__in=['active', 'pending']
+                    ).aggregate(total=Coalesce(Sum('participants'), 0))['total']
+                    
+                    available_spots = schedule.maxParticipants - current_enrolled
                     if available_spots < serializer.validated_data["participants"]:
                          raise ValidationError(f"Not enough spots available for the session on {schedule.day}.")
                     
+                    # Add scheduled instances
                     all_instances_in_group.extend(list(schedule.instances.filter(status='scheduled').order_by('date')))
                 
                 # Sort all collected instances by date to ensure correct session numbering
@@ -379,7 +454,6 @@ class StudentCourseEnrollmentViewSet(viewsets.ModelViewSet):
                     ))
 
                 created_bookings = Booking.objects.bulk_create(bookings)
-                # ... (rest of the logic remains the same)
 
                 logger.info(
                     f"Created course enrollment {enrollment.id} with {len(created_bookings)} "
@@ -415,13 +489,6 @@ class StudentCourseEnrollmentViewSet(viewsets.ModelViewSet):
         """
         Cancel entire course enrollment.
         Only allowed before first session starts (subject to cancellation policy).
-
-        Response:
-        {
-            "status": "cancelled",
-            "message": "Course enrollment cancelled successfully",
-            "refund_info": "A full refund will be processed if applicable"
-        }
         """
         try:
             with transaction.atomic():
@@ -493,14 +560,6 @@ class StudentCourseEnrollmentViewSet(viewsets.ModelViewSet):
         """
         Drop course mid-way through.
         Provides partial refund for remaining sessions.
-
-        Response:
-        {
-            "status": "dropped",
-            "sessions_remaining": 5,
-            "refund_amount": 150.00,
-            "message": "You will receive a $150.00 refund for the remaining 5 sessions"
-        }
         """
         try:
             with transaction.atomic():
