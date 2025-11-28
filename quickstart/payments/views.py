@@ -376,11 +376,9 @@ class CreatePaymentIntentView(APIView):
                             logger.info(f"[{request_id}] Redeemed discount {discount_to_apply.code} for free booking(s).")
 
                         # Create 'Succeeded' Payment Record for 0 amount (for bookkeeping)
-                        # Use a unique fake payment intent ID that can be polled
-                        fake_payment_intent_id = f"pi_free_{uuid.uuid4().hex[:24]}"
                         Payment.objects.create(
                             booking=first_booking,
-                            stripe_payment_intent_id=fake_payment_intent_id, 
+                            stripe_payment_intent_id=f"free_booking_{uuid.uuid4()}", 
                             amount=Decimal("0.00"),
                             tax_amount=Decimal("0.00"),
                             currency="CAD",
@@ -391,7 +389,7 @@ class CreatePaymentIntentView(APIView):
                                 "applied_discount_id": str(discount_to_apply.id) if discount_to_apply else None
                             }
                         )
-                        logger.info(f"[{request_id}] Created $0.00 Payment record with fake PI: {fake_payment_intent_id}")
+                        logger.info(f"[{request_id}] Created $0.00 Payment record.")
 
                     # --- Emails ---
                     recipient_user = request.user if not is_guest else None
@@ -420,11 +418,11 @@ class CreatePaymentIntentView(APIView):
                             if r and r.email:
                                 send_business_new_booking_email(r, first_booking)
 
-                    # Return payment_intent_id so frontend uses the same polling flow as paid bookings
-                    # This ensures consistent behavior and automatic recovery if state is lost
                     response_data = {
-                        "payment_intent_id": fake_payment_intent_id,
-                        "client_secret": f"{fake_payment_intent_id}_secret_free",  # Fake client secret for guest auth
+                        "booking_id": first_booking.id,
+                        "user_facing_reference": first_booking.user_facing_reference,
+                        "booking_group_id": str(booking_group_id) if booking_group_id else None,
+                        "participant_details": participant_details,
                         "status": "confirmed",
                         "message": "Free booking confirmed successfully."
                     }
