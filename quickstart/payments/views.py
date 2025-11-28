@@ -1134,6 +1134,9 @@ class ProcessBookingWebhook(APIView):
             pending_booking.status = "confirmed"
             pending_booking.payment_status = "paid"
 
+            if not pending_booking.user_facing_reference:
+                pending_booking.user_facing_reference = pending_booking._generate_user_facing_reference()
+
             if pending_booking.contact and not pending_booking.user:
                 pending_booking.cancellation_token = uuid.uuid4()
                 logger.info(
