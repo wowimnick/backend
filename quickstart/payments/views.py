@@ -1354,7 +1354,6 @@ class BookingStatusByPaymentIntentView(APIView):
 
             if payment.status == "succeeded" and payment.booking:
                 booking = payment.booking
-                booking.refresh_from_db() 
                 logger.info(
                     f"Booking status check for PI {payment_intent_id}: Found successful payment and booking {booking.id} (Ref: {booking.user_facing_reference})."
                 )
