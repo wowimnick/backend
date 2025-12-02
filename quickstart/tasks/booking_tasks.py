@@ -5,7 +5,8 @@ from django.utils import timezone
 from datetime import timedelta
 import stripe
 from django.core.cache import cache
-from quickstart.models import Booking, Payment
+from quickstart.models import Booking, CourseEnrollment, Payment
+from django.db import transaction
 from django.conf import settings
 from quickstart.utils.email_utils import send_booking_reminder_email
 import logging
@@ -15,7 +16,11 @@ logger = logging.getLogger(__name__)
 
 @shared_task  
 def release_expired_spots():
-    # 1. Define timeout (e.g., 15 minutes allowed for checkout)
+    """
+    Hard deletes bookings that have been pending for more than 15 minutes.
+    Releases the spot back to the schedule and cleans up the database.
+    """
+    # 1. Define timeout (15 minutes allowed for checkout)
     timeout_threshold = timezone.now() - timedelta(minutes=15)
 
     # 2. Find stale bookings
@@ -25,31 +30,46 @@ def release_expired_spots():
     )
 
     if not stale_bookings.exists():
-        # Optional: reduce log noise by only logging if something was actually cleaned
         return 
 
-    logger.info(f"Found {stale_bookings.count()} stale bookings to release.")
+    count = stale_bookings.count()
+    logger.info(f"Found {count} stale bookings to release/delete.")
 
     for booking in stale_bookings:
-        # 3. Cancel Stripe Intent
-        payment = booking.payments.filter(status='pending').first()
-        if payment and payment.stripe_payment_intent_id and not payment.stripe_payment_intent_id.startswith('temp'):
-            try:
-                stripe.PaymentIntent.cancel(payment.stripe_payment_intent_id)
-                logger.info(f"Cancelled Stripe Intent {payment.stripe_payment_intent_id}")
-            except stripe.error.StripeError as e:
-                # Intent might already be cancelled or succeeded
-                logger.warning(f"Could not cancel intent {payment.stripe_payment_intent_id}: {e}")
-            
-            payment.status = 'failed'
-            payment.failure_message = 'Booking timer expired'
-            payment.save()
+        try:
+            # Check if booking still exists (it might have been deleted as part of a group in a previous iteration)
+            if not Booking.objects.filter(pk=booking.pk).exists():
+                continue
 
-        # 4. Mark Booking as Cancelled (Releases the spot)
-        booking.status = 'cancelled'
-        booking.cancellation_reason = 'Checkout timer expired'
-        booking.cancelled_at = timezone.now()
-        booking.save()
+            with transaction.atomic():
+                # 3. Cancel Stripe Intent (Release hold on card/funds)
+                payment = Payment.objects.filter(booking=booking).first()
+                if payment and payment.stripe_payment_intent_id and not payment.stripe_payment_intent_id.startswith('temp'):
+                    try:
+                        stripe.PaymentIntent.cancel(payment.stripe_payment_intent_id)
+                        logger.info(f"Cancelled Stripe Intent {payment.stripe_payment_intent_id}")
+                    except stripe.error.StripeError as e:
+                        # Intent might already be cancelled or succeeded, just log warning
+                        logger.warning(f"Could not cancel intent {payment.stripe_payment_intent_id}: {e}")
+
+                # 4. Hard Delete Logic
+                if booking.booking_group_id:
+                    # Full Course: Clean up the Enrollment and ALL sibling bookings in the group
+                    group_id = booking.booking_group_id
+                    
+                    CourseEnrollment.objects.filter(booking_group_id=group_id).delete()
+                    
+                    deleted_count, _ = Booking.objects.filter(booking_group_id=group_id).delete()
+                    logger.info(f"Hard deleted expired course group {group_id} ({deleted_count} bookings).")
+                else:
+                    # Single Session: Delete just this booking
+                    booking_id = booking.id
+                    booking.delete()
+                    # Payment deletes via CASCADE usually, but if orphaned, the loop continues
+                    logger.info(f"Hard deleted expired booking {booking_id}.")
+
+        except Exception as e:
+            logger.error(f"Error cleaning up booking {booking.id}: {e}", exc_info=True)
 
 
 @shared_task
