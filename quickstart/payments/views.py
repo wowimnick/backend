@@ -1405,3 +1405,60 @@ class BookingStatusByPaymentIntentView(APIView):
                 {"error": "An error occurred while fetching booking status."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+        
+class CancelPendingBookingView(APIView):
+    permission_classes = [] # Allow guests
+
+    def post(self, request):
+        payment_intent_id = request.data.get("payment_intent_id")
+        
+        if not payment_intent_id:
+            return Response({"error": "ID required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            with transaction.atomic():
+                # Find the pending payment
+                payment = Payment.objects.select_related('booking').filter(
+                    stripe_payment_intent_id=payment_intent_id,
+                    status='pending'
+                ).first()
+
+                if payment:
+                    # 1. Cancel Stripe Intent so the hold on the card (if any) is released
+                    try:
+                        stripe.PaymentIntent.cancel(payment_intent_id)
+                    except stripe.error.StripeError as e:
+                        # It might already be cancelled or succeeded, log and move on
+                        logger.warning(f"Stripe cancel failed for {payment_intent_id}: {e}")
+
+                    # 2. HARD DELETE records instead of marking as cancelled
+                    booking = payment.booking
+                    
+                    if booking:
+                        # If it's a course, we need to clean up the whole group and enrollment
+                        if booking.booking_group_id:
+                            # Delete Enrollment (Parent)
+                            CourseEnrollment.objects.filter(
+                                booking_group_id=booking.booking_group_id
+                            ).delete()
+                            
+                            # Delete all bookings in this group
+                            Booking.objects.filter(
+                                booking_group_id=booking.booking_group_id
+                            ).delete()
+                        else:
+                            # Delete Single Session Booking
+                            booking.delete()
+                    
+                    # Note: payment.delete() happens automatically via CASCADE if booking is deleted,
+                    # but if payment existed without booking (orphaned), delete it explicitly:
+                    if Payment.objects.filter(id=payment.id).exists():
+                        payment.delete()
+                        
+                    logger.info(f"Hard deleted pending booking resources for PI {payment_intent_id}")
+
+            return Response({"status": "cancelled"}, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.error(f"Error cancelling booking {payment_intent_id}: {e}")
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

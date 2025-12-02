@@ -49,7 +49,7 @@ from quickstart.views.admin.class_management.class_management_views import (
     AdminClassViewSet,
     AdminReviewViewSet,
 )
-from quickstart.payments.views import CreatePaymentIntentView, ProcessBookingWebhook, UpdatePaymentIntentView
+from quickstart.payments.views import CreatePaymentIntentView, ProcessBookingWebhook, UpdatePaymentIntentView, CancelPendingBookingView
 from quickstart.views.admin.user_management.user_admin_views import UserAdminViewSet
 from quickstart.views.admin.user_management.role_views import RoleManagementViewSet
 from quickstart.views.admin.user_management.verification_views import (
@@ -479,6 +479,11 @@ urlpatterns = [
         "payments/update-payment-intent/",
         UpdatePaymentIntentView.as_view(),
         name="update-payment-intent",
+    ),
+    path(
+        "payments/cancel-payment-intent/",
+        CancelPendingBookingView.as_view(),
+        name="cancel-payment-intent",
     ),
     path(
         "admin/geographical-data/",
