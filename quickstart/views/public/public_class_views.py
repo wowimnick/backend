@@ -361,6 +361,45 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             
         return queryset.distinct()
 
+    @action(detail=False, methods=['get'])
+    def homepage_content(self, request):
+        base_qs = self.get_queryset()
+        base_qs = self._calculate_relevance_score(base_qs)
+
+        # 1. Trending
+        trending_qs = base_qs.order_by('-relevance_score')[:10]
+
+        # 2. New
+        new_qs = base_qs.order_by('-createdAt')[:10]
+
+        # 3. Featured Category (Smart Fallback)
+        category_key = request.query_params.get('featured_category', 'arts')
+        
+        # Try to find the requested category
+        featured_qs = base_qs.filter(category__key__iexact=category_key).order_by('-relevance_score')[:10]
+        
+        # FAILSAFE: If specific category is empty, grab the category with the MOST classes
+        if not featured_qs.exists():
+            from django.db.models import Count
+            # Find a category id that has active classes
+            popular_cat = ClassesMain.objects.filter(status='active').values('category__key').annotate(c=Count('classId')).order_by('-c').first()
+            
+            if popular_cat:
+                fallback_key = popular_cat['category__key']
+                featured_qs = base_qs.filter(category__key=fallback_key).order_by('-relevance_score')[:10]
+                category_key = fallback_key # Update key to send back to frontend
+
+        context = {'request': request}
+        
+        data = {
+            "trending": self.get_serializer(trending_qs, many=True, context=context).data,
+            "new": self.get_serializer(new_qs, many=True, context=context).data,
+            "featured_category": self.get_serializer(featured_qs, many=True, context=context).data,
+            "featured_category_key": category_key # Frontend can use this to know which category was actually picked
+        }
+
+        return Response(data)
+    
     def _calculate_relevance_score(self, queryset):
         # Cast all numeric operations to explicit types for psycopg3 compatibility
         days_old = ExpressionWrapper(

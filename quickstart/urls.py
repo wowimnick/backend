@@ -348,6 +348,11 @@ urlpatterns = [
         name="public-class-search",
     ),
     path(
+        "classes/homepage-content/",
+        PublicClassViewSet.as_view({"get": "homepage_content"}),
+        name="public-class-homepage-content",
+    ),
+    path(
         "classes/<str:pk>/toggle-favorite/",
         PublicClassViewSet.as_view({"post": "toggle_favorite"}),
         name="public-class-toggle-favorite",
