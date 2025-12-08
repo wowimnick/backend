@@ -408,15 +408,18 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
                 )
 
             # --- NOTIFICATION LOGIC ---
-            # 1. Notify the student who cancelled
+            
+            # 1. Notify the student who cancelled (Always send)
             send_booking_cancellation_user_email(
                 user=request.user,
                 booking=booking,
                 refund_details="A refund will be processed if applicable.",
             )
 
-            # 2. Notify the business owner and relevant staff
+            # 2. Notify the business (Respects Toggle)
             business = booking.schedule_instance.schedule.option.classId.businessId
+            
+            # CRITICAL UPDATE: Check the toggle before processing ANY business emails
             if business.cancellationNotification:
                 logger.info(
                     f"Preparing to send cancellation notification for booking {booking.id} to business {business.businessId}."
@@ -445,6 +448,8 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
                         send_business_student_cancellation_email(
                             business_user=recipient, booking=booking
                         )
+            else:
+                logger.info(f"Skipping business cancellation emails for booking {booking.id} (toggle OFF)")
 
             serializer = self.get_serializer(booking)
             return Response(serializer.data, status=status.HTTP_200_OK)

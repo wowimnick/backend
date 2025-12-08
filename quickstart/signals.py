@@ -216,15 +216,13 @@ def create_booking_notification(sender, instance, created, **kwargs):
         booker_name = " ".join(name_parts) if name_parts else instance.contact.email
     # -----------------------------------------------------------------
 
-    # CASE 1: New Confirmed Booking Notification for Business
-    if created and instance.status == "confirmed":
-        # FIXED: Use safe booker_name variable
+    if created and instance.status == "confirmed" and business.newBookingNotification:
         message_for_business = (
             f"New booking from {booker_name} "
             f"for '{class_title}' "
             f"on {instance.schedule_instance.date.strftime('%b %d')}."
         )
-        link_web_for_business = f"/app/business/bookings/{instance.id}"  # Example link
+        link_web_for_business = f"/business/dashboard/bookings"  # Example link
 
         # Notify business owner
         if business.owner:
@@ -289,12 +287,14 @@ def create_booking_notification(sender, instance, created, **kwargs):
             "student cancellation",
             "user cancelled",
             "cancelled by user",
+            "cancelled by guest", # Added this keyword for guest cancellation
         ]
         is_student_cancellation = any(
             keyword in reason_lower for keyword in student_cancelled_keywords
         )
 
-        if is_student_cancellation:
+        # CRITICAL UPDATE: Checks business.cancellationNotification toggle
+        if is_student_cancellation and business.cancellationNotification:
             logger.info(
                 f"Identified student cancellation for booking {instance.id} based on reason: '{instance.cancellation_reason}'"
             )
