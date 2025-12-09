@@ -7,6 +7,8 @@ import os
 import ssl
 import sys
 from datetime import timedelta
+
+from django.template.exceptions import TemplateDoesNotExist
 from celery.schedules import crontab
 from pathlib import Path
 import platform
@@ -104,6 +106,10 @@ if IS_DEPLOYED_ENV and os.environ.get("SENTRY_DSN"):
         integrations=[
             DjangoIntegration(),
             CeleryIntegration(),
+        ],
+        ignore_errors=[
+            TemplateDoesNotExist,  # Ignore template errors
+            "django.security.DisallowedHost", # Ignore bots hitting with wrong IP/Host
         ],
         # Set to 1.0 to capture 100% of transactions for performance monitoring.
         # In high-traffic production, you might lower this to 0.1 or 0.2

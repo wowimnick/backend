@@ -118,9 +118,6 @@ from quickstart.views.widget.widget_views import (
     GuestBookingCreateView,
 )
 
-def trigger_error(request):
-    division_by_zero = 1 / 0
-
 # =============================================================================
 # ROUTER DEFINITIONS
 # =============================================================================
@@ -282,6 +279,7 @@ widget_urlpatterns = [
 ]
 
 urlpatterns = [
+    path("", health_check, name="api-root-health"),
     # --- Django Admin & 3rd Party Libs ---
     path("admin/silk/", include("silk.urls", namespace="admin_silk")),
     path("admin/panel/", admin.site.urls),
@@ -297,7 +295,6 @@ urlpatterns = [
     path("token/refresh/", CustomTokenRefreshView.as_view(), name="token_refresh"),
     path("logout/", LogoutView.as_view(), name="logout"),
     path("csrf/", CSRFTokenView.as_view(), name="csrf_cookie"),
-    path('sentry-debug/', trigger_error),
     path(
         "bookings/guest-cancel/<uuid:token>/",
         GuestBookingCancellationView.as_view(),
