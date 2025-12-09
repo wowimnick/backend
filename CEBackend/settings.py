@@ -12,6 +12,9 @@ from django.template.exceptions import TemplateDoesNotExist
 from celery.schedules import crontab
 from pathlib import Path
 import platform
+import sentry_sdk
+from sentry_sdk.integrations.django import DjangoIntegration
+from sentry_sdk.integrations.celery import CeleryIntegration
 
 if os.name == "nt":  # This checks if the OS is Windows ('nt')
     GDAL_LIBRARY_PATH = r"C:\OSGeo4W\bin\gdal311.dll"
@@ -97,6 +100,33 @@ if IS_DEPLOYED_ENV:
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
 
+def traces_sampler(sampling_context):
+    # Don't send health checks to Sentry
+    path = sampling_context.get('wsgi_environ', {}).get('PATH_INFO', '')
+    if path == '/' or path == '/health-check/':
+        return 0.0
+    return 1.0
+
+if IS_DEPLOYED_ENV and os.environ.get("SENTRY_DSN"):
+    sentry_sdk.init(
+        dsn=os.environ.get("SENTRY_DSN"),
+        traces_sampler=traces_sampler,
+        integrations=[
+            DjangoIntegration(),
+            CeleryIntegration(),
+        ],
+        ignore_errors=[
+            TemplateDoesNotExist,  # Ignore template errors
+            "django.security.DisallowedHost", # Ignore bots hitting with wrong IP/Host
+        ],
+        # Set to 1.0 to capture 100% of transactions for performance monitoring.
+        # In high-traffic production, you might lower this to 0.1 or 0.2
+        traces_sample_rate=1.0,
+        
+        send_default_pii=True,
+        
+        environment=os.environ.get("DJANGO_ENV"),
+    )
 # --- API & Service Keys ---
 RESEND_API_KEY = os.environ["RESEND_API_KEY"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
