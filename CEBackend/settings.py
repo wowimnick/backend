@@ -48,23 +48,6 @@ if not IS_DOCKER:
 else:
     print("--- DOCKER: Relying on environment variables passed to container. ---")
 
-if os.environ.get("SENTRY_DSN"):
-    sentry_sdk.init(
-        dsn=os.environ.get("SENTRY_DSN"),
-        integrations=[
-            DjangoIntegration(),
-            CeleryIntegration(),
-        ],
-        # Capture 100% of transactions for performance monitoring.
-        # Reduce this value (e.g., 0.1) in production if you have high traffic.
-        traces_sample_rate=1.0,
-        
-        # If you want to associate errors with specific users (email/id)
-        send_default_pii=True,
-        
-        environment=os.environ.get("DJANGO_ENV", "local"),
-    )
-
 # --- Core Settings ---
 SECRET_KEY = os.environ["DJANGO_SECRET_KEY"]
 DEBUG = os.environ.get("DEBUG", "False") == "True"
@@ -115,7 +98,23 @@ if IS_DEPLOYED_ENV:
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
 
-
+if IS_DEPLOYED_ENV and os.environ.get("SENTRY_DSN"):
+    sentry_sdk.init(
+        dsn=os.environ.get("SENTRY_DSN"),
+        integrations=[
+            DjangoIntegration(),
+            CeleryIntegration(),
+        ],
+        # Set to 1.0 to capture 100% of transactions for performance monitoring.
+        # In high-traffic production, you might lower this to 0.1 or 0.2
+        traces_sample_rate=1.0,
+        
+        # Capture user emails/IDs to see who was affected by the error
+        send_default_pii=True,
+        
+        # Dynamically sets environment to "staging" or "prod" based on your env var
+        environment=os.environ.get("DJANGO_ENV"),
+    )
 # --- API & Service Keys ---
 RESEND_API_KEY = os.environ["RESEND_API_KEY"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
