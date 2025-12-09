@@ -64,6 +64,7 @@ jobs:
             SECURE_SSL_REDIRECT=${{ secrets.SECURE_SSL_REDIRECT }}
             REVALIDATION_SECRET=${{ secrets.REVALIDATION_SECRET }}
             VERCEL_AUTOMATION_BYPASS_SECRET=${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+            SENTRY_DSN=${{ secrets.SENTRY_DSN }}
 
             # --- Database, Cache, S3, etc. ---
             DB_ENGINE=${{ secrets.DB_ENGINE }}
@@ -124,10 +125,7 @@ jobs:
 
             # 4. START NEW APPLICATION CONTAINERS
             echo "--- Starting new web and worker containers... ---"
-            # MODIFIED: Added "-e CONTAINER_ROLE=web" to give the container its job title.
-            docker run -d --rm --env-file /home/ec2-user/.env.staging -e CONTAINER_ROLE=web -p 80:8000 --name $WEB_CONTAINER_NAME --network $NETWORK_NAME $IMAGE_NAME gunicorn CEBackend.asgi:application -w 2 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
-
-            # MODIFIED: Added "-e CONTAINER_ROLE=worker" and changed the command to start supervisord.
+            docker run -d --rm --env-file /home/ec2-user/.env.staging -e CONTAINER_ROLE=web -p 80:8000 --name $WEB_CONTAINER_NAME --network $NETWORK_NAME $IMAGE_NAME uvicorn CEBackend.asgi:application --host 0.0.0.0 --port 8000 --workers 2 --lifespan off
             docker run -d --rm --env-file /home/ec2-user/.env.staging -e CONTAINER_ROLE=worker --name $WORKER_CONTAINER_NAME --network $NETWORK_NAME $IMAGE_NAME /usr/bin/supervisord -n
 
             # 5. START THE STRIPE CLI SIDECAR CONTAINERS (No changes here)

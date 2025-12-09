@@ -1,9 +1,7 @@
-# quickstart/tasks/user_tasks.py
 from celery import shared_task
 from django.utils import timezone
 from datetime import timedelta
 from quickstart.models import Booking, Reviews
-from quickstart.utils.email_utils import send_request_for_review_email
 import logging
 
 logger = logging.getLogger(__name__)
@@ -15,6 +13,8 @@ def send_pending_review_requests():
     Sends review request emails for bookings that were completed
     between 24 and 48 hours ago and have not yet been reviewed.
     """
+    from quickstart.utils.email_utils import send_request_for_review_email
+
     # Target a window to catch bookings completed yesterday.
     start_time = timezone.now() - timedelta(hours=48)
     end_time = timezone.now() - timedelta(hours=24)
@@ -26,7 +26,7 @@ def send_pending_review_requests():
             status="completed",
             schedule_instance__date__gte=start_time.date(),
             schedule_instance__date__lt=end_time.date() + timedelta(days=1),
-            review__isnull=True,  # Check the related_name from Reviews model's ForeignKey
+            review__isnull=True,
         )
         .select_related("user", "schedule_instance__schedule__option__classId")
         .distinct()

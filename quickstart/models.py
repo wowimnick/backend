@@ -566,6 +566,10 @@ class BusinessInfo(models.Model):
     newBookingNotification = models.BooleanField(default=True)
     cancellationNotification = models.BooleanField(default=True)
     reminderNotification = models.BooleanField(default=True)
+    scheduleExpiryNotification = models.BooleanField(
+        default=True,
+        help_text="Receive warnings when classes are about to run out of scheduled instances."
+    )
     smsNotifications = models.BooleanField(default=False)
 
     # --- Stripe Connect Fields ---
@@ -2453,7 +2457,7 @@ class Discount(models.Model):
     )
     code = models.CharField(
         max_length=50,
-        unique=True,
+        unique=False,
         null=True,
         blank=True,
         db_index=True,
@@ -2467,7 +2471,6 @@ class Discount(models.Model):
         help_text="The value of the discount (e.g., 20.00 for 20% or 10.00 for $10).",
     )
 
-    # MODIFIED: Changed default scope
     scope = models.CharField(
         max_length=20,
         choices=DiscountScope.choices,
@@ -2605,6 +2608,13 @@ class Discount(models.Model):
             Discount.objects.filter(pk=self.pk).update(usage_count=F("usage_count") + 1)
             self.refresh_from_db(fields=["usage_count"])  # Refresh the instance
 
+    class Meta:
+        # This ensures a specific code is unique ONLY within that specific business
+        unique_together = ("business", "code") 
+        
+        indexes = [
+            models.Index(fields=["business", "code"]),
+        ]
 
 class AppliedDiscount(models.Model):
     """

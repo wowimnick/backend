@@ -28,9 +28,11 @@ def notify_businesses_of_expiring_schedules():
     # 1. Query active classes and annotate with the date of their *last* scheduled instance
     # We filter for classes where that max date is either None (no schedules) 
     # or less than our warning threshold.
+    # Added check for scheduleExpiryNotification preference
     classes_needing_schedules = ClassesMain.objects.filter(
         status='active',
-        businessId__isActive=True
+        businessId__isActive=True,
+        businessId__scheduleExpiryNotification=True
     ).annotate(
         last_scheduled_date=Max('options__schedules__instances__date')
     ).filter(
@@ -69,6 +71,7 @@ def notify_businesses_of_expiring_schedules():
             'business_user': owner,
             'expiring_classes': class_list,
             'dashboard_url': f"{settings.FRONTEND_BASE_URL}/business/classes",
+            'settings_url': f"{settings.FRONTEND_BASE_URL}/business/dashboard",
             'settings': settings # To access frontend url in base template
         }
 

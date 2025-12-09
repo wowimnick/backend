@@ -72,37 +72,39 @@ def release_expired_spots():
             logger.error(f"Error cleaning up booking {booking.id}: {e}", exc_info=True)
 
 
+# In quickstart/tasks/booking_tasks.py
+
 @shared_task
 def send_upcoming_booking_reminders():
     """
     Sends reminder emails for confirmed bookings scheduled to start
-    within the next 23 to 24 hours. This version uses a more precise
-    database query to handle midnight edge cases correctly.
+    within the next 23 to 24 hours.
+    
+    UPDATES:
+    1. Respects the BusinessInfo.reminderNotification toggle.
+    2. Uses a precise date filter to minimize database load.
     """
     now = timezone.now()
     reminder_start_time = now + timedelta(hours=23)
     reminder_end_time = now + timedelta(hours=24)
 
-    # --- NEW, MORE PRECISE QUERY ---
-    # The reminder window can span two different dates (e.g., from 23:30 to 00:30).
-    # This gets the unique dates the window covers.
+    # 1. Determine which dates we need to check (usually today and tomorrow)
     possible_dates = {reminder_start_time.date(), reminder_end_time.date()}
 
-    # Fetch all confirmed bookings on those specific dates.
-    # This is more efficient than a broad date range.
+    # 2. Fetch bookings, filtering ONLY for businesses that have notifications ENABLED
     upcoming_bookings = (
         Booking.objects.filter(
             status="confirmed",
             schedule_instance__date__in=possible_dates,
+            schedule_instance__schedule__option__classId__businessId__reminderNotification=True
         )
         .select_related(
             "user",
-            "contact",  # Added contact
+            "contact",
             "schedule_instance__schedule__option__classId__businessId",
         )
         .iterator()
     )
-    # --- END OF NEW QUERY ---
 
     logger.info(
         f"Starting upcoming booking reminder task. Checking for bookings between {reminder_start_time} and {reminder_end_time}."
@@ -111,30 +113,33 @@ def send_upcoming_booking_reminders():
     sent_count = 0
     for booking in upcoming_bookings:
         try:
-            # This logic remains the same: localize the business time and convert to UTC for comparison.
+            # Get the Business Timezone settings
             business_tz_str = (
                 booking.schedule_instance.schedule.option.classId.businessId.business_timezone
             )
             business_tz = timezone.pytz.timezone(business_tz_str)
 
+            # Reconstruct the exact class time in the business's timezone
             naive_datetime = timezone.datetime.combine(
                 booking.schedule_instance.date, booking.schedule_instance.time
             )
             schedule_datetime_aware = business_tz.localize(naive_datetime)
 
-            # Convert the business's local time to UTC for a correct comparison
+            # Convert to UTC for comparison against the server's 'now'
             schedule_datetime_utc = schedule_datetime_aware.astimezone(
                 timezone.pytz.utc
             )
 
-            # Compare the UTC-converted time with our UTC window
+            # 3. Precision Check: Ensure the class is exactly 23-24 hours away
             if not (reminder_start_time <= schedule_datetime_utc < reminder_end_time):
-                continue  # Skip if not in the precise 1-hour window
+                continue  
 
+            # 4. Check Cache to prevent duplicate emails (idempotency)
             cache_key = f"booking_reminder_sent_{booking.id}"
             if cache.get(cache_key):
                 continue
 
+            # 5. Determine Recipient (Registered User OR Guest Contact)
             recipient = booking.user or booking.contact
             if not recipient:
                 logger.warning(
@@ -142,10 +147,12 @@ def send_upcoming_booking_reminders():
                 )
                 continue
 
+            # 6. Send the Email
             send_booking_reminder_email(user=recipient, booking=booking)
             sent_count += 1
 
-            cache.set(cache_key, timeout=90000)  # 25 hours
+            # Set cache for 25 hours to ensure we don't send again for this specific booking
+            cache.set(cache_key, True, timeout=90000) 
             logger.info(
                 f"Queued reminder email for booking {booking.id} to {recipient.email}."
             )

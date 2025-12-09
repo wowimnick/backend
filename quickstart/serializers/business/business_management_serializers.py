@@ -19,7 +19,7 @@ from quickstart.models import (
     VerificationRequest,
     Role,
     ImportedGoogleReview,
-)  # Added Role
+)
 from django.db.models import Sum, Count, Avg, Q, Subquery, OuterRef, IntegerField, F
 from django.db.models.functions import Coalesce
 from datetime import (
@@ -82,7 +82,6 @@ class RecentActivitySerializer(serializers.Serializer):
 class MetricsContainerSerializer(serializers.Serializer):
     total_students = MetricSerializer()
     active_classes = MetricSerializer()
-    # MODIFIED: Made the monthly_revenue field optional.
     monthly_revenue = MetricSerializer(required=False)
     average_rating = MetricSerializer()
 
@@ -484,6 +483,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "newBookingNotification",
             "cancellationNotification",
             "reminderNotification",
+            "scheduleExpiryNotification",
             "smsNotifications",
             "classFormats",
             "skillLevels",
@@ -552,6 +552,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "newBookingNotification": {"required": False},
             "cancellationNotification": {"required": False},
             "reminderNotification": {"required": False},
+            "scheduleExpiryNotification": {"required": False},
             "smsNotifications": {"required": False},
         }
 
@@ -661,6 +662,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "newBookingNotification",
             "cancellationNotification",
             "reminderNotification",
+            "scheduleExpiryNotification",
             "smsNotifications",
         ]
         for field in boolean_fields:

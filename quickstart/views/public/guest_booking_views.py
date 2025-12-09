@@ -1,5 +1,3 @@
-# quickstart/views/bookings/guest_booking_views.py
-
 from django.db import transaction
 from django.utils import timezone
 from datetime import datetime, timedelta
@@ -130,18 +128,25 @@ class GuestBookingCancellationView(APIView):
                     ]
                 )
 
-            business_user = (
-                booking.schedule_instance.schedule.option.classId.businessId.owner
-            )
-
+            # --- NOTIFICATION LOGIC ---
+            
+            # 1. Notify Guest (Always send confirmation to student)
             send_booking_cancellation_user_email(
                 user=booking.contact,
                 booking=booking,
                 refund_details="A refund will be processed automatically if applicable.",
             )
-            send_business_student_cancellation_email(
-                business_user=business_user, booking=booking
-            )
+
+            # 2. Notify Business (Respects Toggle)
+            business = booking.schedule_instance.schedule.option.classId.businessId
+            
+            if business.cancellationNotification:
+                logger.info(f"Sending guest cancellation email to business owner {business.owner.email}")
+                send_business_student_cancellation_email(
+                    business_user=business.owner, booking=booking
+                )
+            else:
+                logger.info(f"Skipping guest cancellation email for business {business.businessId} (toggle OFF)")
 
             serializer = StudentBookingDetailSerializer(
                 booking, context={"request": request}

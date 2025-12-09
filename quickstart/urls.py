@@ -5,6 +5,7 @@ from django.shortcuts import get_object_or_404, redirect
 from rest_framework.routers import DefaultRouter
 from dj_rest_auth.registration.views import VerifyEmailView, ResendEmailVerificationView
 from dj_rest_auth.views import PasswordChangeView
+from django.urls import path
 
 # --- Model import for the new redirect view ---
 from quickstart.views.public.public_class_views import paginated_class_reviews
@@ -278,6 +279,7 @@ widget_urlpatterns = [
 ]
 
 urlpatterns = [
+    path("", health_check, name="api-root-health"),
     # --- Django Admin & 3rd Party Libs ---
     path("admin/silk/", include("silk.urls", namespace="admin_silk")),
     path("admin/panel/", admin.site.urls),
