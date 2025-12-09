@@ -5,6 +5,7 @@ from django.shortcuts import get_object_or_404, redirect
 from rest_framework.routers import DefaultRouter
 from dj_rest_auth.registration.views import VerifyEmailView, ResendEmailVerificationView
 from dj_rest_auth.views import PasswordChangeView
+from django.urls import path
 
 # --- Model import for the new redirect view ---
 from quickstart.views.public.public_class_views import paginated_class_reviews
@@ -116,6 +117,9 @@ from quickstart.views.widget.widget_views import (
     CreateGuestPaymentIntentView,
     GuestBookingCreateView,
 )
+
+def trigger_error(request):
+    division_by_zero = 1 / 0
 
 # =============================================================================
 # ROUTER DEFINITIONS
@@ -293,6 +297,7 @@ urlpatterns = [
     path("token/refresh/", CustomTokenRefreshView.as_view(), name="token_refresh"),
     path("logout/", LogoutView.as_view(), name="logout"),
     path("csrf/", CSRFTokenView.as_view(), name="csrf_cookie"),
+    path('sentry-debug/', trigger_error),
     path(
         "bookings/guest-cancel/<uuid:token>/",
         GuestBookingCancellationView.as_view(),
