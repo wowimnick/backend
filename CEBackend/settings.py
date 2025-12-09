@@ -115,10 +115,8 @@ if IS_DEPLOYED_ENV and os.environ.get("SENTRY_DSN"):
         # In high-traffic production, you might lower this to 0.1 or 0.2
         traces_sample_rate=1.0,
         
-        # Capture user emails/IDs to see who was affected by the error
         send_default_pii=True,
         
-        # Dynamically sets environment to "staging" or "prod" based on your env var
         environment=os.environ.get("DJANGO_ENV"),
     )
 # --- API & Service Keys ---
