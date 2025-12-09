@@ -10,6 +10,9 @@ from datetime import timedelta
 from celery.schedules import crontab
 from pathlib import Path
 import platform
+import sentry_sdk
+from sentry_sdk.integrations.django import DjangoIntegration
+from sentry_sdk.integrations.celery import CeleryIntegration
 
 if os.name == "nt":  # This checks if the OS is Windows ('nt')
     GDAL_LIBRARY_PATH = r"C:\OSGeo4W\bin\gdal311.dll"
@@ -45,6 +48,22 @@ if not IS_DOCKER:
 else:
     print("--- DOCKER: Relying on environment variables passed to container. ---")
 
+if os.environ.get("SENTRY_DSN"):
+    sentry_sdk.init(
+        dsn=os.environ.get("SENTRY_DSN"),
+        integrations=[
+            DjangoIntegration(),
+            CeleryIntegration(),
+        ],
+        # Capture 100% of transactions for performance monitoring.
+        # Reduce this value (e.g., 0.1) in production if you have high traffic.
+        traces_sample_rate=1.0,
+        
+        # If you want to associate errors with specific users (email/id)
+        send_default_pii=True,
+        
+        environment=os.environ.get("DJANGO_ENV", "local"),
+    )
 
 # --- Core Settings ---
 SECRET_KEY = os.environ["DJANGO_SECRET_KEY"]
@@ -284,12 +303,6 @@ CELERY_BEAT_SCHEDULE = {
         "task": "quickstart.tasks.send_pending_review_requests",
         "schedule": crontab(hour=5, minute=0),  # Every day at 5 AM UTC
     },
-    # "send-weekly-performance-summaries": {
-    #     "task": "quickstart.tasks.end_weekly_performance_summaries",
-    #     "schedule": crontab(
-    #         day_of_week="monday", hour=8, minute=0
-    #     ),  # Every Monday at 8 AM UTC
-    # },
     "send-hourly-booking-reminders": {
         "task": "quickstart.tasks.send_upcoming_booking_reminders",
         "schedule": crontab(minute=0, hour="*"),  # Run at the start of every hour
@@ -461,13 +474,28 @@ LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "handlers": {
-        "console": {"class": "logging.StreamHandler"},
+        "console": {
+            "class": "logging.StreamHandler",
+        },
     },
     "loggers": {
-        "django": {"handlers": ["console"], "level": "INFO"},
-        "quickstart": {"handlers": ["console"], "level": "DEBUG", "propagate": False},
-        "celery": {"handlers": ["console"], "level": "INFO"},
-        "": {"handlers": ["console"], "level": "INFO"},
+        "django": {
+            "handlers": ["console"],
+            "level": "INFO",
+        },
+        "quickstart": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False
+        },
+        "celery": {
+            "handlers": ["console"],
+            "level": "INFO"
+        },
+        "": {
+            "handlers": ["console"],
+            "level": "INFO",
+        },
     },
 }
 
