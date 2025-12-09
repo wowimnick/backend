@@ -33,42 +33,8 @@ from .models import (
     Payout,
 )
 
-try:
-    # UTILS: Make sure this import is correct based on your structure
-    from .utils.email_utils import (
-        send_account_security_email,
-        send_class_nearing_full_email,
-        send_bulk_templated_emails,
-        send_payout_initiated_email,
-    )
-except ImportError:
-    # Updated logging message for clarity
-    logging.getLogger(__name__).error(
-        "Failed to import email utility functions from .utils.email_utils."
-    )
-
-    def send_account_security_email(*args, **kwargs):
-        logging.getLogger(__name__).warning("Dummy send_account_security_email called.")
-        pass  # Do nothing if import fails
-
-    def send_class_nearing_full_email(*args, **kwargs):
-        logging.getLogger(__name__).warning(
-            "Dummy send_class_nearing_full_email called."
-        )
-        pass
-
-    def send_bulk_templated_emails(*args, **kwargs):
-        logging.getLogger(__name__).warning("Dummy send_bulk_templated_emails called.")
-        pass
-
-    def send_payout_initiated_email(*args, **kwargs):
-        logging.getLogger(__name__).warning("Dummy send_payout_initiated_email called.")
-        pass
-
-
 logger = logging.getLogger(__name__)
 User = get_user_model()
-
 
 @receiver(pre_save, sender=User)
 def store_old_password(sender, instance, **kwargs):
@@ -87,63 +53,44 @@ def store_old_password(sender, instance, **kwargs):
 
 @receiver(post_save, sender=User)
 def handle_user_password_change(sender, instance, created, **kwargs):
-    """
-    On post_save, check if the password hash has actually changed.
-    This is more reliable than checking update_fields.
-    """
-    # We only care about existing users, not new ones
+    from .utils.email_utils import send_account_security_email
+    
     if not created:
-        # Check if the old password was stored and if it differs from the new one
         old_password = getattr(instance, "_old_password", None)
         if old_password and instance.password != old_password:
-            logger.info(
-                f"Password has changed for user {instance.email}. Triggering security email."
-            )
+            logger.info(f"Password has changed for user {instance.email}. Triggering security email.")
             try:
                 send_account_security_email(
                     instance,
                     "password",
                     subject="Your ClassEasily Password Was Changed",
                 )
-                logger.info(
-                    f"Password change security notification prepared/queued for user {instance.email}"
-                )
+                logger.info(f"Password change notification queued for {instance.email}")
             except Exception as e:
-                logger.error(
-                    f"Failed to trigger password change notification for {instance.email}: {e}",
-                    exc_info=True,
-                )
+                logger.error(f"Failed to trigger password notification for {instance.email}: {e}", exc_info=True)
 
 
 @receiver(email_changed)
-def handle_email_change_signal(
-    sender, request, user, from_email_address, to_email_address, **kwargs
-):
+def handle_email_change_signal(sender, request, user, from_email_address, to_email_address, **kwargs):
+    from .utils.email_utils import send_account_security_email
+
     logger.info("!!! handle_email_change_signal (ALLAUTH) CALLED !!!")
     if not user:
-        logger.warning("email_changed signal received without a user object.")
         return
 
     from_email = getattr(from_email_address, "email", "Unknown")
     to_email = getattr(to_email_address, "email", "Unknown")
-    logger.info(
-        f"Signal processing (ALLAUTH): Email changed for user {user.userId} from {from_email} to {to_email}"
-    )
+    
     try:
         send_account_security_email(
             user,
-            "email_update",  # This ensures the correct template logic is used
+            "email_update",
             new_email=to_email,
             subject="Your ClassEasily Email Address Was Updated",
         )
-        logger.info(
-            f"Email change security notification prepared/queued for user {user.email}"
-        )
+        logger.info(f"Email change notification queued for {user.email}")
     except Exception as e:
-        logger.error(
-            f"Failed to trigger email change notification for user {user.email}: {e}",
-            exc_info=True,
-        )
+        logger.error(f"Failed to trigger email notification for {user.email}: {e}", exc_info=True)
 
 
 # -----------------------------------------------------------------------------------------------------------
@@ -530,69 +477,6 @@ def student_review_response_notification(sender, instance, created, **kwargs):
         logger.info(
             f"Review response notification created for student {student_user.email} for review {instance.reviewId}"
         )
-
-
-@receiver(post_save, sender=Booking)
-def check_class_capacity_notification(sender, instance: Booking, created, **kwargs):
-    """
-    Sends an email to the business if a class is nearing full capacity
-    after a new booking is confirmed.
-    """
-    if instance.status != "confirmed" or not (
-        "status" in (kwargs.get("update_fields") or {"status"}) or created
-    ):
-        return
-
-    try:
-        schedule_instance = instance.schedule_instance
-        if schedule_instance.date < timezone.now().date():
-            return
-
-        confirmed_participants = Booking.objects.filter(
-            schedule_instance=schedule_instance, status="confirmed"
-        ).aggregate(
-            total=Coalesce(Sum("participants"), Value(0), output_field=IntegerField())
-        )[
-            "total"
-        ]
-
-        occupancy_percentage = 0
-        if schedule_instance.max_participants > 0:
-            occupancy_percentage = (
-                confirmed_participants / schedule_instance.max_participants
-            ) * 100
-
-        if occupancy_percentage < 80:
-            return
-
-        cache_key = (
-            f"cap_notif_sent_{schedule_instance.id}_{int(occupancy_percentage/10)}"
-        )
-        if cache.get(cache_key):
-            return
-
-        business = schedule_instance.schedule.option.classId.businessId
-        recipients = {business.owner} | set(business.managers.all())
-
-        for recipient in recipients:
-            if recipient and recipient.email:
-                send_class_nearing_full_email(
-                    business_user=recipient,
-                    schedule_instance=schedule_instance,
-                    occupancy_percentage=occupancy_percentage,
-                )
-
-        cache.set(cache_key, True, timeout=86400)
-        logger.info(
-            f"Class capacity email notification sent for instance {schedule_instance.id}."
-        )
-
-    except Exception as e:
-        logger.error(
-            f"Error in check_class_capacity_notification signal for booking {instance.id}: {e}",
-            exc_info=True,
-        )
-
 
 @receiver(post_save, sender=Schedule)
 def notify_users_of_new_schedule(sender, instance: Schedule, created, **kwargs):

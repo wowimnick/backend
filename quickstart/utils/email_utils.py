@@ -1255,50 +1255,6 @@ def send_performance_summary_email(
         subject=f"Your {period.title()} Performance Summary from ClassEasily",
     )
 
-
-def send_class_nearing_full_email(
-    business_user: CustomUser,
-    schedule_instance: ScheduleInstance,
-    occupancy_percentage: float,
-):
-    """Notifies a business that a specific class instance is almost full."""
-    if not business_user or not business_user.email or not schedule_instance:
-        logger.warning("Attempted to send class nearing full email with invalid data.")
-        return
-
-    logger.info(
-        f"Preparing class nearing full email for instance {schedule_instance.id} to user {business_user.email}"
-    )
-
-    try:
-        class_instance = schedule_instance.schedule.option.classId
-        class_title = class_instance.title
-        class_date = schedule_instance.date
-        class_time = schedule_instance.time
-    except AttributeError:
-        logger.error(
-            f"Could not get details for schedule instance {schedule_instance.id} for nearing full email."
-        )
-        return
-
-    manage_class_url = f"{settings.FRONTEND_BASE_URL}/business/dashboard/classes"
-    context = {
-        "user": business_user,
-        "class_title": class_title,
-        "class_date": class_date,
-        "class_time": class_time,
-        "occupancy_percentage": int(occupancy_percentage),
-        "manage_class_url": manage_class_url,
-        "recipient_email": business_user.email,
-    }
-    send_templated_email(
-        recipient_list=[business_user.email],
-        template_name="emails/business_class_nearing_full.html",
-        context=context,
-        subject=f"Your class '{class_title}' is almost full!",
-    )
-
-
 def send_request_for_review_email(user: CustomUser, booking: Booking):
     """Sends a request for review 24 hours after a class is completed."""
     if not user or not user.email or not booking:
