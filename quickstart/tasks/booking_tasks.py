@@ -72,8 +72,6 @@ def release_expired_spots():
             logger.error(f"Error cleaning up booking {booking.id}: {e}", exc_info=True)
 
 
-# In quickstart/tasks/booking_tasks.py
-
 @shared_task
 def send_upcoming_booking_reminders():
     """

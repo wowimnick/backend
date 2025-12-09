@@ -1,5 +1,3 @@
-# quickstart/tasks/payout_tasks.py
-
 from celery import shared_task
 from django.utils import timezone
 from django.db import transaction
@@ -18,7 +16,7 @@ logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
 
-@shared_task(name="tasks.update_completed_booking_status")
+@shared_task
 def update_completed_booking_status():
     """
     Marks past, confirmed bookings as 'completed' so they are eligible for payout.
@@ -36,7 +34,7 @@ def update_completed_booking_status():
     return f"Completed status update. {updated_count} bookings marked as 'completed'."
 
 
-@shared_task(name="tasks.process_daily_payouts")
+@shared_task
 def process_daily_payouts():
     """
     Groups paid-out bookings by business and initiates Stripe transfers
@@ -185,7 +183,7 @@ def process_daily_payouts():
 
     return f"Payout process finished. Successful: {successful_payouts}. Failed: {failed_payouts}."
 
-@shared_task(name="tasks.process_daily_refunds")
+@shared_task
 def process_daily_refunds():
     logger.info("--- Starting Daily Refund Processing Task ---")
 

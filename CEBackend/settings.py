@@ -307,37 +307,34 @@ CELERY_TASK_TRACK_STARTED = False
 
 CELERY_BEAT_SCHEDULE = {
     "update-completed-bookings-daily": {
-        "task": "quickstart.tasks.update_completed_booking_status",
+        "task": "quickstart.tasks.payout_tasks.update_completed_booking_status",
         "schedule": crontab(hour=2, minute=0),
     },
     "process-payouts-daily": {
-        "task": "quickstart.tasks.process_daily_payouts",
+        "task": "quickstart.tasks.payout_tasks.process_daily_payouts",
         "schedule": crontab(hour=3, minute=0),
     },
     "process-refunds-daily": {
-        "task": "quickstart.tasks.process_daily_refunds",
+        "task": "quickstart.tasks.payout_tasks.process_daily_refunds",
         "schedule": crontab(hour=4, minute=0),
     },
     "send-daily-review-requests": {
-        "task": "quickstart.tasks.send_pending_review_requests",
+        "task": "quickstart.tasks.user_tasks.send_pending_review_requests",
         "schedule": crontab(hour=5, minute=0),  # Every day at 5 AM UTC
     },
     "send-hourly-booking-reminders": {
-        "task": "quickstart.tasks.send_upcoming_booking_reminders",
+        "task": "quickstart.tasks.booking_tasks.send_upcoming_booking_reminders",
         "schedule": crontab(minute=0, hour="*"),  # Run at the start of every hour
     },
     "notify-expiring-schedules-weekly": {
-        "task": "quickstart.tasks.notify_businesses_of_expiring_schedules",
+        "task": "quickstart.tasks.business_tasks.notify_businesses_of_expiring_schedules",
         "schedule": crontab(day_of_week="monday", hour=9, minute=0), # Mondays at 9 AM UTC
     },
     "release-expired-spots-every-5-min": {
         "task": "quickstart.tasks.booking_tasks.release_expired_spots", 
-        # Note: Adjust the import path above if your tasks are exposed directly in quickstart.tasks
         "schedule": crontab(minute="*/5"), # Run every 5 minutes
     },
 }
-
-
 
 # Email-specific settings
 EMAIL_RATE_LIMIT_SETTINGS = {
