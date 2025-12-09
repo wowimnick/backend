@@ -7,7 +7,6 @@ from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
 from django.conf import settings
 from django.utils import timezone
-from quickstart.tasks.email_tasks import send_transactional_email_task
 from typing import Any, Dict, List, Optional
 import pytz
 
@@ -199,9 +198,9 @@ def send_templated_email(
     attachments: Optional[List[Dict]] = None,
 ):
     """
-    Renders an email template, queues it for sending via a Celery task,
-    and includes robust error handling and fallback mechanisms.
+    Renders an email template, queues it for sending via a Celery task
     """
+    from quickstart.tasks.email_tasks import send_transactional_email_task
     logger.info(
         f"Attempting to queue email via send_templated_email. Template: '{template_name}', Recipients: {recipient_list}"
     )
