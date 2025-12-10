@@ -557,6 +557,8 @@ def send_payout_notification(sender, instance: Payout, created, **kwargs):
     """
     if not created:
         return
+    
+    from .utils.email_utils import send_payout_initiated_email 
 
     try:
         business = instance.business

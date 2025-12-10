@@ -1,4 +1,3 @@
-# quickstart/tasks/booking_tasks.py
 import pytz
 from celery import shared_task
 from django.utils import timezone
@@ -49,23 +48,19 @@ def release_expired_spots():
                         stripe.PaymentIntent.cancel(payment.stripe_payment_intent_id)
                         logger.info(f"Cancelled Stripe Intent {payment.stripe_payment_intent_id}")
                     except stripe.error.StripeError as e:
-                        # Intent might already be cancelled or succeeded, just log warning
                         logger.warning(f"Could not cancel intent {payment.stripe_payment_intent_id}: {e}")
 
                 # 4. Hard Delete Logic
                 if booking.booking_group_id:
-                    # Full Course: Clean up the Enrollment and ALL sibling bookings in the group
+                    # Full Course: Clean up the Enrollment and ALL sibling bookings
                     group_id = booking.booking_group_id
-                    
                     CourseEnrollment.objects.filter(booking_group_id=group_id).delete()
-                    
                     deleted_count, _ = Booking.objects.filter(booking_group_id=group_id).delete()
                     logger.info(f"Hard deleted expired course group {group_id} ({deleted_count} bookings).")
                 else:
                     # Single Session: Delete just this booking
                     booking_id = booking.id
                     booking.delete()
-                    # Payment deletes via CASCADE usually, but if orphaned, the loop continues
                     logger.info(f"Hard deleted expired booking {booking_id}.")
 
         except Exception as e:
@@ -76,20 +71,17 @@ def release_expired_spots():
 def send_upcoming_booking_reminders():
     """
     Sends reminder emails for confirmed bookings scheduled to start
-    within the next 23 to 24 hours.
+    within the next 22 to 24 hours.
     
-    UPDATES:
-    1. Respects the BusinessInfo.reminderNotification toggle.
-    2. Uses a precise date filter to minimize database load.
+    ZERO SPAM GUARANTEE:
+    Uses atomic cache.add() to lock the booking ID before sending.
     """
     now = timezone.now()
-    reminder_start_time = now + timedelta(hours=23)
+    reminder_start_time = now + timedelta(hours=22)
     reminder_end_time = now + timedelta(hours=24)
 
-    # 1. Determine which dates we need to check (usually today and tomorrow)
     possible_dates = {reminder_start_time.date(), reminder_end_time.date()}
 
-    # 2. Fetch bookings, filtering ONLY for businesses that have notifications ENABLED
     upcoming_bookings = (
         Booking.objects.filter(
             status="confirmed",
@@ -104,62 +96,50 @@ def send_upcoming_booking_reminders():
         .iterator()
     )
 
-    logger.info(
-        f"Starting upcoming booking reminder task. Checking for bookings between {reminder_start_time} and {reminder_end_time}."
-    )
+    logger.info(f"Starting reminder task. Window: {reminder_start_time} to {reminder_end_time}.")
 
     sent_count = 0
     for booking in upcoming_bookings:
+        # ATOMIC LOCKING: Define key
+        cache_key = f"booking_reminder_sent_{booking.id}"
+        
+        # Try to acquire lock IMMEDIATELY. 
+        # If cache.add returns False, the key exists (sent or in progress) -> SKIP.
+        # Lock duration: 30 hours (covers the entire 24h window + buffer)
+        if not cache.add(cache_key, True, timeout=108000):
+            continue
+
         try:
-            # Get the Business Timezone settings
-            business_tz_str = (
-                booking.schedule_instance.schedule.option.classId.businessId.business_timezone
-            )
+            # Timezone Logic
+            business_tz_str = booking.schedule_instance.schedule.option.classId.businessId.business_timezone
             business_tz = timezone.pytz.timezone(business_tz_str)
 
-            # Reconstruct the exact class time in the business's timezone
             naive_datetime = timezone.datetime.combine(
                 booking.schedule_instance.date, booking.schedule_instance.time
             )
             schedule_datetime_aware = business_tz.localize(naive_datetime)
+            schedule_datetime_utc = schedule_datetime_aware.astimezone(timezone.pytz.utc)
 
-            # Convert to UTC for comparison against the server's 'now'
-            schedule_datetime_utc = schedule_datetime_aware.astimezone(
-                timezone.pytz.utc
-            )
-
-            # 3. Precision Check: Ensure the class is exactly 23-24 hours away
+            # Precision Check
             if not (reminder_start_time <= schedule_datetime_utc < reminder_end_time):
+                # IMPORTANT: If we skipped because of time, we must RELEASE the lock
+                # so it can be picked up in the next hour if valid.
+                cache.delete(cache_key)
                 continue  
 
-            # 4. Check Cache to prevent duplicate emails (idempotency)
-            cache_key = f"booking_reminder_sent_{booking.id}"
-            if cache.get(cache_key):
-                continue
-
-            # 5. Determine Recipient (Registered User OR Guest Contact)
             recipient = booking.user or booking.contact
             if not recipient:
-                logger.warning(
-                    f"Booking {booking.id} has no user or contact to send a reminder to. Skipping."
-                )
+                logger.warning(f"Booking {booking.id} has no recipient. Skipping.")
                 continue
 
-            # 6. Send the Email
             send_booking_reminder_email(user=recipient, booking=booking)
             sent_count += 1
-
-            # Set cache for 25 hours to ensure we don't send again for this specific booking
-            cache.set(cache_key, True, timeout=90000) 
-            logger.info(
-                f"Queued reminder email for booking {booking.id} to {recipient.email}."
-            )
+            logger.info(f"Queued reminder email for booking {booking.id}.")
 
         except Exception as e:
-            logger.error(
-                f"Failed to process or send reminder for booking {booking.id}: {e}",
-                exc_info=True,
-            )
+            # If sending fails, we do NOT release the lock. 
+            # This prevents a "Retry Loop" from spamming the user if the error 
+            # was a network timeout where the email actually did go out.
+            logger.error(f"Failed to send reminder for booking {booking.id}: {e}", exc_info=True)
 
-    logger.info(f"Task finished. Sent {sent_count} booking reminder emails.")
     return f"Completed sending {sent_count} booking reminders."
