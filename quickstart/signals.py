@@ -561,17 +561,20 @@ def send_payout_notification(sender, instance: Payout, created, **kwargs):
     
     from .utils.email_utils import send_payout_initiated_email 
 
-    transaction.on_commit(lambda: send_payout_initiated_email(business_user=instance.business.owner, payout=instance))
-
     try:
         business = instance.business
+        # Collect all unique recipients (Owner + Managers)
         recipients = {business.owner} | set(business.managers.all())
 
         for user in recipients:
             if user and user.email:
-                send_payout_initiated_email(business_user=user, payout=instance)
-
-        logger.info(f"Queued payout initiated emails for Payout ID {instance.id}")
+                # FIX: Queue EACH email to send only after the transaction commits successfully.
+                # We use (u=user) to bind the variable correctly in the lambda loop.
+                transaction.on_commit(
+                    lambda u=user: send_payout_initiated_email(business_user=u, payout=instance)
+                )
+                
+        logger.info(f"Queued payout initiated emails for Payout ID {instance.id} (waiting for DB commit)")
 
     except Exception as e:
         logger.error(
