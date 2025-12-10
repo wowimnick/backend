@@ -5,6 +5,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db.models import Sum, Value, IntegerField, Q
 from django.db.models.functions import Coalesce
+from django.db import transaction
 
 from allauth.account.signals import email_changed
 
@@ -559,6 +560,8 @@ def send_payout_notification(sender, instance: Payout, created, **kwargs):
         return
     
     from .utils.email_utils import send_payout_initiated_email 
+
+    transaction.on_commit(lambda: send_payout_initiated_email(business_user=instance.business.owner, payout=instance))
 
     try:
         business = instance.business
