@@ -150,9 +150,12 @@ def process_daily_payouts():
                     ]
                 )
 
-                # Bulk update bookings to processed
-                Booking.objects.filter(id__in=booking_ids).update(payout_status="processed", payouts=payout_record)
+                # 1. Bulk update the status fields
+                Booking.objects.filter(id__in=booking_ids).update(payout_status="processed")
                 
+                # 2. Bulk link the bookings to the payout record
+                # Note: 'bookings' is the related_name defined in the Booking model for the payouts field
+                payout_record.bookings.add(*booking_ids)
                 successful_payouts += 1
                 logger.info(f"SUCCESS: Payout {transfer.id} for Business {business.businessId}: ${total_payout}")
 
