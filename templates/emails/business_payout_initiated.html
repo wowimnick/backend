@@ -1,47 +1,84 @@
 {# templates/emails/business_payout_initiated.html #}
 {% extends "emails/base_email.html" %}
 {% load i18n tz %}
+
 {% block title %}
-    {% trans "Your Payout is On Its Way!" %}
+    {% trans "Payout Initiated" %}
 {% endblock title %}
+
 {% block content %}
-    <h1>{% trans "Payout Initiated" %}</h1>
-    <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
-    <p>
-        Great news! A payout of <strong>${{ payout.amount|floatformat:2 }} {{ payout.currency|upper }}</strong> has been sent to your connected Stripe account.
-    </p>
-    <div style="background-color: #f9fafb;
-                border: 1px solid #e5e7eb;
-                border-radius: 8px;
-                padding: 16px;
-                margin: 20px 0">
-        <p style="margin-bottom: 6px;">
-            <strong>{% trans "Amount:" %}</strong> ${{ payout.amount|floatformat:2 }} {{ payout.currency|upper }}
-        </p>
-        <p style="margin-bottom: 6px;">
-            <strong>{% trans "Status:" %}</strong> {{ payout.get_status_display }}
-        </p>
-        <p style="margin-bottom: 0;">
-            <strong>{% trans "Expected Arrival:" %}</strong> {{ payout.arrival_date|date:"F j, Y" }}
-        </p>
+    <!-- Success Icon -->
+    <div style="text-align: center; margin-bottom: 24px;">
+        <img src="https://i.imgur.com/O18mJ1K.png" width="48" height="48" alt="Success" style="display: inline-block;" />
     </div>
-    <p>
-        Please note that it can sometimes take a few business days for the funds to be reflected in your bank account after the arrival date, depending on your bank's processing times.
+
+    <!-- Main Headline -->
+    <h1 style="text-align: center; font-size: 24px; font-weight: 700; color: #111827; margin: 0 0 8px 0;">
+        {% trans "Payout is on its way" %}
+    </h1>
+    
+    <p style="text-align: center; color: #6b7280; margin: 0 0 24px 0; font-size: 16px;">
+        {% trans "Funds have been sent to your connected bank account." %}
     </p>
-    <table role="presentation"
-           border="0"
-           cellpadding="0"
-           cellspacing="0"
-           width="100%">
+
+    <!-- Hero Amount -->
+    <div style="background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 12px; padding: 32px 24px; text-align: center; margin-bottom: 24px;">
+        <div style="color: #6b7280; font-size: 14px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">
+            {% trans "Total Amount" %}
+        </div>
+        <div style="color: #111827; font-size: 42px; font-weight: 800; line-height: 1;">
+            ${{ payout.amount|floatformat:2 }}
+            <span style="font-size: 20px; color: #9ca3af; font-weight: 600;">{{ payout.currency|upper }}</span>
+        </div>
+    </div>
+
+    <!-- Details Table -->
+    <div style="margin-bottom: 32px;">
+        <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+            <!-- Expected Date -->
+            <tr>
+                <td style="padding: 12px 0; border-bottom: 1px solid #f3f4f6; color: #6b7280; font-size: 15px;">
+                    {% trans "Expected Arrival" %}
+                </td>
+                <td style="padding: 12px 0; border-bottom: 1px solid #f3f4f6; color: #111827; font-weight: 600; text-align: right; font-size: 15px;">
+                    {{ payout.arrival_date|date:"F j, Y" }}
+                </td>
+            </tr>
+            
+            <!-- Booking Count (Using metadata from payout_tasks.py) -->
+            {% if payout.metadata.booking_count %}
+            <tr>
+                <td style="padding: 12px 0; border-bottom: 1px solid #f3f4f6; color: #6b7280; font-size: 15px;">
+                    {% trans "Total Bookings Processed" %}
+                </td>
+                <td style="padding: 12px 0; border-bottom: 1px solid #f3f4f6; color: #111827; font-weight: 600; text-align: right; font-size: 15px;">
+                    {{ payout.metadata.booking_count }}
+                </td>
+            </tr>
+            {% endif %}
+
+            <!-- Reference ID -->
+            <tr>
+                <td style="padding: 12px 0; border-bottom: 1px solid #f3f4f6; color: #6b7280; font-size: 15px;">
+                    {% trans "Reference ID" %}
+                </td>
+                <td style="padding: 12px 0; border-bottom: 1px solid #f3f4f6; color: #111827; font-family: monospace; font-weight: 600; text-align: right; font-size: 14px;">
+                    {{ payout.stripe_transfer_id|default:payout.id|truncatechars:12 }}
+                </td>
+            </tr>
+        </table>
+    </div>
+
+    <p style="font-size: 14px; color: #6b7280; line-height: 1.5; margin-bottom: 24px;">
+        Please allow 1-2 business days for the funds to appear in your account statement, depending on your bank's processing times.
+    </p>
+
+    <!-- CTA Button -->
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
         <tr>
             <td align="center" class="button-td">
-                <a href="{{ dashboard_url }}" target="_blank" class="button">{% trans 'View Payouts' %}</a>
+                <a href="{{ dashboard_url }}" target="_blank" class="button">{% trans 'View Payout Details' %}</a>
             </td>
         </tr>
     </table>
-    <p>
-        {% trans "Thanks," %}
-        <br />
-        {% trans "The ClassEasily Team" %}
-    </p>
 {% endblock content %}
