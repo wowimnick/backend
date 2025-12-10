@@ -93,10 +93,10 @@ def process_daily_payouts():
                         booking.payout_status = "processed"
                         booking.save(update_fields=["payout_status"])
 
-                # If no funds to transfer (only free classes), skip Stripe
-                if total_payout <= Decimal("0.50"):
-                    if booking_ids:
-                        Booking.objects.filter(id__in=booking_ids).update(payout_status="processed")
+                if total_payout < Decimal("0.50"): # Stripe minimum varies, 0.50 is safe for CAD/USD
+                    # Do NOT mark as processed. Just skip. 
+                    # They will be picked up in the next run and aggregated with new bookings.
+                    logger.info(f"Skipping payout for Business {business.businessId}: Amount ${total_payout} below minimum threshold.")
                     continue
 
                 # Create Payout Record
