@@ -1,13 +1,16 @@
-# quickstart/tasks/email_tasks.py
 import time
 import logging
 from celery import shared_task
 from celery.exceptions import Retry
 from django.conf import settings
+from django.contrib.auth import get_user_model
 import resend
 from resend.exceptions import ResendError, ValidationError
 
+from quickstart.models import AuditLog
+
 logger = logging.getLogger(__name__)
+User = get_user_model()
 
 # Rate limiting configuration for Resend API
 RESEND_RATE_LIMIT = 2  # requests per second
@@ -57,10 +60,7 @@ rate_limiter = RateLimitedEmailSender()
 )
 def send_transactional_email_task(self, **kwargs):
     """
-    Send transactional email with rate limiting and retry logic.
-
-    Args:
-        **kwargs: Email parameters including 'to', 'subject', 'html', etc.
+    Send transactional email with rate limiting, retry logic, and audit logging.
     """
     try:
         # Apply rate limiting before making the request
@@ -69,7 +69,6 @@ def send_transactional_email_task(self, **kwargs):
         # Validate subject length before sending
         subject = kwargs.get("subject", "")
         if len(subject) > 1900:  # Leave some buffer below 2000 char limit
-            # Truncate subject if too long
             kwargs["subject"] = subject[:1900] + "..."
             logger.warning(
                 f"Subject truncated for email to {kwargs.get('to', 'unknown')}"
@@ -78,27 +77,23 @@ def send_transactional_email_task(self, **kwargs):
         # Set up Resend with API key
         resend.api_key = settings.RESEND_API_KEY
 
-        # Create email parameters - ensure 'to' field is properly handled
+        # Create email parameters
         to_recipients = kwargs.get("to", [])
         if not to_recipients:
             raise ValidationError("Missing 'to' field in email parameters")
 
-        # Ensure to_recipients is a list
         if isinstance(to_recipients, str):
             to_recipients = [to_recipients]
 
-        # --- MODIFIED BLOCK ---
-        # The key for the sender's email is changed from "from" to "from_email"
-        # to avoid Python's reserved keyword conflict.
+        from_email = kwargs.get("from_email", settings.DEFAULT_FROM_EMAIL)
+
         params = {
-            "from": kwargs.get("from_email", settings.DEFAULT_FROM_EMAIL),
+            "from": from_email,
             "to": to_recipients,
             "subject": kwargs.get("subject", "Notification from ClassEasily"),
             "html": kwargs.get("html", ""),
         }
-        # --- END MODIFIED BLOCK ---
 
-        # Add optional parameters if present
         if kwargs.get("text"):
             params["text"] = kwargs["text"]
         if kwargs.get("attachments"):
@@ -106,8 +101,6 @@ def send_transactional_email_task(self, **kwargs):
         if kwargs.get("reply_to"):
             params["reply_to"] = kwargs["reply_to"]
 
-        # Log the email parameters for debugging (without sensitive data)
-        # Updated to use the correct key for the 'from' field in logging.
         logger.debug(
             f"Sending email with params: to={params['to']}, subject='{params['subject'][:50]}...', from={params['from']}"
         )
@@ -115,38 +108,60 @@ def send_transactional_email_task(self, **kwargs):
         # Send the email
         email = resend.Emails.send(params)
 
-        # FIX: Handle both object and dict responses from Resend API
+        # Handle response
         if hasattr(email, "id"):
-            # If email is an object with id attribute
             email_id = email.id
         elif isinstance(email, dict) and "id" in email:
-            # If email is a dictionary with id key
             email_id = email["id"]
         else:
-            # Fallback - log the response and use a placeholder
-            logger.warning(f"Unexpected email response format: {type(email)} - {email}")
             email_id = "unknown"
 
         logger.info(
             f"Transactional email sent to {params['to']}. Resend ID: {email_id}"
         )
 
+        # --- LOGGING TO AUDIT LOG FOR HISTORY ---
+        # Find the user to link this email to (if applicable)
+        # We assume the first recipient is the primary target
+        primary_email = to_recipients[0] if to_recipients else None
+        target_user = None
+        if primary_email:
+            target_user = User.objects.filter(email__iexact=primary_email).first()
+
+        try:
+            AuditLog.objects.create(
+                user=None,  # System action
+                user_email="noreply@classeasily.com",
+                action="notification_sent",
+                details=f"Email: {params['subject']}",
+                target_user=target_user,
+                target_model="User" if target_user else "Email",
+                target_id=str(target_user.userId) if target_user else primary_email,
+                metadata={
+                    "resend_id": email_id,
+                    "to": to_recipients,
+                    "from": from_email,
+                    "subject": params["subject"],
+                    "type": "transactional"
+                }
+            )
+        except Exception as log_e:
+            logger.error(f"Failed to create audit log for email: {log_e}")
+        # ----------------------------------------
+
         return {"status": "success", "to": params["to"], "resend_id": email_id}
 
     except ValidationError as e:
-        # Don't retry validation errors - they won't succeed on retry
         logger.error(
             f"Transactional email validation failed for {kwargs.get('to', 'unknown')}. Error: {str(e)}"
         )
         return {"status": "failed", "error": str(e), "to": kwargs.get("to", [])}
 
     except ResendError as e:
-        # Check if it's a rate limit error
         if "Too many requests" in str(e) or "rate limit" in str(e).lower():
             logger.warning(
                 f"Rate limit hit for {kwargs.get('to', 'unknown')}. Retrying in {self.default_retry_delay} seconds."
             )
-            # Increase the retry delay for rate limit errors
             raise self.retry(countdown=60, max_retries=5)
         else:
             logger.error(
@@ -172,8 +187,6 @@ def send_email_task(self, recipient_list, subject, message, from_email=None, **k
     """
     html_message = kwargs.get("html_message", message)
 
-    # --- MODIFIED ---
-    # Changed the keyword argument from "from" to "from_email".
     return send_transactional_email_task.delay(
         to=recipient_list,
         subject=subject,
@@ -181,24 +194,17 @@ def send_email_task(self, recipient_list, subject, message, from_email=None, **k
         text=message,
         from_email=from_email or settings.DEFAULT_FROM_EMAIL,
     )
-    # --- END MODIFIED ---
 
 
-# Batch email sending for multiple emails with automatic rate limiting
 @shared_task(bind=True)
 def send_bulk_emails_task(self, email_list, delay_between_emails=0.5):
     """
     Send multiple emails with rate limiting between each send.
-
-    Args:
-        email_list: List of email parameter dictionaries
-        delay_between_emails: Additional delay between emails (in seconds)
     """
     results = []
 
     for i, email_params in enumerate(email_list):
         try:
-            # Send each email as a separate task
             result = send_transactional_email_task.delay(**email_params)
             results.append(
                 {
@@ -208,7 +214,6 @@ def send_bulk_emails_task(self, email_list, delay_between_emails=0.5):
                 }
             )
 
-            # Additional delay between emails if specified
             if delay_between_emails > 0:
                 time.sleep(delay_between_emails)
 

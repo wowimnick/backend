@@ -1085,16 +1085,22 @@ class ProcessBookingWebhook(APIView):
             logger.error(f"[{webhook_id}] Error processing course payment success: {e}", exc_info=True)
             raise
 
-    def handle_successful_payment(self, payment_intent, webhook_id):
-        if Payment.objects.filter(
-            stripe_payment_intent_id=payment_intent.id, status="succeeded"
-        ).exists():
+def handle_successful_payment(self, payment_intent, webhook_id):
+        # Check if we have ANY record for this Stripe ID that isn't 'pending'.
+        # This catches 'refunded', 'failed', and 'succeeded' statuses safely.
+        existing_payment = Payment.objects.filter(
+            stripe_payment_intent_id=payment_intent.id
+        ).exclude(status="pending").first()
+
+        if existing_payment:
             logger.warning(
-                f"[{webhook_id}] DUPLICATE: PI {payment_intent.id} already processed."
+                f"[{webhook_id}] IDEMPOTENCY: PI {payment_intent.id} already processed. "
+                f"Current status: {existing_payment.status}"
             )
             return {"message": "Already processed"}
 
-        # FIX: Use correct metadata key 'booking_type' as sent by CreatePaymentIntentView
+        # 2. Check for Course vs Single Session
+        # Use correct metadata key 'booking_type' as sent by CreatePaymentIntentView
         enrollment_type = payment_intent.metadata.get("booking_type")
 
         if enrollment_type == "Full Course":
@@ -1103,23 +1109,38 @@ class ProcessBookingWebhook(APIView):
             )
             return self.handle_course_payment_success(payment_intent, webhook_id)
 
+        # 3. Process Single Session Booking
         with transaction.atomic():
-            try:
-                payment_record = Payment.objects.select_for_update().get(
-                    stripe_payment_intent_id=payment_intent.id, status="pending"
-                )
-                pending_booking = Booking.objects.select_for_update().get(
-                    pk=payment_record.booking.pk, status="pending"
-                )
-            except (Payment.DoesNotExist, Booking.DoesNotExist):
+            # Robust Lookup: Try to find the payment record. 
+            # We use filter().first() instead of get() to handle the race condition gracefully.
+            payment_record = Payment.objects.select_for_update().filter(
+                stripe_payment_intent_id=payment_intent.id, 
+                status="pending"
+            ).first()
+
+            if not payment_record:
+                # If we received money but have no pending record, it means the 15-min timer 
+                # deleted it just as the user paid. We MUST raise error to trigger the refund logic.
                 raise DRFValidationError(
-                    "Could not find a corresponding pending booking or payment for this successful payment. Refunding to prevent lost funds."
+                    "Payment record missing or already processed. Initiating refund to prevent lost funds."
                 )
+
+            # Get the booking
+            pending_booking = Booking.objects.select_for_update().filter(
+                pk=payment_record.booking.pk, 
+                status="pending"
+            ).first()
+
+            if not pending_booking:
+                 raise DRFValidationError(
+                    "Booking record missing in DB. Initiating refund."
+                 )
 
             metadata = payment_intent.metadata
             participants = pending_booking.participants
             initial_instance = pending_booking.schedule_instance
 
+            # Capacity Check
             other_participants = (
                 initial_instance.bookings.filter(status__in=["confirmed", "pending"])
                 .exclude(pk=pending_booking.pk)
@@ -1228,6 +1249,7 @@ class ProcessBookingWebhook(APIView):
                 f"[{webhook_id}] Payment {payment_record.id} updated to succeeded."
             )
 
+        # --- EMAILS AND NOTIFICATIONS ---
         recipient_user = pending_booking.user
         recipient_contact = pending_booking.contact
 
@@ -1271,10 +1293,6 @@ class ProcessBookingWebhook(APIView):
                 if staff.user:
                     recipients.add(staff.user)
 
-            logger.info(
-                f"Notification recipients: {[r.email for r in recipients if r]}"
-            )
-
             for recipient in recipients:
                 if recipient and recipient.email:
                     send_business_new_booking_email(recipient, pending_booking)
@@ -1283,7 +1301,6 @@ class ProcessBookingWebhook(APIView):
             "booking_id": pending_booking.id,
             "user_facing_reference": pending_booking.user_facing_reference,
         }
-    
 class BookingStatusByPaymentIntentView(APIView):
     # Allow unauthenticated access, as guests will use this endpoint.
     permission_classes = []
