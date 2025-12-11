@@ -87,11 +87,7 @@ class BusinessSitemap(Sitemap):
 class ExplorePagesSitemap(Sitemap):
     """
     Dynamically generates sitemap entries for key explore pages using ONLY query parameters.
-
-    URL Pattern: /explore?category={key}&subcategory={key}&location={city, state}&lat={lat}&lng={lng}
-
-    All parameters are properly URL-encoded.
-    Categories and subcategories are ONLY in query parameters, never in the path.
+    OPTIMIZED: Uses aggregation to avoid N+1 queries.
     """
 
     changefreq = "daily"
@@ -99,170 +95,170 @@ class ExplorePagesSitemap(Sitemap):
 
     def items(self):
         """
-        Generate explore page URLs with last modified dates.
-        Returns list of dicts: {'url': str, 'lastmod': datetime}
+        Generate explore page URLs with last modified dates using aggregation
+        to fetch valid combinations in minimal database queries.
         """
         urls = []
 
-        # 1. Main explore page (no filters)
-        latest_class = (
-            ClassesMain.objects.filter(
-                status="active",
-                businessId__isActive=True,
-                businessId__verificationStatus="verified",
-            )
-            .order_by("-updatedAt")
-            .first()
+        # Base queryset for all active, verified classes
+        # We reuse this to ensure consistency across all sitemap entries
+        base_qs = ClassesMain.objects.filter(
+            status="active",
+            businessId__isActive=True,
+            businessId__verificationStatus="verified",
         )
 
-        main_lastmod = latest_class.updatedAt if latest_class else timezone.now()
+        # 1. Main explore page (no filters)
+        # Fetch the most recent update time across all active classes
+        main_agg = base_qs.aggregate(latest=Max("updatedAt"))
+        main_lastmod = main_agg["latest"] or timezone.now()
         urls.append({"url": "/explore", "lastmod": main_lastmod})
 
-        # Get all active categories
-        categories = ClassCategory.objects.all()
-
-        # 2. Category pages (no location)
-        # e.g., /explore?category=fitness
-        for cat in categories:
-            cat_classes = ClassesMain.objects.filter(
-                status="active",
-                businessId__isActive=True,
-                businessId__verificationStatus="verified",
-                category=cat,
-            )
-
-            if cat_classes.exists():
-                cat_latest = cat_classes.order_by("-updatedAt").first()
-                urls.append(
-                    {
-                        "url": f"/explore?category={cat.key}",
-                        "lastmod": (
-                            cat_latest.updatedAt if cat_latest else timezone.now()
-                        ),
-                    }
-                )
-
-                # 2b. Subcategory pages (no location)
-                # e.g., /explore?category=fitness&subcategory=yoga
-                for subcat in cat.subcategories.all():
-                    subcat_classes = ClassesMain.objects.filter(
-                        status="active",
-                        businessId__isActive=True,
-                        businessId__verificationStatus="verified",
-                        category=cat,
-                        subcategory=subcat,
-                    )
-
-                    if subcat_classes.exists():
-                        subcat_latest = subcat_classes.order_by("-updatedAt").first()
-                        urls.append(
-                            {
-                                "url": f"/explore?category={cat.key}&subcategory={subcat.key}",
-                                "lastmod": (
-                                    subcat_latest.updatedAt
-                                    if subcat_latest
-                                    else timezone.now()
-                                ),
-                            }
-                        )
-
-        # 3. Get active locations with coordinates from businesses
-        # Group by city/state to get unique location combinations
-        active_locations = (
-            BusinessInfo.objects.filter(
-                isActive=True,
-                verificationStatus="verified",
-                latitude__isnull=False,
-                longitude__isnull=False,
-            )
-            .exclude(businessState__isnull=True)
-            .exclude(businessCity__isnull=True)
-            .exclude(businessState="")
-            .exclude(businessCity="")
-            .values("businessState", "businessCity", "latitude", "longitude")
-            .annotate(
-                class_count=Count("classes", filter=Q(classes__status="active")),
-                last_updated=Max(
-                    "classes__updatedAt", filter=Q(classes__status="active")
-                ),
-            )
-            .filter(class_count__gt=0)
+        # 2. Category Pages
+        # Group by category key and get the max updatedAt for each
+        cat_items = base_qs.values("category__key").annotate(
+            last_updated=Max("updatedAt")
         )
 
-        # Create location URLs with proper URL encoding
-        for loc in active_locations:
-            city = loc["businessCity"]
-            state = loc["businessState"]
-            lat = float(loc["latitude"])
-            lng = float(loc["longitude"])
-            last_updated = loc["last_updated"] or timezone.now()
+        for item in cat_items:
+            urls.append(
+                {
+                    "url": f"/explore?category={item['category__key']}",
+                    "lastmod": item["last_updated"],
+                }
+            )
 
-            # Format location string as "City, State" and URL encode it
-            location_str = f"{city}, {state}"
+        # 3. Category + Subcategory Pages
+        # Group by category AND subcategory
+        subcat_items = (
+            base_qs.exclude(subcategory__isnull=True)
+            .values("category__key", "subcategory__key")
+            .annotate(last_updated=Max("updatedAt"))
+        )
+
+        for item in subcat_items:
+            urls.append(
+                {
+                    "url": f"/explore?category={item['category__key']}&subcategory={item['subcategory__key']}",
+                    "lastmod": item["last_updated"],
+                }
+            )
+
+        # 4. Location Pages
+        # Group by City and State. We assume one lat/lng pair per city is sufficient for the sitemap.
+        # We fetch the Max latitude/longitude to ensure we get a valid coordinate pair for the city.
+        loc_qs = (
+            base_qs.exclude(businessId__businessCity__isnull=True)
+            .exclude(businessId__businessCity="")
+            .values("businessId__businessCity", "businessId__businessState")
+            .annotate(
+                last_updated=Max("updatedAt"),
+                lat=Max("businessId__latitude"),
+                lng=Max("businessId__longitude"),
+            )
+        )
+
+        for item in loc_qs:
+            city = item["businessId__businessCity"]
+            state = item["businessId__businessState"] or ""
+            lat = item["lat"]
+            lng = item["lng"]
+
+            # Skip if we don't have coordinates or city
+            if not city or not lat or not lng:
+                continue
+
+            location_str = f"{city}, {state}" if state else city
             encoded_location = quote(location_str)
 
-            # 4. Location-only pages - properly URL encoded
-            # e.g., /explore?location=Toronto%2C%20ON&lat=43.65&lng=-79.38
-            location_url = f"/explore?location={encoded_location}&lat={lat}&lng={lng}"
-            urls.append({"url": location_url, "lastmod": last_updated})
+            urls.append(
+                {
+                    "url": f"/explore?location={encoded_location}&lat={lat}&lng={lng}",
+                    "lastmod": item["last_updated"],
+                }
+            )
 
-            # 5. Location + Category combinations
-            for cat in categories:
-                cat_loc_classes = ClassesMain.objects.filter(
-                    status="active",
-                    businessId__isActive=True,
-                    businessId__verificationStatus="verified",
-                    businessId__businessCity__iexact=city,
-                    businessId__businessState__iexact=state,
-                    category=cat,
-                )
+        # 5. Location + Category Pages
+        # Group by City, State, AND Category
+        loc_cat_qs = (
+            base_qs.exclude(businessId__businessCity__isnull=True)
+            .exclude(businessId__businessCity="")
+            .values(
+                "businessId__businessCity",
+                "businessId__businessState",
+                "category__key",
+            )
+            .annotate(
+                last_updated=Max("updatedAt"),
+                lat=Max("businessId__latitude"),
+                lng=Max("businessId__longitude"),
+            )
+        )
 
-                if cat_loc_classes.exists():
-                    cat_loc_latest = cat_loc_classes.order_by("-updatedAt").first()
-                    cat_loc_url = f"/explore?category={cat.key}&location={encoded_location}&lat={lat}&lng={lng}"
-                    urls.append(
-                        {
-                            "url": cat_loc_url,
-                            "lastmod": (
-                                cat_loc_latest.updatedAt
-                                if cat_loc_latest
-                                else timezone.now()
-                            ),
-                        }
-                    )
+        for item in loc_cat_qs:
+            city = item["businessId__businessCity"]
+            state = item["businessId__businessState"] or ""
+            lat = item["lat"]
+            lng = item["lng"]
+            cat_key = item["category__key"]
 
-                    # 6. Location + Category + Subcategory combinations
-                    for subcat in cat.subcategories.all():
-                        subcat_loc_classes = ClassesMain.objects.filter(
-                            status="active",
-                            businessId__isActive=True,
-                            businessId__verificationStatus="verified",
-                            businessId__businessCity__iexact=city,
-                            businessId__businessState__iexact=state,
-                            category=cat,
-                            subcategory=subcat,
-                        )
+            if not city or not lat or not lng:
+                continue
 
-                        if subcat_loc_classes.exists():
-                            subcat_loc_latest = subcat_loc_classes.order_by(
-                                "-updatedAt"
-                            ).first()
-                            subcat_loc_url = f"/explore?category={cat.key}&subcategory={subcat.key}&location={encoded_location}&lat={lat}&lng={lng}"
-                            urls.append(
-                                {
-                                    "url": subcat_loc_url,
-                                    "lastmod": (
-                                        subcat_loc_latest.updatedAt
-                                        if subcat_loc_latest
-                                        else timezone.now()
-                                    ),
-                                }
-                            )
+            location_str = f"{city}, {state}" if state else city
+            encoded_location = quote(location_str)
+
+            urls.append(
+                {
+                    "url": f"/explore?category={cat_key}&location={encoded_location}&lat={lat}&lng={lng}",
+                    "lastmod": item["last_updated"],
+                }
+            )
+
+        # 6. Location + Category + Subcategory Pages
+        # Group by City, State, Category AND Subcategory
+        loc_subcat_qs = (
+            base_qs.exclude(businessId__businessCity__isnull=True)
+            .exclude(businessId__businessCity="")
+            .exclude(subcategory__isnull=True)
+            .values(
+                "businessId__businessCity",
+                "businessId__businessState",
+                "category__key",
+                "subcategory__key",
+            )
+            .annotate(
+                last_updated=Max("updatedAt"),
+                lat=Max("businessId__latitude"),
+                lng=Max("businessId__longitude"),
+            )
+        )
+
+        for item in loc_subcat_qs:
+            city = item["businessId__businessCity"]
+            state = item["businessId__businessState"] or ""
+            lat = item["lat"]
+            lng = item["lng"]
+            cat_key = item["category__key"]
+            subcat_key = item["subcategory__key"]
+
+            if not city or not lat or not lng:
+                continue
+
+            location_str = f"{city}, {state}" if state else city
+            encoded_location = quote(location_str)
+
+            urls.append(
+                {
+                    "url": f"/explore?category={cat_key}&subcategory={subcat_key}&location={encoded_location}&lat={lat}&lng={lng}",
+                    "lastmod": item["last_updated"],
+                }
+            )
 
         return urls
 
     def location(self, item):
-        """Extract URL from item dict - already properly encoded"""
+        """Extract URL from item dict"""
         return item["url"]
 
     def lastmod(self, item):
