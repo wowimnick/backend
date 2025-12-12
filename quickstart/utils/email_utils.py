@@ -775,12 +775,30 @@ def send_booking_reminder_email(user, booking: Booking):
         else "#"
     )
 
+    # Calculate end time
+    calculated_end_time = None
+    if booking.schedule_instance:
+        try:
+            dummy_date = datetime.now().date()
+            start_dt = datetime.combine(dummy_date, booking.schedule_instance.time)
+            end_dt = start_dt + timedelta(minutes=booking.schedule_instance.duration)
+            calculated_end_time = end_dt.time()
+        except Exception as e:
+            logger.error(f"Error calculating end time for booking {booking.id}: {e}")
+
+    # Format Timezone (Replace underscore with space)
+    formatted_timezone = related_data.get("business_timezone", "UTC")
+    if formatted_timezone:
+        formatted_timezone = formatted_timezone.replace("_", " ")
+
     context = {
         "user": user,
         "booking": booking,
         "class_details_url": class_details_url,
         "recipient_email": user.email,
         "related_data": related_data,
+        "calculated_end_time": calculated_end_time,
+        "formatted_timezone": formatted_timezone, # Passed explicitly
     }
     
     # Pass course session context if available
