@@ -72,15 +72,23 @@ def send_upcoming_booking_reminders():
     """
     Sends reminder emails for confirmed bookings scheduled to start
     within the next 22 to 24 hours.
-    
-    ZERO SPAM GUARANTEE:
-    Uses atomic cache.add() to lock the booking ID before sending.
     """
     now = timezone.now()
     reminder_start_time = now + timedelta(hours=22)
     reminder_end_time = now + timedelta(hours=24)
 
-    possible_dates = {reminder_start_time.date(), reminder_end_time.date()}
+    # FIX: Widen the date search window to account for timezone differences.
+    # A class might be on "Friday" in NY but "Saturday" in UTC.
+    # We check the target dates, plus one day before and one day after to be safe.
+    start_date = reminder_start_time.date()
+    end_date = reminder_end_time.date()
+    
+    possible_dates = {
+        start_date - timedelta(days=1),
+        start_date,
+        end_date,
+        end_date + timedelta(days=1)
+    }
 
     upcoming_bookings = (
         Booking.objects.filter(
@@ -112,13 +120,13 @@ def send_upcoming_booking_reminders():
         try:
             # Timezone Logic
             business_tz_str = booking.schedule_instance.schedule.option.classId.businessId.business_timezone
-            business_tz = timezone.pytz.timezone(business_tz_str)
+            business_tz = pytz.timezone(business_tz_str)
 
             naive_datetime = timezone.datetime.combine(
                 booking.schedule_instance.date, booking.schedule_instance.time
             )
             schedule_datetime_aware = business_tz.localize(naive_datetime)
-            schedule_datetime_utc = schedule_datetime_aware.astimezone(timezone.pytz.utc)
+            schedule_datetime_utc = schedule_datetime_aware.astimezone(pytz.utc)
 
             # Precision Check
             if not (reminder_start_time <= schedule_datetime_utc < reminder_end_time):
