@@ -1085,7 +1085,7 @@ class ProcessBookingWebhook(APIView):
             logger.error(f"[{webhook_id}] Error processing course payment success: {e}", exc_info=True)
             raise
 
-def handle_successful_payment(self, payment_intent, webhook_id):
+    def handle_successful_payment(self, payment_intent, webhook_id):
         # Check if we have ANY record for this Stripe ID that isn't 'pending'.
         # This catches 'refunded', 'failed', and 'succeeded' statuses safely.
         existing_payment = Payment.objects.filter(
