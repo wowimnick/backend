@@ -353,6 +353,7 @@ class StudentBookingSerializer(serializers.ModelSerializer):
         model = Booking
         fields = [
             "booking_id",
+            "booking_group_id",
             "class_id",
             "slug",
             "class_name",
@@ -360,7 +361,6 @@ class StudentBookingSerializer(serializers.ModelSerializer):
             "date",
             "time",
             "coordinates",
-            # --- ADDED ---
             "location_address_string",
             "business_name",
             "price",
@@ -517,6 +517,7 @@ class StudentBookingDetailSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "user_facing_reference",
+            "booking_group_id",
             "status",
             "booking_date",
             "class_name",

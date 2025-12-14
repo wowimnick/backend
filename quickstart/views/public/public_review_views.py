@@ -13,6 +13,7 @@ from rest_framework.exceptions import (
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.throttling import ScopedRateThrottle
 from django.db import transaction
+from django.db.models import Q
 import logging
 
 from quickstart.utils.email_utils import send_review_submission_confirmation_email
@@ -36,25 +37,19 @@ class StandardResultsSetPagination(PageNumberPagination):
     max_page_size = 100  # Max page size client can request
 
 
-# In public_review_views.py
-
-
 class ReviewSubmission(APIView):
     """
     API endpoint for authenticated users to submit reviews for completed bookings.
-    MODIFIED to use JSON payload with an S3 key for the image.
+    Enforces one review per Course (booking group).
     """
 
     permission_classes = [IsAuthenticated]
-    # MODIFIED: Changed parsers to primarily handle JSON.
     parser_classes = [JSONParser, FormParser, MultiPartParser]
-    # --- Rate Limiting ---
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "sensitive"
 
     @transaction.atomic
     def post(self, request):
-        # The request data is now expected to be JSON.
         serializer = ReviewSubmissionSerializer(
             data=request.data, context={"request": request}
         )
@@ -76,7 +71,6 @@ class ReviewSubmission(APIView):
                 {"booking_id": "Valid booking not found for this ID."}
             )
 
-        # --- (All validation logic for booking ownership and status remains the same) ---
         if booking.user != request.user:
             raise PermissionDenied("You can only review your own completed bookings.")
 
@@ -85,10 +79,24 @@ class ReviewSubmission(APIView):
                 {"booking_id": "You can only review completed bookings."}
             )
 
+        # --- 1. Direct Booking Check ---
         if Reviews.objects.filter(booking=booking).exists():
             raise DRFValidationError(
                 {"booking_id": "A review has already been submitted for this booking."}
             )
+
+        # --- 2. Course/Group Check (New Logic) ---
+        # If this booking is part of a course, check if the user reviewed ANY booking in this group
+        if booking.booking_group_id:
+            already_reviewed_course = Reviews.objects.filter(
+                booking__booking_group_id=booking.booking_group_id,
+                userId=request.user
+            ).exists()
+            
+            if already_reviewed_course:
+                raise DRFValidationError(
+                    {"booking_id": "You have already submitted a review for this course."}
+                )
 
         # --- Create Review ---
         try:
@@ -102,12 +110,9 @@ class ReviewSubmission(APIView):
                 booking=booking,
                 rating=serializer.validated_data["rating"],
                 comment=serializer.validated_data["comment"],
-                # MODIFIED: Get the S3 key from validated_data
                 image=serializer.validated_data.get("image_s3_key"),
                 status="approved",
             )
-
-            # --- (The rest of the view logic remains the same) ---
 
             try:
                 business_instance.update_review_aggregates()
@@ -123,9 +128,6 @@ class ReviewSubmission(APIView):
 
             try:
                 send_review_submission_confirmation_email(request.user, review)
-                logger.info(
-                    f"Review submission confirmation email prepared/queued for review {review.reviewId}"
-                )
             except Exception as email_error:
                 logger.error(
                     f"Failed to send review submission confirmation email for review {review.reviewId}: {email_error}",
@@ -153,8 +155,6 @@ class PlatformClassReviews(generics.ListAPIView):
     permission_classes = [AllowAny]
     pagination_class = StandardResultsSetPagination
 
-    # --- CACHING IMPLEMENTED ---
-    # Cache the response for this view for 24 hours (86400 seconds)
     @method_decorator(cache_page(60 * 60 * 24))
     def get(self, *args, **kwargs):
         return super().get(*args, **kwargs)
@@ -176,7 +176,6 @@ class ImportedGoogleReviewsView(generics.ListAPIView):
     permission_classes = [AllowAny]
     pagination_class = None
 
-    # --- CACHING IMPLEMENTED ---
     @method_decorator(cache_page(60 * 60 * 24))
     def get(self, *args, **kwargs):
         return super().get(*args, **kwargs)
