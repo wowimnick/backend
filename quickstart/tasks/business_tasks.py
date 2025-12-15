@@ -71,7 +71,7 @@ def notify_businesses_of_expiring_schedules():
         context = {
             'business_user': owner,
             'expiring_classes': class_list,
-            'dashboard_url': f"{settings.FRONTEND_BASE_URL}/business/classes",
+            'dashboard_url': f"{settings.FRONTEND_BASE_URL}/business/dashboard/overview",
             'settings_url': f"{settings.FRONTEND_BASE_URL}/business/dashboard",
             'settings': settings 
         }
