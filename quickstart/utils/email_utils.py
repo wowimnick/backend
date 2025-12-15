@@ -316,7 +316,8 @@ def send_booking_confirmation_email(user, booking: Booking):
         if class_identifier
         else "#"
     )
-    manage_bookings_url = f"{settings.FRONTEND_BASE_URL}/my-classes"
+    # Updated: Deep link to the specific booking in "upcoming" tab
+    manage_bookings_url = f"{settings.FRONTEND_BASE_URL}/my-classes?tab=upcoming&highlight={booking.id}"
 
     payment = (
         booking.payments.filter(status="succeeded").order_by("-created_at").first()
@@ -340,7 +341,7 @@ def send_booking_confirmation_email(user, booking: Booking):
             end_dt = start_dt + timedelta(minutes=duration_minutes)
             
             # Format: "7:00 PM - 8:00 PM"
-            time_str_start = start_dt.strftime("%-I:%M %p") # Use %I for zero-padded if %-I not supported on Windows
+            time_str_start = start_dt.strftime("%-I:%M %p") 
             time_str_end = end_dt.strftime("%-I:%M %p")
             formatted_time_range = f"{time_str_start} - {time_str_end}"
 
@@ -441,7 +442,6 @@ def send_booking_confirmation_email(user, booking: Booking):
     logger.info(
         f"--- send_booking_confirmation_email finished for Booking ID: {booking.id} ---"
     )
-
 
 def send_business_staff_invitation_email(invitation: BusinessStaff):
     """Sends an invitation email to a new potential staff member."""
@@ -774,6 +774,9 @@ def send_booking_reminder_email(user, booking: Booking):
         if class_identifier
         else "#"
     )
+    
+    # Updated: Highlighting the specific booking
+    manage_bookings_url = f"{settings.FRONTEND_BASE_URL}/my-classes?tab=upcoming&highlight={booking.id}"
 
     # Calculate end time
     calculated_end_time = None
@@ -795,10 +798,11 @@ def send_booking_reminder_email(user, booking: Booking):
         "user": user,
         "booking": booking,
         "class_details_url": class_details_url,
+        "manage_bookings_url": manage_bookings_url, # Added this to context
         "recipient_email": user.email,
         "related_data": related_data,
         "calculated_end_time": calculated_end_time,
-        "formatted_timezone": formatted_timezone, # Passed explicitly
+        "formatted_timezone": formatted_timezone, 
     }
     
     # Pass course session context if available
@@ -818,7 +822,6 @@ def send_booking_reminder_email(user, booking: Booking):
         subject=f"{subject_prefix} {related_data.get('class_title', '[Class Title]')} is Soon!",
     )
     logger.info(f"Booking reminder email prepared/queued for booking {booking.id}")
-
 
 def send_admin_new_verification_request_email(
     admin_recipient_list: List[str], verification_request: VerificationRequest
@@ -1291,7 +1294,9 @@ def send_request_for_review_email(user: CustomUser, booking: Booking):
     )
 
     related_data = _get_booking_related_data(booking)
-    review_url = f"{settings.FRONTEND_BASE_URL}/my-classes"
+    # Updated: Link to completed tab and highlight the booking to review
+    review_url = f"{settings.FRONTEND_BASE_URL}/my-classes?tab=completed&highlight={booking.id}"
+    
     context = {
         "user": user,
         "booking": booking,
@@ -1305,7 +1310,6 @@ def send_request_for_review_email(user: CustomUser, booking: Booking):
         context=context,
         subject=f"How was your '{related_data.get('class_title', 'class')}' experience?",
     )
-
 
 def send_favorited_class_new_dates_email(
     user: CustomUser, class_main: ClassesMain, new_schedule: Schedule
@@ -1391,7 +1395,8 @@ def send_booking_rescheduled_by_business_email(
         f"Preparing booking rescheduled email for booking {booking.id} to user {user.email}"
     )
 
-    manage_bookings_url = f"{settings.FRONTEND_BASE_URL}/my-classes"
+    # Updated: Direct to highlighting the rescheduled booking
+    manage_bookings_url = f"{settings.FRONTEND_BASE_URL}/my-classes?tab=upcoming&highlight={booking.id}"
 
     context = {
         "user": user,

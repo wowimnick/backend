@@ -41,7 +41,7 @@
     {% endif %}
 
     <div class="detail-item">
-        <strong>{% trans "Date Processed:" %}</strong> {{ booking.cancelled_at|default:booking.updated_at|date:"F j, Y" }}
+        <strong>{% trans "Date Processed:" %}</strong> {{ booking.cancelled_at|date:"F j, Y" }}
     </div>
 
     <div class="detail-item" style="margin-top: 12px;">
