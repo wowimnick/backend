@@ -1151,41 +1151,7 @@ class ProcessBookingWebhook(APIView):
                     f"Session on {initial_instance.date.strftime('%b %d')} is now full."
                 )
 
-            # --- UPDATE PENDING BOOKING TO CONFIRMED ---
-            pending_booking.status = "confirmed"
-            pending_booking.payment_status = "paid"
-
-            if not pending_booking.user_facing_reference:
-                pending_booking.user_facing_reference = pending_booking._generate_user_facing_reference()
-
-            if pending_booking.contact and not pending_booking.user:
-                pending_booking.cancellation_token = uuid.uuid4()
-                logger.info(
-                    f"[{webhook_id}] Generated cancellation token for guest booking {pending_booking.id}"
-                )
-
-            pending_booking.save()
-            logger.info(f"[{webhook_id}] Booking {pending_booking.id} confirmed.")
-
-            # --- Handle Discount Redemption (Single Session) ---
-            applied_discount_id = metadata.get("applied_discount_id")
-            discount_amount = Decimal(metadata.get("discount_amount", "0.00"))
-
-            if applied_discount_id:
-                try:
-                    discount = Discount.objects.select_for_update().get(pk=applied_discount_id)
-                    discount.redeem() # Increments usage_count atomically
-                    
-                    AppliedDiscount.objects.create(
-                        booking=pending_booking,
-                        discount=discount,
-                        amount_saved=discount_amount
-                    )
-                    logger.info(f"[{webhook_id}] Redeemed discount {discount.code} for booking {pending_booking.id}")
-                except Discount.DoesNotExist:
-                    logger.warning(f"[{webhook_id}] Discount {applied_discount_id} not found during webhook processing.")
-
-            # --- CALCULATE FEES AND UPDATE PAYMENT RECORD ---
+            # --- CALCULATE FEES AND NET PAYOUT (Moved UP to update Booking correctly) ---
             grand_total = Decimal(payment_intent.amount_received) / 100
             total_tax = Decimal(metadata.get("tax_amount", "0.00"))
             subtotal_after_discount = Decimal(
@@ -1219,6 +1185,43 @@ class ProcessBookingWebhook(APIView):
             business_net_revenue = subtotal_after_discount - platform_fee_amount
             net_payout_to_business = business_net_revenue + business_payout_tax
 
+            # --- UPDATE PENDING BOOKING TO CONFIRMED ---
+            pending_booking.status = "confirmed"
+            pending_booking.payment_status = "paid"
+            # FIX: Ensure the booking actually knows how much it's worth to the business
+            pending_booking.allocated_net_payout = net_payout_to_business
+
+            if not pending_booking.user_facing_reference:
+                pending_booking.user_facing_reference = pending_booking._generate_user_facing_reference()
+
+            if pending_booking.contact and not pending_booking.user:
+                pending_booking.cancellation_token = uuid.uuid4()
+                logger.info(
+                    f"[{webhook_id}] Generated cancellation token for guest booking {pending_booking.id}"
+                )
+
+            pending_booking.save()
+            logger.info(f"[{webhook_id}] Booking {pending_booking.id} confirmed with Net Payout: {net_payout_to_business}.")
+
+            # --- Handle Discount Redemption (Single Session) ---
+            applied_discount_id = metadata.get("applied_discount_id")
+            discount_amount = Decimal(metadata.get("discount_amount", "0.00"))
+
+            if applied_discount_id:
+                try:
+                    discount = Discount.objects.select_for_update().get(pk=applied_discount_id)
+                    discount.redeem() # Increments usage_count atomically
+                    
+                    AppliedDiscount.objects.create(
+                        booking=pending_booking,
+                        discount=discount,
+                        amount_saved=discount_amount
+                    )
+                    logger.info(f"[{webhook_id}] Redeemed discount {discount.code} for booking {pending_booking.id}")
+                except Discount.DoesNotExist:
+                    logger.warning(f"[{webhook_id}] Discount {applied_discount_id} not found during webhook processing.")
+
+            # --- UPDATE PAYMENT RECORD ---
             charge_details = (
                 stripe.Charge.retrieve(payment_intent.latest_charge)
                 if payment_intent.latest_charge
