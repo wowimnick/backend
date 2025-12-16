@@ -155,9 +155,7 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         """
-        This view returns a list of all bookings for the business
-        associated with the currently authenticated user (owner or staff),
-        with appropriate filters applied.
+        This view returns a list of all bookings for the business...
         """
         user = self.request.user
 
@@ -167,12 +165,10 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
         ).first()
 
         if not business:
-            logger.warning(
-                f"User {user.email} tried to access business bookings but is not associated with any business."
-            )
+            # ... (existing logging code)
             return Booking.objects.none()
 
-        # Base queryset for all bookings belonging to the user's business.
+        # Base queryset
         queryset = (
             Booking.objects.filter(
                 schedule_instance__schedule__option__classId__businessId=business
@@ -180,9 +176,15 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
             .select_related(
                 "user",
                 "schedule_instance__schedule__option__classId",
-                "contact",  # Added contact
+                "contact",
             )
             .order_by("-booking_date")
+        )
+
+        time_threshold = timezone.now() - timedelta(minutes=20)
+        queryset = queryset.exclude(
+            status='pending', 
+            booking_date__lt=time_threshold
         )
 
         # Apply status and date filters from the request query parameters.

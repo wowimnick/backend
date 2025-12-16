@@ -1409,16 +1409,6 @@ def classoption_change_receiver(sender, instance, **kwargs):
             ClassesMain.objects.filter(pk=class_instance.pk).update(
                 search_vector=new_vector
             )
-            # logger.info(f"SV for Class {class_instance.pk} updated due to ClassOption change.")
-
-
-@receiver(post_save, sender="quickstart.BusinessInfo")
-def businessinfo_change_receiver(sender, instance, update_fields, **kwargs):
-    from quickstart.tasks import update_search_vector_for_business
-
-    if update_fields is None or "businessName" in update_fields:
-        update_search_vector_for_business.delay(instance.businessId)
-
 
 @receiver(post_save, sender="quickstart.ClassCategory")
 def classcategory_change_receiver(sender, instance, update_fields, **kwargs):
