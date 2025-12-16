@@ -183,7 +183,16 @@ class CustomTokenRefreshView(APIView):
             # First, attempt a standard refresh. This will work 99% of the time.
             refresh = RefreshToken(refresh_token_str)
             user_id = refresh.payload.get("user_id")
-            user = User.objects.select_related("role").get(userId=user_id)
+
+            # --- OPTIMIZATION FIX: Prefetch permissions and content_type to avoid N+1 queries ---
+            user = (
+                User.objects.select_related("role")
+                .prefetch_related(
+                    "role__permissions", "role__permissions__content_type"
+                )
+                .get(userId=user_id)
+            )
+
             user_serializer = CustomUserDetailsSerializer(user)
 
             data = {
@@ -244,7 +253,15 @@ class CustomTokenRefreshView(APIView):
                         # A new token was created recently. This confirms the race condition.
                         # We create new tokens based on this valid, most recent token.
                         new_refresh = RefreshToken(latest_token.token)
-                        user = User.objects.select_related("role").get(userId=user_id)
+
+                        # --- OPTIMIZATION FIX: Prefetch here as well ---
+                        user = (
+                            User.objects.select_related("role")
+                            .prefetch_related(
+                                "role__permissions", "role__permissions__content_type"
+                            )
+                            .get(userId=user_id)
+                        )
 
                         data = {
                             "access": str(new_refresh.access_token),
@@ -480,9 +497,6 @@ class CustomPasswordResetConfirmView(APIView):
         )
 
         # 3. Use allauth's SetPasswordForm for validation and saving
-        # THE FIX: The error log clearly shows the form expects 'password1' and 'password2'.
-        # We must therefore map the incoming 'new_password1' and 'new_password2' from the request
-        # to the keys the form is expecting to satisfy its validation.
         form = SetPasswordForm(
             data={
                 "password1": request.data.get("new_password1"),
@@ -492,9 +506,6 @@ class CustomPasswordResetConfirmView(APIView):
         )
 
         if form.is_valid():
-            # Because the form's field names appear to be 'password1'/'password2' (based on the error log),
-            # the default form.save() method (which might look for 'new_password1') could fail.
-            # We will set the password manually using the cleaned data to ensure it works.
             user.set_password(form.cleaned_data["password1"])
             user.save()
             logger.info(
