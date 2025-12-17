@@ -312,7 +312,7 @@ CELERY_BEAT_SCHEDULE = {
     },
     "process-payouts-daily": {
         "task": "quickstart.tasks.payout_tasks.process_daily_payouts",
-        "schedule": crontab(hour=6, minute=35), # Staggered to 6:35 AM
+        "schedule": crontab(hour=3, minute=30), # Staggered to 3:30 AM
     },
     "process-refunds-daily": {
         "task": "quickstart.tasks.payout_tasks.process_daily_refunds",
