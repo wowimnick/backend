@@ -312,19 +312,19 @@ CELERY_BEAT_SCHEDULE = {
     },
     "process-payouts-daily": {
         "task": "quickstart.tasks.payout_tasks.process_daily_payouts",
-        "schedule": crontab(hour=3, minute=0),
+        "schedule": crontab(hour=3, minute=30),  # Staggered to 3:30 AM
     },
     "process-refunds-daily": {
         "task": "quickstart.tasks.payout_tasks.process_daily_refunds",
-        "schedule": crontab(hour=4, minute=0),
+        "schedule": crontab(hour=5, minute=0),  # Staggered to 5:00 AM
     },
     "send-daily-review-requests": {
         "task": "quickstart.tasks.user_tasks.send_pending_review_requests",
-        "schedule": crontab(hour=5, minute=0),  # Every day at 5 AM UTC
+        "schedule": crontab(hour=6, minute=30),  # Staggered to 6:30 AM
     },
     "send-hourly-booking-reminders": {
         "task": "quickstart.tasks.booking_tasks.send_upcoming_booking_reminders",
-        "schedule": crontab(minute=0, hour="*"),  # Run at the start of every hour
+        "schedule": crontab(minute=15, hour="*"),  # Run at :15 past every hour (avoids top of hour collision)
     },
     "notify-expiring-schedules-weekly": {
         "task": "quickstart.tasks.business_tasks.notify_businesses_of_expiring_schedules",
@@ -335,6 +335,10 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": crontab(minute="*/5"), # Run every 5 minutes
     },
 }
+
+# Celery Worker Settings - Prevent prefetch issues
+CELERYD_PREFETCH_MULTIPLIER = 1  # Worker only grabs 1 task at a time
+CELERY_ACKS_LATE = True  # Don't acknowledge task until it's actually completed
 
 # Email-specific settings
 EMAIL_RATE_LIMIT_SETTINGS = {

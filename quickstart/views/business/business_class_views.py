@@ -983,6 +983,93 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+    @action(detail=False, methods=["post"], url_path="group-update")
+    def group_update(self, request, *args, **kwargs):
+        """
+        Updates a group of schedules identified by name and option_id.
+        Updates fields like time, price, duration, capacity.
+        """
+        user = request.user
+        business = BusinessInfo.objects.filter(
+            Q(owner=user)
+            | Q(staff_members__user=user, staff_members__status="accepted")
+        ).first()
+        
+        if not business:
+            raise PermissionDenied("User is not associated with any business.")
+
+        # reusing the structure of group action, but we expect 'updates' dict
+        option_id = request.data.get("option_id")
+        group_name = request.data.get("name")
+        updates = request.data.get("updates", {})
+
+        if not option_id or not group_name:
+            return Response(
+                {"detail": "option_id and name are required."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validate Option ownership
+        try:
+            option = ClassOption.objects.get(pk=option_id, classId__businessId=business)
+        except ClassOption.DoesNotExist:
+            raise NotFound("Class option not found or access denied.")
+
+        # Find schedules
+        schedules_to_update = Schedule.objects.filter(option=option, name=group_name)
+        
+        if not schedules_to_update.exists():
+            return Response(
+                {"detail": "No schedules found for this group."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        updated_count = 0
+        
+        try:
+            with transaction.atomic():
+                for schedule in schedules_to_update:
+                    # Apply updates
+                    has_changes = False
+                    
+                    if "time" in updates:
+                        schedule.time = updates["time"]
+                        has_changes = True
+                    if "duration" in updates:
+                        schedule.duration = updates["duration"]
+                        has_changes = True
+                    if "price" in updates:
+                        schedule.price = updates["price"]
+                        has_changes = True
+                    if "maxParticipants" in updates:
+                        schedule.maxParticipants = updates["maxParticipants"]
+                        has_changes = True
+                    if "minParticipants" in updates:
+                        schedule.minParticipants = updates["minParticipants"]
+                        has_changes = True
+                    
+                    # Only save if changed (this triggers the model's save() signal 
+                    # which handles updating ScheduleInstance logic)
+                    if has_changes:
+                        schedule.save()
+                        updated_count += 1
+            
+            # Trigger Next.js Revalidation
+            class_obj = option.classId
+            trigger_nextjs_revalidation(path=f"/classes/{class_obj.slug}")
+            
+            return Response({
+                "message": f"Successfully updated {updated_count} schedules in group '{group_name}'.",
+                "updated_count": updated_count
+            })
+
+        except Exception as e:
+            logger.error(f"Error updating schedule group: {e}", exc_info=True)
+            return Response(
+                {"detail": f"Failed to update group: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
     @action(detail=False, methods=["post"], url_path="group-delete")
     def group_delete(self, request, *args, **kwargs):
         """
