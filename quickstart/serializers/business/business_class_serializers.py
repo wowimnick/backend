@@ -236,7 +236,7 @@ class ScheduleSerializer(serializers.ModelSerializer):
         # 1. Resolve Option and Instance Context
         instance = self.instance
         option = data.get("option") or getattr(instance, "option", None)
-        
+
         if not option:
             raise serializers.ValidationError(
                 "Option context is required for schedule validation."
@@ -244,12 +244,18 @@ class ScheduleSerializer(serializers.ModelSerializer):
 
         # 2. Resolve Fields (Incoming Data -> Fallback to Instance -> None)
         booking_type = option.booking_type
-        
-        start_date = data.get("start_date", getattr(instance, "start_date", None) if instance else None)
-        end_date = data.get("end_date", getattr(instance, "end_date", None) if instance else None)
-        date_field = data.get("date", getattr(instance, "date", None) if instance else None)
+
+        start_date = data.get(
+            "start_date", getattr(instance, "start_date", None) if instance else None
+        )
+        end_date = data.get(
+            "end_date", getattr(instance, "end_date", None) if instance else None
+        )
+        date_field = data.get(
+            "date", getattr(instance, "date", None) if instance else None
+        )
         day = data.get("day", getattr(instance, "day", None) if instance else None)
-        
+
         # 3. Critical Change Protection (If bookings exist)
         if instance and instance.pk:
             has_bookings = getattr(instance, "has_confirmed_bookings", None)
@@ -259,7 +265,15 @@ class ScheduleSerializer(serializers.ModelSerializer):
                 ).exists()
 
             if has_bookings:
-                immutable_fields = ["start_date", "end_date", "day", "time"]
+                # ADDED 'date' and 'duration' to this list to prevent calendar corruption
+                immutable_fields = [
+                    "start_date",
+                    "end_date",
+                    "date",
+                    "day",
+                    "time",
+                    "duration",
+                ]
                 for field in immutable_fields:
                     # Check if field is present in data AND differs from stored value
                     if field in data and data[field] != getattr(instance, field):
@@ -280,7 +294,7 @@ class ScheduleSerializer(serializers.ModelSerializer):
                     "Course end date must be after start date."
                 )
             # Only check past dates on creation, not update
-            if not instance and start_date < timezone.now().date():
+            if not instance and start_date and start_date < timezone.now().date():
                 raise serializers.ValidationError(
                     {"start_date": "New course cannot start in the past."}
                 )
@@ -292,7 +306,7 @@ class ScheduleSerializer(serializers.ModelSerializer):
                 )
             if date_field and not data.get("day"):
                 data["day"] = date_field.strftime("%a")
-            if not instance and date_field < timezone.now().date():
+            if not instance and date_field and date_field < timezone.now().date():
                 raise serializers.ValidationError(
                     {"date": "New session cannot be scheduled in the past."}
                 )
@@ -317,7 +331,7 @@ class ScheduleSerializer(serializers.ModelSerializer):
                         schedule_instance__schedule=instance,
                         status="confirmed",
                     ).aggregate(total=Coalesce(Sum("participants"), 0))["total"]
-                
+
                 if new_max < current_booked:
                     raise serializers.ValidationError(
                         {
@@ -330,7 +344,7 @@ class ScheduleSerializer(serializers.ModelSerializer):
 
         min_p = data.get("minParticipants", getattr(instance, "minParticipants", 1))
         max_p = data.get("maxParticipants", getattr(instance, "maxParticipants", 10))
-        
+
         if min_p > max_p:
             raise serializers.ValidationError(
                 "Minimum participants cannot exceed maximum capacity."
@@ -347,32 +361,29 @@ class ScheduleSerializer(serializers.ModelSerializer):
         old_end = instance.end_date
         old_day = instance.day
         old_time = instance.time
-        
+
         # Perform the standard update
         instance = super().update(instance, validated_data)
-        
+
         is_course = instance.option.booking_type == "Full Course"
-        
+
         # Logic to regenerate instances if dates/times changed for a Course
         if is_course:
             core_changed = (
-                instance.start_date != old_start or 
-                instance.end_date != old_end or 
-                instance.day != old_day or
-                instance.time != old_time
+                instance.start_date != old_start
+                or instance.end_date != old_end
+                or instance.day != old_day
+                or instance.time != old_time
             )
-            
+
             if core_changed:
                 # Delete future instances (validation already ensured no bookings exist)
                 today = timezone.now().date()
-                instance.instances.filter(
-                    date__gte=today, 
-                    status='scheduled'
-                ).delete()
-                
+                instance.instances.filter(date__gte=today, status="scheduled").delete()
+
                 # Regenerate based on new settings
                 instance.generate_course_instances()
-                
+
         return instance
 
 
