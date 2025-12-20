@@ -247,14 +247,13 @@ def register_business(request):
 
 
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])  # User must be logged in
+@permission_classes([IsAuthenticated])
 def get_user_businesses(request):
     """
     Get businesses the current logged-in user owns or manages.
     (URL: /api/my-businesses/)
     """
     user = request.user
-    # Fetch businesses this user owns or manages
     businesses = (
         BusinessInfo.objects.filter(
             Q(owner=user)
@@ -263,10 +262,9 @@ def get_user_businesses(request):
         .distinct()
         .select_related("owner")
         .order_by("businessName")
-        .first()
-    )  # Optimization and ordering
+    ) 
 
-    # Use the standard serializer, sensitive data is handled by context/permissions elsewhere
+    # Now businesses is a QuerySet, so many=True will work correctly
     serializer = ManagedBusinessInfoSerializer(
         businesses, many=True, context={"request": request}
     )
