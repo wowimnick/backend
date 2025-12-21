@@ -273,30 +273,85 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
 
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop("partial", True)
+        
+        # 1. Permission Checks
         if not request.user.has_perm("quickstart.change_businessinfo"):
             self.permission_denied(
                 request, message="You do not have permission to update businesses."
             )
+            
         instance = self.get_object()
-        old_is_active = instance.isActive
+        
+        # 2. Hierarchy Check (Ensure admin can manage this specific owner)
         if not user_can_manage(request.user, instance.owner):
             self.permission_denied(
                 request,
                 message="You cannot manage this business due to hierarchy restrictions.",
             )
+
+        # 3. Capture Old State (Specifically isActive)
+        old_is_active = instance.isActive
+        
+        # 4. Perform the Update
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
+        
         logger.info(
             f"Business '{instance.businessName}' (ID: {instance.pk}) updated by Admin {request.user.email}"
         )
+        
         new_is_active = serializer.instance.isActive
+        
+        # 5. Check for Status Change & Trigger Revalidation
         if old_is_active != new_is_active:
             action_code = (
                 "business_activate" if new_is_active else "business_deactivate"
             )
             details = f"Business '{instance.businessName}' was {'activated' if new_is_active else 'deactivated'} by admin."
             self._log_business_action(instance, action_code, details, request)
+
+            try:
+                from quickstart.utils.revalidation import trigger_nextjs_revalidation, trigger_multiple_revalidations
+
+                # 1. Revalidate the Business Page itself
+                if instance.slug:
+                    trigger_nextjs_revalidation(tag=f"business-{instance.slug}")
+
+                # 2. Collect tags for all classes belonging to this business
+                #    (Since the business status affects the visibility of ALL its classes)
+                business_classes = ClassesMain.objects.filter(
+                    businessId=instance
+                ).select_related("category", "subcategory")
+
+                tags_to_revalidate = ["classes-search", "homepage-classes"]
+
+                for class_obj in business_classes:
+                    # Tag for the class detail page
+                    if class_obj.slug:
+                        tags_to_revalidate.append(f"class-{class_obj.slug}")
+                    
+                    # Tag for the category listing (listing count/content might change)
+                    if class_obj.category and hasattr(class_obj.category, "key"):
+                        tags_to_revalidate.append(f"category-{class_obj.category.key}")
+                    
+                    # Tag for the subcategory listing
+                    if class_obj.subcategory and hasattr(class_obj.subcategory, "key"):
+                        tags_to_revalidate.append(f"subcategory-{class_obj.subcategory.key}")
+
+                # 3. Trigger Bulk Revalidation
+                if tags_to_revalidate:
+                    unique_tags = list(set(tags_to_revalidate))
+                    trigger_multiple_revalidations(tags=unique_tags)
+                    logger.info(
+                        f"Triggered revalidation for {len(unique_tags)} tags due to business status change (ID: {instance.pk})."
+                    )
+
+            except ImportError:
+                logger.warning("Revalidation skipped: 'quickstart.utils.nextjs_utils' not found.")
+            except Exception as e:
+                logger.error(f"Error triggering revalidation during business update: {e}", exc_info=True)
+
         else:
             self._log_business_action(
                 instance,
@@ -304,8 +359,10 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
                 f"Business '{instance.businessName}' details updated by admin.",
                 request,
             )
+            
         if getattr(instance, "_prefetched_objects_cache", None):
             instance._prefetched_objects_cache = {}
+            
         return Response(serializer.data)
 
     def destroy(self, request, *args, **kwargs):
