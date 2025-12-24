@@ -108,38 +108,6 @@ class CanAccessReviewAdmin(BasePermission):
         )  # Make sure this permission exists
 
 
-def _trigger_class_revalidation(self, class_instance):
-    """Helper to trigger all necessary revalidations for a class."""
-    if not class_instance:
-        return
-
-    # 1. Revalidate the class detail page by tags
-    if hasattr(class_instance, "slug") and class_instance.slug:
-        trigger_nextjs_revalidation(tag=f"class-{class_instance.slug}")
-
-    trigger_nextjs_revalidation(tag=f"class-{class_instance.classId}")
-
-    # 2. Revalidate the business page if the class belongs to a business
-    if class_instance.businessId and hasattr(class_instance.businessId, "slug"):
-        business_slug = class_instance.businessId.slug
-        trigger_nextjs_revalidation(tag=f"business-{business_slug}")
-        logger.info(f"Revalidated business page: business-{business_slug}")
-
-    # 3. Revalidate homepage and search/explore pages
-    trigger_nextjs_revalidation(path="/")
-
-    tags_to_revalidate = ["classes-search", "homepage-classes", "classes"]
-    if class_instance.category and hasattr(class_instance.category, "key"):
-        tags_to_revalidate.append(f"category-{class_instance.category.key}")
-    if class_instance.subcategory and hasattr(class_instance.subcategory, "key"):
-        tags_to_revalidate.append(f"subcategory-{class_instance.subcategory.key}")
-
-    for tag in tags_to_revalidate:
-        trigger_nextjs_revalidation(tag=tag)
-
-    logger.info(
-        f"Triggered revalidation for class {class_instance.pk} (slug: {class_instance.slug}) and related tags."
-    )
 
 
 class StandardResultsSetPagination(PageNumberPagination):
@@ -531,6 +499,39 @@ class AdminClassViewSet(viewsets.ModelViewSet):
 
     # --- Custom Actions ---
 
+    @action(detail=True, methods=["patch", "post"])
+    def update_class_status(self, request, pk=None):
+        """
+        Manually update the status of a class (e.g., active, suspended).
+        """
+        # Ensure the user has permission (adjust permission codename if needed)
+        if not request.user.has_perm("quickstart.change_classesmain"):
+             self.permission_denied(request, message="You cannot change class status.")
+        
+        instance = self.get_object()
+        new_status = request.data.get("status")
+        reason = request.data.get("reason", "")
+
+        # Basic validation
+        valid_statuses = dict(ClassesMain.STATUS_CHOICES).keys()
+        if new_status not in valid_statuses:
+             return Response(
+                 {"error": f"Invalid status. Choices are: {', '.join(valid_statuses)}"}, 
+                 status=status.HTTP_400_BAD_REQUEST
+             )
+
+        old_status = instance.status
+        instance.status = new_status
+        instance.save(update_fields=["status"])
+        
+        # Trigger revalidation since visibility changed
+        if hasattr(self, '_trigger_class_revalidation'):
+            self._trigger_class_revalidation(instance)
+
+        logger.info(f"Class {instance.classId} status changed from {old_status} to {new_status} by {request.user.email}. Reason: {reason}")
+        
+        return Response({"status": "success", "new_status": new_status, "classId": instance.classId})
+    
     @action(detail=False, methods=["get"])
     def analytics(self, request):
         """
@@ -737,6 +738,39 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 {"error": "Could not generate analytics"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+    
+    def _trigger_class_revalidation(self, class_instance):
+        """Helper to trigger all necessary revalidations for a class."""
+        if not class_instance:
+            return
+
+        # 1. Revalidate the class detail page by tags
+        if hasattr(class_instance, "slug") and class_instance.slug:
+            trigger_nextjs_revalidation(tag=f"class-{class_instance.slug}")
+
+        trigger_nextjs_revalidation(tag=f"class-{class_instance.classId}")
+
+        # 2. Revalidate the business page if the class belongs to a business
+        if class_instance.businessId and hasattr(class_instance.businessId, "slug"):
+            business_slug = class_instance.businessId.slug
+            trigger_nextjs_revalidation(tag=f"business-{business_slug}")
+            logger.info(f"Revalidated business page: business-{business_slug}")
+
+        # 3. Revalidate homepage and search/explore pages
+        trigger_nextjs_revalidation(path="/")
+
+        tags_to_revalidate = ["classes-search", "homepage-classes", "classes"]
+        if class_instance.category and hasattr(class_instance.category, "key"):
+            tags_to_revalidate.append(f"category-{class_instance.category.key}")
+        if class_instance.subcategory and hasattr(class_instance.subcategory, "key"):
+            tags_to_revalidate.append(f"subcategory-{class_instance.subcategory.key}")
+
+        for tag in tags_to_revalidate:
+            trigger_nextjs_revalidation(tag=tag)
+
+        logger.info(
+            f"Triggered revalidation for class {class_instance.pk} (slug: {class_instance.slug}) and related tags."
+        )
 
 
 # --- AdminCategoryViewSet ---
