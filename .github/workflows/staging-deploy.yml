@@ -65,6 +65,7 @@ jobs:
             REVALIDATION_SECRET=${{ secrets.REVALIDATION_SECRET }}
             VERCEL_AUTOMATION_BYPASS_SECRET=${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
             SENTRY_DSN=${{ secrets.SENTRY_DSN }}
+            GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
 
             # --- Database, Cache, S3, etc. ---
             DB_ENGINE=${{ secrets.DB_ENGINE }}
