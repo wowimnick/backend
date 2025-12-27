@@ -12,6 +12,7 @@ from django.db.models import Count, Q
 from django.utils import timezone
 from django.db.models.functions import TruncDay
 import logging
+from quickstart.utils.permissions import CanAccessUserAdmin
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.conf import settings
 
@@ -69,17 +70,7 @@ class CanImpersonateUser(BasePermission):
         )
 
 
-class CanAccessUserAdmin(BasePermission):
-    message = "You do not have permission to access user administration."
 
-    def has_permission(self, request, view):
-        if (
-            not request.user
-            or not request.user.is_authenticated
-            or not request.user.is_active
-        ):
-            return False
-        return request.user.has_perm("quickstart.access_user_admin")
 
 
 class CanManageTargetUser(BasePermission):
@@ -171,6 +162,118 @@ class UserAdminViewSet(viewsets.ModelViewSet):
         )
         return Response(serializer.data)
 
+    @action(
+        detail=False,
+        methods=["post"],
+        permission_classes=[IsAuthenticated, CanAccessUserAdmin],
+        url_path="create-shadow",
+    )
+    def create_shadow_user(self, request):
+        """
+        Creates a 'Shadow' user for Concierge Onboarding.
+        - Sets a random password.
+        - Auto-verifies the email (bypassing allauth checks).
+        - Sets is_active=True.
+        """
+        email = request.data.get("email")
+        first_name = request.data.get("first_name")
+        last_name = request.data.get("last_name")
+
+        if not email:
+            return Response({"detail": "Email is required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check if user exists
+        if User.objects.filter(email__iexact=email).exists():
+            return Response({"detail": "User with this email already exists"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            from django.utils.crypto import get_random_string
+            from allauth.account.models import EmailAddress
+
+            # 1. Create User with random password
+            random_password = get_random_string(32)
+            user = User.objects.create_user(
+                username=email, # Assuming email is username, adjust if needed
+                email=email,
+                password=random_password,
+                first_name=first_name,
+                last_name=last_name,
+                is_active=True
+            )
+
+            # 2. Assign Default Role (e.g., Business Owner or default Student)
+            # You might want to pass role_id in request, defaulting here for safety
+            try:
+                default_role = Role.objects.get(name="Student") 
+                user.role = default_role
+            except Role.DoesNotExist:
+                pass # Fallback to system default logic
+
+            user.save()
+
+            # 3. Manually mark email as verified (Bypass verification email)
+            EmailAddress.objects.create(
+                user=user,
+                email=email,
+                verified=True,
+                primary=True
+            )
+
+            # 4. Audit Log
+            self._log_user_action(
+                user, 
+                "user_create", 
+                f"Shadow account created via Concierge Onboarding by {request.user.email}",
+                metadata={"type": "shadow_account"}
+            )
+
+            return Response(AdminUserDetailSerializer(user).data, status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+            logger.error(f"Error creating shadow user: {e}")
+            return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[IsAuthenticated, CanAccessUserAdmin],
+        url_path="send-handover",
+    )
+    def send_handover_email(self, request, pk=None):
+        """
+        Sends the 'Magic Link' (Password Reset Token) to the user to claim their account.
+        Uses query parameters to open the frontend Auth Drawer in 'claim' mode.
+        """
+        user = self.get_object()
+        
+        try:
+            from django.contrib.auth.tokens import default_token_generator
+            from quickstart.utils.email_utils import send_concierge_handover_email
+
+            # Generate Token
+            # NOTE: We use the raw PK (user.pk) because CustomPasswordResetConfirmView
+            # expects a raw UID, not a base64 encoded one.
+            token = default_token_generator.make_token(user)
+            uid = user.pk 
+
+            # Construct Frontend URL with Query Parameters
+            # Example: https://classeasily.com/?mode=claim-account&uid=123&token=abc-123
+            claim_url = f"{settings.FRONTEND_BASE_URL}/?mode=claim-account&uid={uid}&token={token}"
+
+            # Send Email
+            send_concierge_handover_email(user, claim_url)
+
+            self._log_user_action(
+                user, 
+                "user_update", 
+                f"Concierge Handover email sent to {user.email}"
+            )
+
+            return Response({"detail": "Handover email sent successfully."})
+
+        except Exception as e:
+            logger.error(f"Error sending handover email: {e}")
+            return Response({"detail": "Failed to send handover email."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     @action(
         detail=True,
         methods=["get"],

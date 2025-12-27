@@ -8,9 +8,42 @@ from django.core.cache import cache
 from collections import defaultdict
 from quickstart.models import BusinessInfo, ClassesMain
 import logging
+from quickstart.utils.services import CollectionAutoAssigner
 import resend
 
 logger = logging.getLogger(__name__)
+
+@shared_task
+def classify_class_task(class_id):
+    """
+    Background task to run automation rules on a single class.
+    Triggered on class creation or update.
+    """
+    try:
+        instance = ClassesMain.objects.get(pk=class_id)
+        assigner = CollectionAutoAssigner()
+        assigner.process_class(instance)
+    except ClassesMain.DoesNotExist:
+        logger.warning(f"Class {class_id} not found during classification task.")
+    except Exception as e:
+        logger.error(f"Error classifying class {class_id}: {e}", exc_info=True)
+
+@shared_task
+def update_trending_collections_task():
+    """
+    Scheduled task (e.g., nightly) to re-evaluate all active classes.
+    Useful for time-based rules like 'Newness' or dynamic scores.
+    """
+    assigner = CollectionAutoAssigner()
+    # Process in batches to avoid memory issues
+    active_classes = ClassesMain.objects.filter(status='active').iterator()
+    
+    count = 0
+    for cls in active_classes:
+        assigner.process_class(cls)
+        count += 1
+    
+    logger.info(f"Updated trending collections for {count} classes.")
 
 @shared_task
 def notify_businesses_of_expiring_schedules():

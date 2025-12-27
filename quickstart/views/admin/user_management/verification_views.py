@@ -64,15 +64,15 @@ class VerificationRequestViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in [
-            "create",
             "submit_verification",
-        ]:  # User submitting their own
+        ]: 
             return [IsAuthenticated()]
         elif self.action in ["list", "retrieve"]:  # Admin viewing
             return [IsAuthenticated(), CanViewAllVerificationRequests()]
         elif self.action in [
             "process_verification",
             "update",
+            "create",
             "partial_update",
             "destroy",
         ]:  # Admin processing/editing

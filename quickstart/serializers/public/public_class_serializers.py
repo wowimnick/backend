@@ -2,6 +2,7 @@ import os
 from django.conf import settings
 from rest_framework import serializers
 from quickstart.models import (
+    ClassCollection,
     ClassesMain,
     ClassImage,
     ClassOption,
@@ -310,3 +311,37 @@ class PublicClassDetailSerializer(PublicClassSerializer):
     def get_google_review_count(self, obj):
         google_stats = self._get_google_review_stats(obj)
         return google_stats.get("google_count") or 0
+
+class PublicCollectionSerializer(serializers.ModelSerializer):
+    image_medium_url = serializers.SerializerMethodField()
+    key = serializers.CharField(source='slug', read_only=True) 
+
+    class Meta:
+        model = ClassCollection
+        fields = ['id', 'name', 'slug', 'key', 'description', 'image_medium_url'] 
+
+    def _get_resized_url(self, obj, size_name):
+        """
+        Constructs a public CloudFront URL for a resized WebP image.
+        """
+        if not getattr(settings, "CLOUDFRONT_DOMAIN", None):
+            logger.warning("CLOUDFRONT_DOMAIN is not configured in settings.py")
+            return None
+
+        if obj.image and obj.image.name:
+            original_path = obj.image.name
+
+            if not original_path.startswith("originals/"):
+                return None
+
+            base_path, _ = os.path.splitext(original_path)
+            resized_base_path = base_path.replace(
+                "originals/", f"public/{size_name}/", 1
+            )
+            final_path = resized_base_path + ".webp"
+            return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
+
+        return None
+    
+    def get_image_medium_url(self, obj):
+        return self._get_resized_url(obj, "medium")

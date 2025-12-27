@@ -25,6 +25,7 @@ from django.db.models import (
     FloatField,
     Func,
     Prefetch,
+    Exists,
 )
 from django.db.models.functions import (
     Coalesce,
@@ -55,6 +56,8 @@ from datetime import (
 )
 
 from quickstart.models import (
+    ClassCategory,
+    ClassCollection,
     ClassImage,
     ClassesMain,
     ClassOption,
@@ -71,10 +74,12 @@ from quickstart.serializers import (
     PublicClassDetailSerializer,
     PublicReviewSerializer,
     ImportedGoogleReviewSerializer,
+    PublicCollectionSerializer,
+    PublicCategorySerializer
 )
 from django.contrib.gis.geos import Point
 from django.contrib.gis.db.models.functions import Distance
-from django.contrib.gis.measure import D  # D is for Distance object
+from django.contrib.gis.measure import D
 
 logger = logging.getLogger(__name__)
 
@@ -360,45 +365,51 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             )
             
         return queryset.distinct()
-
+    
     @action(detail=False, methods=['get'])
     def homepage_content(self, request):
         base_qs = self.get_queryset()
-        base_qs = self._calculate_relevance_score(base_qs)
 
-        # 1. Trending
-        trending_qs = base_qs.order_by('-relevance_score')[:10]
-
-        # 2. New
-        new_qs = base_qs.order_by('-createdAt')[:10]
-
-        # 3. Featured Category (Smart Fallback)
-        category_key = request.query_params.get('featured_category', 'arts')
-        
-        # Try to find the requested category
-        featured_qs = base_qs.filter(category__key__iexact=category_key).order_by('-relevance_score')[:10]
-        
-        # FAILSAFE: If specific category is empty, grab the category with the MOST classes
-        if not featured_qs.exists():
-            from django.db.models import Count
-            # Find a category id that has active classes
-            popular_cat = ClassesMain.objects.filter(status='active').values('category__key').annotate(c=Count('classId')).order_by('-c').first()
-            
-            if popular_cat:
-                fallback_key = popular_cat['category__key']
-                featured_qs = base_qs.filter(category__key=fallback_key).order_by('-relevance_score')[:10]
-                category_key = fallback_key # Update key to send back to frontend
+        # EFFICIENT FILTER: Use Exists() to check for availability without doing a massive JOIN
+        # This checks if there is at least one instance in the future with status 'scheduled'
+        future_instances = ScheduleInstance.objects.filter(
+            schedule__option__classId=OuterRef('pk'),
+            date__gte=timezone.now().date(),
+            status='scheduled'
+        )
+        base_qs = base_qs.filter(Exists(future_instances))
 
         context = {'request': request}
         
-        data = {
-            "trending": self.get_serializer(trending_qs, many=True, context=context).data,
-            "new": self.get_serializer(new_qs, many=True, context=context).data,
-            "featured_category": self.get_serializer(featured_qs, many=True, context=context).data,
-            "featured_category_key": category_key # Frontend can use this to know which category was actually picked
-        }
+        # 1. Determine Mode (Categories vs Collections)
+        mode = request.query_params.get('mode', 'categories')
+        
+        data = {}
+
+        # 2. Fetch the "Pills" data based on mode
+        if mode == 'collections':
+            # Fetch "Vibes" (Date Night, Groups, etc.)
+            collections_qs = ClassCollection.objects.filter(is_active=True).order_by('sort_order')
+            data['collections'] = PublicCollectionSerializer(collections_qs, many=True, context=context).data
+        else:
+            # Fetch Standard Categories (Art, Culinary, etc.) - The Default
+            categories_qs = ClassCategory.objects.all().order_by('sort_order')
+            data['categories'] = PublicCategorySerializer(categories_qs, many=True, context=context).data
+
+        # 3. Trending & New (Always included)
+        base_qs = self._calculate_relevance_score(base_qs)
+        
+        # Trending: High relevance score
+        trending_qs = base_qs.order_by('-relevance_score')[:10]
+        
+        # New: Recently created
+        new_qs = base_qs.order_by('-createdAt')[:10]
+
+        data["trending"] = self.get_serializer(trending_qs, many=True, context=context).data
+        data["new"] = self.get_serializer(new_qs, many=True, context=context).data
 
         return Response(data)
+
     
     def _calculate_relevance_score(self, queryset):
         # Cast all numeric operations to explicit types for psycopg3 compatibility
@@ -558,9 +569,8 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         - Falls back to a radius search for specific addresses or landmarks.
         """
         try:
-            logger.debug(
-                f"Public class search initiated with params: {request.query_params}"
-            )
+            logger.info(f"--- PUBLIC CLASS SEARCH INITIATED ---")
+            logger.info(f"Params: {request.query_params}")
 
             # --- 1. Parameter Extraction ---
             req_lat_str = request.query_params.get("lat")
@@ -569,7 +579,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 "location"
             ) or request.query_params.get("location_search", "")
             search_name = location_param_text.split(",")[0].strip()
-            search_name_lower = search_name.lower()
+            
             req_radius_km_str = request.query_params.get("radius")
             keyword_query_text = request.query_params.get("keyword")
             tag_filter = request.query_params.get("tag")
@@ -580,8 +590,35 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             req_participants_str = request.query_params.get("participants")
             time_preferences = request.query_params.getlist("time_preference")
             sort_by = request.query_params.get("sort_by", "relevance")
+            
+            collection_slug = request.query_params.get("collection")
 
+            # Get Base Queryset
             queryset = self.get_queryset()
+
+            # EFFICIENT FILTER: Filter out classes with no upcoming schedules
+            # Using Exists avoids duplicating rows and simplifies the SQL plan
+            has_future_instances = ScheduleInstance.objects.filter(
+                schedule__option__classId=OuterRef('pk'),
+                date__gte=timezone.now().date(),
+                status='scheduled'
+            )
+            queryset = queryset.filter(Exists(has_future_instances))
+
+            # --- COLLECTION FILTERING ---
+            if collection_slug:
+                logger.info(f"Applying Collection Filter: '{collection_slug}'")
+                queryset = queryset.filter(collections__slug=collection_slug)
+                # Ensure distinctness after M2M filter just in case
+                queryset = queryset.distinct()
+                
+                # Check count after collection filter
+                count_after_collection = queryset.count()
+                logger.info(f"QuerySet Count after Collection Filter: {count_after_collection}")
+                
+                if count_after_collection == 0:
+                    logger.warning(f"Collection filter '{collection_slug}' returned 0 results. Check if slug exists in DB.")
+
             user_location_point = None
             is_province_search = False
 
@@ -639,7 +676,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                         else 25.0
                     )
                     logger.info(
-                        f"Performing radius search: {search_radius_km}km around a specific point."
+                        f"Performing radius search: {search_radius_km}km around {req_lat_str}, {req_lng_str}"
                     )
                     queryset = queryset.filter(
                         point__distance_lte=(
@@ -655,6 +692,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
 
             # --- 3. Standard Field Filtering ---
             if keyword_query_text:
+                logger.info(f"Applying Keyword Search: '{keyword_query_text}'")
                 search_query = SearchQuery(
                     keyword_query_text, search_type="websearch", config="english"
                 )
@@ -686,11 +724,11 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 except InvalidOperation:
                     logger.warning(f"Invalid price_max value: {price_max_str}")
 
-            # --- 4. Availability Filtering (THE FIX) ---
-            # Only trigger availability filters if a date or time preference is explicitly provided.
+            # --- 4. Availability Filtering ---
             apply_availability_filters = bool(req_date_str or time_preferences)
 
             if apply_availability_filters:
+                logger.info("Applying Availability Filters")
                 instance_filters = Q(options__schedules__instances__status="scheduled")
 
                 if req_date_str:
@@ -700,12 +738,10 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                             options__schedules__instances__date=target_date
                         )
                     except ValueError:
-                        # If date is invalid, fall back to future dates
                         instance_filters &= Q(
                             options__schedules__instances__date__gte=timezone.now().date()
                         )
                 else:
-                    # If no date but other availability filters exist, default to future dates
                     instance_filters &= Q(
                         options__schedules__instances__date__gte=timezone.now().date()
                     )
@@ -729,7 +765,6 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     if time_range_filters:
                         instance_filters &= time_range_filters
 
-                # The participant filter is now correctly nested and only applies when filtering by schedule
                 if (
                     req_participants_str
                     and req_participants_str.isdigit()
@@ -776,7 +811,9 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 queryset = queryset.order_by(*order_fields)
 
             # --- 6. Pagination and Response ---
-            logger.debug(f"Final queryset count before pagination: {queryset.count()}")
+            final_count = queryset.count()
+            logger.info(f"Final queryset count before pagination: {final_count}")
+            
             page = self.paginate_queryset(queryset)
             if page is not None:
                 serializer = self.get_serializer(
@@ -795,7 +832,6 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 {"error": "An error occurred during search."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-
 
 class PublicScheduleViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [AllowAny]

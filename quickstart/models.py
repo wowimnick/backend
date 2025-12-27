@@ -1185,11 +1185,55 @@ class ClassSubcategory(models.Model):
         db_table = "class_subcategories"
         unique_together = ["category", "key"]
 
+class ClassCollection(models.Model):
+    """
+    Represents curated lists/vibes (e.g., 'Date Night', 'Under $30').
+    Separate from functional Categories to allow cross-cutting themes.
+    """
+    name = models.CharField(max_length=100)
+    slug = models.SlugField(max_length=120, unique=True)
+    description = models.TextField(blank=True, help_text="Short text for the homepage card")
+    image = models.ImageField(
+        upload_to="originals/collection_images/", 
+        blank=True, 
+        null=True, 
+        max_length=255 
+    )
+    
+    # --- AUTOMATION FIELDS ---
+    COLLECTION_TYPES = [
+        ("manual", "Manual Curation"),
+        ("automated", "Automated (AI/Metrics)"),
+    ]
+    type = models.CharField(max_length=20, choices=COLLECTION_TYPES, default="manual")
+    
+    # Stores the logic, e.g.: 
+    # {"max_price": 30} 
+    # {"min_synthetic_score": 50} 
+    # {"label": "Romantic", "threshold": 0.85}
+    automation_rules = models.JSONField(default=dict, blank=True)
+    # -------------------------
+
+    is_active = models.BooleanField(default=True)
+    sort_order = models.IntegerField(default=0, help_text="Order on homepage")
+
+    def __str__(self):
+        return self.name
+
+    class Meta:
+        db_table = "class_collections"
+        ordering = ["sort_order", "name"]
 
 class ClassesMain(models.Model):
     classId = models.AutoField(primary_key=True)
     businessId = models.ForeignKey(
         "BusinessInfo", on_delete=models.CASCADE, related_name="classes"
+    )
+    collections = models.ManyToManyField(
+        ClassCollection, 
+        blank=True, 
+        related_name="classes",
+        help_text="Assign classes to curated collections (e.g. Date Night)"
     )
     slug = models.SlugField(
         max_length=255,

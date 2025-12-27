@@ -2,9 +2,11 @@ from datetime import timedelta
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.authentication import TokenAuthentication
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated, BasePermission
 from rest_framework.parsers import JSONParser, FormParser
+from rest_framework.exceptions import ValidationError
 import json
 from django.db import transaction
 from django.db.models import (
@@ -35,6 +37,7 @@ import logging
 from quickstart.utils.revalidation import trigger_nextjs_revalidation
 from quickstart.models import (
     ClassCategory,
+    ClassCollection,
     ClassImage,
     ClassSubcategory,
     ClassesMain,
@@ -49,6 +52,7 @@ from quickstart.models import (
     VerificationRequest,  # Ensure BusinessInfo is imported if needed for hierarchy checks
 )
 from quickstart.serializers.admin.class_management.class_management_serializers import (
+    AdminClassCollectionSerializer,
     AdminClassSerializer,
     AdminClassDetailSerializer,
     AdminClassCategorySerializer,
@@ -178,6 +182,8 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                     ),
                     "options__schedules__instances",
                     "reviews",
+                    # ADD THIS LINE HERE:
+                    "collections",
                     Prefetch(
                         "images",
                         queryset=ClassImage.objects.order_by("-isCover", "createdAt"),
@@ -308,11 +314,6 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 if status_filter in valid_statuses:
                     queryset = queryset.filter(status=status_filter)
 
-            featured = self.request.query_params.get("featured")
-            if featured is not None:
-                is_featured = str(featured).lower() in ["true", "1", "yes"]
-                queryset = queryset.filter(business_featured=is_featured)
-
             return queryset
 
         except Exception as e:
@@ -346,8 +347,7 @@ class AdminClassViewSet(viewsets.ModelViewSet):
 
     def update(self, request, *args, **kwargs):
         """
-        UPDATED: Add revalidation after class update
-        Add this code at the end of the existing update method, before the return statement
+        Updates a class, including images, options, and collections.
         """
         if not request.user.has_perm("quickstart.change_classesmain"):
             self.permission_denied(request, message="You cannot update class details.")
@@ -357,8 +357,7 @@ class AdminClassViewSet(viewsets.ModelViewSet):
 
         # Use a transaction to ensure all or no changes are saved
         with transaction.atomic():
-            # ... [ALL EXISTING UPDATE LOGIC STAYS THE SAME] ...
-            # 1. Update the main ClassesMain instance fields
+            # 1. Update the main ClassesMain instance fields via Serializer
             serializer = self.get_serializer(instance, data=request_data, partial=True)
             serializer.is_valid(raise_exception=True)
             updated_instance = serializer.save()
@@ -366,7 +365,15 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 f"Admin {request.user.email} started updating Class '{instance.title}' (ID: {instance.pk})."
             )
 
-            # 2. Handle Image Deletions
+            # 2. Handle Collections Update (Explicitly)
+            if "collections" in request_data:
+                collection_ids = request_data.get("collections")
+                if isinstance(collection_ids, list):
+                    # .set() handles the M2M relationship using IDs
+                    instance.collections.set(collection_ids)
+                    logger.info(f"Updated collections for class {instance.pk} to {collection_ids}")
+
+            # 3. Handle Image Deletions
             try:
                 delete_image_ids = json.loads(
                     request_data.get("delete_image_ids", "[]")
@@ -375,15 +382,10 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                     ClassImage.objects.filter(
                         classId=instance, imageId__in=delete_image_ids
                     ).delete()
-                    logger.info(
-                        f"Deleted {len(delete_image_ids)} images for class {instance.pk}."
-                    )
             except (json.JSONDecodeError, TypeError):
-                logger.warning(
-                    f"Could not parse 'delete_image_ids' for class {instance.pk}."
-                )
+                pass
 
-            # 3. Handle New Image Additions from S3 keys
+            # 4. Handle New Image Additions from S3 keys
             try:
                 new_image_s3_keys = json.loads(
                     request_data.get("new_image_s3_keys", "[]")
@@ -394,15 +396,10 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                         for key in new_image_s3_keys
                     ]
                     ClassImage.objects.bulk_create(images_to_create)
-                    logger.info(
-                        f"Added {len(new_image_s3_keys)} new images for class {instance.pk}."
-                    )
             except (json.JSONDecodeError, TypeError):
-                logger.warning(
-                    f"Could not parse 'new_image_s3_keys' for class {instance.pk}."
-                )
+                pass
 
-            # 4. Handle Cover Image Assignment
+            # 5. Handle Cover Image Assignment
             cover_image_id = request_data.get("cover_image_id")
             if cover_image_id:
                 ClassImage.objects.filter(classId=instance, isCover=True).update(
@@ -411,11 +408,8 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 ClassImage.objects.filter(
                     classId=instance, imageId=cover_image_id
                 ).update(isCover=True)
-                logger.info(
-                    f"Set image {cover_image_id} as cover for class {instance.pk}."
-                )
 
-            # 5. Handle ClassOption Update
+            # 6. Handle ClassOption Update
             options_json_string = request_data.get("options")
             if options_json_string:
                 try:
@@ -427,17 +421,15 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                         )
                         option_serializer.is_valid(raise_exception=True)
                         option_serializer.save()
-                        logger.info(f"Updated options for class {instance.pk}.")
                 except (json.JSONDecodeError, IndexError, TypeError) as e:
-                    logger.error(
-                        f"Error processing options update for class {instance.pk}: {e}"
-                    )
-                    raise ValidationError({"options": "Invalid options data provided."})
+                    logger.error(f"Error processing options: {e}")
+                    raise ValidationError({"options": "Invalid options data."})
 
-        # --- ADDED: Trigger revalidation after successful update ---
-        self._trigger_class_revalidation(updated_instance)
+        # --- Trigger Revalidation ---
+        if hasattr(self, '_trigger_class_revalidation'):
+            self._trigger_class_revalidation(updated_instance)
 
-        # After the transaction, return the fully updated object
+        # Return the fully updated object (detail serializer includes collections)
         detail_serializer = AdminClassDetailSerializer(
             instance, context={"request": request}
         )
@@ -955,6 +947,70 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
                 {"error": "An internal error occurred while updating the order."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+        
+class AdminCollectionViewSet(viewsets.ModelViewSet):
+    """
+    Admin viewset for managing Class Collections (Vibes).
+    """
+    permission_classes = [IsAuthenticated, CanAccessCategoryAdmin] # Re-use category permissions
+    serializer_class = AdminClassCollectionSerializer
+    # Order by sort_order so drag-and-drop reflects correctly in initial fetch
+    queryset = ClassCollection.objects.all().order_by('sort_order')
+    parser_classes = [JSONParser, FormParser]
+
+    def get_queryset(self):
+        # Annotate with the number of classes in this collection
+        return ClassCollection.objects.annotate(
+            class_count=Count('classes', distinct=True) 
+        ).order_by('sort_order')
+
+    def create(self, request, *args, **kwargs):
+        response = super().create(request, *args, **kwargs)
+        if response.status_code == status.HTTP_201_CREATED:
+            trigger_nextjs_revalidation(path="/")
+            trigger_nextjs_revalidation(tag="homepage-content")
+            logger.info(f"Created collection and triggered revalidation")
+        return response
+
+    def update(self, request, *args, **kwargs):
+        response = super().update(request, *args, **kwargs)
+        if response.status_code == status.HTTP_200_OK:
+            trigger_nextjs_revalidation(path="/")
+            trigger_nextjs_revalidation(tag="homepage-content")
+            logger.info(f"Updated collection and triggered revalidation")
+        return response
+
+    def destroy(self, request, *args, **kwargs):
+        response = super().destroy(request, *args, **kwargs)
+        if response.status_code == status.HTTP_204_NO_CONTENT:
+            trigger_nextjs_revalidation(path="/")
+            trigger_nextjs_revalidation(tag="homepage-content")
+            logger.info(f"Deleted collection and triggered revalidation")
+        return response
+
+    @action(detail=False, methods=["post"], url_path="update-order")
+    def update_order(self, request):
+        """
+        Update sort_order for collections.
+        """
+        ordered_data = request.data
+        if not isinstance(ordered_data, list):
+            return Response({"error": "Expected a list."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            with transaction.atomic():
+                for item in ordered_data:
+                    c_id = item.get("id")
+                    order = item.get("order")
+                    if c_id is not None and order is not None:
+                        ClassCollection.objects.filter(pk=c_id).update(sort_order=order)
+            
+            trigger_nextjs_revalidation(tag="homepage-content")
+            return Response({"status": "success"})
+        except Exception as e:
+            logger.error(f"Failed to update collection order: {e}")
+            return Response({"error": "Internal error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
     @action(detail=True, methods=["post"], url_path="delete-with-reassignment")
     @transaction.atomic

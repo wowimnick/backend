@@ -16,6 +16,8 @@ import sentry_sdk
 from sentry_sdk.integrations.django import DjangoIntegration
 from sentry_sdk.integrations.celery import CeleryIntegration
 
+
+
 if os.name == "nt":  # This checks if the OS is Windows ('nt')
     GDAL_LIBRARY_PATH = r"C:\OSGeo4W\bin\gdal311.dll"
     GEOS_LIBRARY_PATH = r"C:\OSGeo4W\bin\geos_c.dll"
@@ -133,6 +135,7 @@ GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
 GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
 STRIPE_PUBLIC_KEY = os.environ["STRIPE_PUBLIC_KEY"]
 STRIPE_SECRET_KEY = os.environ["STRIPE_SECRET_KEY"]
+GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 # Secret for the endpoint at /api/webhooks/stripe-connect/
 STRIPE_CONNECT_WEBHOOK_SECRET = os.environ.get("STRIPE_CONNECT_WEBHOOK_SECRET")
 

@@ -1275,6 +1275,29 @@ def send_performance_summary_email(
         subject=f"Your {period.title()} Performance Summary from ClassEasily",
     )
 
+def send_concierge_handover_email(user: CustomUser, claim_url: str):
+    """
+    Sends the account claim email to a user who was onboarded via Concierge services.
+    """
+    if not user or not user.email:
+        logger.warning("Attempted to send handover email to invalid user.")
+        return
+
+    logger.info(f"Preparing concierge handover email for user {user.email}")
+
+    context = {
+        "user": user,
+        "claim_url": claim_url,
+        "recipient_email": user.email,
+    }
+
+    send_templated_email(
+        recipient_list=[user.email],
+        template_name="emails/concierge_handover.html",
+        context=context,
+        subject="Your Business Account is Ready! - ClassEasily",
+    )
+    
 def send_request_for_review_email(user: CustomUser, booking: Booking):
     """Sends a request for review 24 hours after a class is completed."""
     if not user or not user.email or not booking:

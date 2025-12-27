@@ -5,6 +5,7 @@ from decimal import Decimal  # Ensure Decimal is imported
 
 from ....models import (
     ClassCategory,
+    ClassCollection,
     ClassSubcategory,
     ClassesMain,
     ClassImage,
@@ -188,11 +189,16 @@ class AdminBusinessSerializer(serializers.ModelSerializer):
 
         return f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
 
+class SimpleCollectionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ClassCollection
+        fields = ['id', 'name']
 
 class AdminClassSerializer(serializers.ModelSerializer):
     images = AdminClassImageSerializer(many=True, read_only=True)
     business = AdminBusinessSerializer(source="businessId", read_only=True)
     businessId = serializers.IntegerField(source="businessId.pk", read_only=True)
+    collections = SimpleCollectionSerializer(many=True, read_only=True)
     business_name = serializers.CharField(
         read_only=True
     )  # Will be populated by the annotation in the view
@@ -223,7 +229,7 @@ class AdminClassSerializer(serializers.ModelSerializer):
             "subcategory",
             "location",
             "min_price",
-            "max_price",  # Included here now
+            "max_price", 
             "price_range",
             "status",
             "active_schedules_count",
@@ -231,12 +237,13 @@ class AdminClassSerializer(serializers.ModelSerializer):
             "images",
             "business",
             "businessId",
-            "business_name",  # MODIFIED: Added business_name
+            "business_name",  
             "average_rating",
             "review_count",
             "platform_revenue",
             "createdAt",
             "updatedAt",
+            "collections", 
         ]
         read_only_fields = fields
 
@@ -424,7 +431,71 @@ class SubcategorySerializer(serializers.ModelSerializer):
         model = ClassSubcategory
         fields = ["id", "name", "key", "description", "class_count"]
 
+class AdminClassCollectionSerializer(serializers.ModelSerializer):
+    """
+    Serializer for managing Class Collections (Vibes).
+    Handles S3 image key updates and Automation Rules.
+    """
+    class_count = serializers.IntegerField(read_only=True, default=0)
+    image_medium_url = serializers.SerializerMethodField()
+    image_s3_key = serializers.CharField(write_only=True, required=False, allow_null=True)
+    
+    # Ensure automation_rules is treated as a Dict
+    automation_rules = serializers.JSONField(required=False, default=dict)
 
+    class Meta:
+        model = ClassCollection
+        fields = [
+            "id",
+            "name",
+            "slug",
+            "description",
+            "type",              # Added support for 'manual' vs 'automated'
+            "automation_rules",  # Added support for JSON rules
+            "image_medium_url",
+            "image_s3_key",
+            "is_active",
+            "sort_order",
+            "class_count", 
+        ]
+        read_only_fields = ["id", "image_medium_url", "class_count"]
+
+    def get_image_medium_url(self, obj):
+        if not obj.image or not hasattr(obj.image, "name") or not obj.image.name:
+            return None
+        if not getattr(settings, "CLOUDFRONT_DOMAIN", None):
+            return None
+
+        original_path = obj.image.name
+        if not original_path.startswith("originals/"):
+            return None
+
+        base_name, _ = os.path.splitext(original_path.replace("originals/", "", 1))
+        return f"{settings.CLOUDFRONT_DOMAIN}/public/medium/{base_name}.webp"
+
+    def _handle_image_update(self, instance, s3_key_data):
+        s3_key = s3_key_data.pop("image_s3_key", "NOT_PROVIDED")
+        if s3_key is None:
+            if instance.image:
+                instance.image.delete(save=False)
+            instance.image = None
+        elif s3_key != "NOT_PROVIDED":
+            if instance.image:
+                instance.image.delete(save=False)
+            instance.image = s3_key
+
+    def create(self, validated_data):
+        s3_key = validated_data.pop("image_s3_key", None)
+        instance = ClassCollection.objects.create(**validated_data)
+        if s3_key:
+            instance.image = s3_key
+            instance.save()
+        return instance
+
+    def update(self, instance, validated_data):
+        self._handle_image_update(instance, validated_data)
+        return super().update(instance, validated_data)
+    
 # --- AdminClassCategorySerializer ---
 class AdminClassCategorySerializer(serializers.ModelSerializer):
     """
@@ -451,7 +522,6 @@ class AdminClassCategorySerializer(serializers.ModelSerializer):
             "name",
             "key",
             "description",
-            "is_featured",
             "image_s3_key",
             "sort_order",
             "image_medium_url",

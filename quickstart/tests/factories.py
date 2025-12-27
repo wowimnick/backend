@@ -1,332 +1,179 @@
-# quickstart/tests/factories.py
 import factory
 from factory.django import DjangoModelFactory
+from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Permission, ContentType
+import datetime
 from django.utils import timezone
-from datetime import date, time, timedelta
-from decimal import Decimal
-from django.utils.text import slugify
-from django.core.exceptions import ValidationError
 
 from quickstart.models import (
-    CustomUser,
-    BusinessInfo,
+    Role, 
+    BusinessInfo, 
+    ClassesMain, 
     ClassCategory,
-    ClassSubcategory,
-    ClassesMain,
     ClassOption,
-    PartnerTier,
-    Payment,
     Schedule,
     ScheduleInstance,
     Booking,
-    Reviews,
-    Role,
-    SupportTicket,
-    VerificationRequest,
     Payout,
-    BlogCategory,
-    BlogPost,
+    Discount,
+    AuditLog,
+    VerificationRequest,
+    BusinessStaff
 )
 
+User = get_user_model()
 
-# --- Core Factories ---
+class PermissionFactory(DjangoModelFactory):
+    class Meta:
+        model = Permission
+        django_get_or_create = ('codename', 'content_type')
+
+    name = factory.Sequence(lambda n: f"Permission {n}")
+    codename = factory.Sequence(lambda n: f"perm_{n}")
+    content_type = factory.Iterator(ContentType.objects.all())
+
 class RoleFactory(DjangoModelFactory):
     class Meta:
         model = Role
+        django_get_or_create = ('name',)
+        # Silence factory_boy warning about post_generation save
+        skip_postgeneration_save = True  
 
-    name = factory.Faker("job")
-    hierarchy_level = factory.Sequence(lambda n: n)
+    name = "Standard User"
+    hierarchy_level = 1
 
+    @factory.post_generation
+    def permissions(self, create, extracted, **kwargs):
+        if not create or not extracted:
+            return
+        self.permissions.add(*extracted)
 
 class UserFactory(DjangoModelFactory):
     class Meta:
-        model = CustomUser
-        django_get_or_create = ("username",)
+        model = User
+        # Silence factory_boy warning
+        skip_postgeneration_save = True 
 
-    username = factory.Faker("user_name")
-    email = factory.LazyAttribute(lambda o: f"{o.username}@example.com")
-    first_name = factory.Faker("first_name")
-    last_name = factory.Faker("last_name")
-    is_staff = False
+    email = factory.Sequence(lambda n: f"user{n}@example.com")
+    username = factory.Sequence(lambda n: f"user{n}")
+    first_name = "John"
+    last_name = "Doe"
+    role = factory.SubFactory(RoleFactory)
     is_active = True
 
-
-class BlogCategoryFactory(DjangoModelFactory):
-    class Meta:
-        model = BlogCategory
-        django_get_or_create = ("name",)
-
-    name = factory.Faker("word")
-    slug = factory.LazyAttribute(lambda o: slugify(o.name))
-
-
-class BlogPostFactory(DjangoModelFactory):
-    class Meta:
-        model = BlogPost
-
-    title = factory.Faker("sentence", nb_words=5)
-    slug = factory.LazyAttribute(lambda o: slugify(o.title))
-    excerpt = factory.Faker("paragraph", nb_sentences=2)
-    content = factory.Faker("text", max_nb_chars=1000)
-    image_url = factory.Faker("image_url")
-    author = factory.SubFactory(UserFactory)
-    category = factory.SubFactory(BlogCategoryFactory)
-    tags = factory.LazyFunction(lambda: ["testing", "django", "api"])
-    status = factory.Iterator(["published", "draft"])
-    published_date = factory.LazyFunction(timezone.now)
-
-
-class ClassCategoryFactory(DjangoModelFactory):
-    class Meta:
-        model = ClassCategory
-        django_get_or_create = ("key",)
-
-    name = factory.Faker("word")
-    key = factory.LazyAttribute(lambda o: o.name.lower())
-
-
-class ClassSubcategoryFactory(DjangoModelFactory):
-    class Meta:
-        model = ClassSubcategory
-
-    category = factory.SubFactory(ClassCategoryFactory)
-    name = factory.Faker("word")
-    key = factory.LazyAttribute(lambda o: o.name.lower())
-
-
-class PartnerTierFactory(DjangoModelFactory):
-    class Meta:
-        model = PartnerTier
-        django_get_or_create = ("name",)
-
-    name = factory.Faker("word")
-    fee_percentage = Decimal("13.00")
-    is_default = False
-
     @factory.post_generation
-    def clean(self, create, extracted, **kwargs):
+    def password(self, create, extracted, **kwargs):
+        password = extracted or "password"
+        self.set_password(password)
         if create:
-            try:
-                self.clean()
-            except ValidationError:
-                if (
-                    PartnerTier.objects.filter(is_default=True)
-                    .exclude(pk=self.pk)
-                    .exists()
-                ):
-                    self.is_default = False
-                    self.save()
+            self.save()
 
-
-class BusinessInfoFactory(DjangoModelFactory):
+class BusinessFactory(DjangoModelFactory):
     class Meta:
         model = BusinessInfo
 
     owner = factory.SubFactory(UserFactory)
-    businessName = factory.Faker("company")
-    businessType = "school"
-    businessDescription = factory.Faker("text", max_nb_chars=300)
-    studentContactPhone = factory.Faker("phone_number")
-    studentContactEmail = factory.Faker("email")
-    preferredContact = "email"
-    businessAddress = factory.Faker("street_address")
-    businessCity = factory.Faker("city")
-    businessState = factory.Faker("state_abbr")
-    businessZipCode = factory.Faker("zipcode")
-    businessHours = factory.LazyFunction(
-        lambda: [
-            {"day": "Monday", "isOpen": True, "open": "09:00", "close": "17:00"},
-            {"day": "Tuesday", "isOpen": True, "open": "09:00", "close": "17:00"},
-            {"day": "Wednesday", "isOpen": True, "open": "09:00", "close": "17:00"},
-            {"day": "Thursday", "isOpen": True, "open": "09:00", "close": "17:00"},
-            {"day": "Friday", "isOpen": True, "open": "09:00", "close": "17:00"},
-            {"day": "Saturday", "isOpen": False, "open": "09:00", "close": "17:00"},
-            {"day": "Sunday", "isOpen": False, "open": "09:00", "close": "17:00"},
-        ]
-    )
-    termsAccepted = True
-    privacyAccepted = True
-    verificationStatus = "verified"
+    businessName = factory.Sequence(lambda n: f"Business {n}")
+    studentContactEmail = factory.Sequence(lambda n: f"biz{n}@example.com")
+    studentContactPhone = "555-0199"
     isActive = True
+    verificationStatus = "verified"
+    slug = factory.Sequence(lambda n: f"business-{n}")
 
-    partner_tier = factory.SubFactory(PartnerTierFactory)
+class ClassCategoryFactory(DjangoModelFactory):
+    class Meta:
+        model = ClassCategory
+    
+    name = "Art"
+    key = "art"
 
-    business_timezone = "UTC"
-    stripe_account_id = factory.Sequence(lambda n: f"acct_test_{n}")
-    stripe_account_status = "active"
-
-
-class ClassesMainFactory(DjangoModelFactory):
+class ClassFactory(DjangoModelFactory):
     class Meta:
         model = ClassesMain
 
-    businessId = factory.SubFactory(BusinessInfoFactory)
-    title = factory.Faker("catch_phrase")
-    description = factory.Faker("text", max_nb_chars=500)
+    businessId = factory.SubFactory(BusinessFactory)
+    title = factory.Sequence(lambda n: f"Pottery Class {n}")
+    description = "Learn to throw clay."
     category = factory.SubFactory(ClassCategoryFactory)
-    subcategory = factory.SubFactory(
-        ClassSubcategoryFactory, category=factory.SelfAttribute("..category")
-    )
     status = "active"
-    location = "Test Location"
-    coordinates = "45.0000,-75.0000"
-
+    location = "Studio A"
+    coordinates = "40.7128,-74.0060"
 
 class ClassOptionFactory(DjangoModelFactory):
     class Meta:
         model = ClassOption
-
-    classId = factory.SubFactory(ClassesMainFactory)
+    
+    classId = factory.SubFactory(ClassFactory)
     booking_type = "Single Session"
-    cancellationPolicy = "24h"
-    cancellationRefundPercentage = 100
-
+    price_type = "per_session"
 
 class ScheduleFactory(DjangoModelFactory):
     class Meta:
         model = Schedule
 
     option = factory.SubFactory(ClassOptionFactory)
-    date = factory.Sequence(lambda n: (timezone.now() + timedelta(days=n)).date())
-    time = time(14, 0)
+    time = datetime.time(10, 0)
     duration = 60
-    price = Decimal("25.00")
+    price = 20.00
     maxParticipants = 10
-
+    # Required for 'Single Session' validation logic in your model
+    date = factory.LazyFunction(datetime.date.today)
 
 class ScheduleInstanceFactory(DjangoModelFactory):
     class Meta:
         model = ScheduleInstance
 
     schedule = factory.SubFactory(ScheduleFactory)
+    # Ensure instance date matches schedule date
     date = factory.LazyAttribute(lambda o: o.schedule.date)
-    time = factory.LazyAttribute(lambda o: o.schedule.time)
-    duration = factory.LazyAttribute(lambda o: o.schedule.duration)
-    price = factory.LazyAttribute(lambda o: o.schedule.price)
-    max_participants = factory.LazyAttribute(lambda o: o.schedule.maxParticipants)
+    time = datetime.time(10, 0)
+    max_participants = 10
+    price = 20.00
     status = "scheduled"
-
 
 class BookingFactory(DjangoModelFactory):
     class Meta:
         model = Booking
 
-    schedule_instance = factory.SubFactory(ScheduleInstanceFactory)
     user = factory.SubFactory(UserFactory)
+    schedule_instance = factory.SubFactory(ScheduleInstanceFactory)
     status = "confirmed"
-    participants = 1
-    amount_paid = factory.LazyAttribute(
-        lambda o: o.schedule_instance.price * o.participants
-    )
     payment_status = "paid"
-
+    amount_paid = 20.00
+    participants = 1
 
 class PayoutFactory(DjangoModelFactory):
     class Meta:
         model = Payout
 
-    business = factory.SubFactory(BusinessInfoFactory)
-    stripe_transfer_id = factory.Sequence(lambda n: f"tr_test_{n}")
-    amount = factory.Faker(
-        "pydecimal", left_digits=4, right_digits=2, positive=True, min_value=50
-    )
-    currency = "cad"
-    arrival_date = factory.LazyFunction(
-        lambda: timezone.now().date() + timedelta(days=7)
-    )
-    status = factory.Iterator(["pending", "in_transit", "paid", "failed"])
-    created_at = factory.LazyFunction(timezone.now)
-
-    @factory.post_generation
-    def bookings(self, create, extracted, **kwargs):
-        if not create:
-            return
-        if extracted:
-            for booking in extracted:
-                self.bookings.add(booking)
-
-
-class ReviewFactory(DjangoModelFactory):
-    class Meta:
-        model = Reviews
-
-    userId = factory.SubFactory(UserFactory)
-    classId = factory.SubFactory(ClassesMainFactory)
-    businessId = factory.SelfAttribute("classId.businessId")
-    booking = factory.LazyAttribute(
-        lambda o: BookingFactory(
-            user=o.userId,
-            schedule_instance__schedule__option__classId=o.classId,
-        )
-    )
-    rating = factory.Faker("pyint", min_value=4, max_value=5)
-    comment = factory.Faker("text")
-    status = "approved"
-
-
-class SupportTicketFactory(DjangoModelFactory):
-    class Meta:
-        model = SupportTicket
-
-    user = factory.SubFactory(UserFactory)
-    subject = factory.Faker("sentence", nb_words=6)
-    description = factory.Faker("text", max_nb_chars=300)
-    category = "technical"
-    status = "open"
-    priority = "medium"
-
-
-class PaymentFactory(DjangoModelFactory):
-    class Meta:
-        model = Payment
-
-    booking = factory.SubFactory(BookingFactory)
-    stripe_payment_intent_id = factory.Sequence(lambda n: f"pi_test_{n}")
-
-    # --- FIX: Refactored to avoid non-model keyword arguments ---
-    @factory.lazy_attribute
-    def tax_amount(self):
-        subtotal = self.booking.amount_paid
-        return (subtotal * Decimal("0.13")).quantize(Decimal("0.01"))
-
-    @factory.lazy_attribute
-    def amount(self):
-        subtotal = self.booking.amount_paid
-        tax = (subtotal * Decimal("0.13")).quantize(Decimal("0.01"))
-        return subtotal + tax
-
-    @factory.lazy_attribute
-    def platform_fee_amount(self):
-        subtotal = self.booking.amount_paid
-        fee_percentage = (
-            self.booking.schedule_instance.schedule.option.classId.businessId.partner_tier.fee_percentage
-        )
-        return (subtotal * fee_percentage / Decimal(100)).quantize(Decimal("0.01"))
-
-    @factory.lazy_attribute
-    def platform_fee_tax(self):
-        return (self.platform_fee_amount * Decimal("0.13")).quantize(Decimal("0.01"))
-
-    @factory.lazy_attribute
-    def net_payout_amount(self):
-        subtotal = self.booking.amount_paid
-        return (subtotal - self.platform_fee_amount) + (
-            self.tax_amount - self.platform_fee_tax
-        )
-
-    status = "succeeded"
+    business = factory.SubFactory(BusinessFactory)
+    stripe_transfer_id = factory.Sequence(lambda n: f"tr_{n}")
+    amount = 100.00
     currency = "CAD"
-    payment_method_type = "card"
-    card_brand = "visa"
-    card_last4 = "4242"
+    status = "paid"
 
+class DiscountFactory(DjangoModelFactory):
+    class Meta:
+        model = Discount
+    
+    business = factory.SubFactory(BusinessFactory)
+    name = "Summer Sale"
+    value = 10.00
+    discount_type = "fixed_amount"
+    # Ensure uniqueness of code if provided, or leave blank for automatic
+    code = factory.Sequence(lambda n: f"SALE{n}")
+
+class AuditLogFactory(DjangoModelFactory):
+    class Meta:
+        model = AuditLog
+    
+    user_email = "admin@test.com"
+    action = "login"
 
 class VerificationRequestFactory(DjangoModelFactory):
     class Meta:
         model = VerificationRequest
-
+    
     user = factory.SubFactory(UserFactory)
-    business = factory.SubFactory(
-        BusinessInfoFactory, owner=factory.SelfAttribute("..user")
-    )
+    business = factory.SubFactory(BusinessFactory)
     status = "pending"

@@ -49,6 +49,7 @@ from quickstart.views.admin.class_management.class_management_views import (
     AdminCategoryViewSet,
     AdminClassViewSet,
     AdminReviewViewSet,
+    AdminCollectionViewSet,
 )
 from quickstart.payments.views import CreatePaymentIntentView, ProcessBookingWebhook, UpdatePaymentIntentView, CancelPendingBookingView
 from quickstart.views.admin.user_management.user_admin_views import UserAdminViewSet
@@ -137,6 +138,9 @@ public_router.register(r"schedules", PublicScheduleViewSet, basename="public-sch
 public_router.register(
     r"categories", PublicCategoryViewSet, basename="public-categories"
 )
+public_router.register(
+    r"courses", PublicCourseViewSet, basename="public-courses"
+)
 
 # --- Business Management Router ---
 business_management_router = DefaultRouter()
@@ -145,9 +149,6 @@ business_management_router.register(
 )
 business_management_router.register(
     r"classes", BusinessClassViewSet, basename="business-class"
-)
-business_management_router.register(
-    r"courses", PublicCourseViewSet, basename="public-courses"
 )
 business_management_router.register(
     r"student/course-enrollments",
@@ -215,6 +216,7 @@ admin_router.register(
 admin_router.register(r"businesses", BusinessAdminViewSet, basename="admin-businesses")
 admin_router.register(r"classes", AdminClassViewSet, basename="admin-classes")
 admin_router.register(r"categories", AdminCategoryViewSet, basename="admin-categories")
+admin_router.register(r"collections", AdminCollectionViewSet, basename="admin-collections")
 admin_router.register(r"reviews", AdminReviewViewSet, basename="admin-reviews")
 admin_router.register(r"bookings", AdminBookingViewSet, basename="admin-bookings")
 admin_router.register(r"payments", AdminPaymentViewSet, basename="admin-payments")

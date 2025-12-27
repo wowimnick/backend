@@ -1,4 +1,3 @@
-# In a new file or an existing views file (e.g., quickstart/views/user_views.py)
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -8,18 +7,18 @@ from django.db.models import Q
 
 from quickstart.models import Notification, BusinessInfo  # Adjust import
 from quickstart.serializers import NotificationSerializer  # Adjust import
+# ADDED: Import Business Permissions
+from quickstart.utils.permissions import IsBusinessMember
 
 
 class NotificationViewSet(viewsets.ModelViewSet):
     serializer_class = NotificationSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsBusinessMember]
     http_method_names = ["get", "post", "head", "options"]  # Allow POST for actions
 
     def get_queryset(self):
         # Notifications for the current authenticated user OR for any business they manage/own
         user = self.request.user
-        # --- CORRECTED ---
-        # Uses the standard, correct way to find associated businesses.
         user_businesses_qs = BusinessInfo.objects.filter(
             Q(owner=user)
             | Q(staff_members__user=user, staff_members__status="accepted")

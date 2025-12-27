@@ -15,6 +15,7 @@ from quickstart.serializers.admin.user_management.audit_serializers import (
 )
 
 from quickstart.models import AuditLog
+from quickstart.utils.permissions import CanAccessUserAdmin
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -31,7 +32,7 @@ class StandardResultsSetPagination(pagination.PageNumberPagination):
 class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
     """Viewset for audit logs - read-only access for admins"""
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, CanAccessUserAdmin]
     serializer_class = AuditLogSerializer
     filter_backends = [filters.SearchFilter]
     search_fields = ["user_email", "details", "ip_address"]

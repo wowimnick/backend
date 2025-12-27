@@ -13,6 +13,17 @@ from quickstart.models import (
 
 logger = logging.getLogger(__name__)
 
+class CanAccessUserAdmin(BasePermission):
+    message = "You do not have permission to access user administration."
+
+    def has_permission(self, request, view):
+        if (
+            not request.user
+            or not request.user.is_authenticated
+            or not request.user.is_active
+        ):
+            return False
+        return request.user.has_perm("quickstart.access_user_admin")
 
 class IsWidgetRequest(BasePermission):
     """

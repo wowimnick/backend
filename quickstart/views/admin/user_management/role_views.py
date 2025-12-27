@@ -15,6 +15,7 @@ from quickstart.serializers.admin.user_management.role_serializers import (
 )
 
 from quickstart.models import Role, PermissionGroup, EnhancedPermission, AuditLog
+from quickstart.utils.permissions import CanAccessUserAdmin
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 class RoleManagementViewSet(viewsets.ModelViewSet):
     """Viewset for role management"""
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, CanAccessUserAdmin]
 
     def get_queryset(self):
         queryset = Role.objects.annotate(user_count=Count("customuser"))

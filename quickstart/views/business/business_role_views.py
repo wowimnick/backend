@@ -21,7 +21,7 @@ from quickstart.serializers.business.business_staff_serializers import (
     PermissionGroupSerializer,
 )
 
-# MODIFIED: Removed IsBusinessOwnerOrManager as we will perform a more specific check.
+# MODIFIED: Re-enabling this for top-level security (403 instead of 200 OK Empty List)
 from quickstart.utils.permissions import IsBusinessOwnerOrManager
 
 
@@ -32,9 +32,7 @@ class BusinessRoleViewSet(viewsets.ModelViewSet):
     """
 
     serializer_class = BusinessRoleSerializer
-    # MODIFIED: The base permission is just being authenticated.
-    # Specific permission checks will be done inside the methods.
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsBusinessOwnerOrManager]
 
     def get_queryset(self):
         """
