@@ -1,101 +1,94 @@
 {# templates/emails/booking_reminder_user.html #}
 {% extends "emails/base_email.html" %}
 {% load i18n tz %}
-
 {% block title %}
     {% if is_course_session %}
-        {% blocktrans with session=booking.course_session_number class_name=related_data.class_title %}Reminder: Session {{ session }} of {{ class_name }}{% endblocktrans %}
+        {% blocktrans with session=booking.course_session_number %}Reminder: Session {{ session }}{% endblocktrans %}
     {% else %}
-        {% trans "Reminder: Your Class is Soon!" %}
+        {% trans "Your experience is coming up" %}
     {% endif %}
 {% endblock title %}
-
 {% block content %}
-    <h1>{% trans "Friendly Reminder!" %}</h1>
-    
-    <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
-    
-    {% if is_course_session %}
-        <p>
-            Just a reminder that <strong>Session {{ booking.course_session_number }}</strong> of your course 
-            <strong>{{ related_data.class_title|default:"[Class Title]" }}</strong> is coming up soon!
+    <div style="text-align: center;">
+        <!-- Icon -->
+        <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">⏰</div>
+        <h1>{% trans "The countdown begins." %}</h1>
+        <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+            {% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}
+            <br>
+            {% if is_course_session %}
+                Session {{ booking.course_session_number }} of <strong>{{ related_data.class_title|default:"your course" }}</strong> is almost here.
+            {% else %}
+                You're just about ready to dive into <strong>{{ related_data.class_title|default:"your experience" }}</strong>.
+            {% endif %}
         </p>
-    {% else %}
-        <p>
-            Just a friendly reminder that your class, <strong>{{ related_data.class_title|default:"[Class Title]" }}</strong>, is coming up soon!
-        </p>
-    {% endif %}
-
-    <div style="background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin: 20px 0">
-        
-        {# --- PROMINENT DATE DISPLAY --- #}
-        <div style="text-align: center; padding-bottom: 16px; margin-bottom: 16px; border-bottom: 1px dashed #d1d5db;">
-            <div style="font-size: 14px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">
-                {% if is_course_session %}
-                    {% trans "Next Session" %}
-                {% else %}
-                    {% trans "When" %}
+        <!-- Details Card -->
+        <div style="background-color: #F9FAFB;
+                    border: 1px solid #E5E7EB;
+                    border-radius: 20px;
+                    overflow: hidden;
+                    margin-bottom: 32px">
+            <div style="padding: 24px;">
+                <div style="font-size: 13px;
+                            color: #86868B;
+                            text-transform: uppercase;
+                            letter-spacing: 0.05em;
+                            margin-bottom: 8px">
+                    {% if is_course_session %}
+                        {% trans "Next Session" %}
+                    {% else %}
+                        {% trans "Happening On" %}
+                    {% endif %}
+                </div>
+                <div style="font-size: 24px;
+                            font-weight: 700;
+                            color: #1D1D1F;
+                            margin-bottom: 4px">{{ booking.schedule_instance.date|date:"l, F j" }}</div>
+                <div style="font-size: 18px; color: #484848;">
+                    {{ booking.schedule_instance.time|time:"g:i A" }} - {{ calculated_end_time|time:"g:i A" }}
+                </div>
+                {% if formatted_timezone %}
+                    <div style="font-size: 12px; color: #86868B; margin-top: 4px;">{{ formatted_timezone }}</div>
                 {% endif %}
             </div>
-            <div style="font-size: 20px; font-weight: 700; color: #111827;">
-                {{ booking.schedule_instance.date|date:"l, F j" }}
-            </div>
-            <div style="font-size: 18px; font-weight: 600; color: #374151; margin-top: 4px;">
-                {{ booking.schedule_instance.time|time:"g:i A" }} - 
-                {{ calculated_end_time|time:"g:i A" }}
-            </div>
-            {% if formatted_timezone %}
-                <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">
-                    Timezone: {{ formatted_timezone }}
+            <div style="background-color: #ffffff;
+                        padding: 20px;
+                        border-top: 1px solid #E5E7EB;
+                        text-align: left">
+                <div style="margin-bottom: 12px;">
+                    <span style="font-size: 18px; vertical-align: middle; margin-right: 8px;">📍</span>
+                    <span style="font-size: 16px; color: #1D1D1F; vertical-align: middle;">{{ related_data.class_location|default:"Check details for location" }}</span>
                 </div>
-            {% endif %}
+                <div style="margin-bottom: 0;">
+                    <span style="font-size: 18px; vertical-align: middle; margin-right: 8px;">👥</span>
+                    <span style="font-size: 16px; color: #1D1D1F; vertical-align: middle;">{{ booking.participants }}
+                        {% if booking.participants > 1 %}
+                            people attending
+                        {% else %}
+                            person attending
+                        {% endif %}
+                    </span>
+                </div>
+            </div>
         </div>
-        {# --- END PROMINENT DATE --- #}
-
-        <div style="margin-top: 12px;">
-            <div class="detail-item">
-                <strong>{% trans "Class:" %}</strong> {{ related_data.class_title|default:"N/A" }}
-            </div>
-            
-            {% if is_course_session %}
-            <div class="detail-item" style="color: #ff385c;">
-                <strong>{% trans "Session:" %}</strong> #{{ booking.course_session_number }}
-            </div>
-            {% endif %}
-            
-            <div class="detail-item">
-                <strong>{% trans "Location:" %}</strong> {{ related_data.class_location|default:"N/A" }}
-            </div>
-            
-            {% if booking.participants > 1 %}
-            <div class="detail-item">
-                <strong>{% trans "Participants:" %}</strong> {{ booking.participants }}
-            </div>
-            {% endif %}
-        </div>
+        <p style="color: #484848; margin-bottom: 32px;">
+            {% trans "Be sure to double-check any preparation notes or materials needed before you arrive." %}
+        </p>
+        <table role="presentation"
+               border="0"
+               cellpadding="0"
+               cellspacing="0"
+               width="100%">
+            <tr>
+                <td align="center">
+                    <a href="{{ class_details_url }}" target="_blank" class="button">{% trans 'View Experience Details' %}</a>
+                </td>
+            </tr>
+        </table>
     </div>
-
-    <p>
-        {% trans "Please check the class details for required materials or any other important information." %}
-    </p>
-
-    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
-        <tr>
-            <td align="center" class="button-td">
-                <a href="{{ class_details_url }}" target="_blank" class="button">{% trans 'View Class Details' %}</a>
-            </td>
-        </tr>
-    </table>
-
-    <p>
-        {% trans "We look forward to seeing you there!" %}
-        <br />
-        {% trans "The ClassEasily Team" %}
-    </p>
 {% endblock content %}
-
 {% block footer_recipient %}
     {% if recipient_email and recipient_email != "N/A" %}
-        <p>Reminder sent to {{ recipient_email }}. Booking ID: {{ booking.id }}</p>
+        <p class="footer-text">Reminder sent to {{ recipient_email }}</p>
     {% endif %}
 {% endblock footer_recipient %}

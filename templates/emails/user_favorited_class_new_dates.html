@@ -2,31 +2,42 @@
 {% extends "emails/base_email.html" %}
 {% load i18n %}
 {% block title %}
-    New Dates for a Class You Like!
+    New Dates Available
 {% endblock title %}
 {% block content %}
-    <h1>New Dates Available!</h1>
-    <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
-    <p>
-        Good news! <strong>{{ class_main.title }}</strong>, a class you favorited, has new dates available.
-    </p>
-    <p>
-        Don't miss your chance to book a spot. Click the button below to view the updated schedule and secure your place.
-    </p>
-    <table role="presentation"
-           border="0"
-           cellpadding="0"
-           cellspacing="0"
-           width="100%">
-        <tr>
-            <td align="center" class="button-td">
-                <a href="{{ class_url }}" target="_blank" class="button">View Class Dates</a>
-            </td>
-        </tr>
-    </table>
-    <p>
-        Happy learning!
-        <br />
-        The ClassEasily Team
-    </p>
+    <div style="text-align: center;">
+        <!-- Icon -->
+        <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">❤️</div>
+        <h1>It's back.</h1>
+        <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+            {% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}
+            <br>
+            Good news! <strong>{{ class_main.title }}</strong> has new dates available.
+        </p>
+        <!-- Card -->
+        <div style="background-color: #ffffff;
+                    border: 1px solid #E5E7EB;
+                    border-radius: 20px;
+                    overflow: hidden;
+                    margin-bottom: 32px;
+                    padding: 24px;
+                    box-shadow: 0 4px 6px rgba(0,0,0,0.02)">
+            <div style="font-weight: 700;
+                        font-size: 18px;
+                        color: #1D1D1F;
+                        margin-bottom: 8px">{{ class_main.title }}</div>
+            <div style="color: #86868B; font-size: 14px;">{% trans "Slots filling up soon." %}</div>
+        </div>
+        <table role="presentation"
+               border="0"
+               cellpadding="0"
+               cellspacing="0"
+               width="100%">
+            <tr>
+                <td align="center">
+                    <a href="{{ class_url }}" target="_blank" class="button">View New Dates</a>
+                </td>
+            </tr>
+        </table>
+    </div>
 {% endblock content %}

@@ -2,29 +2,60 @@
 {% extends "emails/base_email.html" %}
 {% load i18n tz %}
 {% block title %}
-    Your Class is Almost Full!
+    {% trans "You're drawing a crowd" %}
 {% endblock title %}
 {% block content %}
-    <h1>Your Class is Almost Full!</h1>
-    <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
-    <p>
-        Great news! Your class, <strong>{{ class_title }}</strong>, scheduled for <strong>{{ class_date|date:"F j, Y" }} at {{ class_time|time:"P" }}</strong> is now {{ occupancy_percentage }}% full.
-    </p>
-    <p>There are only a few spots left. Consider sharing on social media to fill the remaining seats!</p>
-    <table role="presentation"
-           border="0"
-           cellpadding="0"
-           cellspacing="0"
-           width="100%">
-        <tr>
-            <td align="center" class="button-td">
-                <a href="{{ manage_class_url }}" target="_blank" class="button">Manage Class</a>
-            </td>
-        </tr>
-    </table>
-    <p>
-        Keep up the momentum!
-        <br />
-        The ClassEasily Team
-    </p>
+    <div style="text-align: center;">
+        <!-- Icon -->
+        <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">🔥</div>
+        <h1>{% trans "Momentum is building." %}</h1>
+        <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+            {% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}
+            <br>
+            Your experience, <strong>{{ class_title }}</strong>, is hot right now!
+        </p>
+        <!-- Progress Card -->
+        <div style="background-color: #ffffff;
+                    border: 1px solid #E5E7EB;
+                    border-radius: 20px;
+                    overflow: hidden;
+                    margin-bottom: 32px;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.03)">
+            <div style="padding: 24px;">
+                <div style="font-size: 14px; color: #86868B; margin-bottom: 8px;">
+                    {{ class_date|date:"F j" }} • {{ class_time|time:"P" }}
+                </div>
+                <div style="font-size: 48px;
+                            font-weight: 700;
+                            color: #1D1D1F;
+                            letter-spacing: -1px;
+                            line-height: 1">{{ occupancy_percentage }}%</div>
+                <div style="font-size: 16px;
+                            font-weight: 600;
+                            color: #F81E3E;
+                            margin-top: 4px">{% trans "Occupancy Reached" %}</div>
+            </div>
+            <!-- Optional visual bar -->
+            <div style="height: 8px; width: 100%; background-color: #F5F5F7;">
+                <div style="height: 100%;
+                            width: {{ occupancy_percentage }}%;
+                            background-color: #F81E3E;
+                            border-radius: 0 4px 4px 0"></div>
+            </div>
+        </div>
+        <p style="color: #484848; margin-bottom: 32px;">
+            {% trans "You only have a few spots left. This is a great time to post on social media to sell out the remaining seats." %}
+        </p>
+        <table role="presentation"
+               border="0"
+               cellpadding="0"
+               cellspacing="0"
+               width="100%">
+            <tr>
+                <td align="center">
+                    <a href="{{ manage_class_url }}" target="_blank" class="button">{% trans 'Manage Inventory' %}</a>
+                </td>
+            </tr>
+        </table>
+    </div>
 {% endblock content %}

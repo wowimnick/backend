@@ -1,5 +1,6 @@
 # quickstart/views/business/business_staff_views.py
 
+import uuid
 from rest_framework import viewsets, status, generics
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -246,6 +247,12 @@ class ValidateInvitationTokenView(generics.GenericAPIView):
         token = request.query_params.get("token")
         if not token:
             raise DRFValidationError({"token": "Invitation token is required."})
+        
+        try:
+            uuid.UUID(str(token))
+        except (ValueError, TypeError):
+            # If it's not a valid UUID, return 400 instead of crashing with 500
+            return Response({"detail": "Invalid invitation link format."}, status=400)
 
         try:
             # We only look for pending invitations. Accepted or expired ones are invalid.

@@ -2,49 +2,86 @@
 {% extends "emails/base_email.html" %}
 {% load i18n %}
 {% block title %}
-    Your {{ period }} Performance Summary
+    Your {{ period }} Performance
 {% endblock title %}
 {% block content %}
-    <h1>Your {{ period }} Performance Summary</h1>
-    <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
-    <p>
-        Here's a look at how your business performed on ClassEasily from <strong>{{ summary.start_date }}</strong> to <strong>{{ summary.end_date }}</strong>.
-    </p>
-    <div style="background-color: #f9fafb;
-                border: 1px solid #e5e7eb;
-                border-radius: 8px;
-                padding: 16px;
-                margin: 20px 0">
-        <h2 style="font-size: 18px;
-                   font-weight: 600;
-                   color: #111827;
-                   margin-top: 0;
-                   margin-bottom: 12px">{{ period }} Highlights:</h2>
-        <p style="margin-bottom: 6px;">
-            <strong>Total Revenue:</strong> ${{ summary.total_revenue }}
+    <div style="text-align: center;">
+        <!-- Icon -->
+        <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">📈</div>
+        <h1>{% trans "Your impact this month." %}</h1>
+        <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+            {% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}
+            <br>
+            {% trans "Here's how your experiences performed from" %}
+            <br>
+            <span style="color: #86868B; font-size: 16px;">{{ summary.start_date }} — {{ summary.end_date }}</span>
         </p>
-        <p style="margin-bottom: 6px;">
-            <strong>New Bookings:</strong> {{ summary.new_bookings }}
+        <!-- Stats Grid Card -->
+        <div style="background-color: #ffffff;
+                    border: 1px solid #E5E7EB;
+                    border-radius: 20px;
+                    overflow: hidden;
+                    margin-bottom: 32px;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.03)">
+            <div style="background-color: #F9FAFB;
+                        padding: 16px;
+                        border-bottom: 1px solid #E5E7EB">
+                <h2 style="font-size: 14px;
+                           font-weight: 700;
+                           color: #1D1D1F;
+                           text-transform: uppercase;
+                           letter-spacing: 0.05em;
+                           margin: 0">{{ period }} {% trans "Highlights" %}</h2>
+            </div>
+            <div style="padding: 24px;">
+                <!-- Row 1 -->
+                <div style="margin-bottom: 24px;">
+                    <div style="font-size: 13px;
+                                color: #86868B;
+                                text-transform: uppercase;
+                                margin-bottom: 4px">{% trans "Total Revenue" %}</div>
+                    <div style="font-size: 32px; font-weight: 800; color: #1D1D1F;">${{ summary.total_revenue }}</div>
+                </div>
+                <!-- Divider -->
+                <div style="height: 1px; background-color: #E5E7EB; margin-bottom: 24px;"></div>
+                <!-- Row 2 (Columns) -->
+                <table role="presentation"
+                       border="0"
+                       cellpadding="0"
+                       cellspacing="0"
+                       width="100%">
+                    <tr>
+                        <td align="center" width="50%" style="border-right: 1px solid #E5E7EB;">
+                            <div style="font-size: 13px;
+                                        color: #86868B;
+                                        text-transform: uppercase;
+                                        margin-bottom: 4px">{% trans "New Bookings" %}</div>
+                            <div style="font-size: 24px; font-weight: 700; color: #1D1D1F;">{{ summary.new_bookings }}</div>
+                        </td>
+                        <td align="center" width="50%">
+                            <div style="font-size: 13px;
+                                        color: #86868B;
+                                        text-transform: uppercase;
+                                        margin-bottom: 4px">{% trans "Unique Students" %}</div>
+                            <div style="font-size: 24px; font-weight: 700; color: #1D1D1F;">{{ summary.unique_students }}</div>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+        <p style="color: #484848; margin-bottom: 32px;">
+            {% trans "Dive deeper into your analytics to see what's working best." %}
         </p>
-        <p style="margin-bottom: 0;">
-            <strong>Unique Students:</strong> {{ summary.unique_students }}
-        </p>
+        <table role="presentation"
+               border="0"
+               cellpadding="0"
+               cellspacing="0"
+               width="100%">
+            <tr>
+                <td align="center">
+                    <a href="{{ dashboard_url }}" target="_blank" class="button">{% trans 'View Full Analytics' %}</a>
+                </td>
+            </tr>
+        </table>
     </div>
-    <p>Dive deeper into your analytics and discover more insights on your dashboard.</p>
-    <table role="presentation"
-           border="0"
-           cellpadding="0"
-           cellspacing="0"
-           width="100%">
-        <tr>
-            <td align="center" class="button-td">
-                <a href="{{ dashboard_url }}" target="_blank" class="button">View Full Analytics</a>
-            </td>
-        </tr>
-    </table>
-    <p>
-        Keep up the great work!
-        <br />
-        The ClassEasily Team
-    </p>
 {% endblock content %}

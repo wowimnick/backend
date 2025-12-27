@@ -2,91 +2,95 @@
 {% extends "emails/base_email.html" %}
 {% load i18n tz %}
 {% block title %}
-    {% trans "New Booking Received!" %}
+    {% trans "New Booking Received" %}
 {% endblock title %}
 {% block content %}
-    <h1>{% trans "New Booking for Your Class!" %}</h1>
-    <p>
-        {% blocktrans with first_name=business_user.first_name|default:"Business Owner/Manager" %}Hi {{ first_name }},{% endblocktrans %}
-    </p>
-    <p>
-        You've received a new booking for your class: <strong>{{ related_data.class_title|default:"[Class Title]" }}</strong>.
-    </p>
-    <div style="background-color: #f9fafb;
-                border: 1px solid #e5e7eb;
-                border-radius: 8px;
-                padding: 16px;
-                margin: 20px 0">
-        <h2 style="font-size: 18px;
-                   font-weight: 600;
-                   color: #111827;
-                   margin-top: 0;
-                   margin-bottom: 12px">{% trans "Booking Details:" %}</h2>
-        {% with booker=booking.user|default:booking.contact %}
-            <p style="margin-bottom: 6px;">
-                <strong>{% trans "Booker Name:" %}</strong>
-                {% if booker.get_full_name %}
-                    {{ booker.get_full_name }}
-                {% elif booker.first_name %}
-                    {{ booker.first_name }} {{ booker.last_name|default:''|safe }}
-                {% else %}
-                    Guest Booker
+    <div style="text-align: center;">
+        <!-- Icon -->
+        <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">🎫</div>
+        <h1>{% trans "Another seat filled." %}</h1>
+        <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+            {% blocktrans with first_name=business_user.first_name|default:"Partner" %}Hi {{ first_name }},{% endblocktrans %}
+            <br>
+            Someone new is joining the fun for <strong>{{ related_data.class_title|default:"your experience" }}</strong>.
+        </p>
+        <!-- Details Card -->
+        <div style="background-color: #F9FAFB;
+                    border: 1px solid #E5E7EB;
+                    border-radius: 16px;
+                    padding: 24px;
+                    text-align: left;
+                    margin-bottom: 32px">
+            {% with booker=booking.user|default:booking.contact %}
+                <div style="display: flex;
+                            align-items: center;
+                            margin-bottom: 20px;
+                            padding-bottom: 20px;
+                            border-bottom: 1px dashed #D1D5DB">
+                    <div style="background: #34D399;
+                                width: 40px;
+                                height: 40px;
+                                border-radius: 20px;
+                                display: flex;
+                                align-items: center;
+                                justify-content: center;
+                                font-size: 20px;
+                                color: white;
+                                margin-right: 16px">✓</div>
+                    <div>
+                        <div style="font-size: 16px; font-weight: 700; color: #1D1D1F;">
+                            {% if booker.get_full_name %}
+                                {{ booker.get_full_name }}
+                            {% else %}
+                                {{ booker.first_name }} {{ booker.last_name }}
+                            {% endif %}
+                        </div>
+                        <div style="font-size: 14px; color: #86868B;">{{ booker.email }}</div>
+                    </div>
+                </div>
+                <div style="font-size: 14px; margin-bottom: 8px; color: #1D1D1F;">
+                    <strong>{% trans "Date:" %}</strong> {{ booking.schedule_instance.date|date:"l, F j" }}
+                </div>
+                <div style="font-size: 14px; margin-bottom: 8px; color: #1D1D1F;">
+                    <strong>{% trans "Participants:" %}</strong> {{ booking.participants }}
+                </div>
+                {% if booker.phone_number %}
+                    <div style="font-size: 14px; margin-bottom: 8px; color: #1D1D1F;">
+                        <strong>{% trans "Phone:" %}</strong> <a href="tel:{{ booker.phone_number }}"
+    style="color:#1D1D1F;
+           text-decoration:none">{{ booker.phone_number }}</a>
+                    </div>
                 {% endif %}
-            </p>
-            <p style="margin-bottom: 6px;">
-                <strong>{% trans "Booker Email:" %}</strong> {{ booker.email|default:"N/A" }}
-            </p>
-            {# --- ADDITION START --- #}
-            {% if booker.phone_number %}
-                <p style="margin-bottom: 6px;">
-                    <strong>{% trans "Booker Phone:" %}</strong> {{ booker.phone_number }}
-                </p>
-            {% endif %}
-            {# --- ADDITION END --- #}
-        {% endwith %}
-        <p style="margin-bottom: 6px;">
-            <strong>{% trans "Date:" %}</strong> {{ booking.schedule_instance.date|date:"l, F j, Y" }}
-        </p>
-        <p style="margin-bottom: 6px;">
-            <strong>{% trans "Time:" %}</strong> {{ booking.schedule_instance.time|time:"P" }}
-        </p>
-        <p style="margin-bottom: 6px;">
-            <strong>{% trans "Total Participants:" %}</strong> {{ booking.participants }}
-        </p>
-        {% if booking.participant_details and booking.participants > 0 %}
-            <p style="margin-bottom: 2px;">
-                <strong>{% trans "Participant Names:" %}</strong>
-            </p>
-            <ul style="margin-top: 0; margin-bottom: 6px; padding-left: 20px;">
-                {% for participant in booking.participant_details %}
-                    <li>{{ participant.name|default:"Unnamed Participant" }}</li>
-                {% endfor %}
-            </ul>
-        {% endif %}
-        <p style="margin-bottom: 0;">
-            <strong>{% trans "Notes from Booker:" %}</strong> {{ booking.notes|default:"None" }}
-        </p>
+                {% if booking.notes %}
+                    <div style="margin-top: 16px;
+                                background: #ffffff;
+                                padding: 12px;
+                                border-radius: 8px;
+                                border: 1px solid #E5E7EB">
+                        <div style="font-size: 11px;
+                                    text-transform: uppercase;
+                                    color: #86868B;
+                                    margin-bottom: 4px">{% trans "Customer Notes" %}</div>
+                        <div style="font-size: 14px; color: #1D1D1F; font-style: italic;">"{{ booking.notes }}"</div>
+                    </div>
+                {% endif %}
+            {% endwith %}
+        </div>
+        <table role="presentation"
+               border="0"
+               cellpadding="0"
+               cellspacing="0"
+               width="100%">
+            <tr>
+                <td align="center">
+                    <a href="{{ dashboard_booking_url }}" target="_blank" class="button">{% trans 'View Booking Details' %}</a>
+                </td>
+            </tr>
+        </table>
     </div>
-    <p>{% trans "You can view the full details and manage this booking from your Business Dashboard." %}</p>
-    <table role="presentation"
-           border="0"
-           cellpadding="0"
-           cellspacing="0"
-           width="100%">
-        <tr>
-            <td align="center" class="button-td">
-                <a href="{{ dashboard_booking_url }}" target="_blank" class="button">{% trans 'View Booking Details' %}</a>
-            </td>
-        </tr>
-    </table>
-    <p>
-        {% trans "Keep up the great work!" %}
-        <br />
-        {% trans "The ClassEasily Team" %}
-    </p>
 {% endblock content %}
 {% block footer_recipient %}
     {% if recipient_email and recipient_email != "N/A" %}
-        <p>New booking notification sent to {{ recipient_email }} for Booking ID: {{ booking.id }}</p>
+        <p class="footer-text">Notification sent to {{ recipient_email }}</p>
     {% endif %}
 {% endblock footer_recipient %}

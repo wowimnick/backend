@@ -1,64 +1,80 @@
 {# templates/emails/business_schedule_expiry_warning.html #}
 {% extends "emails/base_email.html" %}
 {% load i18n %}
-
 {% block title %}
-    {% trans "Action Required: Classes Ending Soon" %}
+    {% trans "Keep the momentum going" %}
 {% endblock title %}
-
 {% block content %}
-    <h1>{% trans "Time to Update Your Schedule!" %}</h1>
-    
-    <p>{% blocktrans with first_name=business_user.first_name|default:"Business Owner" %}Hi {{ first_name }},{% endblocktrans %}</p>
-    
-    <p>
-        {% trans "We noticed that the following classes have run out of scheduled sessions or are ending within the next 14 days. To ensure students can keep booking, please add new sessions soon." %}
-    </p>
-
-    <div style="background-color: #fff1f2; border: 1px solid #fecdd3; border-radius: 8px; padding: 16px; margin: 20px 0">
-        <h2 style="font-size: 18px; font-weight: 600; color: #9f1239; margin-top: 0; margin-bottom: 12px">
-            {% trans "Classes Needing Attention:" %}
-        </h2>
-        
-        <ul style="padding-left: 20px; margin-bottom: 0; color: #881337;">
-            {% for item in expiring_classes %}
-                <li style="margin-bottom: 8px;">
-                    <strong>{{ item.title }}</strong>
-                    <br/>
-                    <span style="font-size: 14px; color: #4b5563;">
-                        {% if item.last_date %}
-                            {% trans "Last scheduled session:" %} {{ item.last_date|date:"F j, Y" }}
-                        {% else %}
-                            {% trans "No future sessions scheduled." %}
-                        {% endif %}
-                    </span>
-                </li>
-            {% endfor %}
-        </ul>
+    <div style="text-align: center;">
+        <!-- Icon -->
+        <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">⏳</div>
+        <h1>{% trans "Don't let the fun stop." %}</h1>
+        <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+            {% blocktrans with first_name=business_user.first_name|default:"Partner" %}Hi {{ first_name }},{% endblocktrans %}
+            <br>
+            {% trans "Some of your experiences are running out of scheduled dates." %}
+        </p>
+        <!-- Warning Card -->
+        <div style="background-color: #FFF1F2;
+                    border: 1px solid #FECDD3;
+                    border-radius: 20px;
+                    overflow: hidden;
+                    margin-bottom: 32px;
+                    text-align: left">
+            <div style="padding: 20px;">
+                <h2 style="font-size: 16px;
+                           font-weight: 700;
+                           color: #9F1239;
+                           margin-top: 0;
+                           margin-bottom: 16px">{% trans "Ending within 14 days:" %}</h2>
+                <table role="presentation"
+                       border="0"
+                       cellpadding="0"
+                       cellspacing="0"
+                       width="100%">
+                    {% for item in expiring_classes %}
+                        <tr>
+                            <td style="padding-bottom: 12px;">
+                                <div style="font-size: 16px; font-weight: 600; color: #881337;">{{ item.title }}</div>
+                                <div style="font-size: 14px; color: #9F1239; opacity: 0.8;">
+                                    {% if item.last_date %}
+                                        {% trans "Last session:" %} {{ item.last_date|date:"F j, Y" }}
+                                    {% else %}
+                                        {% trans "No future sessions found." %}
+                                    {% endif %}
+                                </div>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </table>
+            </div>
+        </div>
+        <p style="color: #484848; margin-bottom: 32px;">
+            {% trans "Adding new dates now ensures your listing stays visible and students can keep booking future adventures." %}
+        </p>
+        <table role="presentation"
+               border="0"
+               cellpadding="0"
+               cellspacing="0"
+               width="100%">
+            <tr>
+                <td align="center">
+                    <a href="{{ dashboard_url }}" target="_blank" class="button">{% trans 'Add New Dates' %}</a>
+                </td>
+            </tr>
+        </table>
+        <p style="font-size: 13px;
+                  color: #86868B;
+                  margin-top: 32px;
+                  border-top: 1px solid #E5E7EB;
+                  padding-top: 16px">
+            {% trans "Want to adjust these reminders?" %}
+            <a href="{{ settings_url }}"
+               style="color: #86868B;
+                      text-decoration: underline">{% trans "Update notification settings." %}</a>
+        </p>
     </div>
-
-    <p>{% trans "Keeping your schedule up to date helps improve your search ranking and ensures you don't miss out on bookings." %}</p>
-
-    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
-        <tr>
-            <td align="center" class="button-td">
-                <a href="{{ dashboard_url }}" target="_blank" class="button">{% trans 'Manage Classes' %}</a>
-            </td>
-        </tr>
-    </table>
-
-    <p style="font-size: 13px; color: #6b7280; margin-top: 24px; border-top: 1px solid #e5e7eb; padding-top: 16px;">
-        {% trans "Want to stop receiving these specific reminders?" %} 
-        <a href="{{ settings_url }}" style="color: #6b7280; text-decoration: underline;">
-            {% trans "Update your notification preferences in Business Settings." %}
-        </a>
-    </p>
-
-    <p>
-        {% trans "The ClassEasily Team" %}
-    </p>
 {% endblock content %}
-
 {% block footer_recipient %}
-    <p>Schedule notification sent to {{ business_user.email }}</p>
+    <p class="footer-text">Schedule alert sent to {{ business_user.email }}</p>
 {% endblock footer_recipient %}

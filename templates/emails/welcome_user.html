@@ -2,40 +2,41 @@
 {% extends "emails/base_email.html" %}
 {% load i18n %}
 {% block title %}
-    {% trans "Welcome to ClassEasily!" %}
+    {% trans "Welcome to ClassEasily" %}
 {% endblock title %}
 {% block content %}
-    <h1>{% trans "Welcome to ClassEasily!" %}</h1>
-    <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
-    <p>
-        {% trans "We're thrilled to have you join the ClassEasily community! Your account is now active (or pending email verification if you just signed up)." %}
-    </p>
-    <p>
-        {% trans "Get ready to explore a world of classes, connect with talented instructors, and achieve your learning goals." %}
-    </p>
-    <p>{% trans "To get started, why not browse some of the amazing classes available right now?" %}</p>
-    <table role="presentation"
-           border="0"
-           cellpadding="0"
-           cellspacing="0"
-           width="100%">
-        <tr>
-            <td align="center" class="button-td">
-                <a href="{{ explore_url }}" target="_blank" class="button">{% trans 'Explore Classes Now' %}</a>
-            </td>
-        </tr>
-    </table>
-    <p>
-        {% trans "If you have any questions, please don't hesitate to visit our Help Center or contact our support team." %}
-    </p>
-    <p>
-        {% trans "Happy learning," %}
-        <br />
-        {% trans "The ClassEasily Team" %}
-    </p>
+    <div style="text-align: center;">
+        <!-- Icon -->
+        <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">👋</div>
+        <h1>{% trans "Welcome." %}</h1>
+        <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+            {% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}
+            <br>
+            {% trans "We're thrilled to have you join us. Get ready to explore a world of new experiences." %}
+        </p>
+        <div style="background-color: #F9FAFB;
+                    border-radius: 20px;
+                    padding: 32px;
+                    margin-bottom: 32px">
+            <p style="margin: 0; font-size: 16px; color: #484848;">
+                {% trans "Whether you're looking to learn a new skill, meet new people, or just have fun, your next adventure is just a click away." %}
+            </p>
+        </div>
+        <table role="presentation"
+               border="0"
+               cellpadding="0"
+               cellspacing="0"
+               width="100%">
+            <tr>
+                <td align="center">
+                    <a href="{{ explore_url }}" target="_blank" class="button">{% trans 'Explore Experiences' %}</a>
+                </td>
+            </tr>
+        </table>
+    </div>
 {% endblock content %}
 {% block footer_recipient %}
     {% if recipient_email and recipient_email != "N/A" %}
-        <p>{% blocktrans %}This email was sent to {{ recipient_email }}.{% endblocktrans %}</p>
+        <p class="footer-text">Sent to {{ recipient_email }}</p>
     {% endif %}
 {% endblock footer_recipient %}

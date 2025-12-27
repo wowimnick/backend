@@ -2,61 +2,56 @@
 {% extends "emails/base_email.html" %}
 {% load i18n tz %}
 {% block title %}
-    {% trans "New Business Verification Request Submitted" %}
+    {% trans "New Verification Request" %}
 {% endblock title %}
 {% block content %}
-    <h1>{% trans "New Verification Request Requires Review" %}</h1>
-    <p>{% trans "Hi Admin Team," %}</p>
-    {% with business_name=business.businessName|default:"[Business Name]" user_name=user.get_full_name|default:user.email|default:"[User]" submission_time=verification_request.submitted_at|timezone:settings.TIME_ZONE|date:"F j, Y, P" %}
-        <p>
-            {% blocktrans %}A new business verification request has been submitted by <strong>{{ user_name }}</strong> for the business <strong>{{ business_name }}</strong> on {{ submission_time }}.{% endblocktrans %}
+    <div style="text-align: center;">
+        <!-- Icon -->
+        <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">📋</div>
+        <h1>{% trans "Verification Pending." %}</h1>
+        <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+            {% trans "A new business profile needs your review." %}
         </p>
-    {% endwith %}
-    <p>
-        {% trans "Please review the submission and associated documents in the admin panel to approve or reject the request." %}
-    </p>
-    <div style="background-color: #f9fafb;
-                border: 1px solid #e5e7eb;
-                border-radius: 8px;
-                padding: 16px;
-                margin: 20px 0">
-        <h2 style="font-size: 18px;
-                   font-weight: 600;
-                   color: #111827;
-                   margin-top: 0;
-                   margin-bottom: 12px">{% trans "Request Details:" %}</h2>
-        <p style="margin-bottom: 6px;">
-            <strong>{% trans "User:" %}</strong> {{ user.get_full_name|default:user.email }} (ID: {{ user.userId }})
-        </p>
-        <p style="margin-bottom: 6px;">
-            <strong>{% trans "Business:" %}</strong> {{ business.businessName|default:"N/A" }} (ID: {{ business.businessId }})
-        </p>
-        <p style="margin-bottom: 6px;">
-            <strong>{% trans "Request ID:" %}</strong> {{ verification_request.id }}
-        </p>
-        <p style="margin-bottom: 0;">
-            <strong>{% trans "Submitted At:" %}</strong> {{ verification_request.submitted_at|timezone:settings.TIME_ZONE|date:"l, F j, Y, P T" }}
-        </p>
+        <!-- Data Card -->
+        <div style="background-color: #ffffff;
+                    border: 1px solid #E5E7EB;
+                    border-radius: 20px;
+                    overflow: hidden;
+                    margin-bottom: 32px;
+                    text-align: left;
+                    padding: 24px">
+            <div style="margin-bottom: 16px;">
+                <div style="font-size: 12px; color: #86868B; text-transform: uppercase;">{% trans "Business Name" %}</div>
+                <div style="font-size: 18px; font-weight: 700; color: #1D1D1F;">
+                    {{ business.businessName|default:"[Business Name]" }}
+                </div>
+                <div style="font-size: 12px; color: #86868B;">ID: {{ business.businessId }}</div>
+            </div>
+            <div style="margin-bottom: 16px;">
+                <div style="font-size: 12px; color: #86868B; text-transform: uppercase;">{% trans "Submitted By" %}</div>
+                <div style="font-size: 16px; color: #1D1D1F;">{{ user.get_full_name|default:user.email }}</div>
+                <div style="font-size: 12px; color: #86868B;">User ID: {{ user.userId }}</div>
+            </div>
+            <div style="margin-bottom: 0;">
+                <div style="font-size: 12px; color: #86868B; text-transform: uppercase;">{% trans "Time" %}</div>
+                <div style="font-size: 16px; color: #1D1D1F;">
+                    {{ verification_request.submitted_at|timezone:settings.TIME_ZONE|date:"F j, Y, P T" }}
+                </div>
+            </div>
+        </div>
+        <table role="presentation"
+               border="0"
+               cellpadding="0"
+               cellspacing="0"
+               width="100%">
+            <tr>
+                <td align="center">
+                    <a href="{{ verification_url }}" target="_blank" class="button">{% trans 'Review in Admin Panel' %}</a>
+                </td>
+            </tr>
+        </table>
     </div>
-    <table role="presentation"
-           border="0"
-           cellpadding="0"
-           cellspacing="0"
-           width="100%">
-        <tr>
-            <td align="center" class="button-td">
-                <a href="{{ verification_url }}" target="_blank" class="button">{% trans 'Review Verification Request' %}</a>
-            </td>
-        </tr>
-    </table>
-    <p>
-        {% trans "Regards," %}
-        <br />
-        {% trans "The ClassEasily System" %}
-    </p>
 {% endblock content %}
 {% block footer_recipient %}
-    {% if recipient_email and recipient_email != "N/A" %}
-        <p>Verification notification sent to designated administrators.</p>
-    {% endif %}
+    <p class="footer-text">{% trans "Sent to System Administrators" %}</p>
 {% endblock footer_recipient %}

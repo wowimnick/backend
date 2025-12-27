@@ -2,45 +2,42 @@
 {% extends "emails/base_email.html" %}
 {% load i18n %}
 {% block title %}
-    [User Reply] Support Ticket #{{ ticket.user_facing_id }}
+    [User Reply] Ticket #{{ ticket.user_facing_id }}
 {% endblock title %}
 {% block content %}
-    <h1>User Has Replied to Ticket #{{ ticket.user_facing_id }}</h1>
-    <p>Hi Admin Team,</p>
-    <p>A user has replied to a support ticket.</p>
-    <div style="background-color: #f9fafb;
-                border: 1px solid #e5e7eb;
-                border-radius: 8px;
-                padding: 16px;
-                margin: 20px 0">
-        <p style="margin-bottom: 6px;">
-            <strong>Ticket ID:</strong> #{{ ticket.user_facing_id }}
+    <div style="text-align: center;">
+        <!-- Icon -->
+        <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">💬</div>
+        <h1>{% trans "New reply on ticket." %}</h1>
+        <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+            Ticket #{{ ticket.user_facing_id }} has a new message.
         </p>
-        <p style="margin-bottom: 6px;">
-            <strong>Subject:</strong> {{ ticket.subject }}
-        </p>
-        <p style="margin-bottom: 6px;">
-            <strong>User:</strong> {{ user_name }}
-        </p>
-        <p style="margin-bottom: 0;">
-            <strong>Status:</strong> {{ ticket.get_status_display }}
-        </p>
+        <div style="background-color: #F9FAFB;
+                    border: 1px solid #E5E7EB;
+                    border-radius: 16px;
+                    padding: 24px;
+                    text-align: left;
+                    margin-bottom: 32px">
+            <div style="font-size: 14px; margin-bottom: 8px;">
+                <strong>Subject:</strong> {{ ticket.subject }}
+            </div>
+            <div style="font-size: 14px; margin-bottom: 8px;">
+                <strong>User:</strong> {{ user_name }}
+            </div>
+            <div style="font-size: 14px; margin-bottom: 0;">
+                <strong>Status:</strong> {{ ticket.get_status_display }}
+            </div>
+        </div>
+        <table role="presentation"
+               border="0"
+               cellpadding="0"
+               cellspacing="0"
+               width="100%">
+            <tr>
+                <td align="center">
+                    <a href="{{ ticket_url }}" target="_blank" class="button">View Ticket</a>
+                </td>
+            </tr>
+        </table>
     </div>
-    <p>Please review the ticket and respond to the user in a timely manner.</p>
-    <table role="presentation"
-           border="0"
-           cellpadding="0"
-           cellspacing="0"
-           width="100%">
-        <tr>
-            <td align="center" class="button-td">
-                <a href="{{ ticket_url }}" target="_blank" class="button">View Ticket in Admin</a>
-            </td>
-        </tr>
-    </table>
-    <p>
-        Regards,
-        <br />
-        The ClassEasily System
-    </p>
 {% endblock content %}

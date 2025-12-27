@@ -2,82 +2,69 @@
 {% extends "emails/base_email.html" %}
 {% load i18n tz %}
 {% block title %}
-    {% trans "Booking Cancellation Notice" %}
+    {% trans "A spot has opened up" %}
 {% endblock title %}
 {% block content %}
-    <h1>{% trans "A Student Cancelled Their Booking" %}</h1>
-    <p>
-        {% blocktrans with first_name=business_user.first_name|default:"Business Owner/Manager" %}Hi {{ first_name }},{% endblocktrans %}
-    </p>
-    {% with booker=booking.user|default:booking.contact class_title=related_data.class_title|default:"your class" %}
-        {# --- VARIABLE FIX START --- #}
-        {% with booker_name=booker.first_name|add:" "|add:booker.last_name|default:"A student" %}
-            {# --- VARIABLE FIX END --- #}
-            <p>
-                {% blocktrans %}Please note that <strong>{{ booker_name }}</strong> has cancelled their booking for <strong>{{ class_title }}</strong>.{% endblocktrans %}
-            </p>
+    <div style="text-align: center;">
+        <!-- Icon -->
+        <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">👤</div>
+        <h1>{% trans "A spot just opened up." %}</h1>
+        <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+            {% blocktrans with first_name=business_user.first_name|default:"Partner" %}Hi {{ first_name }},{% endblocktrans %}
+            <br>
+            Just a heads up that a booking has been cancelled for <strong>{{ related_data.class_title|default:"your experience" }}</strong>.
+        </p>
+        <!-- Details Card -->
+        {% with booker=booking.user|default:booking.contact %}
+            <div style="background-color: #F9FAFB;
+                        border: 1px solid #E5E7EB;
+                        border-radius: 16px;
+                        padding: 24px;
+                        text-align: left;
+                        margin-bottom: 32px">
+                <div style="display: flex; align-items: center; margin-bottom: 20px;">
+                    <div style="background: #E5E7EB;
+                                width: 40px;
+                                height: 40px;
+                                border-radius: 20px;
+                                display: flex;
+                                align-items: center;
+                                justify-content: center;
+                                font-size: 20px;
+                                margin-right: 16px">✕</div>
+                    <div>
+                        <div style="font-size: 16px; font-weight: 700; color: #1D1D1F;">
+                            {{ booker.first_name|add:" "|add:booker.last_name|default:"Guest Student" }}
+                        </div>
+                        <div style="font-size: 14px; color: #86868B;">{{ booker.email }}</div>
+                    </div>
+                </div>
+                <div style="font-size: 14px; color: #1D1D1F; margin-bottom: 8px;">
+                    <strong>{% trans "Session:" %}</strong> {{ booking.schedule_instance.date|date:"F j, Y" }} at {{ booking.schedule_instance.time|time:"P" }}
+                </div>
+                <div style="font-size: 14px; color: #1D1D1F; margin-bottom: 0;">
+                    <strong>{% trans "Seats Released:" %}</strong> {{ booking.participants }}
+                </div>
+            </div>
         {% endwith %}
-        <div style="background-color: #f9fafb;
-                    border: 1px solid #e5e7eb;
-                    border-radius: 8px;
-                    padding: 16px;
-                    margin: 20px 0">
-            <h2 style="font-size: 18px;
-                       font-weight: 600;
-                       color: #111827;
-                       margin-top: 0;
-                       margin-bottom: 12px">{% trans "Cancelled Booking Details:" %}</h2>
-            <p style="margin-bottom: 6px;">
-                {# --- VARIABLE FIX START --- #}
-                <strong>{% trans "Booker Name:" %}</strong> {{ booker.first_name|add:" "|add:booker.last_name|default:"N/A" }}
-                {# --- VARIABLE FIX END --- #}
-            </p>
-            <p style="margin-bottom: 6px;">
-                <strong>{% trans "Booker Email:" %}</strong> {{ booker.email }}
-            </p>
-            <p style="margin-bottom: 6px;">
-                <strong>{% trans "Original Date:" %}</strong> {{ booking.schedule_instance.date|date:"l, F j, Y" }}
-            </p>
-            <p style="margin-bottom: 6px;">
-                <strong>{% trans "Original Time:" %}</strong> {{ booking.schedule_instance.time|time:"P" }}
-            </p>
-            <p style="margin-bottom: 0;">
-                <strong>{% trans "Total Participants Cancelled:" %}</strong> {{ booking.participants }}
-            </p>
-            {% if booking.participant_details and booking.participants > 0 %}
-                <p style="margin-bottom: 2px;">
-                    <strong>{% trans "Participant Names in Cancelled Booking:" %}</strong>
-                </p>
-                <ul style="margin-top: 0; margin-bottom: 6px; padding-left: 20px;">
-                    {% for participant in booking.participant_details %}
-                        <li>{{ participant.name|default:"Unnamed Participant" }}</li>
-                    {% endfor %}
-                </ul>
-            {% endif %}
-        </div>
-    {% endwith %}
-    <p>
-        {% trans "The spot(s) for this session may now be available for others to book. You can view the updated schedule and booking details on your dashboard." %}
-    </p>
-    <table role="presentation"
-           border="0"
-           cellpadding="0"
-           cellspacing="0"
-           width="100%">
-        <tr>
-            <td align="center" class="button-td">
-                <a href="{{ dashboard_booking_url }}" target="_blank" class="button">{% trans 'View Bookings' %}</a>
-            </td>
-        </tr>
-    </table>
-    <p>
-        {% trans "Regards," %}
-        <br />
-        {% trans "The ClassEasily Team" %}
-    </p>
+        <p style="color: #484848; margin-bottom: 32px;">
+            {% trans "This inventory has been automatically returned to your available spots." %}
+        </p>
+        <table role="presentation"
+               border="0"
+               cellpadding="0"
+               cellspacing="0"
+               width="100%">
+            <tr>
+                <td align="center">
+                    <a href="{{ dashboard_booking_url }}" target="_blank" class="button">{% trans 'View Dashboard' %}</a>
+                </td>
+            </tr>
+        </table>
+    </div>
 {% endblock content %}
 {% block footer_recipient %}
     {% if recipient_email and recipient_email != "N/A" %}
-        <p>Cancellation notice sent to {{ recipient_email }} regarding Booking ID: {{ booking.id }}</p>
+        <p class="footer-text">Notification sent to {{ recipient_email }}</p>
     {% endif %}
 {% endblock footer_recipient %}

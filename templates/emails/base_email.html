@@ -1,182 +1,218 @@
 {# templates/emails/base_email.html #}
 {% load i18n %}
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en"
+      xmlns:v="urn:schemas-microsoft-com:vml"
+      xmlns:o="urn:schemas-microsoft-com:office:office">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="x-apple-disable-message-reformatting" />
     <title>
       {% block title %}
         {% trans "Notification from ClassEasily" %}
       {% endblock title %}
     </title>
+    <!-- Custom Font Handling -->
+    <!-- STEP 1: Host your .woff2 or .woff font files on your server (publicly accessible) -->
+    <!-- STEP 2: Paste the URL in the src field below -->
     <style type="text/css">
-      /* Resets */
+      @font-face {
+        font-family: 'Proxima Soft';
+        font-style: normal;
+        font-weight: 400;
+        src: local('Proxima Soft'), local('ProximaSoft-Regular'), 
+             url('https://db.onlinewebfonts.com/t/c07f11aa096ff678ae123a044308df27.woff2') format('woff2');
+        mso-font-alt: 'Arial'; /* Outlook fallback */
+      }
+      @font-face {
+        font-family: 'Proxima Soft';
+        font-style: normal;
+        font-weight: 700;
+        src: local('Proxima Soft Bold'), local('ProximaSoft-Bold'), 
+             url('https://db.onlinewebfonts.com/t/04350375d01194aee22a9f70a76a6a49.woff2') format('woff2');
+        mso-font-alt: 'Arial'; /* Outlook fallback */
+      }
+    </style>
+    <!--[if mso]>
+    <noscript>
+    <xml>
+      <o:OfficeDocumentSettings>
+        <o:PixelsPerInch>96</o:PixelsPerInch>
+      </o:OfficeDocumentSettings>
+    </xml>
+    </noscript>
+<![endif]-->
+    <style type="text/css">
+      /* --- RESETS --- */
       body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
       table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
-      img { -ms-interpolation-mode: bicubic; border: 0; height: auto; line-height: 100%; outline: none; text-decoration: none; }
+      img { -ms-interpolation-mode: bicubic; border: 0; height: auto; line-height: 100%; outline: none; text-decoration: none; display: block; }
       table { border-collapse: collapse !important; }
-      
-      /* Global */
-      body { 
-        height: 100% !important; 
-        margin: 0 !important; 
-        padding: 0 !important; 
-        width: 100% !important; 
-        background-color: #f3f4f6; 
-        font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-        color: #374151;
+      body { height: 100% !important; margin: 0 !important; padding: 0 !important; width: 100% !important; }
+
+      /* --- GLOBAL STYLES --- */
+      body {
+        background-color: #F5F5F7; /* Apple Gray */
+        font-family: 'Proxima Soft', 'Nunito', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        color: #1D1D1F;
+        -webkit-font-smoothing: antialiased;
       }
       
-      /* Layout */
-      .container { 
-        max-width: 600px; 
-        margin: 0 auto; 
-        background-color: #ffffff; 
-        border-radius: 8px; 
-        overflow: hidden; 
-        width: 100%; 
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-        margin-top: 24px;
-        margin-bottom: 24px;
+      /* --- ELEMENTS --- */
+      h1, h2, h3 {
+        color: #1D1D1F;
+        font-weight: 700;
+        margin-top: 0;
+        margin-bottom: 16px;
+        letter-spacing: -0.01em;
       }
+      h1 { font-size: 32px; line-height: 1.1; }
+      h2 { font-size: 24px; }
       
-      /* Header */
-      .header { 
-        padding: 32px 20px; 
-        text-align: center; 
-        background-color: #ffffff; 
-        border-bottom: 1px solid #f3f4f6;
-      }
-      .header img { 
-        max-height: 40px; 
-        display: block; 
-        margin: 0 auto; 
-      }
-      
-      /* Content */
-      .content-wrapper { 
-        padding: 40px 32px; 
-        background-color: #ffffff; 
-        line-height: 1.6; 
-        font-size: 16px; 
-      }
-      .content-wrapper h1 { 
-        font-size: 24px; 
-        font-weight: 700; 
-        color: #111827; 
-        margin: 0 0 20px 0; 
-        line-height: 1.3;
-        text-align: left; 
-      }
-      .content-wrapper p { 
-        margin: 0 0 20px 0; 
-      }
-      
-      /* Detail Box */
-      .detail-box {
-        background-color: #f9fafb;
-        border: 1px solid #e5e7eb;
-        border-radius: 8px;
-        padding: 24px;
-        margin: 24px 0;
-      }
-      .detail-box h2 {
-        font-size: 18px;
-        font-weight: 600;
-        color: #111827;
-        margin: 0 0 16px 0;
-      }
-      .detail-item {
-        margin-bottom: 8px;
-      }
-      .detail-item strong {
-        color: #111827;
-      }
-      
-      /* Button */
-      .button-td { padding: 24px 0; text-align: center; }
-      .button { 
-        background-color: #ff385c; 
-        color: #ffffff !important; 
-        border-radius: 6px; 
-        padding: 14px 28px; 
-        font-weight: 600; 
-        font-size: 16px; 
-        display: inline-block; 
-        text-decoration: none !important; 
-        box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-      }
-      .button:hover { background-color: #e31c3d; }
-      
-      /* Footer */
-      .footer { 
-        padding: 32px 20px; 
-        background-color: #f9fafb; 
-        text-align: center; 
-        font-size: 13px; 
-        color: #6b7280; 
-        border-top: 1px solid #e5e7eb; 
-      }
-      .footer p { margin: 0 0 12px 0; line-height: 1.5; }
-      .footer-links a { 
-        color: #6b7280; 
-        text-decoration: underline; 
-        margin: 0 10px; 
+      p {
+        color: #484848; /* Softer text color for readability */
+        font-size: 16px;
+        line-height: 1.6;
+        margin: 0 0 24px 0;
       }
 
-      /* Mobile Responsiveness */
-      @media screen and (max-width: 620px) {
-        .container { margin: 0 !important; border-radius: 0 !important; width: 100% !important; }
-        .content-wrapper { padding: 24px 20px !important; }
-        .header { padding: 24px 20px !important; }
-        .detail-box { padding: 16px !important; }
-        h1 { font-size: 22px !important; }
-        .button { width: 100%; box-sizing: border-box; display: block; padding: 14px 0; }
+      /* Links - using your Brand Color */
+      a { color: #f81e3e; text-decoration: none; font-weight: 600; }
+      a:hover { text-decoration: underline; }
+
+      /* Buttons - Pill Shape, Brand Color, Soft Shadow */
+      .button {
+        background-color: #f81e3e !important;
+        color: #ffffff !important;
+        border-radius: 980px; /* Full Pill */
+        padding: 16px 36px;
+        display: inline-block;
+        font-weight: 600;
+        font-size: 16px;
+        text-decoration: none !important;
+        text-align: center;
+        mso-padding-alt: 0;
+        /* Subtle colored shadow matching the button */
+        box-shadow: 0 4px 10px rgba(248, 30, 62, 0.25);
+      }
+      .button:hover { background-color: #d61532 !important; }
+
+      /* Card Style - The "Floating" Look */
+      .card-container {
+        background-color: #ffffff;
+        border-radius: 20px;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.04);
+        overflow: hidden;
+      }
+
+      /* Footer */
+      .footer-text { font-size: 11px; color: #86868B; line-height: 1.5; }
+      .footer-link { color: #86868B; text-decoration: none; margin: 0 8px; font-size: 12px; }
+      .footer-link:hover { color: #1D1D1F; text-decoration: underline; }
+
+      /* --- RESPONSIVE --- */
+      @media screen and (max-width: 600px) {
+        .container { width: 100% !important; margin: 0 !important; }
+        .content-padding { padding: 32px 24px !important; }
+        .card-container { border-radius: 0 !important; box-shadow: none !important; }
+        h1 { font-size: 26px !important; }
+        .button { display: block; width: auto; }
       }
     </style>
   </head>
-  <body style="margin: 0 !important; padding: 0 !important; background-color: #f3f4f6;">
-    <div class="container">
-      <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
-        <tbody>
-          <!-- Header -->
-          <tr>
-            <td class="header">
-              <img src="https://i.imgur.com/nX3IuE2.png" alt="ClassEasily Logo" />
-            </td>
-          </tr>
-          
-          <!-- Main Content -->
-          <tr>
-            <td class="content-wrapper">
-              {% block content %}
-                <p>{% trans "This is a notification from ClassEasily." %}</p>
-              {% endblock content %}
-            </td>
-          </tr>
-          
-          <!-- Footer -->
-          <tr>
-            <td class="footer">
-              {% block footer_recipient %}
-                {% if recipient_email and recipient_email != "N/A" %}
-                  <p>{% blocktrans %}Sent to {{ recipient_email }}{% endblocktrans %}</p>
-                {% endif %}
-              {% endblock footer_recipient %}
-              
-              <div class="footer-links" style="margin-bottom: 16px;">
-                <a href="{{ settings.FRONTEND_BASE_URL }}/my-tickets" target="_blank">Help Center</a>
-                <a href="{{ settings.FRONTEND_BASE_URL }}/terms-of-service" target="_blank">Terms</a>
-                <a href="{{ settings.FRONTEND_BASE_URL }}/privacy-policy" target="_blank">Privacy</a>
-              </div>
-              
-              <p>© {% now "Y" %} ClassEasily. All rights reserved.</p>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+  <body style="margin: 0; padding: 0; background-color: #F5F5F7;">
+    <!-- WRAPPER -->
+    <table role="presentation"
+           border="0"
+           cellpadding="0"
+           cellspacing="0"
+           width="100%"
+           style="background-color: #F5F5F7">
+      <tr>
+        <td align="center" style="padding: 40px 0;">
+          <!-- MAIN LAYOUT CONTAINER (600px) -->
+          <table class="container"
+                 role="presentation"
+                 border="0"
+                 cellpadding="0"
+                 cellspacing="0"
+                 width="600"
+                 style="width: 600px;
+                        margin: 0 auto;
+                        max-width: 600px">
+            <!-- LOGO HEADER -->
+            <tr>
+              <td align="center" style="padding-bottom: 32px;">
+                <!-- Ensure this logo works on the light gray background -->
+                <img src="https://i.imgur.com/nX3IuE2.png"
+                     alt="ClassEasily"
+                     width="150"
+                     style="width: 150px;
+                            max-width: 100%;
+                            height: auto;
+                            display: block" />
+              </td>
+            </tr>
+            <!-- CARD CONTENT -->
+            <tr>
+              <td class="card-container">
+                <table role="presentation"
+                       border="0"
+                       cellpadding="0"
+                       cellspacing="0"
+                       width="100%">
+                  <tr>
+                    <td class="content-padding" style="padding: 50px 50px; text-align: left;">
+                      {% block content %}
+                        <!-- Default content if not overridden -->
+                        <p>{% trans "Notification from ClassEasily." %}</p>
+                      {% endblock content %}
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <!-- FOOTER -->
+            <tr>
+              <td style="padding: 32px 20px; text-align: center;">
+                {% block footer_recipient %}
+                  {% if recipient_email and recipient_email != "N/A" %}
+                    <p class="footer-text" style="margin-bottom: 16px;">
+                      {% blocktrans %}Sent to {{ recipient_email }}{% endblocktrans %}
+                    </p>
+                  {% endif %}
+                {% endblock footer_recipient %}
+                <!-- Links -->
+                <div style="margin-bottom: 20px;">
+                  <a href="{{ settings.FRONTEND_BASE_URL }}/my-tickets"
+                     class="footer-link"
+                     target="_blank">{% trans "Help Center" %}</a>
+                  <a href="{{ settings.FRONTEND_BASE_URL }}/terms-of-service"
+                     class="footer-link"
+                     target="_blank">{% trans "Terms" %}</a>
+                  <a href="{{ settings.FRONTEND_BASE_URL }}/privacy-policy"
+                     class="footer-link"
+                     target="_blank">{% trans "Privacy" %}</a>
+                </div>
+                <!-- Copyright -->
+                <p class="footer-text" style="margin: 0;">© {% now "Y" %} ClassEasily. {% trans "All rights reserved." %}</p>
+              </td>
+            </tr>
+          </table>
+          <!-- SPACER -->
+          <table role="presentation"
+                 border="0"
+                 cellpadding="0"
+                 cellspacing="0"
+                 width="100%">
+            <tr>
+              <td height="40" style="font-size: 40px; line-height: 40px;">&nbsp;</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
   </body>
 </html>

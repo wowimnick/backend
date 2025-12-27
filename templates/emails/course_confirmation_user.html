@@ -1,111 +1,117 @@
 {# templates/emails/course_confirmation_user.html #}
 {% extends "emails/base_email.html" %}
 {% load i18n tz string_filters %}
-
 {% block title %}
-    {% trans "You're Enrolled in the Course!" %}
+    {% trans "Enrollment Confirmed" %}
 {% endblock title %}
-
 {% block content %}
-    <h1>{% trans "You're Enrolled!" %}</h1>
-    
-    <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
-    
-    <p>
-        {% trans "Great news! Your enrollment for the full course" %} 
-        <strong>{{ related_data.class_title|default:"[Course Title]" }}</strong> 
-        {% trans "has been confirmed." %}
-    </p>
-    
-    <div class="detail-box">
-        <h2>{% trans "Course Summary" %}</h2>
-        
-        {% if booking.user_facing_reference %}
-        <div class="detail-item">
-            <strong>{% trans "Reference ID:" %}</strong> {{ booking.user_facing_reference }}
-        </div>
-        {% endif %}
-        
-        <div class="detail-item">
-            <strong>{% trans "Course:" %}</strong> {{ related_data.class_title|default:"N/A" }}
-        </div>
-
-        <div class="detail-item">
-            <strong>{% trans "Provider:" %}</strong> {{ related_data.business_name|default:"N/A" }}
-        </div>
-
-        <div class="detail-item">
-            <strong>{% trans "Location:" %}</strong> {{ related_data.class_location|default:"N/A" }}
-        </div>
-
-        {% if enrollment %}
-            <div class="detail-item">
-                <strong>{% trans "Duration:" %}</strong> {{ enrollment.schedule.start_date|date:"M j" }} - {{ enrollment.schedule.end_date|date:"M j, Y" }}
+    <div style="text-align: center;">
+        <!-- Icon -->
+        <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">🎓</div>
+        <h1>{% trans "You're enrolled!" %}</h1>
+        <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+            {% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}
+            <br>
+            Your spot in the full course is secured.
+        </p>
+        <!-- Main Ticket Card -->
+        <div style="background-color: #ffffff;
+                    border: 1px solid #E5E7EB;
+                    border-radius: 20px;
+                    overflow: hidden;
+                    margin-bottom: 32px;
+                    box-shadow: 0 4px 6px rgba(0,0,0,0.02)">
+            <!-- Header -->
+            <div style="background-color: #F5F5F7;
+                        padding: 24px;
+                        border-bottom: 1px solid #E5E7EB">
+                <div style="font-size: 13px;
+                            color: #86868B;
+                            text-transform: uppercase;
+                            letter-spacing: 0.05em;
+                            margin-bottom: 8px">{% trans "Course Title" %}</div>
+                <div style="font-size: 24px;
+                            font-weight: 700;
+                            color: #1D1D1F;
+                            line-height: 1.2">{{ related_data.class_title|default:"[Course Title]" }}</div>
+                {% if enrollment %}
+                    <div style="font-size: 16px;
+                                color: #F81E3E;
+                                font-weight: 600;
+                                margin-top: 8px">
+                        {{ enrollment.schedule.start_date|date:"M j" }} — {{ enrollment.schedule.end_date|date:"M j, Y" }}
+                    </div>
+                {% endif %}
             </div>
-            <div class="detail-item">
-                <strong>{% trans "Total Sessions:" %}</strong> {{ enrollment.total_sessions }}
+            <!-- Details -->
+            <div style="padding: 24px; text-align: left;">
+                <div style="margin-bottom: 16px;">
+                    <div style="font-size: 12px; color: #86868B; text-transform: uppercase;">{% trans "Location" %}</div>
+                    <div style="font-size: 16px; color: #1D1D1F; font-weight: 500;">{{ related_data.class_location|default:"N/A" }}</div>
+                </div>
+                <div style="margin-bottom: 16px;">
+                    <div style="font-size: 12px; color: #86868B; text-transform: uppercase;">{% trans "Provider" %}</div>
+                    <div style="font-size: 16px; color: #1D1D1F; font-weight: 500;">{{ related_data.business_name|default:"N/A" }}</div>
+                </div>
+                <div style="margin-bottom: 0;">
+                    <div style="font-size: 12px; color: #86868B; text-transform: uppercase;">{% trans "Total Sessions" %}</div>
+                    <div style="font-size: 16px; color: #1D1D1F; font-weight: 500;">{{ enrollment.total_sessions }}</div>
+                </div>
+            </div>
+        </div>
+        <!-- Session List (if available) -->
+        {% if course_sessions %}
+            <div style="background-color: #F9FAFB;
+                        border: 1px solid #E5E7EB;
+                        border-radius: 16px;
+                        padding: 20px;
+                        text-align: left;
+                        margin-bottom: 32px">
+                <h3 style="font-size: 14px;
+                           text-transform: uppercase;
+                           color: #86868B;
+                           margin-top: 0;
+                           margin-bottom: 16px">{% trans "Schedule Overview" %}</h3>
+                <table width="100%"
+                       cellpadding="0"
+                       cellspacing="0"
+                       style="border-collapse: collapse;
+                              font-size: 14px">
+                    {% for session in course_sessions %}
+                        <tr>
+                            <td style="padding-bottom: 12px;
+                                       width: 30px;
+                                       vertical-align: top;
+                                       color: #F81E3E;
+                                       font-weight: 700">#{{ session.course_session_number }}</td>
+                            <td style="padding-bottom: 12px; vertical-align: top;">
+                                <div style="color: #1D1D1F; font-weight: 600;">{{ session.schedule_instance.date|date:"D, M j" }}</div>
+                                <div style="color: #86868B;">{{ session.schedule_instance.time|time:"g:i A" }}</div>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </table>
             </div>
         {% endif %}
-        
-        {% if booking.participants > 1 %}
-        <div class="detail-item" style="margin-top: 12px;">
-            <strong>{% trans "Participants:" %}</strong> {{ booking.participants }}
-        </div>
-        {% endif %}
-    </div>
-
-    {% if course_sessions %}
-    <div style="margin: 24px 0;">
-        <h3 style="font-size: 18px; color: #111827; margin-bottom: 12px;">{% trans "Your Course Schedule" %}</h3>
-        <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse; font-size: 14px;">
-            <thead>
-                <tr style="border-bottom: 2px solid #e5e7eb;">
-                    <th align="left" style="padding: 8px 4px; color: #6b7280; font-weight: 600;">#</th>
-                    <th align="left" style="padding: 8px 4px; color: #6b7280; font-weight: 600;">{% trans "Date" %}</th>
-                    <th align="left" style="padding: 8px 4px; color: #6b7280; font-weight: 600;">{% trans "Time" %}</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for session in course_sessions %}
-                <tr style="border-bottom: 1px solid #f3f4f6;">
-                    <td style="padding: 12px 4px;">{{ session.course_session_number }}</td>
-                    <td style="padding: 12px 4px; font-weight: 500;">
-                        {{ session.schedule_instance.date|date:"D, M j, Y" }}
-                    </td>
-                    <td style="padding: 12px 4px;">
-                        {{ session.schedule_instance.time|time:"g:i A" }}
-                        {% if related_data.business_timezone %}
-                            <span style="font-size: 11px; color: #9ca3af;">({{ related_data.business_timezone|humanize_timezone }})</span>
-                        {% endif %}
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
+        <table role="presentation"
+               border="0"
+               cellpadding="0"
+               cellspacing="0"
+               width="100%">
+            <tr>
+                <td align="center">
+                    {% if is_guest and guest_cancellation_url %}
+                        <a href="{{ guest_cancellation_url }}" target="_blank" class="button">{% trans 'Manage Enrollment' %}</a>
+                    {% else %}
+                        <a href="{{ manage_bookings_url }}" target="_blank" class="button">{% trans 'View Course Details' %}</a>
+                    {% endif %}
+                </td>
+            </tr>
         </table>
     </div>
-    {% endif %}
-
-    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
-        <tr>
-            <td align="center" class="button-td">
-                {% if is_guest and guest_cancellation_url %}
-                     <a href="{{ guest_cancellation_url }}" target="_blank" class="button">{% trans 'Manage Enrollment' %}</a>
-                {% else %}
-                    <a href="{{ manage_bookings_url }}" target="_blank" class="button">{% trans 'View My Course' %}</a>
-                {% endif %}
-            </td>
-        </tr>
-    </table>
-
-    <p>
-        {% trans "We look forward to seeing you there!" %}
-        <br />
-        {% trans "The ClassEasily Team" %}
-    </p>
 {% endblock content %}
-
 {% block footer_recipient %}
     {% if recipient_email and recipient_email != "N/A" %}
-        <p>Course confirmation sent to {{ recipient_email }}.</p>
+        <p class="footer-text">Enrollment confirmation sent to {{ recipient_email }}</p>
     {% endif %}
 {% endblock footer_recipient %}

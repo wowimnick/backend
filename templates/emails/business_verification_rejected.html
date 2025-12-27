@@ -2,44 +2,59 @@
 {% extends "emails/base_email.html" %}
 {% load i18n %}
 {% block title %}
-    {% trans "Action Required: Business Verification Update" %}
+    {% trans "Update needed for your account" %}
 {% endblock title %}
 {% block content %}
-    <h1>{% trans "Update on Your Business Verification Request" %}</h1>
-    <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
-    {% with business_name=business.businessName %}
-        <p>
-            {% blocktrans %}Thank you for submitting your verification request for <strong>{{ business_name }}</strong>. After review, we were unable to approve your verification at this time.{% endblocktrans %}
+    <div style="text-align: center;">
+        <!-- Icon -->
+        <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">⚠️</div>
+        <h1>{% trans "We need a few more details." %}</h1>
+        <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+            {% blocktrans with first_name=user.first_name|default:"Partner" %}Hi {{ first_name }},{% endblocktrans %}
+            <br>
+            We were unable to approve the verification for <strong>{{ business.businessName }}</strong> just yet.
         </p>
-    {% endwith %}
-    {% if verification_request.rejection_reason %}
-        <div style="background-color: #fef2f2;
-                    border: 1px solid #fecaca;
-                    border-radius: 8px;
-                    padding: 12px 16px;
-                    margin: 20px 0;
-                    color: #991b1b">
-            <p style="margin-bottom: 4px;">
-                <strong>{% trans "Reason for Rejection:" %}</strong>
+        <!-- Feedback Card -->
+        <div style="background-color: #FEF2F2;
+                    border: 1px solid #FECACA;
+                    border-radius: 16px;
+                    padding: 24px;
+                    text-align: left;
+                    margin-bottom: 32px">
+            <h2 style="font-size: 14px;
+                       text-transform: uppercase;
+                       letter-spacing: 0.05em;
+                       color: #991B1B;
+                       margin-top: 0;
+                       margin-bottom: 12px">{% trans "What needs attention:" %}</h2>
+            <p style="color: #7F1D1D; font-size: 16px; line-height: 1.5; margin: 0;">
+                {% if verification_request.rejection_reason %}
+                    {{ verification_request.rejection_reason|linebreaksbr }}
+                {% else %}
+                    {% trans "Please verify your business documentation and ensure the name matches your official records." %}
+                {% endif %}
             </p>
-            <p style="margin-bottom: 0;">{{ verification_request.rejection_reason|linebreaksbr }}</p>
         </div>
-    {% else %}
-        <p>{% trans "No specific reason was provided. Please contact support for more details." %}</p>
-    {% endif %}
-    {% with support_email=contact_email|default:'support@classeasily.com' %}
-        <p>
-            {% blocktrans %}Please review the reason provided. You may need to update your business information or submit additional documentation. If you have questions or believe this decision was made in error, please contact our support team by replying to this email or contacting {{ support_email }}.{% endblocktrans %}
+        <p style="color: #484848; margin-bottom: 32px;">
+            {% trans "Don't worry—this is usually a quick fix. Please review the note above and update your information." %}
         </p>
-    {% endwith %}
-    <p>
-        {% trans "We appreciate your understanding," %}
-        <br />
-        {% trans "The ClassEasily Team" %}
-    </p>
+        <table role="presentation"
+               border="0"
+               cellpadding="0"
+               cellspacing="0"
+               width="100%">
+            <tr>
+                <td align="center">
+                    {% with support_email=contact_email|default:'support@classeasily.com' %}
+                        <a href="mailto:{{ support_email }}" class="button">{% trans 'Contact Support' %}</a>
+                    {% endwith %}
+                </td>
+            </tr>
+        </table>
+    </div>
 {% endblock content %}
 {% block footer_recipient %}
     {% if recipient_email and recipient_email != "N/A" %}
-        <p>Verification status update sent to {{ recipient_email }} for Business ID: {{ business.businessId }}</p>
+        <p class="footer-text">Notice sent to {{ recipient_email }}</p>
     {% endif %}
 {% endblock footer_recipient %}

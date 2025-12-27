@@ -2,41 +2,49 @@
 {% extends "emails/base_email.html" %}
 {% load i18n %}
 {% block title %}
-    {% trans "Your Business Verification is Approved!" %}
+    {% trans "You're officially verified" %}
 {% endblock title %}
 {% block content %}
-    <h1>{% trans "Congratulations! Your Business is Verified!" %}</h1>
-    <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
-    {% with business_name=business.businessName %}
-        <p>
-            {% blocktrans %}We're happy to inform you that your verification request for <strong>{{ business_name }}</strong> has been reviewed and approved by the ClassEasily team.{% endblocktrans %}
+    <div style="text-align: center;">
+        <!-- Icon -->
+        <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">🚀</div>
+        <h1>{% trans "You are clear for takeoff." %}</h1>
+        <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+            {% blocktrans with first_name=user.first_name|default:"Partner" %}Hi {{ first_name }},{% endblocktrans %}
+            <br>
+            Your business, <strong>{{ business.businessName }}</strong>, is now fully verified.
         </p>
-    {% endwith %}
-    <p>
-        {% trans "Your business is now active and visible on the platform. You can start creating classes, setting up schedules, and welcoming students!" %}
-    </p>
-    <table role="presentation"
-           border="0"
-           cellpadding="0"
-           cellspacing="0"
-           width="100%">
-        <tr>
-            <td align="center" class="button-td">
-                <a href="{{ dashboard_url }}" target="_blank" class="button">{% trans 'Go to Your Dashboard' %}</a>
-            </td>
-        </tr>
-    </table>
-    <p>
-        {% trans "If you have any questions about getting started, please check out our Business Help Center or contact support." %}
-    </p>
-    <p>
-        {% trans "We're excited to partner with you!" %}
-        <br />
-        {% trans "The ClassEasily Team" %}
-    </p>
+        <!-- Success Card -->
+        <div style="background-color: #F0FDF4;
+                    border: 1px solid #BBF7D0;
+                    border-radius: 16px;
+                    padding: 24px;
+                    text-align: center;
+                    margin-bottom: 32px">
+            <h2 style="font-size: 18px;
+                       font-weight: 600;
+                       color: #166534;
+                       margin: 0 0 8px 0">{% trans "Status: Active" %}</h2>
+            <p style="color: #15803D; margin: 0;">{% trans "Your profile is visible and you can now accept bookings." %}</p>
+        </div>
+        <p style="color: #484848; margin-bottom: 32px;">
+            {% trans "You can now access all features of your dashboard, including payout settings, schedule management, and analytics." %}
+        </p>
+        <table role="presentation"
+               border="0"
+               cellpadding="0"
+               cellspacing="0"
+               width="100%">
+            <tr>
+                <td align="center">
+                    <a href="{{ dashboard_url }}" target="_blank" class="button">{% trans 'Go to Dashboard' %}</a>
+                </td>
+            </tr>
+        </table>
+    </div>
 {% endblock content %}
 {% block footer_recipient %}
     {% if recipient_email and recipient_email != "N/A" %}
-        <p>Verification status update sent to {{ recipient_email }} for Business ID: {{ business.businessId }}</p>
+        <p class="footer-text">Sent to {{ recipient_email }}</p>
     {% endif %}
 {% endblock footer_recipient %}

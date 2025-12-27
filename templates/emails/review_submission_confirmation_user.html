@@ -2,41 +2,50 @@
 {% extends "emails/base_email.html" %}
 {% load i18n %}
 {% block title %}
-  {% trans "Review Received!" %}
+  {% trans "Review Received" %}
 {% endblock title %}
 {% block content %}
-  <h1>{% trans "Thanks for Your Feedback!" %}</h1>
-  <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
-  <p>
-    Thank you for submitting your review for
-    <strong>{{ class_name|default:"the class" }}</strong>. We've received it successfully.
-  </p>
-  <p>
-    {% trans "Your feedback helps other students make informed decisions and allows businesses to improve their offerings. Approved reviews are typically visible on the class page shortly." %}
-  </p>
-  {% if review %}
-    <div style="background-color: #f9fafb;
-                border: 1px solid #e5e7eb;
-                border-radius: 8px;
-                padding: 12px 16px;
-                margin: 20px 0;
-                font-style: italic">
-      <p style="margin-bottom: 4px;">
-        <strong>{% trans "Your Rating:" %}</strong> {{ review.rating }}/5
-      </p>
-      <p style="margin-bottom: 0;">
-        <strong>{% trans "Your Comment Snippet:" %}</strong> "{{ review.comment|truncatewords:30 }}"
-      </p>
-    </div>
-  {% endif %}
-  <p>
-    {% trans "We appreciate you taking the time to share your experience!" %}
-    <br />
-    {% trans "The ClassEasily Team" %}
-  </p>
+  <div style="text-align: center;">
+    <!-- Icon -->
+    <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">⭐</div>
+    <h1>{% trans "Thanks for sharing." %}</h1>
+    <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+      {% trans "Your feedback helps the community grow." %}
+    </p>
+    {% if review %}
+      <div style="background-color: #F9FAFB;
+                  border: 1px solid #E5E7EB;
+                  border-radius: 16px;
+                  padding: 24px;
+                  text-align: center;
+                  margin-bottom: 32px">
+        <div style="font-size: 32px;
+                    color: #FFB400;
+                    letter-spacing: 4px;
+                    margin-bottom: 12px">
+          {% if review.rating == 5 %}
+            ★★★★★
+          {% elif review.rating == 4 %}
+            ★★★★☆
+          {% elif review.rating == 3 %}
+            ★★★☆☆
+          {% else %}
+            ★☆☆☆☆
+          {% endif %}
+        </div>
+        <div style="font-style: italic; color: #484848; font-size: 16px;">"{{ review.comment|truncatewords:20 }}"</div>
+        <div style="font-size: 12px;
+                    color: #86868B;
+                    margin-top: 16px;
+                    text-transform: uppercase">{% trans "Posted for" %} {{ class_name|default:"Experience" }}</div>
+      </div>
+    {% endif %}
+    <p style="color: #484848; font-size: 14px;">
+      {% trans "Your review will be visible on the experience page shortly." %}
+    </p>
+    <p style="margin-top: 32px;">{% trans "The ClassEasily Team" %}</p>
+  </div>
 {% endblock content %}
 {% block footer_recipient %}
-  {% if recipient_email %}
-    <p>Review confirmation sent to {{ recipient_email }}. Review ID: {{ review.reviewId }}</p>
-  {% endif %}
+  {% if recipient_email %}<p class="footer-text">Confirmation sent to {{ recipient_email }}</p>{% endif %}
 {% endblock footer_recipient %}

@@ -1,63 +1,79 @@
 {# templates/emails/booking_cancellation_user.html #}
 {% extends "emails/base_email.html" %}
 {% load i18n tz %}
-
 {% block title %}
-  {% trans "Booking Cancelled" %}
+  {% trans "Cancellation Confirmed" %}
 {% endblock title %}
-
 {% block content %}
-  <h1>{% trans "Booking Cancelled" %}</h1>
-  
-  <p>{% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}</p>
-  
-  <p>
-    This confirms that you have successfully cancelled your booking for
-    <strong>{{ related_data.class_title|default:"[Class Title]" }}</strong>.
-  </p>
-
-  <div class="detail-box">
-    <h2>{% trans "Cancellation Summary" %}</h2>
-    
-    <div class="detail-item">
-        <strong>{% trans "Date Processed:" %}</strong> {{ booking.cancelled_at|date:"F j, Y" }}
-    </div>
-    
-    <div class="detail-item">
-        <strong>{% trans "Original Class Date:" %}</strong> {{ booking.schedule_instance.date|date:"l, F j, Y" }} at {{ booking.schedule_instance.time|time:"P" }}
-    </div>
-
-    <div class="detail-item" style="margin-top: 12px;">
-        <strong>{% trans "Refund Status:" %}</strong>
-        {% if refund_details %}
+  <div style="text-align: center;">
+    <!-- Icon -->
+    <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">🗓️</div>
+    <h1>{% trans "Your schedule is clear." %}</h1>
+    <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+      {% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}
+      <br>
+      {% trans "We've processed the cancellation for your upcoming experience." %}
+    </p>
+    <!-- Card for Details -->
+    <div style="background-color: #F9FAFB;
+                border: 1px solid #E5E7EB;
+                border-radius: 16px;
+                padding: 24px;
+                text-align: left;
+                margin-bottom: 32px">
+      <h2 style="font-size: 16px;
+                 text-transform: uppercase;
+                 color: #86868B;
+                 letter-spacing: 0.05em;
+                 margin-bottom: 16px;
+                 margin-top: 0">{% trans "Cancellation Summary" %}</h2>
+      <div style="margin-bottom: 12px;">
+        <div style="font-size: 14px; color: #86868B;">{% trans "Experience" %}</div>
+        <div style="font-size: 16px; font-weight: 600; color: #1D1D1F;">
+          {{ related_data.class_title|default:"[Experience Title]" }}
+        </div>
+      </div>
+      <div style="margin-bottom: 12px;">
+        <div style="font-size: 14px; color: #86868B;">{% trans "Original Date" %}</div>
+        <div style="font-size: 16px; color: #1D1D1F;">
+          {{ booking.schedule_instance.date|date:"l, F j" }} at {{ booking.schedule_instance.time|time:"g:i A" }}
+        </div>
+      </div>
+      <div style="border-top: 1px dashed #D1D5DB;
+                  padding-top: 12px;
+                  margin-top: 16px">
+        <div style="font-size: 14px; color: #86868B;">{% trans "Refund Status" %}</div>
+        <div style="font-size: 16px; color: #1D1D1F;">
+          {% if refund_details %}
             {{ refund_details }}
-        {% else %}
-            {% trans "Processed according to cancellation policy." %}
-        {% endif %}
+          {% else %}
+            {% trans "Processed according to the host's policy." %}
+          {% endif %}
+        </div>
+      </div>
     </div>
+    <p style="color: #484848; margin-bottom: 32px;">
+      {% trans "Whenever you're ready to book your next adventure, we'll be here." %}
+    </p>
+    <table role="presentation"
+           border="0"
+           cellpadding="0"
+           cellspacing="0"
+           width="100%">
+      <tr>
+        <td align="center">
+          <a href="{{ explore_url }}" target="_blank" class="button">{% trans 'Find a New Experience' %}</a>
+        </td>
+      </tr>
+    </table>
   </div>
-
-  <p>
-    {% trans "If you have any questions about the policy or your refund, please contact the business directly." %}
-  </p>
-
-  <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
-    <tr>
-      <td align="center" class="button-td">
-        <a href="{{ explore_url }}" target="_blank" class="button">{% trans 'Find Another Class' %}</a>
-      </td>
-    </tr>
-  </table>
-
-  <p>
-    {% trans "We hope to see you in another class soon!" %}
-    <br />
-    {% trans "The ClassEasily Team" %}
-  </p>
 {% endblock content %}
-
 {% block footer_recipient %}
   {% if recipient_email and recipient_email != "N/A" %}
-    <p>Cancellation confirmation sent to {{ recipient_email }}. Booking ID: {{ booking.id }}</p>
+    <p class="footer-text" style="margin-bottom: 16px;">
+      Cancellation confirmation sent to {{ recipient_email }}
+      <br>
+      Booking Reference: #{{ booking.id }}
+    </p>
   {% endif %}
 {% endblock footer_recipient %}

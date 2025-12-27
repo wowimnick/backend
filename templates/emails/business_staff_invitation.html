@@ -2,35 +2,57 @@
 {% extends "emails/base_email.html" %}
 {% load i18n %}
 {% block title %}
-    {% blocktrans with business_name=business_name %}Invitation to join {{ business_name }}{% endblocktrans %}
+    {% blocktrans with business_name=business_name %}Join {{ business_name }}{% endblocktrans %}
 {% endblock title %}
 {% block content %}
-    <h1>{% trans "You're Invited!" %}</h1>
-    <p>{% blocktrans %}Hello,{% endblocktrans %}</p>
-    <p>
-        {% blocktrans with inviter_name=inviter_name business_name=business_name role_name=role_name %}
-        <strong>{{ inviter_name }}</strong> has invited you to join <strong>{{ business_name }}</strong> on ClassEasily as a <strong>{{ role_name }}</strong>.
+    <div style="text-align: center;">
+        <!-- Icon -->
+        <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">🤝</div>
+        <h1>{% trans "You've been scouted." %}</h1>
+        <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+            {% blocktrans with inviter_name=inviter_name business_name=business_name %}
+        <strong>{{ inviter_name }}</strong> wants you on the team at <strong>{{ business_name }}</strong>.
         {% endblocktrans %}
-    </p>
-    <p>
-        {% trans "To accept this invitation, please click the button below. If you don't have a ClassEasily account yet, you will be prompted to create one first." %}
-    </p>
-    <table role="presentation"
-           border="0"
-           cellpadding="0"
-           cellspacing="0"
-           width="100%">
-        <tr>
-            <td align="center" class="button-td">
-                {# --- THE CHANGE IS HERE --- #}
-                <a href="{{ accept_url }}" target="_blank" class="button">{% trans 'Accept Invitation' %}</a>
-            </td>
-        </tr>
-    </table>
-    <p>{% trans "If you were not expecting this invitation, you can safely ignore this email." %}</p>
-    <p>
-        {% trans "Best regards," %}
-        <br />
-        {% trans "The ClassEasily Team" %}
-    </p>
+        </p>
+        <!-- Invitation Card -->
+        <div style="background-color: #ffffff;
+                    border: 1px solid #E5E7EB;
+                    border-radius: 20px;
+                    overflow: hidden;
+                    margin-bottom: 32px;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.03);
+                    max-width: 400px;
+                    margin-left: auto;
+                    margin-right: auto">
+            <div style="padding: 32px;">
+                <div style="width: 64px;
+                            height: 64px;
+                            background-color: #F5F5F7;
+                            border-radius: 12px;
+                            margin: 0 auto 16px auto;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            font-size: 24px">🏢</div>
+                <div style="font-size: 20px;
+                            font-weight: 700;
+                            color: #1D1D1F;
+                            margin-bottom: 4px">{{ business_name }}</div>
+                <div style="font-size: 14px; color: #86868B; margin-bottom: 24px;">
+                    {% trans "Invited as" %} <strong>{{ role_name }}</strong>
+                </div>
+                <a href="{{ accept_url }}"
+                   target="_blank"
+                   class="button"
+                   style="width: 100%;
+                          box-sizing: border-box">{% trans 'Accept Invitation' %}</a>
+            </div>
+        </div>
+        <p style="font-size: 14px; color: #86868B; margin-bottom: 24px;">
+            {% trans "If you don't have a ClassEasily account yet, you'll be able to create one securely." %}
+        </p>
+        <p style="font-size: 12px; color: #D1D5DB;">
+            {% trans "If you were not expecting this, you can safely ignore this email." %}
+        </p>
+    </div>
 {% endblock content %}
