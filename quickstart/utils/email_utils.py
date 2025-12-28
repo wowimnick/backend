@@ -1418,14 +1418,25 @@ def send_booking_rescheduled_by_business_email(
         f"Preparing booking rescheduled email for booking {booking.id} to user {user.email}"
     )
 
-    # Updated: Direct to highlighting the rescheduled booking
     manage_bookings_url = f"{settings.FRONTEND_BASE_URL}/my-classes?tab=upcoming&highlight={booking.id}"
+
+    # Calculate End Time for the NEW instance
+    new_end_time = None
+    try:
+        dummy_date = datetime.now().date()
+        start_dt = datetime.combine(dummy_date, new_instance.time)
+        end_dt = start_dt + timedelta(minutes=new_instance.duration)
+        new_end_time = end_dt.time()
+    except Exception as e:
+        logger.error(f"Error calculating new end time for reschedule email: {e}")
+        new_end_time = new_instance.time # Fallback to start time to prevent crash
 
     context = {
         "user": user,
         "booking": booking,
         "old_instance": old_instance,
         "new_instance": new_instance,
+        "new_end_time": new_end_time, # Added to context
         "manage_bookings_url": manage_bookings_url,
         "recipient_email": user.email,
         "related_data": related_data,

@@ -1,6 +1,6 @@
 {# templates/emails/booking_rescheduled_by_business.html #}
 {% extends "emails/base_email.html" %}
-{% load i18n tz string_filters %}
+{% load i18n tz %}
 {% block title %}
     {% trans "Schedule Update" %}
 {% endblock title %}
@@ -60,7 +60,7 @@
                                 color: #1D1D1F;
                                 margin-top: 4px">
                         {{ new_instance.time|time:"g:i A" }} -
-                        {{ new_instance.time|add_minutes:new_instance.duration|time:"g:i A" }}
+                        {{ new_end_time|time:"g:i A" }}
                     </div>
                     {% if related_data.business_timezone %}
                         <div style="font-size: 12px; color: #86868B; margin-top: 8px;">
