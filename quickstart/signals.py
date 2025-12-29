@@ -10,13 +10,10 @@ from django.db import transaction
 from allauth.account.signals import email_changed
 
 from django.db.models.signals import pre_save, post_save
-from django.dispatch import receiver
 from django.contrib.contenttypes.models import ContentType
 from django.utils import timezone
 
-
 from django.contrib.auth.models import Permission
-
 from django.core.cache import cache
 
 from quickstart.tasks.business_tasks import classify_class_task
@@ -40,38 +37,68 @@ from .models import (
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
+
 @receiver(pre_save, sender=User)
-def store_old_password(sender, instance, **kwargs):
+def capture_old_user_state(sender, instance, **kwargs):
     """
-    On pre_save, if the user instance already exists in the DB,
-    fetch its current password hash from the DB and store it on the instance
-    so we can compare it after the save.
+    Capture the state of the user before saving to detect changes in 
+    sensitive fields like password or activation status.
     """
     if instance.pk:
         try:
-            # Fetch the old password hash from the database directly
-            instance._old_password = User.objects.get(pk=instance.pk).password
+            # Fetch the old data from the database directly
+            current_db_user = User.objects.get(pk=instance.pk)
+            instance._old_password = current_db_user.password
+            instance._old_is_active = current_db_user.is_active
         except User.DoesNotExist:
             instance._old_password = None
+            instance._old_is_active = None
+    else:
+        # User is being created
+        instance._old_password = None
+        instance._old_is_active = None
 
 
 @receiver(post_save, sender=User)
 def handle_user_password_change(sender, instance, created, **kwargs):
     from .utils.email_utils import send_account_security_email
     
-    if not created:
-        old_password = getattr(instance, "_old_password", None)
-        if old_password and instance.password != old_password:
-            logger.info(f"Password has changed for user {instance.email}. Triggering security email.")
-            try:
-                send_account_security_email(
-                    instance,
-                    "password",
-                    subject="Your ClassEasily Password Was Changed",
-                )
-                logger.info(f"Password change notification queued for {instance.email}")
-            except Exception as e:
-                logger.error(f"Failed to trigger password notification for {instance.email}: {e}", exc_info=True)
+    if created:
+        return
+
+    # 1. Optimization: If update_fields was used and 'password' is not in it, 
+    # the password definitely didn't change (DB-wise).
+    # This prevents signals from firing on simple updates like 'last_login'.
+    if kwargs.get('update_fields') and 'password' not in kwargs['update_fields']:
+        return
+
+    # 2. Retrieve captured old state
+    old_password = getattr(instance, "_old_password", None)
+    old_is_active = getattr(instance, "_old_is_active", None)
+
+    # 3. Check for Activation (False -> True)
+    # If the user is transitioning from inactive to active (e.g., verifying email),
+    # we suppress the password change notification. This avoids false positives
+    # during the verification flow where the user model is saved.
+    is_activating = (old_is_active is False) and (instance.is_active is True)
+    
+    if is_activating:
+        logger.info(f"User {instance.email} is being activated. Skipping password change notification.")
+        return
+
+    # 4. Check actual password change
+    # Only verify if we have a valid old password to compare against and it differs
+    if old_password is not None and instance.password != old_password:
+        logger.info(f"Password has changed for user {instance.email}. Triggering security email.")
+        try:
+            send_account_security_email(
+                instance,
+                "password",
+                subject="Your ClassEasily Password Was Changed",
+            )
+            logger.info(f"Password change notification queued for {instance.email}")
+        except Exception as e:
+            logger.error(f"Failed to trigger password notification for {instance.email}: {e}", exc_info=True)
 
 
 @receiver(email_changed)
