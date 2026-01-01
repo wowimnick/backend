@@ -329,10 +329,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "quickstart.tasks.booking_tasks.send_upcoming_booking_reminders",
         "schedule": crontab(minute=15, hour="*"),  # Run at :15 past every hour (avoids top of hour collision)
     },
-    "notify-expiring-schedules-weekly": {
-        "task": "quickstart.tasks.business_tasks.notify_businesses_of_expiring_schedules",
-        "schedule": crontab(day_of_week="monday", hour=9, minute=0), # Mondays at 9 AM UTC
-    },
+    # "notify-expiring-schedules-weekly": {
+    #     "task": "quickstart.tasks.business_tasks.notify_businesses_of_expiring_schedules",
+    #     "schedule": crontab(day_of_week="monday", hour=9, minute=0), # Mondays at 9 AM UTC
+    # },
     "release-expired-spots-every-5-min": {
         "task": "quickstart.tasks.booking_tasks.release_expired_spots", 
         "schedule": crontab(minute="*/5"), # Run every 5 minutes
