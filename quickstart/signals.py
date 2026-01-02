@@ -281,7 +281,7 @@ def create_booking_notification(sender, instance, created, **kwargs):
                 f"Booking for '{class_title}' "
                 f"on {instance.schedule_instance.date.strftime('%b %d')} by {booker_name} was cancelled by the student."
             )
-            link_web_for_business = f"/app/business/bookings/{instance.id}"
+            link_web_for_business = f"/business/dashboard/bookings" 
 
             if business.owner:
                 Notification.objects.create(
@@ -349,7 +349,7 @@ def create_review_notification(sender, instance, created, **kwargs):
             f"New {instance.rating}★ review from {instance.userId.get_full_name() or instance.userId.email} "
             f"for your class '{class_title}'."
         )
-        link_web = f"/app/business/reviews/{instance.reviewId}"  # Example link
+        link_web = f"/business/dashboard/reviews"
 
         if business.owner:
             Notification.objects.create(
@@ -417,9 +417,7 @@ def create_payment_notification(sender, instance, created, **kwargs):
 
         content_type = ContentType.objects.get_for_model(instance)
         message = f"Payment of ${instance.amount:.2f} received for booking ref: {booking.user_facing_reference or booking.id}."
-        link_web = (
-            f"/app/business/revenue"  # Or link to payment details if you have that view
-        )
+        link_web = f"/business/dashboard/trends" 
 
         if business.owner:
             Notification.objects.create(
@@ -491,7 +489,7 @@ def student_review_response_notification(sender, instance, created, **kwargs):
         message = (
             f"{business.businessName} responded to your review for '{class_title}'."
         )
-        link_web = f"/app/user/my-reviews"  # Or to the specific class review page
+        link_web = f"/my-classes?tab=completed"
 
         Notification.objects.create(
             user=student_user,  # Student is the recipient
