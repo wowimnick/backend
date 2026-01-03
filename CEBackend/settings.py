@@ -98,6 +98,7 @@ if IS_DEPLOYED_ENV:
     SECURE_SSL_REDIRECT = (
         os.environ.get("SECURE_SSL_REDIRECT", "False").lower() == "true"
     )
+    SECURE_REDIRECT_EXEMPT = [r"^health-check/$", r"^$"] 
     SECURE_HSTS_SECONDS = 31536000
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True

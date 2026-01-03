@@ -1,3 +1,4 @@
+import time
 import uuid
 from datetime import timedelta
 from decimal import Decimal
@@ -280,7 +281,6 @@ class Command(BaseCommand):
             }, "Weekly")),
         ]
 
-        # Loop through and run
         self.stdout.write("\n" + "="*50)
         success_count = 0
         
@@ -291,6 +291,11 @@ class Command(BaseCommand):
                 func()
                 self.stdout.write(self.style.SUCCESS(" SENT ✅"))
                 success_count += 1
+                
+                # Prevent rate limiting (Resend limit in settings is ~2/sec)
+                # We sleep 1 second to be safe and ensure delivery.
+                time.sleep(1) 
+
             except Exception as e:
                 self.stdout.write(self.style.ERROR(" FAILED ❌"))
                 self.stdout.write(self.style.ERROR(f"  Error: {str(e)}"))
