@@ -16,7 +16,7 @@ from django.utils import timezone
 from django.contrib.auth.models import Permission
 from django.core.cache import cache
 
-from quickstart.tasks.business_tasks import classify_class_task
+from quickstart.tasks.business_tasks import classify_class_task, update_trending_collections_task
 from .models import (
     Booking,
     BusinessRole,
@@ -606,15 +606,11 @@ def trigger_classification(sender, instance, created, update_fields, **kwargs):
 def trigger_reclassification_on_collection_change(sender, instance, created, update_fields, **kwargs):
     """
     If an Automated Collection is created or its rules change, we must 
-    re-evaluate ALL active classes to see if they now fit this new collection.
+    re-evaluate ALL active classes.
     """
-    # 1. Quick check: Is this an automated collection?
     if instance.type != 'automated':
         return
 
-    # 2. Determine if we should run. 
-    # If created, yes. 
-    # If updated, check if 'automation_rules' or 'is_active' changed.
     should_run = False
     if created:
         should_run = True
@@ -623,24 +619,18 @@ def trigger_reclassification_on_collection_change(sender, instance, created, upd
         if any(field in update_fields for field in relevant_fields):
             should_run = True
     else:
-        # Full save without specific update_fields usually implies a form save
         should_run = True
 
     if should_run:
-        # 3. Fetch all active classes
-        # NOTE: This triggers 1 LLM call per active class. 
-        # If you have 5,000 classes, this queues 5,000 tasks ($$$).
-        active_class_ids = ClassesMain.objects.filter(status='active').values_list('pk', flat=True)
+        # LOGIC CHANGE HERE:
+        # Instead of fetching IDs and queuing N tasks, we queue 1 task 
+        # that handles the iteration internally.
         
-        logger.info(f"🔄 Collection '{instance.name}' changed. Re-queueing {len(active_class_ids)} classes for classification.")
+        logger.info(f"🔄 Collection '{instance.name}' changed. Queueing bulk re-classification.")
 
-        # 4. Queue tasks safely using on_commit
-        def queue_bulk_tasks():
-            for class_id in active_class_ids:
-                classify_class_task.delay(class_id)
-
-        transaction.on_commit(queue_bulk_tasks)
-
+        # Use the existing task that iterates over all active classes
+        transaction.on_commit(lambda: update_trending_collections_task.delay())
+        
 @receiver(post_save, sender=Payout)
 def send_payout_notification(sender, instance: Payout, created, **kwargs):
     """
