@@ -370,8 +370,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
     def homepage_content(self, request):
         base_qs = self.get_queryset()
 
-        # EFFICIENT FILTER: Use Exists() to check for availability without doing a massive JOIN
-        # This checks if there is at least one instance in the future with status 'scheduled'
+        # EFFICIENT FILTER: Check for availability
         future_instances = ScheduleInstance.objects.filter(
             schedule__option__classId=OuterRef('pk'),
             date__gte=timezone.now().date(),
@@ -379,34 +378,61 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         )
         base_qs = base_qs.filter(Exists(future_instances))
 
+        # Annotate relevance score for all subsequent queries
+        base_qs = self._calculate_relevance_score(base_qs)
+
         context = {'request': request}
-        
-        # 1. Determine Mode (Categories vs Collections)
-        mode = request.query_params.get('mode', 'categories')
-        
         data = {}
 
-        # 2. Fetch the "Pills" data based on mode
-        if mode == 'collections':
-            # Fetch "Vibes" (Date Night, Groups, etc.)
-            collections_qs = ClassCollection.objects.filter(is_active=True).order_by('sort_order')
-            data['collections'] = PublicCollectionSerializer(collections_qs, many=True, context=context).data
-        else:
-            # Fetch Standard Categories (Art, Culinary, etc.) - The Default
-            categories_qs = ClassCategory.objects.all().order_by('sort_order')
-            data['categories'] = PublicCategorySerializer(categories_qs, many=True, context=context).data
-
-        # 3. Trending & New (Always included)
-        base_qs = self._calculate_relevance_score(base_qs)
-        
-        # Trending: High relevance score
+        # --- 1. Fetch Trending (Priority 1) ---
+        # We fetch this first because it takes precedence.
         trending_qs = base_qs.order_by('-relevance_score')[:10]
         
-        # New: Recently created
-        new_qs = base_qs.order_by('-createdAt')[:10]
-
+        # Serialize immediately
         data["trending"] = self.get_serializer(trending_qs, many=True, context=context).data
+        
+        # Extract IDs to exclude from subsequent lists
+        # We use the data we just fetched to avoid hitting the DB again
+        trending_ids = [item['classId'] for item in data["trending"]]
+
+        # --- 2. Fetch New (Priority 2) ---
+        # Exclude classes that are already appearing in Trending
+        new_qs = base_qs.exclude(pk__in=trending_ids).order_by('-createdAt')[:10]
         data["new"] = self.get_serializer(new_qs, many=True, context=context).data
+
+        # --- 3. Fetch Collections/Categories (Priority 3) ---
+        mode = request.query_params.get('mode', 'categories')
+
+        if mode == 'collections':
+            # Get the collections metadata
+            collections_qs = ClassCollection.objects.filter(is_active=True).order_by('sort_order')
+            
+            # We need to manually construct the collection data to include the classes
+            # and ensure those classes DO NOT appear in Trending.
+            collections_data = []
+            
+            for collection in collections_qs:
+                # Get basic collection info
+                coll_data = PublicCollectionSerializer(collection, context=context).data
+                
+                # Fetch classes specifically for this collection
+                # AND exclude the IDs we found in Trending
+                classes_for_collection = base_qs.filter(collections=collection)\
+                    .exclude(pk__in=trending_ids)\
+                    .order_by('-relevance_score')[:10]
+                
+                # Attach the classes to the collection object
+                coll_data['classes'] = self.get_serializer(classes_for_collection, many=True, context=context).data
+                
+                # Only add the collection to the response if it actually has classes left after filtering
+                if coll_data['classes']:
+                    collections_data.append(coll_data)
+
+            data['collections'] = collections_data
+        else:
+            # Default behavior for Categories
+            categories_qs = ClassCategory.objects.all().order_by('sort_order')
+            data['categories'] = PublicCategorySerializer(categories_qs, many=True, context=context).data
 
         return Response(data)
 
