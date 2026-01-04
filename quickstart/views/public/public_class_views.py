@@ -417,12 +417,23 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 
                 # Fetch classes specifically for this collection
                 # AND exclude the IDs we found in Trending
-                classes_for_collection = base_qs.filter(collections=collection)\
+                # CHANGE: Fetch a larger pool (e.g. 30) of 'good' classes, then shuffle them
+                # so the sort order isn't identical to Trending (strictly by score).
+                candidate_classes = base_qs.filter(collections=collection)\
                     .exclude(pk__in=trending_ids)\
-                    .order_by('-relevance_score')[:10]
+                    .order_by('-relevance_score')[:30]
+                
+                # Convert QuerySet to list to allow shuffling
+                class_list = list(candidate_classes)
+                
+                # Randomize the order of these high-quality candidates
+                random.shuffle(class_list)
+                
+                # Slice the top 10 after shuffling
+                final_classes = class_list[:10]
                 
                 # Attach the classes to the collection object
-                coll_data['classes'] = self.get_serializer(classes_for_collection, many=True, context=context).data
+                coll_data['classes'] = self.get_serializer(final_classes, many=True, context=context).data
                 
                 # Only add the collection to the response if it actually has classes left after filtering
                 if coll_data['classes']:
