@@ -586,7 +586,12 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             category_key = request.query_params.get("category_key")
             subcategory_key = request.query_params.get("subcategory_key")
             price_max_str = request.query_params.get("price_max")
+            
+            # --- DATE PARAMETERS ---
             req_date_str = request.query_params.get("date")
+            req_start_date_str = request.query_params.get("start_date")
+            req_end_date_str = request.query_params.get("end_date")
+
             req_participants_str = request.query_params.get("participants")
             time_preferences = request.query_params.getlist("time_preference")
             sort_by = request.query_params.get("sort_by", "relevance")
@@ -725,13 +730,30 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     logger.warning(f"Invalid price_max value: {price_max_str}")
 
             # --- 4. Availability Filtering ---
-            apply_availability_filters = bool(req_date_str or time_preferences)
+            # Updated to check for start/end date params
+            apply_availability_filters = bool(req_date_str or req_start_date_str or req_end_date_str or time_preferences)
 
             if apply_availability_filters:
                 logger.info("Applying Availability Filters")
                 instance_filters = Q(options__schedules__instances__status="scheduled")
 
-                if req_date_str:
+                # Date Range Logic
+                if req_start_date_str and req_end_date_str:
+                    try:
+                        start_date = datetime.strptime(req_start_date_str, "%Y-%m-%d").date()
+                        end_date = datetime.strptime(req_end_date_str, "%Y-%m-%d").date()
+                        
+                        # Use range filter on the instance date
+                        instance_filters &= Q(
+                            options__schedules__instances__date__range=(start_date, end_date)
+                        )
+                        logger.info(f"Filtering by date range: {start_date} to {end_date}")
+                    except ValueError:
+                        logger.warning(f"Invalid date range: {req_start_date_str} - {req_end_date_str}")
+                        instance_filters &= Q(
+                            options__schedules__instances__date__gte=timezone.now().date()
+                        )
+                elif req_date_str:
                     try:
                         target_date = datetime.strptime(req_date_str, "%Y-%m-%d").date()
                         instance_filters &= Q(
@@ -742,6 +764,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                             options__schedules__instances__date__gte=timezone.now().date()
                         )
                 else:
+                    # If time prefs exist but no date, default to today onwards
                     instance_filters &= Q(
                         options__schedules__instances__date__gte=timezone.now().date()
                     )
