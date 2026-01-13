@@ -139,11 +139,12 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
         allow_blank=True,
         help_text="JSON string of social media links, e.g. {'facebook':'url'}",
     )
+    # --- UPDATED: Help text for new context ---
     tags_keywords = serializers.CharField(
         write_only=True,
         required=False,
         allow_blank=True,
-        help_text="JSON string of a list of keywords",
+        help_text="JSON string of a list of keywords (e.g., 'kayaking', 'wine tasting')",
     )
     founding_year = serializers.IntegerField(required=False, allow_null=True)
     studentContactPhone = serializers.CharField(required=True)
@@ -216,6 +217,18 @@ class BusinessRegistrationSerializer(serializers.ModelSerializer):
             "showExactLocation": {"read_only": True},
         }
 
+    def validate_businessType(self, value):
+        """
+        Ensure valid business type based on new experience-based choices.
+        """
+        valid_types = [
+            "individual", "tour-operator", "experience-group", 
+            "venue", "event-organizer"
+        ]
+        if value not in valid_types:
+            raise DRFValidationError(f"Invalid business type. Must be one of: {', '.join(valid_types)}")
+        return value
+    
     def validate_website(self, value):
         if value:
             if not all(

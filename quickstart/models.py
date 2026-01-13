@@ -502,15 +502,24 @@ class BusinessInfo(models.Model):
         default="on_booking",
         help_text="Choose who can see your direct contact information.",
     )
+
+    # --- UPDATED BUSINESS TYPES ---
+    BUSINESS_TYPE_CHOICES = [
+        ("individual", "Individual Host"),
+        ("tour-operator", "Tour Operator"),
+        ("experience-group", "Experience Group"),
+        ("venue", "Venue / Studio"),
+        ("event-organizer", "Event Organizer"),
+        # Legacy types (kept temporarily for migration safety if needed, 
+        # but ideally removed after running the migration script below)
+        ("school", "School (Legacy)"),
+        ("studio", "Studio (Legacy)"),
+        ("academy", "Academy (Legacy)"),
+        ("center", "Learning Center (Legacy)"),
+    ]
     businessType = models.CharField(
         max_length=50,
-        choices=[
-            ("individual", "Individual Teacher"),
-            ("school", "School"),
-            ("studio", "Studio"),
-            ("academy", "Academy"),
-            ("center", "Learning Center"),
-        ],
+        choices=BUSINESS_TYPE_CHOICES,
     )
     businessDescription = models.TextField(max_length=750)
     businessImage = models.ImageField(
@@ -1562,20 +1571,27 @@ class ClassOption(models.Model):
 
     BOOKING_TYPES = [
         ("Single Session", "Single Session"),
-        ("Full Course", "Full Course"),
+        ("Full Course", "Full Course"), # You might want to rename this to "Multi-Day Adventure" in the future
     ]
     booking_type = models.CharField(
         max_length=20, choices=BOOKING_TYPES, default="Single Session"
     )
 
+    # --- UPDATED SKILL/ACTIVITY LEVELS ---
+    LEVEL_CHOICES = [
+        ("no-experience", "No Experience Needed"),
+        ("beginner", "Beginner Friendly"),
+        ("intermediate", "Intermediate"),
+        ("advanced", "Advanced"),
+        ("active", "Moderate Physical Activity"),
+        ("strenuous", "Strenuous Activity"),
+        ("all", "Open to All Levels"),
+        # Legacy mappings
+        ("expert", "Expert"), 
+    ]
     level = models.CharField(
         max_length=20,
-        choices=[
-            ("beginner", "Beginner"),
-            ("intermediate", "Intermediate"),
-            ("advanced", "Advanced"),
-            ("all", "All Levels"),
-        ],
+        choices=LEVEL_CHOICES,
         default="all",
     )
 

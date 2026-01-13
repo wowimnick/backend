@@ -508,6 +508,20 @@ class CustomPasswordResetConfirmView(APIView):
         if form.is_valid():
             user.set_password(form.cleaned_data["password1"])
             user.save()
+            
+            # --- EXPLICITLY SEND EMAIL HERE ---
+            try:
+                logger.info(f"Triggering explicit password change email for {user.email}")
+                send_account_security_email(
+                    user,
+                    "password",
+                    subject="Your ClassEasily Password Was Changed",
+                )
+            except Exception as e:
+                # Log error but do not crash the request; the password change succeeded.
+                logger.error(f"Failed to send password change email: {e}")
+            # ----------------------------------
+
             logger.info(
                 f"!!! [PWD-RESET-CONFIRM-RAW] SUCCESS: Password successfully reset for user: {user.email}"
             )
