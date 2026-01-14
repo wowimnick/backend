@@ -264,12 +264,19 @@ class VerificationRequestViewSet(viewsets.ModelViewSet):
             action_code = "verification_approve"
             try:
                 if verification.user and verification.business:
-                    send_business_verification_approved_email(
-                        user=verification.user, business=verification.business
-                    )
-                    logger.info(
-                        f"Verification '{VERIFIED_STATUS}' email prepared for business {verification.business.businessId}, user {verification.user.email}"
-                    )
+                    # --- CHANGE START: Check last_login before sending email ---
+                    if verification.user.last_login is not None:
+                        send_business_verification_approved_email(
+                            user=verification.user, business=verification.business
+                        )
+                        logger.info(
+                            f"Verification '{VERIFIED_STATUS}' email prepared for business {verification.business.businessId}, user {verification.user.email}"
+                        )
+                    else:
+                        logger.info(
+                            f"Skipping verification approval email for user {verification.user.email} (Shadow Account/Never logged in)."
+                        )
+                    # --- CHANGE END ---
 
                     try:
                         target_role = Role.objects.get(name=BUSINESS_OWNER_ROLE_NAME)
@@ -364,14 +371,21 @@ class VerificationRequestViewSet(viewsets.ModelViewSet):
             )
             try:
                 if verification.user and verification.business:
-                    send_business_verification_rejected_email(
-                        user=verification.user,
-                        business=verification.business,
-                        verification_request=verification,
-                    )
-                    logger.info(
-                        f"Verification rejected email prepared for business {verification.business.businessId}, user {verification.user.email}"
-                    )
+                    # --- CHANGE START: Check last_login before sending email ---
+                    if verification.user.last_login is not None:
+                        send_business_verification_rejected_email(
+                            user=verification.user,
+                            business=verification.business,
+                            verification_request=verification,
+                        )
+                        logger.info(
+                            f"Verification rejected email prepared for business {verification.business.businessId}, user {verification.user.email}"
+                        )
+                    else:
+                        logger.info(
+                            f"Skipping verification rejection email for user {verification.user.email} (Shadow Account/Never logged in)."
+                        )
+                    # --- CHANGE END ---
                 else:
                     logger.error(
                         f"Cannot send rejection email for verification {verification.id}: Missing user or business link."
