@@ -1135,6 +1135,7 @@ class ClassCategory(models.Model):
     )
     image = models.ImageField(
         upload_to="originals/category_images/",
+        max_length=255,
         blank=True,
         null=True,
         help_text="Image displayed on the homepage category card.",
