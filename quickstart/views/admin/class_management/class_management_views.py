@@ -913,103 +913,6 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(instance, context={"request": request})
         return Response(serializer.data)
 
-    @action(detail=False, methods=["post"], url_path="update-order")
-    def update_order(self, request):
-        """
-        Receives a list of category IDs in their desired order and updates their sort_order.
-        Expects a payload like: [{"id": 1, "order": 0}, {"id": 3, "order": 1}]
-        """
-        if not request.user.has_perm("quickstart.change_classcategory"):
-            self.permission_denied(request, message="You cannot reorder categories.")
-
-        ordered_data = request.data
-        if not isinstance(ordered_data, list):
-            return Response(
-                {"error": "Expected a list of category objects."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            with transaction.atomic():
-                for item in ordered_data:
-                    category_id = item.get("id")
-                    new_order = item.get("order")
-                    if category_id is not None and new_order is not None:
-                        ClassCategory.objects.filter(pk=category_id).update(
-                            sort_order=new_order
-                        )
-
-            logger.info(f"Category order updated by Admin {request.user.email}.")
-            return Response({"status": "success"}, status=status.HTTP_200_OK)
-        except Exception as e:
-            logger.error(f"Failed to update category order: {e}", exc_info=True)
-            return Response(
-                {"error": "An internal error occurred while updating the order."},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-        
-class AdminCollectionViewSet(viewsets.ModelViewSet):
-    """
-    Admin viewset for managing Class Collections (Vibes).
-    """
-    permission_classes = [IsAuthenticated, CanAccessCategoryAdmin] # Re-use category permissions
-    serializer_class = AdminClassCollectionSerializer
-    # Order by sort_order so drag-and-drop reflects correctly in initial fetch
-    queryset = ClassCollection.objects.all().order_by('sort_order')
-    parser_classes = [JSONParser, FormParser]
-
-    def get_queryset(self):
-        # Annotate with the number of classes in this collection
-        return ClassCollection.objects.annotate(
-            class_count=Count('classes', distinct=True) 
-        ).order_by('sort_order')
-
-    def create(self, request, *args, **kwargs):
-        response = super().create(request, *args, **kwargs)
-        if response.status_code == status.HTTP_201_CREATED:
-            trigger_nextjs_revalidation(path="/")
-            trigger_nextjs_revalidation(tag="homepage-content")
-            logger.info(f"Created collection and triggered revalidation")
-        return response
-
-    def update(self, request, *args, **kwargs):
-        response = super().update(request, *args, **kwargs)
-        if response.status_code == status.HTTP_200_OK:
-            trigger_nextjs_revalidation(path="/")
-            trigger_nextjs_revalidation(tag="homepage-content")
-            logger.info(f"Updated collection and triggered revalidation")
-        return response
-
-    def destroy(self, request, *args, **kwargs):
-        response = super().destroy(request, *args, **kwargs)
-        if response.status_code == status.HTTP_204_NO_CONTENT:
-            trigger_nextjs_revalidation(path="/")
-            trigger_nextjs_revalidation(tag="homepage-content")
-            logger.info(f"Deleted collection and triggered revalidation")
-        return response
-
-    @action(detail=False, methods=["post"], url_path="update-order")
-    def update_order(self, request):
-        """
-        Update sort_order for collections.
-        """
-        ordered_data = request.data
-        if not isinstance(ordered_data, list):
-            return Response({"error": "Expected a list."}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            with transaction.atomic():
-                for item in ordered_data:
-                    c_id = item.get("id")
-                    order = item.get("order")
-                    if c_id is not None and order is not None:
-                        ClassCollection.objects.filter(pk=c_id).update(sort_order=order)
-            
-            trigger_nextjs_revalidation(tag="homepage-content")
-            return Response({"status": "success"})
-        except Exception as e:
-            logger.error(f"Failed to update collection order: {e}")
-            return Response({"error": "Internal error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
     @action(detail=True, methods=["post"], url_path="delete-with-reassignment")
@@ -1076,6 +979,7 @@ class AdminCollectionViewSet(viewsets.ModelViewSet):
             },
             status=status.HTTP_200_OK,
         )
+    
 
     @action(detail=True, methods=["post"], url_path="subcategories")
     def add_subcategory(self, request, pk=None):
@@ -1212,8 +1116,9 @@ class AdminCollectionViewSet(viewsets.ModelViewSet):
             subcategory_to_delete = ClassSubcategory.objects.get(
                 pk=subcategory_pk, category=category
             )
+            # MODIFIED: Fetch the new subcategory globally, not restricted to the current category.
             new_subcategory = ClassSubcategory.objects.get(
-                pk=new_subcategory_id, category=category
+                pk=new_subcategory_id
             )
         except (ClassCategory.DoesNotExist, ClassSubcategory.DoesNotExist):
             return Response(
@@ -1227,20 +1132,36 @@ class AdminCollectionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # MODIFIED: Update BOTH subcategory and category to match the new subcategory's parent.
         updated_count = ClassesMain.objects.filter(
             subcategory=subcategory_to_delete
-        ).update(subcategory=new_subcategory)
+        ).update(
+            subcategory=new_subcategory,
+            category=new_subcategory.category # Ensure the parent category changes too
+        )
 
         logger.info(
-            f"{updated_count} classes reassigned from Subcategory '{subcategory_to_delete.name}' to '{new_subcategory.name}'."
+            f"{updated_count} classes reassigned from Subcategory '{subcategory_to_delete.name}' "
+            f"(Cat: {category.name}) to '{new_subcategory.name}' (Cat: {new_subcategory.category.name})."
         )
 
         subcategory_name = subcategory_to_delete.name
+        old_category_key = category.key
+        new_category_key = new_subcategory.category.key
+
         subcategory_to_delete.delete()
 
         logger.warning(
             f"Subcategory '{subcategory_name}' deleted after reassigning classes by Admin {request.user.email}."
         )
+
+        # --- ADDED: Trigger revalidation for homepage, search, old category, and new category ---
+        trigger_nextjs_revalidation(path="/")
+        trigger_nextjs_revalidation(tag="classes-search")
+        trigger_nextjs_revalidation(tag="homepage-classes")
+        trigger_nextjs_revalidation(tag=f"category-{old_category_key}")
+        if old_category_key != new_category_key:
+            trigger_nextjs_revalidation(tag=f"category-{new_category_key}")
 
         return Response(
             {
@@ -1248,6 +1169,106 @@ class AdminCollectionViewSet(viewsets.ModelViewSet):
             },
             status=status.HTTP_200_OK,
         )
+    
+    @action(detail=False, methods=["post"], url_path="update-order")
+    def update_order(self, request):
+        """
+        Receives a list of category IDs in their desired order and updates their sort_order.
+        Expects a payload like: [{"id": 1, "order": 0}, {"id": 3, "order": 1}]
+        """
+        if not request.user.has_perm("quickstart.change_classcategory"):
+            self.permission_denied(request, message="You cannot reorder categories.")
+
+        ordered_data = request.data
+        if not isinstance(ordered_data, list):
+            return Response(
+                {"error": "Expected a list of category objects."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            with transaction.atomic():
+                for item in ordered_data:
+                    category_id = item.get("id")
+                    new_order = item.get("order")
+                    if category_id is not None and new_order is not None:
+                        ClassCategory.objects.filter(pk=category_id).update(
+                            sort_order=new_order
+                        )
+
+            logger.info(f"Category order updated by Admin {request.user.email}.")
+            return Response({"status": "success"}, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.error(f"Failed to update category order: {e}", exc_info=True)
+            return Response(
+                {"error": "An internal error occurred while updating the order."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        
+class AdminCollectionViewSet(viewsets.ModelViewSet):
+    """
+    Admin viewset for managing Class Collections (Vibes).
+    """
+    permission_classes = [IsAuthenticated, CanAccessCategoryAdmin] # Re-use category permissions
+    serializer_class = AdminClassCollectionSerializer
+    # Order by sort_order so drag-and-drop reflects correctly in initial fetch
+    queryset = ClassCollection.objects.all().order_by('sort_order')
+    parser_classes = [JSONParser, FormParser]
+
+    def get_queryset(self):
+        # Annotate with the number of classes in this collection
+        return ClassCollection.objects.annotate(
+            class_count=Count('classes', distinct=True) 
+        ).order_by('sort_order')
+
+    def create(self, request, *args, **kwargs):
+        response = super().create(request, *args, **kwargs)
+        if response.status_code == status.HTTP_201_CREATED:
+            trigger_nextjs_revalidation(path="/")
+            trigger_nextjs_revalidation(tag="homepage-content")
+            logger.info(f"Created collection and triggered revalidation")
+        return response
+
+    def update(self, request, *args, **kwargs):
+        response = super().update(request, *args, **kwargs)
+        if response.status_code == status.HTTP_200_OK:
+            trigger_nextjs_revalidation(path="/")
+            trigger_nextjs_revalidation(tag="homepage-content")
+            logger.info(f"Updated collection and triggered revalidation")
+        return response
+
+    def destroy(self, request, *args, **kwargs):
+        response = super().destroy(request, *args, **kwargs)
+        if response.status_code == status.HTTP_204_NO_CONTENT:
+            trigger_nextjs_revalidation(path="/")
+            trigger_nextjs_revalidation(tag="homepage-content")
+            logger.info(f"Deleted collection and triggered revalidation")
+        return response
+
+    @action(detail=False, methods=["post"], url_path="update-order")
+    def update_order(self, request):
+        """
+        Update sort_order for collections.
+        """
+        ordered_data = request.data
+        if not isinstance(ordered_data, list):
+            return Response({"error": "Expected a list."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            with transaction.atomic():
+                for item in ordered_data:
+                    c_id = item.get("id")
+                    order = item.get("order")
+                    if c_id is not None and order is not None:
+                        ClassCollection.objects.filter(pk=c_id).update(sort_order=order)
+            
+            trigger_nextjs_revalidation(tag="homepage-content")
+            return Response({"status": "success"})
+        except Exception as e:
+            logger.error(f"Failed to update collection order: {e}")
+            return Response({"error": "Internal error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 
 
 class AdminReviewViewSet(viewsets.ModelViewSet):
