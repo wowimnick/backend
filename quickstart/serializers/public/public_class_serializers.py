@@ -109,6 +109,8 @@ class PublicClassOptionSerializer(serializers.ModelSerializer):
         model = ClassOption
         fields = [
             "optionId",
+            "title",       
+            "description",  
             "booking_type",
             "level",
             "equipment",

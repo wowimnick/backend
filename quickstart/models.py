@@ -1569,6 +1569,29 @@ class ClassOption(models.Model):
         "ClassesMain", on_delete=models.CASCADE, related_name="options"
     )
 
+    # --- NEW FIELDS FOR MULTI-TIER ---
+    title = models.CharField(
+        max_length=150, 
+        default="General Admission", 
+        help_text="Name of this ticket tier (e.g., VIP, General Admission)."
+    )
+    description = models.TextField(
+        blank=True, 
+        help_text="Specific details for this ticket tier."
+    )
+    
+    SCHEDULE_MODE_CHOICES = [
+        ("primary", "Primary"),
+        ("synced", "Synced (Same Schedule)"),
+        ("independent", "Independent (Separate Schedule)"),
+    ]
+    schedule_mode = models.CharField(
+        max_length=20, 
+        choices=SCHEDULE_MODE_CHOICES, 
+        default="primary",
+        help_text="Determines if this tier follows the main schedule or has its own."
+    )
+
     BOOKING_TYPES = [
         ("Single Session", "Single Session"),
         ("Full Course", "Full Course"), # You might want to rename this to "Multi-Day Adventure" in the future

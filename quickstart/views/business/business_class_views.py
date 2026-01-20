@@ -161,7 +161,7 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
     """
     ViewSet for Business Users to manage their own ClassesMain.
     Handles CRUD, image management, and status toggling.
-    MODIFIED to handle image uploads via S3 keys and trigger Next.js revalidation.
+    MODIFIED to handle Multi-Tier Options (Create/Update/Delete).
     """
 
     permission_classes = [
@@ -373,7 +373,8 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
             )
 
     def _process_images_and_options_on_create(self, class_instance, request_data):
-        """Helper to handle images (from S3 keys) and options during creation."""
+        """Helper to handle images (from S3 keys) and options (List) during creation."""
+        # 1. Image Processing
         image_s3_keys = request_data.get("image_s3_keys", [])
         cover_image_s3_key = request_data.get("cover_image_s3_key")
 
@@ -405,6 +406,7 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
             f"Bulk-created {len(image_objects_to_create)} images for class {class_instance.classId} from S3 keys."
         )
 
+        # 2. Options Processing (MULTI-TIER SUPPORT)
         options_json_string = request_data.get("options")
         if not options_json_string:
             raise DRFValidationError({"options": "Class option data is required."})
@@ -418,11 +420,22 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                     }
                 )
 
-            option_dict = options_data_list[0]
-            option_serializer = ManagedClassOptionSerializer(data=option_dict)
-            option_serializer.is_valid(raise_exception=True)
-            option_serializer.save(classId=class_instance)
-            logger.info(f"Created ClassOption for class {class_instance.classId}.")
+            # Loop through all options in the array
+            for index, option_dict in enumerate(options_data_list):
+                # Enforce that the first option (index 0) is always primary
+                # unless explicitly set, but for new classes, first is safe assumption for primary.
+                if index == 0:
+                    option_dict["schedule_mode"] = "primary"
+                
+                # If subsequent items don't have a schedule_mode, default to synced
+                if "schedule_mode" not in option_dict:
+                    option_dict["schedule_mode"] = "synced"
+
+                option_serializer = ManagedClassOptionSerializer(data=option_dict)
+                option_serializer.is_valid(raise_exception=True)
+                option_serializer.save(classId=class_instance)
+            
+            logger.info(f"Created {len(options_data_list)} ClassOptions for class {class_instance.classId}.")
 
         except json.JSONDecodeError:
             raise DRFValidationError(
@@ -439,13 +452,13 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         """
-        Handles updates for a class, its images, and options, then triggers revalidation.
+        Handles updates for a class, its images, and options (Smart Sync), then triggers revalidation.
         """
         instance = serializer.instance
         user = self.request.user
         request_data = self.request.data
 
-        # --- MODIFIED: Get old category/subcategory keys BEFORE update for comparison ---
+        # --- Get old category/subcategory keys BEFORE update for comparison ---
         old_category_key = instance.category.key if instance.category else None
         old_subcategory_key = instance.subcategory.key if instance.subcategory else None
 
@@ -455,6 +468,7 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                 f"Class '{updated_instance.title}' (ID: {updated_instance.pk}) base fields updated by user {user.email}"
             )
 
+            # 1. Image Deletion
             delete_image_ids_str = request_data.get("delete_image_ids", "[]")
             try:
                 delete_image_ids = json.loads(delete_image_ids_str)
@@ -475,6 +489,7 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                     f"Could not parse delete_image_ids: {delete_image_ids_str}"
                 )
 
+            # 2. Image Addition
             new_image_s3_keys_str = request_data.get("new_image_s3_keys", "[]")
             try:
                 new_image_s3_keys = json.loads(new_image_s3_keys_str)
@@ -492,6 +507,7 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                     f"Could not parse new_image_s3_keys: {new_image_s3_keys_str}"
                 )
 
+            # 3. Cover Image Update
             cover_image_id_str = request_data.get("cover_image_id")
             cover_image_s3_key = request_data.get("cover_image_s3_key")
 
@@ -518,20 +534,49 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                     first_image.isCover = True
                     first_image.save(update_fields=["isCover"])
 
+            # 4. Multi-Tier Options Update (Smart Sync)
             options_json_string = request_data.get("options")
             if options_json_string:
                 try:
                     options_data_list = json.loads(options_json_string)
-                    option_dict = options_data_list[0]
-                    option_id = option_dict.get("optionId")
-                    option_instance = get_object_or_404(
-                        ClassOption, optionId=option_id, classId=instance
-                    )
-                    option_serializer = ManagedClassOptionSerializer(
-                        option_instance, data=option_dict, partial=True
-                    )
-                    option_serializer.is_valid(raise_exception=True)
-                    option_serializer.save()
+                    if not isinstance(options_data_list, list):
+                         raise DRFValidationError({"options": "Options data must be a list."})
+
+                    # A. Identify IDs present in the payload (Existing Options)
+                    incoming_ids = [
+                        item.get("optionId") 
+                        for item in options_data_list 
+                        if item.get("optionId")
+                    ]
+
+                    # B. Delete Options NOT in the payload (User deleted them in UI)
+                    if len(options_data_list) > 0:
+                        ClassOption.objects.filter(classId=instance).exclude(
+                            optionId__in=incoming_ids
+                        ).delete()
+
+                    # C. Update or Create Options
+                    for index, option_dict in enumerate(options_data_list):
+                        option_id = option_dict.get("optionId")
+
+                        if index == 0:
+                             option_dict["schedule_mode"] = "primary"
+
+                        if option_id:
+                            # Update existing option
+                            option_instance = get_object_or_404(
+                                ClassOption, optionId=option_id, classId=instance
+                            )
+                            option_serializer = ManagedClassOptionSerializer(
+                                option_instance, data=option_dict, partial=True
+                            )
+                        else:
+                            # Create new option
+                            option_serializer = ManagedClassOptionSerializer(data=option_dict)
+
+                        option_serializer.is_valid(raise_exception=True)
+                        option_serializer.save(classId=instance) 
+
                 except Exception as e:
                     logger.error(
                         f"Error processing options update for class {instance.pk}: {e}",
@@ -541,10 +586,10 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                         {"options": f"Failed to update class options: {str(e)}"}
                     )
 
-        # --- MODIFIED: Trigger revalidation for the updated class ---
+        # --- Trigger revalidation for the updated class ---
         self._trigger_class_revalidation(updated_instance)
 
-        # --- MODIFIED: Also revalidate old category tags if they have changed ---
+        # --- Revalidate old category tags if they have changed ---
         new_category_key = (
             updated_instance.category.key if updated_instance.category else None
         )
@@ -558,7 +603,7 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
             trigger_nextjs_revalidation(tag=f"subcategory-{old_subcategory_key}")
 
     def perform_destroy(self, instance):
-        # --- MODIFIED: Capture instance data before modification ---
+        # --- Capture instance data before modification ---
         class_to_revalidate = instance
 
         try:
@@ -614,7 +659,7 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                         f"No active future schedule instances found to delete for class '{class_to_revalidate.title}' (ID: {class_to_revalidate.pk})."
                     )
 
-            # --- MODIFIED: Trigger revalidation after suspension ---
+            # --- Trigger revalidation after suspension ---
             self._trigger_class_revalidation(class_to_revalidate)
 
         except Exception as e:
@@ -686,12 +731,10 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
             f"Class '{class_instance.title}' status toggled from {old_status} to {new_status} by {request.user.email}"
         )
 
-        # --- MODIFIED: Trigger revalidation after toggling status ---
+        # --- Trigger revalidation after toggling status ---
         self._trigger_class_revalidation(class_instance)
 
         return Response({"status": class_instance.status})
-
-
 # --- Views for related models (Options, Schedules, Instances, Breaks) ---
 
 
