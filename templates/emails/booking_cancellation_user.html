@@ -31,6 +31,9 @@
         <div style="font-size: 14px; color: #86868B;">{% trans "Experience" %}</div>
         <div style="font-size: 16px; font-weight: 600; color: #1D1D1F;">
           {{ related_data.class_title|default:"[Experience Title]" }}
+          {% if related_data.option_title and related_data.option_title != related_data.class_title %}
+            <span style="font-weight: 400; color: #6B7280;">({{ related_data.option_title }})</span>
+          {% endif %}
         </div>
       </div>
       <div style="margin-bottom: 12px;">

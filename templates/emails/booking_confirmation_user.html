@@ -13,7 +13,12 @@
             {% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}
         </p>
         <p style="color: #484848; margin-bottom: 32px;">
-            {% trans "Your spot is secured for" %} <strong>{{ related_data.class_title|default:"an exciting experience" }}</strong>.
+            {% trans "Your spot is secured for" %} <strong>{{ related_data.class_title }}</strong>
+            {% if related_data.option_title and related_data.option_title != related_data.class_title %}
+                <br>
+                <span style="font-size: 16px; color: #86868B;">({{ related_data.option_title }})</span>
+            {% endif %}
+            .
         </p>
         <!-- Main Ticket/Card -->
         <div style="background-color: #ffffff;

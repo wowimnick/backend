@@ -288,6 +288,86 @@ class PublicClassSerializer(serializers.ModelSerializer):
 
         return round(combined_avg, 1)
 
+class HomepageClassImageSerializer(serializers.ModelSerializer):
+    """
+    Lightweight image serializer for homepage.
+    Only returns the medium_url to reduce payload size.
+    """
+    medium_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ClassImage
+        fields = ['medium_url'] # Only medium_url requested
+
+    def get_medium_url(self, obj):
+        # Re-use logic from PublicClassImageSerializer for consistency
+        if not getattr(settings, "CLOUDFRONT_DOMAIN", None):
+            return None
+        
+        if obj.image and obj.image.name:
+            original_path = obj.image.name
+            if not original_path.startswith("originals/"):
+                return None
+            
+            base_path, _ = os.path.splitext(original_path)
+            resized_base_path = base_path.replace("originals/", "public/medium/", 1)
+            final_path = resized_base_path + ".webp"
+            return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
+        return None
+
+class HomepageClassSerializer(PublicClassSerializer):
+    """
+    Highly optimized serializer for homepage cards.
+    1. Returns 'images' as a LIST to maintain structure.
+    2. The list contains ONLY one object with ONLY the medium_url.
+    3. Strips out heavier fields not needed for the card view.
+    """
+    images = serializers.SerializerMethodField()
+    
+    class Meta(PublicClassSerializer.Meta):
+        fields = [
+            "classId",
+            "slug",
+            "business_name",
+            "title",
+            "category_name",
+            "location",
+            "coordinates",
+            "average_rating",
+            "review_count",
+            "min_session_price",
+            "min_course_price",
+            "images", # Maintained strictly as a list
+            "is_favorited",
+        ]
+
+    def get_images(self, obj):
+        """
+        Returns a list containing exactly one image object (the medium url), 
+        maintaining the original list structure: [{'medium_url': '...'}]
+        """
+        # Note: 'images' is expected to be prefetched in the ViewSet
+        all_images = getattr(obj, 'images', None)
+        
+        target_image = None
+        
+        if all_images:
+            # If it's a manager/queryset, filter without hitting DB if prefetched
+            if hasattr(all_images, 'all'):
+                image_list = list(all_images.all())
+            else:
+                image_list = all_images
+
+            if image_list:
+                # Try to find the cover image, else first image
+                cover_img = next((img for img in image_list if img.isCover), None)
+                target_image = cover_img if cover_img else image_list[0]
+        
+        if target_image:
+            return [HomepageClassImageSerializer(target_image).data]
+        
+        return []
+
 
 class PublicClassDetailSerializer(PublicClassSerializer):
     """

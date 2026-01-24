@@ -75,7 +75,8 @@ from quickstart.serializers import (
     PublicReviewSerializer,
     ImportedGoogleReviewSerializer,
     PublicCollectionSerializer,
-    PublicCategorySerializer
+    PublicCategorySerializer,
+    HomepageClassSerializer
 )
 from django.contrib.gis.geos import Point
 from django.contrib.gis.db.models.functions import Distance
@@ -368,45 +369,51 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
     
     @action(detail=False, methods=['get'])
     def homepage_content(self, request):
+        """
+        Custom endpoint for homepage data.
+        Returns:
+        1. Trending classes (Top by relevance) - Single medium image
+        2. Date Night classes (Specific collection) - Single medium image, De-duplicated from trending
+        3. All Collections (Metadata pills)
+        """
+        # 1. Base Query with availability check
         base_qs = self.get_queryset()
-
-        # EFFICIENT FILTER: Use Exists() to check for availability without doing a massive JOIN
-        # This checks if there is at least one instance in the future with status 'scheduled'
         future_instances = ScheduleInstance.objects.filter(
             schedule__option__classId=OuterRef('pk'),
             date__gte=timezone.now().date(),
             status='scheduled'
         )
         base_qs = base_qs.filter(Exists(future_instances))
+        base_qs = self._calculate_relevance_score(base_qs)
 
         context = {'request': request}
-        
-        # 1. Determine Mode (Categories vs Collections)
-        mode = request.query_params.get('mode', 'categories')
-        
         data = {}
 
-        # 2. Fetch the "Pills" data based on mode
-        if mode == 'collections':
-            # Fetch "Vibes" (Date Night, Groups, etc.)
-            collections_qs = ClassCollection.objects.filter(is_active=True).order_by('sort_order')
-            data['collections'] = PublicCollectionSerializer(collections_qs, many=True, context=context).data
-        else:
-            # Fetch Standard Categories (Art, Culinary, etc.) - The Default
-            categories_qs = ClassCategory.objects.all().order_by('sort_order')
-            data['categories'] = PublicCategorySerializer(categories_qs, many=True, context=context).data
-
-        # 3. Trending & New (Always included)
-        base_qs = self._calculate_relevance_score(base_qs)
-        
-        # Trending: High relevance score
+        # 2. Trending (Highest Relevance)
+        # Fetch 10 items
         trending_qs = base_qs.order_by('-relevance_score')[:10]
+        # Evaluate to list to get IDs for exclusion
+        trending_data = HomepageClassSerializer(trending_qs, many=True, context=context).data
+        data["trending"] = trending_data
         
-        # New: Recently created
-        new_qs = base_qs.order_by('-createdAt')[:10]
+        # Extract IDs to prevent duplicates in the next section
+        # We iterate over the serialized data or we could evaluate a value list query
+        trending_ids = [item['classId'] for item in trending_data]
 
-        data["trending"] = self.get_serializer(trending_qs, many=True, context=context).data
-        data["new"] = self.get_serializer(new_qs, many=True, context=context).data
+        # 3. Date Night Collection
+        # Specific request for "date-night" slug, de-duplicated from trending
+        date_night_slug = "date-night"
+        date_night_qs = base_qs.filter(collections__slug=date_night_slug)
+        if trending_ids:
+            date_night_qs = date_night_qs.exclude(pk__in=trending_ids)
+        
+        # Order by relevance within the collection
+        date_night_qs = date_night_qs.order_by('-relevance_score')[:10]
+        data["date_night"] = HomepageClassSerializer(date_night_qs, many=True, context=context).data
+
+        # 4. All Collections (For the pills/navigation)
+        collections_qs = ClassCollection.objects.filter(is_active=True).order_by('sort_order')
+        data['collections'] = PublicCollectionSerializer(collections_qs, many=True, context=context).data
 
         return Response(data)
 

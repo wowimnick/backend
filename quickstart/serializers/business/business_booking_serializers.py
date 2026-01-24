@@ -141,7 +141,7 @@ class BusinessBookingListSerializer(serializers.ModelSerializer):
         source="schedule_instance.schedule.option.classId.title", read_only=True
     )
     option_name = serializers.CharField(
-        source="schedule_instance.schedule.option.classId.title", read_only=True
+        source="schedule_instance.schedule.option.title", read_only=True
     )
     user_name = serializers.SerializerMethodField(read_only=True)
     # MODIFICATION: Changed to SerializerMethodField to handle guests
@@ -256,7 +256,7 @@ class BusinessBookingDetailSerializer(serializers.ModelSerializer):
         source="schedule_instance.schedule.option.classId.title", read_only=True
     )
     option_name = serializers.CharField(
-        source="schedule_instance.schedule.option.classId.title", read_only=True
+        source="schedule_instance.schedule.option.title", read_only=True
     )
     date = serializers.DateField(source="schedule_instance.date", read_only=True)
     time = serializers.TimeField(source="schedule_instance.time", read_only=True)
