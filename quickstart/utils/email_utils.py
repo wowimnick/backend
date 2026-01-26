@@ -1431,12 +1431,18 @@ def send_booking_rescheduled_by_business_email(
         logger.error(f"Error calculating new end time for reschedule email: {e}")
         new_end_time = new_instance.time # Fallback to start time to prevent crash
 
+    # NEW: Format timezone (Replace underscore with space)
+    formatted_timezone = related_data.get("business_timezone", "UTC")
+    if formatted_timezone:
+        formatted_timezone = formatted_timezone.replace("_", " ")
+
     context = {
         "user": user,
         "booking": booking,
         "old_instance": old_instance,
         "new_instance": new_instance,
-        "new_end_time": new_end_time, # Added to context
+        "new_end_time": new_end_time,
+        "formatted_timezone": formatted_timezone,  # Added to context
         "manage_bookings_url": manage_bookings_url,
         "recipient_email": user.email,
         "related_data": related_data,
