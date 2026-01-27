@@ -50,7 +50,8 @@ from .public.public_class_serializers import (
     PublicClassOptionSerializer,
     PublicScheduleSerializer,
     PublicClassDetailSerializer,
-    PublicCollectionSerializer
+    PublicCollectionSerializer,
+    HomepageClassSerializer
 )
 
 from .public.public_blog_serializers import (
@@ -158,6 +159,7 @@ __all__ = [
     "PublicClassOptionSerializer",
     "PublicScheduleSerializer",
     "PublicClassDetailSerializer",
+    "HomepageClassSerializer",
     "PublicCollectionSerializer",
     # Course Serializers
     "PublicCourseScheduleSerializer",

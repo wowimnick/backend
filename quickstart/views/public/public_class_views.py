@@ -76,7 +76,8 @@ from quickstart.serializers import (
     PublicReviewSerializer,
     ImportedGoogleReviewSerializer,
     PublicCollectionSerializer,
-    PublicCategorySerializer
+    PublicCategorySerializer,
+    HomepageClassSerializer
 )
 from django.contrib.gis.geos import Point
 from django.contrib.gis.db.models.functions import Distance
@@ -369,82 +370,51 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
     
     @action(detail=False, methods=['get'])
     def homepage_content(self, request):
+        """
+        Custom endpoint for homepage data.
+        Returns:
+        1. Trending classes (Top by relevance) - Single medium image
+        2. Date Night classes (Specific collection) - Single medium image, De-duplicated from trending
+        3. All Collections (Metadata pills)
+        """
+        # 1. Base Query with availability check
         base_qs = self.get_queryset()
-
-        # EFFICIENT FILTER: Check for availability
         future_instances = ScheduleInstance.objects.filter(
             schedule__option__classId=OuterRef('pk'),
             date__gte=timezone.now().date(),
             status='scheduled'
         )
         base_qs = base_qs.filter(Exists(future_instances))
-
-        # Annotate relevance score for all subsequent queries
         base_qs = self._calculate_relevance_score(base_qs)
 
         context = {'request': request}
         data = {}
 
-        # --- 1. Fetch Trending (Priority 1) ---
-        # We fetch this first because it takes precedence.
+        # 2. Trending (Highest Relevance)
+        # Fetch 10 items
         trending_qs = base_qs.order_by('-relevance_score')[:10]
+        # Evaluate to list to get IDs for exclusion
+        trending_data = HomepageClassSerializer(trending_qs, many=True, context=context).data
+        data["trending"] = trending_data
         
-        # Serialize immediately
-        data["trending"] = self.get_serializer(trending_qs, many=True, context=context).data
+        # Extract IDs to prevent duplicates in the next section
+        # We iterate over the serialized data or we could evaluate a value list query
+        trending_ids = [item['classId'] for item in trending_data]
+
+        # 3. Date Night Collection
+        # Specific request for "date-night" slug, de-duplicated from trending
+        date_night_slug = "date-night"
+        date_night_qs = base_qs.filter(collections__slug=date_night_slug)
+        if trending_ids:
+            date_night_qs = date_night_qs.exclude(pk__in=trending_ids)
         
-        # Extract IDs to exclude from subsequent lists
-        # We use the data we just fetched to avoid hitting the DB again
-        trending_ids = [item['classId'] for item in data["trending"]]
+        # Order by relevance within the collection
+        date_night_qs = date_night_qs.order_by('-relevance_score')[:10]
+        data["date_night"] = HomepageClassSerializer(date_night_qs, many=True, context=context).data
 
-        # --- 2. Fetch New (Priority 2) ---
-        # Exclude classes that are already appearing in Trending
-        new_qs = base_qs.exclude(pk__in=trending_ids).order_by('-createdAt')[:10]
-        data["new"] = self.get_serializer(new_qs, many=True, context=context).data
-
-        # --- 3. Fetch Collections/Categories (Priority 3) ---
-        mode = request.query_params.get('mode', 'categories')
-
-        if mode == 'collections':
-            # Get the collections metadata
-            collections_qs = ClassCollection.objects.filter(is_active=True).order_by('sort_order')
-            
-            # We need to manually construct the collection data to include the classes
-            # and ensure those classes DO NOT appear in Trending.
-            collections_data = []
-            
-            for collection in collections_qs:
-                # Get basic collection info
-                coll_data = PublicCollectionSerializer(collection, context=context).data
-                
-                # Fetch classes specifically for this collection
-                # AND exclude the IDs we found in Trending
-                # CHANGE: Fetch a larger pool (e.g. 30) of 'good' classes, then shuffle them
-                # so the sort order isn't identical to Trending (strictly by score).
-                candidate_classes = base_qs.filter(collections=collection)\
-                    .exclude(pk__in=trending_ids)\
-                    .order_by('-relevance_score')[:30]
-                
-                # Convert QuerySet to list to allow shuffling
-                class_list = list(candidate_classes)
-                
-                # Randomize the order of these high-quality candidates
-                random.shuffle(class_list)
-                
-                # Slice the top 10 after shuffling
-                final_classes = class_list[:10]
-                
-                # Attach the classes to the collection object
-                coll_data['classes'] = self.get_serializer(final_classes, many=True, context=context).data
-                
-                # Only add the collection to the response if it actually has classes left after filtering
-                if coll_data['classes']:
-                    collections_data.append(coll_data)
-
-            data['collections'] = collections_data
-        else:
-            # Default behavior for Categories
-            categories_qs = ClassCategory.objects.all().order_by('sort_order')
-            data['categories'] = PublicCategorySerializer(categories_qs, many=True, context=context).data
+        # 4. All Collections (For the pills/navigation)
+        collections_qs = ClassCollection.objects.filter(is_active=True).order_by('sort_order')
+        data['collections'] = PublicCollectionSerializer(collections_qs, many=True, context=context).data
 
         return Response(data)
 

@@ -18,7 +18,11 @@
                 {% else %}
                     Your booking for
                 {% endif %}
-                <strong>{{ related_data.class_title|default:"the experience" }}</strong> has been cancelled by the host.
+                <strong>{{ related_data.class_title|default:"the experience" }}</strong>
+                {% if related_data.option_title and related_data.option_title != related_data.class_title %}
+                    ({{ related_data.option_title }})
+                {% endif %}
+                has been cancelled by the host.
             </p>
             <!-- Details Card -->
             <div style="background-color: #F9FAFB;

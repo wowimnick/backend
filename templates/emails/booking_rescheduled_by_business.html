@@ -62,10 +62,8 @@
                         {{ new_instance.time|time:"g:i A" }} -
                         {{ new_end_time|time:"g:i A" }}
                     </div>
-                    {% if related_data.business_timezone %}
-                        <div style="font-size: 12px; color: #86868B; margin-top: 8px;">
-                            ({{ related_data.business_timezone|humanize_timezone }})
-                        </div>
+                    {% if formatted_timezone %}
+                        <div style="font-size: 12px; color: #86868B; margin-top: 8px;">({{ formatted_timezone }})</div>
                     {% endif %}
                 </div>
             </div>

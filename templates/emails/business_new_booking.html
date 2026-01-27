@@ -12,7 +12,11 @@
         <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
             {% blocktrans with first_name=business_user.first_name|default:"Partner" %}Hi {{ first_name }},{% endblocktrans %}
             <br>
-            Someone new is joining the fun for <strong>{{ related_data.class_title|default:"your experience" }}</strong>.
+            Someone new is joining the fun for <strong>{{ related_data.class_title }}</strong>
+            {% if related_data.option_title and related_data.option_title != related_data.class_title %}
+                <span style="color: #6B7280;">({{ related_data.option_title }})</span>
+            {% endif %}
+            .
         </p>
         <!-- Details Card -->
         <div style="background-color: #F9FAFB;
@@ -51,9 +55,24 @@
                 <div style="font-size: 14px; margin-bottom: 8px; color: #1D1D1F;">
                     <strong>{% trans "Date:" %}</strong> {{ booking.schedule_instance.date|date:"l, F j" }}
                 </div>
+                {% if related_data.option_title and related_data.option_title != related_data.class_title %}
+                    <div style="font-size: 14px; margin-bottom: 8px; color: #1D1D1F;">
+                        <strong>{% trans "Option:" %}</strong> {{ related_data.option_title }}
+                    </div>
+                {% endif %}
                 <div style="font-size: 14px; margin-bottom: 8px; color: #1D1D1F;">
                     <strong>{% trans "Participants:" %}</strong> {{ booking.participants }}
                 </div>
+                {% if booking.participant_details %}
+                    <div style="font-size: 14px; margin-top: 8px; color: #1D1D1F;">
+                        <strong>{% trans "Guest List:" %}</strong>
+                        <ul style="margin-top: 4px; padding-left: 20px; color: #484848;">
+                            {% for p in booking.participant_details %}
+                                {% if p.name %}<li>{{ p.name }}</li>{% endif %}
+                            {% endfor %}
+                        </ul>
+                    </div>
+                {% endif %}
                 {% if booker.phone_number %}
                     <div style="font-size: 14px; margin-bottom: 8px; color: #1D1D1F;">
                         <strong>{% trans "Phone:" %}</strong> <a href="tel:{{ booker.phone_number }}"

@@ -454,8 +454,6 @@ class BulkScheduleCreateSerializer(serializers.Serializer):
 class ManagedClassOptionSerializer(serializers.ModelSerializer):
     """
     Serializer for managing class options by business users.
-    MODIFIED: This no longer includes the 'schedules' field to keep the class list API response lean.
-    Schedules are now fetched on-demand from the BusinessScheduleViewSet.
     """
 
     class Meta:
@@ -463,6 +461,9 @@ class ManagedClassOptionSerializer(serializers.ModelSerializer):
         fields = [
             "optionId",
             "classId",
+            "title",           # NEW
+            "description",     # NEW
+            "schedule_mode",   # NEW
             "booking_type",
             "level",
             "equipment",
@@ -485,6 +486,8 @@ class ManagedClassOptionSerializer(serializers.ModelSerializer):
             "updatedAt",
         ]
         extra_kwargs = {
+            "title": {"required": False}, 
+            "schedule_mode": {"default": "primary"},
             "equipment": {"required": False},
             "tags": {"required": False},
             "level": {"default": ClassOption._meta.get_field("level").get_default()},

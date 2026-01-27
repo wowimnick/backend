@@ -12,7 +12,11 @@
         <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
             {% blocktrans with first_name=business_user.first_name|default:"Partner" %}Hi {{ first_name }},{% endblocktrans %}
             <br>
-            Just a heads up that a booking has been cancelled for <strong>{{ related_data.class_title|default:"your experience" }}</strong>.
+            Just a heads up that a booking has been cancelled for <strong>{{ related_data.class_title }}</strong>
+            {% if related_data.option_title and related_data.option_title != related_data.class_title %}
+                <span style="color: #6B7280;">({{ related_data.option_title }})</span>
+            {% endif %}
+            .
         </p>
         <!-- Details Card -->
         {% with booker=booking.user|default:booking.contact %}
@@ -42,6 +46,11 @@
                 <div style="font-size: 14px; color: #1D1D1F; margin-bottom: 8px;">
                     <strong>{% trans "Session:" %}</strong> {{ booking.schedule_instance.date|date:"F j, Y" }} at {{ booking.schedule_instance.time|time:"P" }}
                 </div>
+                {% if related_data.option_title and related_data.option_title != related_data.class_title %}
+                    <div style="font-size: 14px; color: #1D1D1F; margin-bottom: 8px;">
+                        <strong>{% trans "Option:" %}</strong> {{ related_data.option_title }}
+                    </div>
+                {% endif %}
                 <div style="font-size: 14px; color: #1D1D1F; margin-bottom: 0;">
                     <strong>{% trans "Seats Released:" %}</strong> {{ booking.participants }}
                 </div>
