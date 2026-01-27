@@ -373,7 +373,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         Custom endpoint for homepage data.
         Returns:
         1. Trending classes (Top by relevance) - Single medium image
-        2. Date Night classes (Specific collection) - Single medium image, De-duplicated from trending
+        2. Date Night classes (Specific collection) - Single medium image, Randomized
         3. All Collections (Metadata pills)
         """
         # 1. Base Query with availability check
@@ -392,23 +392,18 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         # 2. Trending (Highest Relevance)
         # Fetch 10 items
         trending_qs = base_qs.order_by('-relevance_score')[:10]
-        # Evaluate to list to get IDs for exclusion
         trending_data = HomepageClassSerializer(trending_qs, many=True, context=context).data
         data["trending"] = trending_data
         
-        # Extract IDs to prevent duplicates in the next section
-        # We iterate over the serialized data or we could evaluate a value list query
-        trending_ids = [item['classId'] for item in trending_data]
-
         # 3. Date Night Collection
-        # Specific request for "date-night" slug, de-duplicated from trending
+        # Specific request for "date-night" slug
+        # We removed the exclusion logic to allow overlap if necessary
+        # We use order_by('?') to shuffle results so users see different classes on refresh
         date_night_slug = "date-night"
         date_night_qs = base_qs.filter(collections__slug=date_night_slug)
-        if trending_ids:
-            date_night_qs = date_night_qs.exclude(pk__in=trending_ids)
         
-        # Order by relevance within the collection
-        date_night_qs = date_night_qs.order_by('-relevance_score')[:10]
+        # Order by random to maximize variety
+        date_night_qs = date_night_qs.order_by('?')[:10]
         data["date_night"] = HomepageClassSerializer(date_night_qs, many=True, context=context).data
 
         # 4. All Collections (For the pills/navigation)
@@ -416,7 +411,6 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         data['collections'] = PublicCollectionSerializer(collections_qs, many=True, context=context).data
 
         return Response(data)
-
     
     def _calculate_relevance_score(self, queryset):
         # Cast all numeric operations to explicit types for psycopg3 compatibility
