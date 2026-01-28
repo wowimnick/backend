@@ -373,51 +373,49 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         """
         Custom endpoint for homepage data.
         Returns:
-        1. Trending classes (Top by relevance) - Single medium image
-        2. Date Night classes (Specific collection) - Single medium image, De-duplicated from trending
+        1. Trending classes (Top by relevance)
+        2. Date Night classes (Randomized specific collection)
         3. All Collections (Metadata pills)
         """
         # 1. Base Query with availability check
         base_qs = self.get_queryset()
+
+        # EFFICIENT FILTER: Check for future availability
         future_instances = ScheduleInstance.objects.filter(
             schedule__option__classId=OuterRef('pk'),
             date__gte=timezone.now().date(),
             status='scheduled'
         )
         base_qs = base_qs.filter(Exists(future_instances))
+        
+        # Calculate scores
         base_qs = self._calculate_relevance_score(base_qs)
 
         context = {'request': request}
         data = {}
 
         # 2. Trending (Highest Relevance)
-        # Fetch 10 items
         trending_qs = base_qs.order_by('-relevance_score')[:10]
-        # Evaluate to list to get IDs for exclusion
-        trending_data = HomepageClassSerializer(trending_qs, many=True, context=context).data
-        data["trending"] = trending_data
-        
-        # Extract IDs to prevent duplicates in the next section
-        # We iterate over the serialized data or we could evaluate a value list query
-        trending_ids = [item['classId'] for item in trending_data]
+        # Use HomepageClassSerializer for lighter payload
+        data["trending"] = HomepageClassSerializer(trending_qs, many=True, context=context).data
 
-        # 3. Date Night Collection
-        # Specific request for "date-night" slug, de-duplicated from trending
+        # 3. Date Night Collection (Required by Frontend)
+        # We randomize this (?) so it changes on refresh
         date_night_slug = "date-night"
-        date_night_qs = base_qs.filter(collections__slug=date_night_slug)
-        if trending_ids:
-            date_night_qs = date_night_qs.exclude(pk__in=trending_ids)
-        
-        # Order by relevance within the collection
-        date_night_qs = date_night_qs.order_by('-relevance_score')[:10]
+        date_night_qs = base_qs.filter(collections__slug=date_night_slug).order_by('?')[:10]
         data["date_night"] = HomepageClassSerializer(date_night_qs, many=True, context=context).data
 
-        # 4. All Collections (For the pills/navigation)
-        collections_qs = ClassCollection.objects.filter(is_active=True).order_by('sort_order')
-        data['collections'] = PublicCollectionSerializer(collections_qs, many=True, context=context).data
+        # 4. Mode Selection (Categories vs Collections pills)
+        mode = request.query_params.get('mode', 'categories')
+        
+        if mode == 'collections':
+            collections_qs = ClassCollection.objects.filter(is_active=True).order_by('sort_order')
+            data['collections'] = PublicCollectionSerializer(collections_qs, many=True, context=context).data
+        else:
+            categories_qs = ClassCategory.objects.all().order_by('sort_order')
+            data['categories'] = PublicCategorySerializer(categories_qs, many=True, context=context).data
 
         return Response(data)
-
     
     def _calculate_relevance_score(self, queryset):
         # Cast all numeric operations to explicit types for psycopg3 compatibility
