@@ -372,43 +372,47 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         """
         Custom endpoint for homepage data.
         Returns:
-        1. Trending classes (Top by relevance) - Single medium image
-        2. Date Night classes (Specific collection) - Single medium image, Randomized
+        1. Trending classes (Top by relevance)
+        2. Date Night classes (Randomized specific collection)
         3. All Collections (Metadata pills)
         """
         # 1. Base Query with availability check
         base_qs = self.get_queryset()
+
+        # EFFICIENT FILTER: Check for future availability
         future_instances = ScheduleInstance.objects.filter(
             schedule__option__classId=OuterRef('pk'),
             date__gte=timezone.now().date(),
             status='scheduled'
         )
         base_qs = base_qs.filter(Exists(future_instances))
+        
+        # Calculate scores
         base_qs = self._calculate_relevance_score(base_qs)
 
         context = {'request': request}
         data = {}
 
         # 2. Trending (Highest Relevance)
-        # Fetch 10 items
         trending_qs = base_qs.order_by('-relevance_score')[:10]
-        trending_data = HomepageClassSerializer(trending_qs, many=True, context=context).data
-        data["trending"] = trending_data
-        
-        # 3. Date Night Collection
-        # Specific request for "date-night" slug
-        # We removed the exclusion logic to allow overlap if necessary
-        # We use order_by('?') to shuffle results so users see different classes on refresh
+        # Use HomepageClassSerializer for lighter payload
+        data["trending"] = HomepageClassSerializer(trending_qs, many=True, context=context).data
+
+        # 3. Date Night Collection (Required by Frontend)
+        # We randomize this (?) so it changes on refresh
         date_night_slug = "date-night"
-        date_night_qs = base_qs.filter(collections__slug=date_night_slug)
-        
-        # Order by random to maximize variety
-        date_night_qs = date_night_qs.order_by('?')[:10]
+        date_night_qs = base_qs.filter(collections__slug=date_night_slug).order_by('?')[:10]
         data["date_night"] = HomepageClassSerializer(date_night_qs, many=True, context=context).data
 
-        # 4. All Collections (For the pills/navigation)
-        collections_qs = ClassCollection.objects.filter(is_active=True).order_by('sort_order')
-        data['collections'] = PublicCollectionSerializer(collections_qs, many=True, context=context).data
+        # 4. Mode Selection (Categories vs Collections pills)
+        mode = request.query_params.get('mode', 'categories')
+        
+        if mode == 'collections':
+            collections_qs = ClassCollection.objects.filter(is_active=True).order_by('sort_order')
+            data['collections'] = PublicCollectionSerializer(collections_qs, many=True, context=context).data
+        else:
+            categories_qs = ClassCategory.objects.all().order_by('sort_order')
+            data['categories'] = PublicCategorySerializer(categories_qs, many=True, context=context).data
 
         return Response(data)
     
