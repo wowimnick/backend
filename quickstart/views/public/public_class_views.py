@@ -373,8 +373,8 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         Custom endpoint for homepage data.
         Returns:
         1. Trending classes (Top by relevance)
-        2. Date Night classes (Randomized specific collection)
-        3. All Collections (Metadata pills)
+        2. Date Night classes (Specific collection) - Randomized AND De-duplicated
+        3. All Collections/Categories (Metadata pills)
         """
         # 1. Base Query with availability check
         base_qs = self.get_queryset()
@@ -393,15 +393,26 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         context = {'request': request}
         data = {}
 
-        # 2. Trending (Highest Relevance)
+        # 2. Trending (Highest Relevance) - Fetch this FIRST
         trending_qs = base_qs.order_by('-relevance_score')[:10]
-        # Use HomepageClassSerializer for lighter payload
-        data["trending"] = HomepageClassSerializer(trending_qs, many=True, context=context).data
+        # Serialize immediately to get the IDs
+        trending_data = HomepageClassSerializer(trending_qs, many=True, context=context).data
+        data["trending"] = trending_data
+        
+        # Extract IDs to prevent duplicates in the next section
+        trending_ids = [item['classId'] for item in trending_data]
 
-        # 3. Date Night Collection (Required by Frontend)
-        # We randomize this (?) so it changes on refresh
+        # 3. Date Night Collection
         date_night_slug = "date-night"
-        date_night_qs = base_qs.filter(collections__slug=date_night_slug).order_by('?')[:10]
+        date_night_qs = base_qs.filter(collections__slug=date_night_slug)
+        
+        # EXCLUDE classes that are already in the Trending list
+        if trending_ids:
+            date_night_qs = date_night_qs.exclude(pk__in=trending_ids)
+            
+        # Randomize the remaining results so it's different every time
+        date_night_qs = date_night_qs.order_by('?')[:10]
+        
         data["date_night"] = HomepageClassSerializer(date_night_qs, many=True, context=context).data
 
         # 4. Mode Selection (Categories vs Collections pills)
@@ -415,7 +426,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             data['categories'] = PublicCategorySerializer(categories_qs, many=True, context=context).data
 
         return Response(data)
-    
+
     def _calculate_relevance_score(self, queryset):
         # Cast all numeric operations to explicit types for psycopg3 compatibility
         days_old = ExpressionWrapper(
