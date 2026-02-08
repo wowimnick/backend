@@ -1,0 +1,97 @@
+{# templates/emails/gift_card_delivery.html #}
+{% extends "emails/base_email.html" %}
+{% load i18n %}
+{% block title %}
+    {% trans "You've received a gift!" %}
+{% endblock title %}
+{% block content %}
+    <div style="text-align: center; position: relative;">
+        <!-- 1. HEADER TEXT -->
+        <h2 style="color: #1D1D1F;
+                   margin-bottom: 8px;
+                   position: relative;
+                   z-index: 2">
+            {% if is_self %}
+                {% trans "Here is your Gift Card" %}
+            {% else %}
+                {{ gift_card.sender_name }} {% trans "sent you a gift!" %}
+            {% endif %}
+        </h2>
+        <p style="font-size: 16px;
+                  color: #484848;
+                  margin-bottom: 24px;
+                  position: relative;
+                  z-index: 2">
+            {% if gift_card.message %}
+                "{{ gift_card.message }}"
+            {% else %}
+                {% trans "Redeem this for any experience on ClassEasily." %}
+            {% endif %}
+        </p>
+        <!-- 2. THE CARD & CONFETTI CONTAINER -->
+        <div style="position: relative;
+                    width: 100%;
+                    max-width: 400px;
+                    margin: 0 auto 32px auto">
+            <!-- THE CARD DESIGN (Selected by User) -->
+            <div style="position: relative;
+                        z-index: 2;
+                        border-radius: 16px;
+                        overflow: hidden;
+                        box-shadow: 0 15px 35px rgba(0,0,0,0.2);
+                        background-color: #f0f0f0">
+                {% if gift_card.design_url %}
+                    <!-- Use the user's selected design -->
+                    <img src="{{ gift_card.design_url }}"
+                         alt="Gift Card"
+                         style="width: 100%;
+                                height: auto;
+                                display: block;
+                                border-radius: 16px">
+                {% else %}
+                    <!-- Fallback if no design found -->
+                    <div style="padding: 40px; background: #333; color: #fff;">
+                        <div style="font-size: 32px; font-weight: bold;">${{ gift_card.initial_amount }}</div>
+                        <div>ClassEasily Gift Card</div>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+        <!-- 3. THE CODE -->
+        <div style="background: #F5F5F7;
+                    border: 1px dashed #D1D5DB;
+                    padding: 16px;
+                    border-radius: 12px;
+                    display: inline-block;
+                    margin-bottom: 24px">
+            <div style="font-size: 12px;
+                        color: #86868B;
+                        text-transform: uppercase;
+                        letter-spacing: 1px;
+                        margin-bottom: 4px">{% trans "Your Code" %}</div>
+            <div style="font-family: monospace;
+                        font-size: 24px;
+                        font-weight: 700;
+                        letter-spacing: 2px;
+                        color: #1D1D1F;
+                        user-select: all">{{ gift_card.code }}</div>
+        </div>
+        <p style="font-size: 14px; color: #86868B; margin-bottom: 32px;">
+            {% trans "Use this code at checkout to redeem your credit." %}
+        </p>
+        <!-- BUTTON -->
+        <table role="presentation"
+               border="0"
+               cellpadding="0"
+               cellspacing="0"
+               width="100%">
+            <tr>
+                <td align="center">
+                    <a href="{{ settings.FRONTEND_BASE_URL }}/explore"
+                       target="_blank"
+                       class="button">{% trans 'Book an Experience' %}</a>
+                </td>
+            </tr>
+        </table>
+    </div>
+{% endblock content %}

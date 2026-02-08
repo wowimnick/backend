@@ -16,6 +16,7 @@ from ..models import (
     Booking,
     BusinessStaff,
     CustomUser,
+    GiftCard,
     Reviews,
     SupportTicket,
     BusinessInfo,
@@ -25,7 +26,7 @@ from ..models import (
     ClassesMain,
     Schedule,
     Contact,
-    CourseEnrollment
+    CourseEnrollment,
 )
 
 logger = logging.getLogger(__name__)
@@ -74,10 +75,12 @@ def _get_booking_related_data(booking: Booking) -> dict:
         data["business_contact_email"] = getattr(
             business, "studentContactEmail", settings.DEFAULT_FROM_EMAIL
         )
-        
+
         # Basic schedule summary for courses
         if schedule.day and schedule.time:
-            data["schedule_summary"] = f"{schedule.day}s at {schedule.time.strftime('%I:%M %p')}"
+            data["schedule_summary"] = (
+                f"{schedule.day}s at {schedule.time.strftime('%I:%M %p')}"
+            )
 
     except AttributeError as e:
         logger.error(
@@ -201,6 +204,7 @@ def send_templated_email(
     Renders an email template, queues it for sending via a Celery task
     """
     from quickstart.tasks.email_tasks import send_transactional_email_task
+
     logger.info(
         f"Attempting to queue email via send_templated_email. Template: '{template_name}', Recipients: {recipient_list}"
     )
@@ -317,7 +321,9 @@ def send_booking_confirmation_email(user, booking: Booking):
         else "#"
     )
     # Updated: Deep link to the specific booking in "upcoming" tab
-    manage_bookings_url = f"{settings.FRONTEND_BASE_URL}/my-classes?tab=upcoming&highlight={booking.id}"
+    manage_bookings_url = (
+        f"{settings.FRONTEND_BASE_URL}/my-classes?tab=upcoming&highlight={booking.id}"
+    )
 
     payment = (
         booking.payments.filter(status="succeeded").order_by("-created_at").first()
@@ -334,24 +340,26 @@ def send_booking_confirmation_email(user, booking: Booking):
             # 1. Calculate End Time
             start_time = booking.schedule_instance.time
             duration_minutes = booking.schedule_instance.duration
-            
+
             # Combine with today's date just to do the math easily
             dummy_date = datetime.now().date()
             start_dt = datetime.combine(dummy_date, start_time)
             end_dt = start_dt + timedelta(minutes=duration_minutes)
-            
+
             # Format: "7:00 PM - 8:00 PM"
-            time_str_start = start_dt.strftime("%-I:%M %p") 
+            time_str_start = start_dt.strftime("%-I:%M %p")
             time_str_end = end_dt.strftime("%-I:%M %p")
             formatted_time_range = f"{time_str_start} - {time_str_end}"
 
             # 2. Format Timezone (e.g., "America/New_York" -> "America/New York")
             if formatted_timezone_display:
-                formatted_timezone_display = formatted_timezone_display.replace("_", " ")
+                formatted_timezone_display = formatted_timezone_display.replace(
+                    "_", " "
+                )
         except Exception as e:
             logger.error(f"Error formatting dates for email: {e}")
             formatted_time_range = str(booking.schedule_instance.time)
-    
+
     context = {
         "user": recipient,
         "booking": booking,
@@ -383,22 +391,30 @@ def send_booking_confirmation_email(user, booking: Booking):
     if booking.enrollment_type == "Full Course":
         template_name = "emails/course_confirmation_user.html"
         subject_prefix = "Course Enrollment Confirmed:"
-        
+
         # --- NEW LOGIC: Fetch full course session list ---
         if booking.booking_group_id:
             try:
-                enrollment = CourseEnrollment.objects.get(booking_group_id=booking.booking_group_id)
-                context["enrollment"] = enrollment
-                
-                # Fetch all sessions to list specific dates
-                course_sessions = Booking.objects.filter(
+                enrollment = CourseEnrollment.objects.get(
                     booking_group_id=booking.booking_group_id
-                ).select_related('schedule_instance').order_by('course_session_number')
-                
+                )
+                context["enrollment"] = enrollment
+
+                # Fetch all sessions to list specific dates
+                course_sessions = (
+                    Booking.objects.filter(booking_group_id=booking.booking_group_id)
+                    .select_related("schedule_instance")
+                    .order_by("course_session_number")
+                )
+
                 context["course_sessions"] = course_sessions
-                logger.info(f"Attached {course_sessions.count()} session dates to email context.")
+                logger.info(
+                    f"Attached {course_sessions.count()} session dates to email context."
+                )
             except CourseEnrollment.DoesNotExist:
-                logger.warning(f"CourseEnrollment missing for booking_group_id {booking.booking_group_id}")
+                logger.warning(
+                    f"CourseEnrollment missing for booking_group_id {booking.booking_group_id}"
+                )
                 context["enrollment"] = None
                 context["course_sessions"] = []
     else:
@@ -443,6 +459,7 @@ def send_booking_confirmation_email(user, booking: Booking):
         f"--- send_booking_confirmation_email finished for Booking ID: {booking.id} ---"
     )
 
+
 def send_business_staff_invitation_email(invitation: BusinessStaff):
     """Sends an invitation email to a new potential staff member."""
     if not invitation or not invitation.invited_email:
@@ -471,107 +488,49 @@ def send_business_staff_invitation_email(invitation: BusinessStaff):
     )
 
 
-def send_bulk_templated_emails(email_data_list, delay_between_batches=1.0):
+def send_gift_card_email(gift_card):
     """
-    Send multiple templated emails with rate limiting.
+    Sends the gift card code/details to the recipient.
+    Used for both instant delivery and scheduled delivery tasks.
     """
-    from quickstart.tasks.email_tasks import send_bulk_emails_task
-
-    # Prepare email parameters for bulk sending
-    email_params_list = []
-
-    for email_data in email_data_list:
-        try:
-            # Add settings to context
-            template_context = email_data["context"].copy()
-            template_context["settings"] = settings
-
-            html_content = render_to_string(
-                email_data["template_name"], template_context
-            )
-
-            subject = email_data.get("subject") or "Notification from ClassEasily"
-
-            max_subject_length = getattr(settings, "EMAIL_RATE_LIMIT_SETTINGS", {}).get(
-                "MAX_SUBJECT_LENGTH", 1900
-            )
-            if len(subject) > max_subject_length:
-                subject = subject[:max_subject_length] + "..."
-
-            email_params = {
-                "to": email_data["recipient_list"],
-                "subject": subject,
-                "html": html_content,
-                "from": email_data.get("from_email") or settings.DEFAULT_FROM_EMAIL,
-            }
-
-            email_params_list.append(email_params)
-
-        except Exception as e:
-            logger.error(
-                f"Error preparing bulk email for template {email_data.get('template_name', 'unknown')}: {str(e)}"
-            )
-            continue
-
-    if email_params_list:
-        # Queue the bulk email task
-        task_result = send_bulk_emails_task.delay(
-            email_params_list, delay_between_emails=delay_between_batches
+    if not gift_card or not gift_card.recipient_email:
+        logger.warning(
+            "Attempted to send gift card email without valid card or recipient."
         )
-
-        logger.info(f"✅ Bulk email task queued for {len(email_params_list)} emails.")
-        return task_result
-    else:
-        logger.warning("No valid emails to send in bulk operation.")
-        return None
-
-
-def send_welcome_email(user):
-    """Sends the welcome email to a newly registered user."""
-    if not user or not user.email:
-        logger.warning("Attempted to send welcome email to invalid user.")
         return
 
-    logger.info(f"Preparing welcome email for user {user.email}")
-    context = {
-        "user": user,
-        "explore_url": f"{settings.FRONTEND_BASE_URL}/explore",
-        "recipient_email": user.email,
-    }
-
-    return send_templated_email(
-        recipient_list=[user.email],
-        template_name="emails/welcome_user.html",
-        context=context,
-        subject="Welcome to ClassEasily!",  # Explicit subject to avoid generation issues
+    logger.info(
+        f"Preparing gift card email for {gift_card.code} to {gift_card.recipient_email}"
     )
 
+    # Logic: if sender name is in recipient name, implied self-purchase
+    is_self = False
+    if gift_card.sender_name and gift_card.recipient_name:
+        if (
+            gift_card.sender_name.lower().strip()
+            in gift_card.recipient_name.lower().strip()
+        ):
+            is_self = True
 
-def test_email_rate_limiting():
-    """
-    Test function to verify email rate limiting is working.
-    """
-    test_emails = []
-    for i in range(5):
-        test_emails.append(
-            {
-                "recipient_list": ["test@example.com"],
-                "template_name": "emails/welcome_user.html",
-                "context": {
-                    "user": {"first_name": f"Test User {i}"},
-                    "explore_url": "https://example.com",
-                    "recipient_email": "test@example.com",
-                },
-                "subject": f"Test Email {i}",
-            }
-        )
+    context = {
+        "gift_card": gift_card,
+        "is_self": is_self,
+        "recipient_email": gift_card.recipient_email,
+    }
 
-    return send_bulk_templated_emails(test_emails, delay_between_batches=0.6)
+    send_templated_email(
+        recipient_list=[gift_card.recipient_email],
+        template_name="emails/gift_card_delivery.html",
+        context=context,
+        subject=f"You've received a ${gift_card.initial_amount} Gift Card!",
+    )
+
+    # Mark as sent
+    gift_card.email_sent = True
+    gift_card.save(update_fields=["email_sent"])
 
 
-def send_account_security_email(
-    user, change_type, new_email=None, subject=None
-): 
+def send_account_security_email(user, change_type, new_email=None, subject=None):
     """
     Sends a security notification after password or email change.
     """
@@ -579,7 +538,7 @@ def send_account_security_email(
         logger.warning("Attempted to send security email to invalid user.")
         return
 
-    recipient = user.email  
+    recipient = user.email
 
     logger.info(
         f"Preparing security email (type: {change_type}) for user {user.userId} to {recipient}"
@@ -621,7 +580,7 @@ def send_booking_cancellation_user_email(user, booking: Booking, refund_details:
     )
 
     explore_url = f"{settings.FRONTEND_BASE_URL}/explore"
-    
+
     context = {
         "user": user,
         "booking": booking,
@@ -629,35 +588,40 @@ def send_booking_cancellation_user_email(user, booking: Booking, refund_details:
         "explore_url": explore_url,
         "recipient_email": user.email,
         "related_data": related_data,
-        "upcoming_sessions": []
+        "upcoming_sessions": [],
     }
-    
+
     # Choose template and subject based on type
     if booking.enrollment_type == "Full Course":
         template_name = "emails/course_cancellation_user.html"
-        
+
         # Determine if it's a full drop or single session
         # If the CourseEnrollment is "dropped" or "cancelled", it's the whole thing
         # If just this booking is "cancelled", it's a single session
-        
+
         is_single_session_drop = False
         try:
             # Check if user has other active bookings in this group
             if booking.booking_group_id:
                 active_siblings = Booking.objects.filter(
-                    booking_group_id=booking.booking_group_id,
-                    status='confirmed'
+                    booking_group_id=booking.booking_group_id, status="confirmed"
                 ).count()
                 if active_siblings > 0:
                     is_single_session_drop = True
-                    subject_prefix = f"Session {booking.course_session_number} Cancelled:"
-                    
+                    subject_prefix = (
+                        f"Session {booking.course_session_number} Cancelled:"
+                    )
+
                     # Fetch upcoming sessions
-                    next_sessions = Booking.objects.filter(
-                        booking_group_id=booking.booking_group_id,
-                        status='confirmed',
-                        schedule_instance__date__gt=booking.schedule_instance.date
-                    ).select_related('schedule_instance').order_by('course_session_number')[:3]
+                    next_sessions = (
+                        Booking.objects.filter(
+                            booking_group_id=booking.booking_group_id,
+                            status="confirmed",
+                            schedule_instance__date__gt=booking.schedule_instance.date,
+                        )
+                        .select_related("schedule_instance")
+                        .order_by("course_session_number")[:3]
+                    )
                     context["upcoming_sessions"] = next_sessions
                 else:
                     subject_prefix = "Course Drop Confirmed:"
@@ -670,7 +634,9 @@ def send_booking_cancellation_user_email(user, booking: Booking, refund_details:
     else:
         template_name = "emails/booking_cancellation_user.html"
         subject_prefix = "Booking Cancelled:"
-        logger.info(f"Using Single Session Cancellation template for booking {booking.id}")
+        logger.info(
+            f"Using Single Session Cancellation template for booking {booking.id}"
+        )
 
     send_templated_email(
         recipient_list=[user.email],
@@ -720,24 +686,32 @@ def send_booking_cancelled_by_other_email(
         "explore_url": explore_url,
         "recipient_email": user.email,
         "related_data": related_data,
-        "upcoming_sessions": []
+        "upcoming_sessions": [],
     }
-    
+
     # --- NEW LOGIC: Fetch upcoming sessions if it's a course session ---
     if booking.enrollment_type == "Full Course" and booking.booking_group_id:
         try:
             # Check for active future sessions in the same course
-            upcoming_sessions = Booking.objects.filter(
-                booking_group_id=booking.booking_group_id,
-                status='confirmed',
-                schedule_instance__date__gt=booking.schedule_instance.date
-            ).select_related('schedule_instance').order_by('course_session_number')[:3]
-            
-            context['upcoming_sessions'] = upcoming_sessions
+            upcoming_sessions = (
+                Booking.objects.filter(
+                    booking_group_id=booking.booking_group_id,
+                    status="confirmed",
+                    schedule_instance__date__gt=booking.schedule_instance.date,
+                )
+                .select_related("schedule_instance")
+                .order_by("course_session_number")[:3]
+            )
+
+            context["upcoming_sessions"] = upcoming_sessions
             if upcoming_sessions.exists():
-                logger.info(f"Found {upcoming_sessions.count()} upcoming sessions to list in cancellation email.")
+                logger.info(
+                    f"Found {upcoming_sessions.count()} upcoming sessions to list in cancellation email."
+                )
         except Exception as e:
-            logger.warning(f"Failed to fetch upcoming sessions for cancellation email: {e}")
+            logger.warning(
+                f"Failed to fetch upcoming sessions for cancellation email: {e}"
+            )
 
     send_templated_email(
         recipient_list=[user.email],
@@ -774,9 +748,11 @@ def send_booking_reminder_email(user, booking: Booking):
         if class_identifier
         else "#"
     )
-    
+
     # Updated: Highlighting the specific booking
-    manage_bookings_url = f"{settings.FRONTEND_BASE_URL}/my-classes?tab=upcoming&highlight={booking.id}"
+    manage_bookings_url = (
+        f"{settings.FRONTEND_BASE_URL}/my-classes?tab=upcoming&highlight={booking.id}"
+    )
 
     # Calculate end time
     calculated_end_time = None
@@ -798,18 +774,20 @@ def send_booking_reminder_email(user, booking: Booking):
         "user": user,
         "booking": booking,
         "class_details_url": class_details_url,
-        "manage_bookings_url": manage_bookings_url, # Added this to context
+        "manage_bookings_url": manage_bookings_url,  # Added this to context
         "recipient_email": user.email,
         "related_data": related_data,
         "calculated_end_time": calculated_end_time,
-        "formatted_timezone": formatted_timezone, 
+        "formatted_timezone": formatted_timezone,
     }
-    
+
     # Pass course session context if available
     if booking.enrollment_type == "Full Course" and booking.course_session_number:
         context["is_course_session"] = True
         subject_prefix = f"Reminder: Session {booking.course_session_number} of"
-        logger.info(f"Formatting reminder for Course Session #{booking.course_session_number}")
+        logger.info(
+            f"Formatting reminder for Course Session #{booking.course_session_number}"
+        )
     else:
         context["is_course_session"] = False
         subject_prefix = "Reminder: Your Class"
@@ -822,6 +800,7 @@ def send_booking_reminder_email(user, booking: Booking):
         subject=f"{subject_prefix} {related_data.get('class_title', '[Class Title]')} is Soon!",
     )
     logger.info(f"Booking reminder email prepared/queued for booking {booking.id}")
+
 
 def send_admin_new_verification_request_email(
     admin_recipient_list: List[str], verification_request: VerificationRequest
@@ -905,7 +884,7 @@ def send_review_submission_confirmation_email(user: CustomUser, review: Reviews)
     context = {
         "user": user,
         "review": review,
-        "class_name": class_name, 
+        "class_name": class_name,
         "recipient_email": user.email,
     }
 
@@ -1275,6 +1254,7 @@ def send_performance_summary_email(
         subject=f"Your {period.title()} Performance Summary from ClassEasily",
     )
 
+
 def send_concierge_handover_email(user: CustomUser, claim_url: str):
     """
     Sends the account claim email to a user who was onboarded via Concierge services.
@@ -1297,7 +1277,8 @@ def send_concierge_handover_email(user: CustomUser, claim_url: str):
         context=context,
         subject="Your Business Account is Ready! - ClassEasily",
     )
-    
+
+
 def send_request_for_review_email(user: CustomUser, booking: Booking):
     """Sends a request for review 24 hours after a class is completed."""
     if not user or not user.email or not booking:
@@ -1318,8 +1299,10 @@ def send_request_for_review_email(user: CustomUser, booking: Booking):
 
     related_data = _get_booking_related_data(booking)
     # Updated: Link to completed tab and highlight the booking to review
-    review_url = f"{settings.FRONTEND_BASE_URL}/my-classes?tab=completed&highlight={booking.id}"
-    
+    review_url = (
+        f"{settings.FRONTEND_BASE_URL}/my-classes?tab=completed&highlight={booking.id}"
+    )
+
     context = {
         "user": user,
         "booking": booking,
@@ -1333,6 +1316,7 @@ def send_request_for_review_email(user: CustomUser, booking: Booking):
         context=context,
         subject=f"How was your '{related_data.get('class_title', 'class')}' experience?",
     )
+
 
 def send_favorited_class_new_dates_email(
     user: CustomUser, class_main: ClassesMain, new_schedule: Schedule
@@ -1418,7 +1402,9 @@ def send_booking_rescheduled_by_business_email(
         f"Preparing booking rescheduled email for booking {booking.id} to user {user.email}"
     )
 
-    manage_bookings_url = f"{settings.FRONTEND_BASE_URL}/my-classes?tab=upcoming&highlight={booking.id}"
+    manage_bookings_url = (
+        f"{settings.FRONTEND_BASE_URL}/my-classes?tab=upcoming&highlight={booking.id}"
+    )
 
     # Calculate End Time for the NEW instance
     new_end_time = None
@@ -1429,7 +1415,7 @@ def send_booking_rescheduled_by_business_email(
         new_end_time = end_dt.time()
     except Exception as e:
         logger.error(f"Error calculating new end time for reschedule email: {e}")
-        new_end_time = new_instance.time # Fallback to start time to prevent crash
+        new_end_time = new_instance.time  # Fallback to start time to prevent crash
 
     # NEW: Format timezone (Replace underscore with space)
     formatted_timezone = related_data.get("business_timezone", "UTC")

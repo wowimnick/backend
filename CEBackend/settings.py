@@ -17,7 +17,6 @@ from sentry_sdk.integrations.django import DjangoIntegration
 from sentry_sdk.integrations.celery import CeleryIntegration
 
 
-
 if os.name == "nt":  # This checks if the OS is Windows ('nt')
     GDAL_LIBRARY_PATH = r"C:\OSGeo4W\bin\gdal311.dll"
     GEOS_LIBRARY_PATH = r"C:\OSGeo4W\bin\geos_c.dll"
@@ -98,17 +97,19 @@ if IS_DEPLOYED_ENV:
     SECURE_SSL_REDIRECT = (
         os.environ.get("SECURE_SSL_REDIRECT", "False").lower() == "true"
     )
-    SECURE_REDIRECT_EXEMPT = [r"^health-check/$", r"^$"] 
+    SECURE_REDIRECT_EXEMPT = [r"^health-check/$", r"^$"]
     SECURE_HSTS_SECONDS = 31536000
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
 
+
 def traces_sampler(sampling_context):
     # Don't send health checks to Sentry
-    path = sampling_context.get('wsgi_environ', {}).get('PATH_INFO', '')
-    if path == '/' or path == '/health-check/':
+    path = sampling_context.get("wsgi_environ", {}).get("PATH_INFO", "")
+    if path == "/" or path == "/health-check/":
         return 0.0
     return 1.0
+
 
 if IS_DEPLOYED_ENV and os.environ.get("SENTRY_DSN"):
     sentry_sdk.init(
@@ -120,14 +121,12 @@ if IS_DEPLOYED_ENV and os.environ.get("SENTRY_DSN"):
         ],
         ignore_errors=[
             TemplateDoesNotExist,  # Ignore template errors
-            "django.security.DisallowedHost", # Ignore bots hitting with wrong IP/Host
+            "django.security.DisallowedHost",  # Ignore bots hitting with wrong IP/Host
         ],
         # Set to 1.0 to capture 100% of transactions for performance monitoring.
         # In high-traffic production, you might lower this to 0.1 or 0.2
         traces_sample_rate=1.0,
-        
         send_default_pii=True,
-        
         environment=os.environ.get("DJANGO_ENV"),
     )
 # --- API & Service Keys ---
@@ -316,7 +315,7 @@ CELERY_BEAT_SCHEDULE = {
     },
     "process-payouts-daily": {
         "task": "quickstart.tasks.payout_tasks.process_daily_payouts",
-        "schedule": crontab(hour=3, minute=30), # Staggered to 3:30 AM
+        "schedule": crontab(hour=3, minute=30),  # Staggered to 3:30 AM
     },
     "process-refunds-daily": {
         "task": "quickstart.tasks.payout_tasks.process_daily_refunds",
@@ -328,15 +327,21 @@ CELERY_BEAT_SCHEDULE = {
     },
     "send-hourly-booking-reminders": {
         "task": "quickstart.tasks.booking_tasks.send_upcoming_booking_reminders",
-        "schedule": crontab(minute=15, hour="*"),  # Run at :15 past every hour (avoids top of hour collision)
+        "schedule": crontab(
+            minute=15, hour="*"
+        ),  # Run at :15 past every hour (avoids top of hour collision)
     },
     # "notify-expiring-schedules-weekly": {
     #     "task": "quickstart.tasks.business_tasks.notify_businesses_of_expiring_schedules",
     #     "schedule": crontab(day_of_week="monday", hour=9, minute=0), # Mondays at 9 AM UTC
     # },
     "release-expired-spots-every-5-min": {
-        "task": "quickstart.tasks.booking_tasks.release_expired_spots", 
-        "schedule": crontab(minute="*/5"), # Run every 5 minutes
+        "task": "quickstart.tasks.booking_tasks.release_expired_spots",
+        "schedule": crontab(minute="*/5"),  # Run every 5 minutes
+    },
+    "process-scheduled-gift-cards-daily": {
+        "task": "quickstart.tasks.giftcard_tasks.process_scheduled_gift_cards",
+        "schedule": crontab(hour=8, minute=0),
     },
 }
 
@@ -507,15 +512,8 @@ LOGGING = {
             "handlers": ["console"],
             "level": "INFO",
         },
-        "quickstart": {
-            "handlers": ["console"],
-            "level": "INFO",
-            "propagate": False
-        },
-        "celery": {
-            "handlers": ["console"],
-            "level": "INFO"
-        },
+        "quickstart": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "celery": {"handlers": ["console"], "level": "INFO"},
         "": {
             "handlers": ["console"],
             "level": "INFO",

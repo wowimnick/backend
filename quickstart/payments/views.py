@@ -25,11 +25,11 @@ from quickstart.models import (
     PartnerTier,
     Payment,
     ScheduleInstance,
-    Schedule, 
+    Schedule,
     Contact,
     BusinessStaff,
-    GiftCard,           # NEW
-    GiftCardTransaction # NEW
+    GiftCard,  # NEW
+    GiftCardTransaction,  # NEW
 )
 from quickstart.serializers.public.public_booking_serializers import (
     BookingCreateSerializer,
@@ -38,6 +38,7 @@ from quickstart.serializers.public.public_booking_serializers import (
 from quickstart.utils.email_utils import (
     send_booking_confirmation_email,
     send_business_new_booking_email,
+    send_gift_card_email,
 )
 
 import logging
@@ -74,7 +75,7 @@ class CreatePaymentIntentView(APIView):
 
         # 1. Capture Gift Card Code
         gift_card_code = request.data.get("gift_card_code")
-        
+
         logger.info(f"[{request_id}] Raw request data: {request.data}")
 
         try:
@@ -119,10 +120,10 @@ class CreatePaymentIntentView(APIView):
                 # Retrieve validated instances from context to use them
                 instance = serializer.context.get("validated_instance")
                 option = instance.schedule.option
-                
+
                 # Determine booking_type based on Option configuration
                 booking_type = option.booking_type
-                
+
                 business = instance.schedule.option.classId.businessId
 
             logger.info(
@@ -154,38 +155,42 @@ class CreatePaymentIntentView(APIView):
 
             # --- FETCH ALL SIBLING SCHEDULES FOR COURSES ---
             all_instances = []
-            
+
             if booking_type == "Full Course":
                 # If Full Course, we must find ALL schedules that match this group
                 representative_schedule = instance.schedule
-                
+
                 sibling_schedules = Schedule.objects.filter(
                     option=representative_schedule.option,
                     start_date=representative_schedule.start_date,
                     end_date=representative_schedule.end_date,
                     time=representative_schedule.time,
-                    price=representative_schedule.price
+                    price=representative_schedule.price,
                 )
-                
+
                 # Fetch ALL future instances for ALL these schedules
-                all_instances = list(ScheduleInstance.objects.filter(
-                    schedule__in=sibling_schedules,
-                    status='scheduled',
-                    date__gte=timezone.now().date()
-                ).order_by('date'))
-                
+                all_instances = list(
+                    ScheduleInstance.objects.filter(
+                        schedule__in=sibling_schedules,
+                        status="scheduled",
+                        date__gte=timezone.now().date(),
+                    ).order_by("date")
+                )
+
                 if not all_instances:
                     return Response(
-                         {"error": "No upcoming sessions found for this course."},
-                         status=status.HTTP_400_BAD_REQUEST
+                        {"error": "No upcoming sessions found for this course."},
+                        status=status.HTTP_400_BAD_REQUEST,
                     )
 
                 # RE-VALIDATE CAPACITY for siblings
                 for group_inst in all_instances:
                     if not group_inst.can_accommodate(participants):
-                         return Response(
-                            {"error": f"Session on {group_inst.date} does not have enough capacity."},
-                            status=status.HTTP_400_BAD_REQUEST
+                        return Response(
+                            {
+                                "error": f"Session on {group_inst.date} does not have enough capacity."
+                            },
+                            status=status.HTTP_400_BAD_REQUEST,
                         )
             else:
                 # Single Session - just use the validated instance
@@ -250,17 +255,16 @@ class CreatePaymentIntentView(APIView):
                     with transaction.atomic():
                         # Lock the GC row to prevent race conditions
                         gift_card_obj = GiftCard.objects.select_for_update().get(
-                            code__iexact=gift_card_code, 
-                            is_active=True
+                            code__iexact=gift_card_code, is_active=True
                         )
-                        
+
                         if gift_card_obj.current_balance > 0:
                             if gift_card_obj.current_balance >= grand_total:
                                 amount_covered_by_gc = grand_total
                             else:
                                 amount_covered_by_gc = gift_card_obj.current_balance
                 except GiftCard.DoesNotExist:
-                     return Response({"error": "Invalid Gift Card Code"}, status=400)
+                    return Response({"error": "Invalid Gift Card Code"}, status=400)
 
             # Final amount Stripe needs to charge
             amount_remaining = grand_total - amount_covered_by_gc
@@ -269,7 +273,9 @@ class CreatePaymentIntentView(APIView):
             # --- Check for Stripe Minimum (only if price > 0) ---
             if 0 < total_amount_for_stripe_cents < 50:
                 return Response(
-                    {"error": "The remaining amount is too low to process. Please add more items or pay fully with card/gift card."},
+                    {
+                        "error": "The remaining amount is too low to process. Please add more items or pay fully with card/gift card."
+                    },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
@@ -277,18 +283,22 @@ class CreatePaymentIntentView(APIView):
             #  FREE / FULLY COVERED BY GC FLOW
             # ==========================================
             if total_amount_for_stripe_cents == 0:
-                logger.info(f"[{request_id}] Processing PAID booking (Total via Stripe: $0.00). Fully covered or Free.")
+                logger.info(
+                    f"[{request_id}] Processing PAID booking (Total via Stripe: $0.00). Fully covered or Free."
+                )
 
                 first_booking = None
                 booking_group_id = None
-                
+
                 try:
                     with transaction.atomic():
                         # --- 2a. DEDUCT GIFT CARD BALANCE IMMEDIATELY ---
                         if amount_covered_by_gc > 0 and gift_card_obj:
                             gift_card_obj.current_balance -= amount_covered_by_gc
                             gift_card_obj.save()
-                            logger.info(f"[{request_id}] Deducted ${amount_covered_by_gc} from GC {gift_card_obj.code} immediately.")
+                            logger.info(
+                                f"[{request_id}] Deducted ${amount_covered_by_gc} from GC {gift_card_obj.code} immediately."
+                            )
 
                         # --- Create Bookings ---
                         created_bookings = []
@@ -302,12 +312,14 @@ class CreatePaymentIntentView(APIView):
                                 total_sessions=len(all_instances),
                                 participants=participants,
                                 status="active",  # Directly active
-                                total_amount_paid=grand_total, # Record full value
+                                total_amount_paid=grand_total,  # Record full value
                                 cancellation_policy=option.cancellationPolicy,
                                 cancellation_custom_hours=option.cancellationCustomHours,
                                 cancellation_refund_percentage=option.cancellationRefundPercentage,
                             )
-                            logger.info(f"[{request_id}] Created ACTIVE CourseEnrollment: {enrollment.id}")
+                            logger.info(
+                                f"[{request_id}] Created ACTIVE CourseEnrollment: {enrollment.id}"
+                            )
 
                             bookings_to_create = []
                             generated_refs = set()
@@ -323,8 +335,10 @@ class CreatePaymentIntentView(APIView):
                                     participants=participants,
                                     participant_details=participant_details,
                                     notes=notes,
-                                    amount_paid=Decimal("0.00"), # Split happens later in reporting, or we can split now
-                                    status="confirmed", # Directly confirmed
+                                    amount_paid=Decimal(
+                                        "0.00"
+                                    ),  # Split happens later in reporting, or we can split now
+                                    status="confirmed",  # Directly confirmed
                                     payment_status="paid",
                                     cancellation_policy=enrollment.cancellation_policy,
                                     cancellation_custom_hours=enrollment.cancellation_custom_hours,
@@ -338,14 +352,20 @@ class CreatePaymentIntentView(APIView):
                                         break
                                 bookings_to_create.append(b)
 
-                            created_bookings = Booking.objects.bulk_create(bookings_to_create)
+                            created_bookings = Booking.objects.bulk_create(
+                                bookings_to_create
+                            )
                             first_booking = created_bookings[0]
                             if not first_booking.user_facing_reference:
-                                first_booking.user_facing_reference = bookings_to_create[0].user_facing_reference
-                            
-                            logger.info(f"[{request_id}] Bulk-created {len(created_bookings)} CONFIRMED Bookings.")
+                                first_booking.user_facing_reference = (
+                                    bookings_to_create[0].user_facing_reference
+                                )
 
-                        else: # Single Session
+                            logger.info(
+                                f"[{request_id}] Bulk-created {len(created_bookings)} CONFIRMED Bookings."
+                            )
+
+                        else:  # Single Session
                             first_booking = Booking.objects.create(
                                 schedule_instance=instance,
                                 user=request.user if not is_guest else None,
@@ -354,50 +374,65 @@ class CreatePaymentIntentView(APIView):
                                 participant_details=participant_details,
                                 notes=notes,
                                 amount_paid=grand_total,
-                                status="confirmed", # Directly confirmed
+                                status="confirmed",  # Directly confirmed
                                 payment_status="paid",
                                 enrollment_type="Single Session",
                                 cancellation_policy=option.cancellationPolicy,
                                 cancellation_refund_percentage=option.cancellationRefundPercentage,
                                 cancellation_custom_hours=option.cancellationCustomHours,
                             )
-                            first_booking.user_facing_reference = first_booking._generate_user_facing_reference()
-                            first_booking.save(update_fields=['user_facing_reference'])
+                            first_booking.user_facing_reference = (
+                                first_booking._generate_user_facing_reference()
+                            )
+                            first_booking.save(update_fields=["user_facing_reference"])
                             created_bookings = [first_booking]
-                            logger.info(f"[{request_id}] Created CONFIRMED single Booking: {first_booking.id}")
+                            logger.info(
+                                f"[{request_id}] Created CONFIRMED single Booking: {first_booking.id}"
+                            )
 
                         if is_guest and first_booking:
                             first_booking.cancellation_token = uuid.uuid4()
-                            first_booking.save(update_fields=['cancellation_token'])
+                            first_booking.save(update_fields=["cancellation_token"])
 
                         # --- HANDLE COUPON REDEMPTION (FREE FLOW) ---
                         if discount_to_apply:
                             discount_to_apply.redeem()
-                            
+
                             if booking_type == "Full Course":
                                 booking_count = len(created_bookings)
                                 if booking_count > 0:
-                                    share_discount = (calculated_discount_amount / booking_count).quantize(Decimal("0.01"))
-                                    total_allocated_discount = share_discount * booking_count
-                                    remainder_discount = calculated_discount_amount - total_allocated_discount
-                                    
+                                    share_discount = (
+                                        calculated_discount_amount / booking_count
+                                    ).quantize(Decimal("0.01"))
+                                    total_allocated_discount = (
+                                        share_discount * booking_count
+                                    )
+                                    remainder_discount = (
+                                        calculated_discount_amount
+                                        - total_allocated_discount
+                                    )
+
                                     applied_discounts = []
                                     for index, booking in enumerate(created_bookings):
                                         amount = share_discount
                                         if index == 0:
                                             amount += remainder_discount
-                                        
-                                        applied_discounts.append(AppliedDiscount(
-                                            booking=booking,
-                                            discount=discount_to_apply,
-                                            amount_saved=amount
-                                        ))
-                                    AppliedDiscount.objects.bulk_create(applied_discounts)
+
+                                        applied_discounts.append(
+                                            AppliedDiscount(
+                                                booking=booking,
+                                                discount=discount_to_apply,
+                                                amount_saved=amount,
+                                            )
+                                        )
+                                    AppliedDiscount.objects.bulk_create(
+                                        applied_discounts
+                                    )
                             else:
                                 AppliedDiscount.objects.create(
                                     booking=first_booking,
                                     discount=discount_to_apply,
-                                    amount_saved=calculated_discount_amount
+                                    amount_saved=calculated_discount_amount,
                                 )
 
                         # --- LOG GIFT CARD TRANSACTION ---
@@ -407,24 +442,30 @@ class CreatePaymentIntentView(APIView):
                                 booking=first_booking,
                                 amount=-amount_covered_by_gc,
                                 balance_after=gift_card_obj.current_balance,
-                                transaction_type='redemption'
+                                transaction_type="redemption",
                             )
 
                         # Create 'Succeeded' Payment Record (Internal)
                         Payment.objects.create(
                             booking=first_booking,
-                            stripe_payment_intent_id=f"internal_{uuid.uuid4()}", 
+                            stripe_payment_intent_id=f"internal_{uuid.uuid4()}",
                             amount=grand_total,
                             tax_amount=tax_amount,
                             currency="CAD",
                             status="succeeded",
                             metadata={
-                                "is_free": (grand_total == 0), 
+                                "is_free": (grand_total == 0),
                                 "paid_via_giftcard": (amount_covered_by_gc > 0),
-                                "gift_card_code": gift_card_code if gift_card_code else None,
-                                "notes": notes, 
-                                "applied_discount_id": str(discount_to_apply.id) if discount_to_apply else None
-                            }
+                                "gift_card_code": (
+                                    gift_card_code if gift_card_code else None
+                                ),
+                                "notes": notes,
+                                "applied_discount_id": (
+                                    str(discount_to_apply.id)
+                                    if discount_to_apply
+                                    else None
+                                ),
+                            },
                         )
                         logger.info(f"[{request_id}] Created internal Payment record.")
 
@@ -435,8 +476,10 @@ class CreatePaymentIntentView(APIView):
                     if recipient_user:
                         send_booking_confirmation_email(recipient_user, first_booking)
                     elif recipient_contact:
-                         send_booking_confirmation_email(recipient_contact, first_booking)
-                    
+                        send_booking_confirmation_email(
+                            recipient_contact, first_booking
+                        )
+
                     if business.newBookingNotification:
                         recipients = {business.owner}
                         staff_to_notify = BusinessStaff.objects.filter(
@@ -444,10 +487,11 @@ class CreatePaymentIntentView(APIView):
                             status="accepted",
                             role__permissions__codename="receive_booking_notifications",
                         ).select_related("user")
-                        
+
                         for staff in staff_to_notify:
-                            if staff.user: recipients.add(staff.user)
-                        
+                            if staff.user:
+                                recipients.add(staff.user)
+
                         for r in recipients:
                             if r and r.email:
                                 send_business_new_booking_email(r, first_booking)
@@ -455,15 +499,20 @@ class CreatePaymentIntentView(APIView):
                     response_data = {
                         "booking_id": first_booking.id,
                         "user_facing_reference": first_booking.user_facing_reference,
-                        "booking_group_id": str(booking_group_id) if booking_group_id else None,
+                        "booking_group_id": (
+                            str(booking_group_id) if booking_group_id else None
+                        ),
                         "participant_details": participant_details,
                         "status": "confirmed",
-                        "message": "Booking confirmed successfully."
+                        "message": "Booking confirmed successfully.",
                     }
                     return Response(response_data)
-                
+
                 except Exception as e:
-                    logger.error(f"[{request_id}] Error processing free/GC booking: {str(e)}", exc_info=True)
+                    logger.error(
+                        f"[{request_id}] Error processing free/GC booking: {str(e)}",
+                        exc_info=True,
+                    )
                     return Response(
                         {"error": "An error occurred while processing the booking."},
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -543,7 +592,7 @@ class CreatePaymentIntentView(APIView):
 
                 pending_payment = Payment.objects.create(
                     booking=first_booking,
-                    stripe_payment_intent_id=f"temp_{uuid.uuid4()}", 
+                    stripe_payment_intent_id=f"temp_{uuid.uuid4()}",
                     amount=grand_total,
                     tax_amount=tax_amount,
                     currency=currency_code.upper(),
@@ -570,7 +619,7 @@ class CreatePaymentIntentView(APIView):
                 "booking_group_id": str(booking_group_id) if booking_group_id else None,
                 # GIFT CARD METADATA FOR WEBHOOK
                 "gift_card_code": gift_card_code if gift_card_code else "",
-                "gift_card_amount_to_deduct": str(amount_covered_by_gc)
+                "gift_card_amount_to_deduct": str(amount_covered_by_gc),
             }
             if is_guest:
                 metadata["guest_contact_id"] = str(guest_contact.id)
@@ -642,25 +691,28 @@ class CreatePaymentIntentView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+
 class UpdatePaymentIntentView(APIView):
-    permission_classes = [] 
+    permission_classes = []
 
     def post(self, request):
         payment_intent_id = request.data.get("payment_intent_id")
-        
+
         if not payment_intent_id:
-            return Response({"error": "Payment Intent ID is required"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "Payment Intent ID is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         try:
             with transaction.atomic():
                 # 1. Get the pending booking
-                payment = Payment.objects.select_related('booking', 'booking__contact').get(
-                    stripe_payment_intent_id=payment_intent_id,
-                    status='pending'
-                )
+                payment = Payment.objects.select_related(
+                    "booking", "booking__contact"
+                ).get(stripe_payment_intent_id=payment_intent_id, status="pending")
                 booking = payment.booking
                 business = booking.schedule_instance.schedule.option.classId.businessId
-                
+
                 new_email = request.data.get("guest_email")
                 new_name = request.data.get("guest_full_name")
                 new_phone = request.data.get("guest_phone")
@@ -671,35 +723,46 @@ class UpdatePaymentIntentView(APIView):
                 updated_contact = booking.contact
                 if booking.contact and new_email:
                     # Check if the "Real" email already exists as a contact for this business
-                    existing_contact = Contact.objects.filter(
-                        business=business, 
-                        email__iexact=new_email
-                    ).exclude(id=booking.contact.id).first()
+                    existing_contact = (
+                        Contact.objects.filter(
+                            business=business, email__iexact=new_email
+                        )
+                        .exclude(id=booking.contact.id)
+                        .first()
+                    )
 
                     if existing_contact:
                         # CASE A: Contact exists. Switch booking to point to the EXISTING contact.
                         old_temp_contact = booking.contact
                         updated_contact = existing_contact
-                        
+
                         # Update the existing contact with latest name/phone
                         if new_name:
-                            parts = new_name.split(' ', 1)
+                            parts = new_name.split(" ", 1)
                             existing_contact.first_name = parts[0]
-                            existing_contact.last_name = parts[1] if len(parts) > 1 else ''
+                            existing_contact.last_name = (
+                                parts[1] if len(parts) > 1 else ""
+                            )
                         if new_phone:
                             existing_contact.phone_number = new_phone
                         existing_contact.save()
-                        
+
                         # Clean up the placeholder contact if it was just a temp one
-                        if "pending@example" in old_temp_contact.email or "pending" in old_temp_contact.email:
+                        if (
+                            "pending@example" in old_temp_contact.email
+                            or "pending" in old_temp_contact.email
+                        ):
                             old_temp_contact.delete()
                     else:
                         # CASE B: Contact does not exist. Update the current placeholder contact.
-                        if new_email: booking.contact.email = new_email
-                        if new_name: 
-                            parts = new_name.split(' ', 1)
+                        if new_email:
+                            booking.contact.email = new_email
+                        if new_name:
+                            parts = new_name.split(" ", 1)
                             booking.contact.first_name = parts[0]
-                            booking.contact.last_name = parts[1] if len(parts) > 1 else ''
+                            booking.contact.last_name = (
+                                parts[1] if len(parts) > 1 else ""
+                            )
                         if new_phone:
                             booking.contact.phone_number = new_phone
                         booking.contact.save()
@@ -709,7 +772,9 @@ class UpdatePaymentIntentView(APIView):
                 bookings_to_update = []
                 if booking.booking_group_id:
                     # If this is a course, we must update ALL bookings in the group
-                    bookings_to_update = Booking.objects.filter(booking_group_id=booking.booking_group_id)
+                    bookings_to_update = Booking.objects.filter(
+                        booking_group_id=booking.booking_group_id
+                    )
                 else:
                     # Single session
                     bookings_to_update = [booking]
@@ -717,19 +782,21 @@ class UpdatePaymentIntentView(APIView):
                 # Prepare common update fields
                 update_fields = {}
                 if new_notes is not None:
-                    update_fields['notes'] = new_notes
+                    update_fields["notes"] = new_notes
                 if new_participants is not None:
-                    update_fields['participant_details'] = new_participants
-                
+                    update_fields["participant_details"] = new_participants
+
                 # If contact changed (Case A), we must link all bookings to the new contact
                 if updated_contact and updated_contact.id != booking.contact_id:
-                     update_fields['contact'] = updated_contact
+                    update_fields["contact"] = updated_contact
 
                 # Perform the update
                 if update_fields:
                     if booking.booking_group_id:
                         # For QuerySet
-                        Booking.objects.filter(booking_group_id=booking.booking_group_id).update(**update_fields)
+                        Booking.objects.filter(
+                            booking_group_id=booking.booking_group_id
+                        ).update(**update_fields)
                     else:
                         # For single instance
                         for field, value in update_fields.items():
@@ -744,17 +811,26 @@ class UpdatePaymentIntentView(APIView):
                         "guest_full_name": new_name,
                         "guest_phone": new_phone,
                         "notes": new_notes,
-                    }
+                    },
                 )
 
-            return Response({"status": "updated", "booking_id": booking.id}, status=status.HTTP_200_OK)
+            return Response(
+                {"status": "updated", "booking_id": booking.id},
+                status=status.HTTP_200_OK,
+            )
 
         except Payment.DoesNotExist:
-            return Response({"error": "Payment intent not found or not pending"}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"error": "Payment intent not found or not pending"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
         except Exception as e:
             logger.error(f"Error updating payment intent: {e}", exc_info=True)
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
+            return Response(
+                {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
 class ProcessBookingWebhook(APIView):
     authentication_classes = []
     permission_classes = []
@@ -813,33 +889,53 @@ class ProcessBookingWebhook(APIView):
         """Creates the Gift Card after successful payment (Step E)"""
         meta = payment_intent.metadata
         amount = Decimal(payment_intent.amount) / 100
-        
+
         # Idempotency check
         if GiftCard.objects.filter(stripe_payment_intent_id=payment_intent.id).exists():
             return
 
         with transaction.atomic():
+            # Parse scheduled status
+            is_scheduled_str = meta.get("is_scheduled", "False")
+            is_scheduled = is_scheduled_str == "True"
+            scheduled_date = (
+                meta.get("scheduled_date") if meta.get("scheduled_date") else None
+            )
+
+            # Create Gift Card
             gc = GiftCard.objects.create(
                 initial_amount=amount,
                 current_balance=amount,
-                recipient_email=meta.get('recipient_email'),
-                recipient_name=meta.get('recipient_name'),
-                sender_name=meta.get('sender_name'),
-                message=meta.get('message', ''),
-                is_scheduled=(meta.get('is_scheduled') == 'True'),
-                scheduled_date=meta.get('scheduled_date') if meta.get('scheduled_date') else None,
-                stripe_payment_intent_id=payment_intent.id
+                recipient_email=meta.get("recipient_email"),
+                recipient_name=meta.get("recipient_name"),
+                sender_name=meta.get("sender_name"),
+                message=meta.get("message", ""),
+                # NEW: Save the design URL
+                design_url=meta.get("design_url"),
+                is_scheduled=is_scheduled,
+                scheduled_date=scheduled_date,
+                stripe_payment_intent_id=payment_intent.id,
             )
-            
+
             # Initial Load Transaction
             GiftCardTransaction.objects.create(
                 gift_card=gc,
                 amount=amount,
                 balance_after=amount,
-                transaction_type='initial_load'
+                transaction_type="initial_load",
             )
-            
-            logger.info(f"Created Gift Card {gc.code} for ${amount} via PI {payment_intent.id}")
+
+            logger.info(
+                f"Created Gift Card {gc.code} for ${amount} via PI {payment_intent.id}"
+            )
+
+            if not is_scheduled:
+                send_gift_card_email(gc)
+                logger.info(f"Instant delivery email queued for Gift Card {gc.code}")
+            else:
+                logger.info(
+                    f"Gift Card {gc.code} scheduled for {scheduled_date}. Email deferred."
+                )
 
     def post(self, request):
         webhook_id = str(uuid.uuid4())[:8]
@@ -857,14 +953,16 @@ class ProcessBookingWebhook(APIView):
             logger.info(
                 f"[{webhook_id}] Processing payment_intent.succeeded for PI: {payment_intent.id}"
             )
-            
+
             # 1. CHECK FOR GIFT CARD PURCHASE
             if payment_intent.metadata.get("type") == "gift_card_purchase":
                 try:
                     self.handle_gift_card_creation(payment_intent)
                     return Response(status=status.HTTP_200_OK)
                 except Exception as e:
-                    logger.error(f"[{webhook_id}] Error creating Gift Card: {e}", exc_info=True)
+                    logger.error(
+                        f"[{webhook_id}] Error creating Gift Card: {e}", exc_info=True
+                    )
                     return Response(status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
             # 2. STANDARD BOOKING FLOW
@@ -960,8 +1058,12 @@ class ProcessBookingWebhook(APIView):
                 # Get booking group ID from metadata
                 booking_group_id = payment_intent.metadata.get("booking_group_id")
                 if not booking_group_id:
-                    logger.error(f"[{webhook_id}] No booking_group_id in payment intent metadata")
-                    raise DRFValidationError("Missing booking_group_id in payment metadata")
+                    logger.error(
+                        f"[{webhook_id}] No booking_group_id in payment intent metadata"
+                    )
+                    raise DRFValidationError(
+                        "Missing booking_group_id in payment metadata"
+                    )
 
                 # Get enrollment
                 try:
@@ -969,12 +1071,18 @@ class ProcessBookingWebhook(APIView):
                         booking_group_id=booking_group_id
                     )
                 except CourseEnrollment.DoesNotExist:
-                    logger.error(f"[{webhook_id}] CourseEnrollment not found for booking_group_id {booking_group_id}")
-                    raise DRFValidationError(f"Course enrollment not found for booking group {booking_group_id}")
+                    logger.error(
+                        f"[{webhook_id}] CourseEnrollment not found for booking_group_id {booking_group_id}"
+                    )
+                    raise DRFValidationError(
+                        f"Course enrollment not found for booking group {booking_group_id}"
+                    )
 
                 # Update enrollment status
                 enrollment.status = "active"
-                enrollment.total_amount_paid = Decimal(str(payment_intent.amount_received)) / 100
+                enrollment.total_amount_paid = (
+                    Decimal(str(payment_intent.amount_received)) / 100
+                )
                 enrollment.save(update_fields=["status", "total_amount_paid"])
 
                 # Get all bookings for this course
@@ -988,10 +1096,12 @@ class ProcessBookingWebhook(APIView):
                     raise DRFValidationError(f"No bookings found for course enrollment")
 
                 # --- 1/N Calculation Logic ---
-                
+
                 # 1. Retrieve Financials from Metadata (calculated in CreatePaymentIntentView)
                 metadata = payment_intent.metadata
-                subtotal_after_discount = Decimal(metadata.get("subtotal_after_discount", "0.00"))
+                subtotal_after_discount = Decimal(
+                    metadata.get("subtotal_after_discount", "0.00")
+                )
                 total_tax = Decimal(metadata.get("tax_amount", "0.00"))
                 grand_total = Decimal(payment_intent.amount_received) / 100
 
@@ -1007,19 +1117,27 @@ class ProcessBookingWebhook(APIView):
                     )
 
                 service_fee_rate = fee_percentage / Decimal("100.0")
-                platform_fee_amount = (subtotal_after_discount * service_fee_rate).quantize(Decimal("0.01"))
-                platform_fee_tax = (platform_fee_amount * HST_RATE).quantize(Decimal("0.01"))
-                
+                platform_fee_amount = (
+                    subtotal_after_discount * service_fee_rate
+                ).quantize(Decimal("0.01"))
+                platform_fee_tax = (platform_fee_amount * HST_RATE).quantize(
+                    Decimal("0.01")
+                )
+
                 # This is the total bucket of money the business is owed for the whole course
                 business_payout_tax = total_tax - platform_fee_tax
                 business_net_revenue = subtotal_after_discount - platform_fee_amount
-                total_net_payout_to_business = business_net_revenue + business_payout_tax
+                total_net_payout_to_business = (
+                    business_net_revenue + business_payout_tax
+                )
 
                 # 3. Calculate Share Per Booking
                 booking_count = len(bookings)
                 if booking_count > 0:
-                    share_per_booking = (total_net_payout_to_business / booking_count).quantize(Decimal("0.01"))
-                    
+                    share_per_booking = (
+                        total_net_payout_to_business / booking_count
+                    ).quantize(Decimal("0.01"))
+
                     # Handle rounding remainders (e.g. 100 / 3 = 33.33, 33.33, 33.33 -> Remainder 0.01)
                     total_allocated = share_per_booking * booking_count
                     remainder = total_net_payout_to_business - total_allocated
@@ -1029,18 +1147,20 @@ class ProcessBookingWebhook(APIView):
 
                 # 4. Update Bookings
                 generated_refs = set()
-                
+
                 # Calculate session price for display (customer facing amount)
-                session_price = (enrollment.total_amount_paid / booking_count).quantize(Decimal("0.01"))
+                session_price = (enrollment.total_amount_paid / booking_count).quantize(
+                    Decimal("0.01")
+                )
 
                 for index, booking in enumerate(bookings):
                     booking.status = "confirmed"
                     booking.payment_status = "paid"
                     booking.amount_paid = session_price
-                    
+
                     # Assign the calculated payout share
                     booking.allocated_net_payout = share_per_booking
-                    
+
                     # Add the penny remainder to the first booking
                     if index == 0:
                         booking.allocated_net_payout += remainder
@@ -1071,37 +1191,49 @@ class ProcessBookingWebhook(APIView):
 
                 if applied_discount_id:
                     try:
-                        discount = Discount.objects.select_for_update().get(pk=applied_discount_id)
+                        discount = Discount.objects.select_for_update().get(
+                            pk=applied_discount_id
+                        )
                         discount.redeem()  # Increments usage_count atomically
 
                         # Distribute the applied discount amount across bookings for record-keeping
                         if booking_count > 0:
-                            share_discount = (total_discount_amount / booking_count).quantize(Decimal("0.01"))
+                            share_discount = (
+                                total_discount_amount / booking_count
+                            ).quantize(Decimal("0.01"))
                             total_allocated_discount = share_discount * booking_count
-                            remainder_discount = total_discount_amount - total_allocated_discount
-                            
+                            remainder_discount = (
+                                total_discount_amount - total_allocated_discount
+                            )
+
                             applied_discounts = []
                             for index, booking in enumerate(bookings):
                                 amount = share_discount
                                 if index == 0:
                                     amount += remainder_discount
-                                
-                                applied_discounts.append(AppliedDiscount(
-                                    booking=booking,
-                                    discount=discount,
-                                    amount_saved=amount
-                                ))
-                            
+
+                                applied_discounts.append(
+                                    AppliedDiscount(
+                                        booking=booking,
+                                        discount=discount,
+                                        amount_saved=amount,
+                                    )
+                                )
+
                             AppliedDiscount.objects.bulk_create(applied_discounts)
-                            logger.info(f"[{webhook_id}] Redeemed discount {discount.code} for course (Group: {booking_group_id}).")
+                            logger.info(
+                                f"[{webhook_id}] Redeemed discount {discount.code} for course (Group: {booking_group_id})."
+                            )
 
                     except Discount.DoesNotExist:
-                        logger.warning(f"[{webhook_id}] Discount ID {applied_discount_id} found in metadata but not in DB.")
+                        logger.warning(
+                            f"[{webhook_id}] Discount ID {applied_discount_id} found in metadata but not in DB."
+                        )
 
                 # --- Handle Gift Card Deduction (Step D) ---
                 gc_code = metadata.get("gift_card_code")
                 gc_amount_str = metadata.get("gift_card_amount_to_deduct")
-                
+
                 if gc_code and gc_amount_str:
                     try:
                         gc_amount = Decimal(gc_amount_str)
@@ -1110,19 +1242,28 @@ class ProcessBookingWebhook(APIView):
                             if gc.current_balance >= gc_amount:
                                 gc.current_balance -= gc_amount
                                 gc.save()
-                                
+
                                 GiftCardTransaction.objects.create(
                                     gift_card=gc,
-                                    booking=bookings[0], # Associate with first booking of the course
+                                    booking=bookings[
+                                        0
+                                    ],  # Associate with first booking of the course
                                     amount=-gc_amount,
                                     balance_after=gc.current_balance,
-                                    transaction_type='redemption'
+                                    transaction_type="redemption",
                                 )
-                                logger.info(f"[{webhook_id}] Deducted ${gc_amount} from GC {gc_code} for Course.")
+                                logger.info(
+                                    f"[{webhook_id}] Deducted ${gc_amount} from GC {gc_code} for Course."
+                                )
                             else:
-                                logger.critical(f"[{webhook_id}] Insufficient funds in GC {gc_code} for committed transaction. Manual review required.")
+                                logger.critical(
+                                    f"[{webhook_id}] Insufficient funds in GC {gc_code} for committed transaction. Manual review required."
+                                )
                     except Exception as e:
-                        logger.error(f"[{webhook_id}] Failed to process GC deduction: {e}", exc_info=True)
+                        logger.error(
+                            f"[{webhook_id}] Failed to process GC deduction: {e}",
+                            exc_info=True,
+                        )
 
                 # --- Payment Record Update (For Bookkeeping) ---
                 try:
@@ -1137,10 +1278,12 @@ class ProcessBookingWebhook(APIView):
                 payment_record.tax_amount = total_tax
                 payment_record.platform_fee_amount = platform_fee_amount
                 payment_record.platform_fee_tax = platform_fee_tax
-                payment_record.net_payout_amount = total_net_payout_to_business # Total for the whole course
+                payment_record.net_payout_amount = (
+                    total_net_payout_to_business  # Total for the whole course
+                )
                 payment_record.metadata = {"original_stripe_metadata": dict(metadata)}
                 payment_record.stripe_charge_id = payment_intent.latest_charge
-                
+
                 # Stripe Charge Details
                 charge_details = (
                     stripe.Charge.retrieve(payment_intent.latest_charge)
@@ -1150,8 +1293,12 @@ class ProcessBookingWebhook(APIView):
                 if charge_details:
                     payment_record.receipt_url = charge_details.receipt_url
                     if charge_details.payment_method_details.card:
-                        payment_record.card_brand = charge_details.payment_method_details.card.brand
-                        payment_record.card_last4 = charge_details.payment_method_details.card.last4
+                        payment_record.card_brand = (
+                            charge_details.payment_method_details.card.brand
+                        )
+                        payment_record.card_last4 = (
+                            charge_details.payment_method_details.card.last4
+                        )
 
                 payment_record.save()
 
@@ -1174,25 +1321,33 @@ class ProcessBookingWebhook(APIView):
                     ).select_related("user")
 
                     for staff in staff_to_notify:
-                        if staff.user: recipients.add(staff.user)
+                        if staff.user:
+                            recipients.add(staff.user)
 
                     for recipient in recipients:
                         if recipient and recipient.email:
                             send_business_new_booking_email(recipient, first_booking)
 
-                logger.info(f"[{webhook_id}] 1/N Payout processed. Total Net: {total_net_payout_to_business}, Per Booking: {share_per_booking}")
+                logger.info(
+                    f"[{webhook_id}] 1/N Payout processed. Total Net: {total_net_payout_to_business}, Per Booking: {share_per_booking}"
+                )
                 return {"message": "Course payment processed successfully"}
 
         except Exception as e:
-            logger.error(f"[{webhook_id}] Error processing course payment success: {e}", exc_info=True)
+            logger.error(
+                f"[{webhook_id}] Error processing course payment success: {e}",
+                exc_info=True,
+            )
             raise
 
     def handle_successful_payment(self, payment_intent, webhook_id):
         # Check if we have ANY record for this Stripe ID that isn't 'pending'.
         # This catches 'refunded', 'failed', and 'succeeded' statuses safely.
-        existing_payment = Payment.objects.filter(
-            stripe_payment_intent_id=payment_intent.id
-        ).exclude(status="pending").first()
+        existing_payment = (
+            Payment.objects.filter(stripe_payment_intent_id=payment_intent.id)
+            .exclude(status="pending")
+            .first()
+        )
 
         if existing_payment:
             logger.warning(
@@ -1213,30 +1368,32 @@ class ProcessBookingWebhook(APIView):
 
         # 3. Process Single Session Booking
         with transaction.atomic():
-            # Robust Lookup: Try to find the payment record. 
+            # Robust Lookup: Try to find the payment record.
             # We use filter().first() instead of get() to handle the race condition gracefully.
-            payment_record = Payment.objects.select_for_update().filter(
-                stripe_payment_intent_id=payment_intent.id, 
-                status="pending"
-            ).first()
+            payment_record = (
+                Payment.objects.select_for_update()
+                .filter(stripe_payment_intent_id=payment_intent.id, status="pending")
+                .first()
+            )
 
             if not payment_record:
-                # If we received money but have no pending record, it means the 15-min timer 
+                # If we received money but have no pending record, it means the 15-min timer
                 # deleted it just as the user paid. We MUST raise error to trigger the refund logic.
                 raise DRFValidationError(
                     "Payment record missing or already processed. Initiating refund to prevent lost funds."
                 )
 
             # Get the booking
-            pending_booking = Booking.objects.select_for_update().filter(
-                pk=payment_record.booking.pk, 
-                status="pending"
-            ).first()
+            pending_booking = (
+                Booking.objects.select_for_update()
+                .filter(pk=payment_record.booking.pk, status="pending")
+                .first()
+            )
 
             if not pending_booking:
-                 raise DRFValidationError(
+                raise DRFValidationError(
                     "Booking record missing in DB. Initiating refund."
-                 )
+                )
 
             metadata = payment_intent.metadata
             participants = pending_booking.participants
@@ -1294,7 +1451,9 @@ class ProcessBookingWebhook(APIView):
             pending_booking.allocated_net_payout = net_payout_to_business
 
             if not pending_booking.user_facing_reference:
-                pending_booking.user_facing_reference = pending_booking._generate_user_facing_reference()
+                pending_booking.user_facing_reference = (
+                    pending_booking._generate_user_facing_reference()
+                )
 
             if pending_booking.contact and not pending_booking.user:
                 pending_booking.cancellation_token = uuid.uuid4()
@@ -1303,7 +1462,9 @@ class ProcessBookingWebhook(APIView):
                 )
 
             pending_booking.save()
-            logger.info(f"[{webhook_id}] Booking {pending_booking.id} confirmed with Net Payout: {net_payout_to_business}.")
+            logger.info(
+                f"[{webhook_id}] Booking {pending_booking.id} confirmed with Net Payout: {net_payout_to_business}."
+            )
 
             # --- Handle Discount Redemption (Single Session) ---
             applied_discount_id = metadata.get("applied_discount_id")
@@ -1311,22 +1472,28 @@ class ProcessBookingWebhook(APIView):
 
             if applied_discount_id:
                 try:
-                    discount = Discount.objects.select_for_update().get(pk=applied_discount_id)
-                    discount.redeem() # Increments usage_count atomically
-                    
+                    discount = Discount.objects.select_for_update().get(
+                        pk=applied_discount_id
+                    )
+                    discount.redeem()  # Increments usage_count atomically
+
                     AppliedDiscount.objects.create(
                         booking=pending_booking,
                         discount=discount,
-                        amount_saved=discount_amount
+                        amount_saved=discount_amount,
                     )
-                    logger.info(f"[{webhook_id}] Redeemed discount {discount.code} for booking {pending_booking.id}")
+                    logger.info(
+                        f"[{webhook_id}] Redeemed discount {discount.code} for booking {pending_booking.id}"
+                    )
                 except Discount.DoesNotExist:
-                    logger.warning(f"[{webhook_id}] Discount {applied_discount_id} not found during webhook processing.")
+                    logger.warning(
+                        f"[{webhook_id}] Discount {applied_discount_id} not found during webhook processing."
+                    )
 
             # --- Handle Gift Card Deduction (Step D - Single Session) ---
             gc_code = metadata.get("gift_card_code")
             gc_amount_str = metadata.get("gift_card_amount_to_deduct")
-            
+
             if gc_code and gc_amount_str:
                 try:
                     gc_amount = Decimal(gc_amount_str)
@@ -1335,19 +1502,26 @@ class ProcessBookingWebhook(APIView):
                         if gc.current_balance >= gc_amount:
                             gc.current_balance -= gc_amount
                             gc.save()
-                            
+
                             GiftCardTransaction.objects.create(
                                 gift_card=gc,
-                                booking=pending_booking, 
+                                booking=pending_booking,
                                 amount=-gc_amount,
                                 balance_after=gc.current_balance,
-                                transaction_type='redemption'
+                                transaction_type="redemption",
                             )
-                            logger.info(f"[{webhook_id}] Deducted ${gc_amount} from GC {gc_code} for single session.")
+                            logger.info(
+                                f"[{webhook_id}] Deducted ${gc_amount} from GC {gc_code} for single session."
+                            )
                         else:
-                            logger.critical(f"[{webhook_id}] Insufficient funds in GC {gc_code} for committed transaction. Manual review required.")
+                            logger.critical(
+                                f"[{webhook_id}] Insufficient funds in GC {gc_code} for committed transaction. Manual review required."
+                            )
                 except Exception as e:
-                    logger.error(f"[{webhook_id}] Failed to process GC deduction: {e}", exc_info=True)
+                    logger.error(
+                        f"[{webhook_id}] Failed to process GC deduction: {e}",
+                        exc_info=True,
+                    )
 
             # --- UPDATE PAYMENT RECORD ---
             charge_details = (
@@ -1432,6 +1606,8 @@ class ProcessBookingWebhook(APIView):
             "booking_id": pending_booking.id,
             "user_facing_reference": pending_booking.user_facing_reference,
         }
+
+
 class BookingStatusByPaymentIntentView(APIView):
     # Allow unauthenticated access, as guests will use this endpoint.
     permission_classes = []
@@ -1553,23 +1729,29 @@ class BookingStatusByPaymentIntentView(APIView):
                 {"error": "An error occurred while fetching booking status."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-        
+
+
 class CancelPendingBookingView(APIView):
-    permission_classes = [] # Allow guests
+    permission_classes = []  # Allow guests
 
     def post(self, request):
         payment_intent_id = request.data.get("payment_intent_id")
-        
+
         if not payment_intent_id:
-            return Response({"error": "ID required"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "ID required"}, status=status.HTTP_400_BAD_REQUEST
+            )
 
         try:
             with transaction.atomic():
                 # Find the pending payment
-                payment = Payment.objects.select_related('booking').filter(
-                    stripe_payment_intent_id=payment_intent_id,
-                    status='pending'
-                ).first()
+                payment = (
+                    Payment.objects.select_related("booking")
+                    .filter(
+                        stripe_payment_intent_id=payment_intent_id, status="pending"
+                    )
+                    .first()
+                )
 
                 if payment:
                     # 1. Cancel Stripe Intent so the hold on the card (if any) is released
@@ -1577,11 +1759,13 @@ class CancelPendingBookingView(APIView):
                         stripe.PaymentIntent.cancel(payment_intent_id)
                     except stripe.error.StripeError as e:
                         # It might already be cancelled or succeeded, log and move on
-                        logger.warning(f"Stripe cancel failed for {payment_intent_id}: {e}")
+                        logger.warning(
+                            f"Stripe cancel failed for {payment_intent_id}: {e}"
+                        )
 
                     # 2. HARD DELETE records instead of marking as cancelled
                     booking = payment.booking
-                    
+
                     if booking:
                         # If it's a course, we need to clean up the whole group and enrollment
                         if booking.booking_group_id:
@@ -1589,7 +1773,7 @@ class CancelPendingBookingView(APIView):
                             CourseEnrollment.objects.filter(
                                 booking_group_id=booking.booking_group_id
                             ).delete()
-                            
+
                             # Delete all bookings in this group
                             Booking.objects.filter(
                                 booking_group_id=booking.booking_group_id
@@ -1597,16 +1781,20 @@ class CancelPendingBookingView(APIView):
                         else:
                             # Delete Single Session Booking
                             booking.delete()
-                    
+
                     # Note: payment.delete() happens automatically via CASCADE if booking is deleted,
                     # but if payment existed without booking (orphaned), delete it explicitly:
                     if Payment.objects.filter(id=payment.id).exists():
                         payment.delete()
-                        
-                    logger.info(f"Hard deleted pending booking resources for PI {payment_intent_id}")
+
+                    logger.info(
+                        f"Hard deleted pending booking resources for PI {payment_intent_id}"
+                    )
 
             return Response({"status": "cancelled"}, status=status.HTTP_200_OK)
 
         except Exception as e:
             logger.error(f"Error cancelling booking {payment_intent_id}: {e}")
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

@@ -4,8 +4,8 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from quickstart.models import Payment, Booking
-import stripe  # Import stripe
-from django.conf import settings  # Import settings
+import stripe
+from django.conf import settings
 
 import logging
 
@@ -24,7 +24,6 @@ class BookingStatusByPaymentIntentView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # --- MODIFICATION START ---
         # For guests, we require the client_secret as a temporary auth token.
         is_guest = not request.user or not request.user.is_authenticated
         client_secret = request.query_params.get("client_secret")
@@ -37,7 +36,6 @@ class BookingStatusByPaymentIntentView(APIView):
                 {"error": "Authorization required."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
-        # --- MODIFICATION END ---
 
         try:
             payment = (
