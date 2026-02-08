@@ -13,7 +13,8 @@ from django.db import models
 from django.contrib.auth.models import AbstractUser, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.utils.text import slugify as django_slugify
-from storages.backends.s3boto3 import S3Boto3Storage
+import secrets
+import string
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.contrib.postgres.search import SearchVectorField
 from django.contrib.postgres.search import SearchVector
@@ -2226,6 +2227,82 @@ class ScheduleInstance(models.Model):
             models.Index(fields=["schedule", "date", "status"]),
         ]
 
+class GiftCard(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    code = models.CharField(max_length=20, unique=True, db_index=True, editable=False)
+    
+    # Balance Info
+    initial_amount = models.DecimalField(max_digits=10, decimal_places=2)
+    current_balance = models.DecimalField(max_digits=10, decimal_places=2)
+    currency = models.CharField(max_length=3, default="CAD")
+    
+    # Recipient Info
+    recipient_email = models.EmailField()
+    recipient_name = models.CharField(max_length=150)
+    sender_name = models.CharField(max_length=150)
+    message = models.TextField(blank=True)
+    
+    # Delivery Info
+    is_scheduled = models.BooleanField(default=False)
+    scheduled_date = models.DateField(null=True, blank=True)
+    email_sent = models.BooleanField(default=False)
+    
+    # Metadata
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    is_active = models.BooleanField(default=True)
+    
+    # Stripe reference for the initial purchase
+    stripe_payment_intent_id = models.CharField(max_length=255, blank=True, null=True)
+
+    def save(self, *args, **kwargs):
+        if not self.code:
+            self.code = self._generate_unique_code()
+        super().save(*args, **kwargs)
+
+    def _generate_unique_code(self):
+        """Generates a secure, human-readable 16-char code (e.g. ABCD-1234-EFGH-5678)"""
+        while True:
+            # Generate 16 random alphanumeric characters
+            chars = string.ascii_uppercase + string.digits
+            # Exclude confusing characters if desired (0/O, 1/I), but simple alphanumeric is usually fine
+            raw = ''.join(secrets.choice(chars) for _ in range(16))
+            formatted = f"{raw[:4]}-{raw[4:8]}-{raw[8:12]}-{raw[12:]}"
+            if not GiftCard.objects.filter(code=formatted).exists():
+                return formatted
+
+    def __str__(self):
+        return f"GiftCard {self.code} (${self.current_balance})"
+
+    class Meta:
+        db_table = "gift_cards"
+        indexes = [models.Index(fields=["code"])]
+
+
+class GiftCardTransaction(models.Model):
+    """
+    Ledger to track every usage of a gift card.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    gift_card = models.ForeignKey(GiftCard, on_delete=models.CASCADE, related_name="transactions")
+    booking = models.ForeignKey("Booking", on_delete=models.SET_NULL, null=True, blank=True, related_name="gift_card_transactions")
+    
+    amount = models.DecimalField(max_digits=10, decimal_places=2, help_text="Negative for spend, Positive for refund/load")
+    balance_after = models.DecimalField(max_digits=10, decimal_places=2)
+    
+    TRANSACTION_TYPES = [
+        ('initial_load', 'Initial Load'),
+        ('redemption', 'Redemption'),
+        ('refund', 'Refund'),
+    ]
+    transaction_type = models.CharField(max_length=20, choices=TRANSACTION_TYPES)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    def __str__(self):
+        return f"{self.transaction_type}: {self.amount} on {self.gift_card.code}"
+
+    class Meta:
+        db_table = "gift_card_transactions"
 
 class Booking(models.Model):
     id = models.AutoField(primary_key=True)

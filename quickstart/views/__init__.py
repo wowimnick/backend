@@ -18,6 +18,8 @@ from .business.business_management_views import (
 from .public.public_business_views import (
     PublicBusinessInfoViewSet,
 )
+from .public.public_giftcard_views import CreateGiftCardPaymentIntentView, ValidateGiftCardView
+
 
 from quickstart.views.business.business_course_views import (
     PublicCourseViewSet,
@@ -124,6 +126,9 @@ __all__ = [
     "PermissionGroupSerializer",
     "BusinessRoleSerializer",
     "ValidateInvitationTokenView",
+    # Gift Card Views
+    "CreateGiftCardPaymentIntentView",
+    "ValidateGiftCardView",
     # Blog Views
     "PublicBlogPostViewSet",
     "PublicBlogCategoryViewSet",
