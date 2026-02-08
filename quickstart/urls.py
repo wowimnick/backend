@@ -51,7 +51,12 @@ from quickstart.views.admin.class_management.class_management_views import (
     AdminReviewViewSet,
     AdminCollectionViewSet,
 )
-from quickstart.payments.views import CreatePaymentIntentView, ProcessBookingWebhook, UpdatePaymentIntentView, CancelPendingBookingView
+from quickstart.payments.views import (
+    CreatePaymentIntentView,
+    ProcessBookingWebhook,
+    UpdatePaymentIntentView,
+    CancelPendingBookingView,
+)
 from quickstart.views.admin.user_management.user_admin_views import UserAdminViewSet
 from quickstart.views.admin.user_management.role_views import RoleManagementViewSet
 from quickstart.views.admin.user_management.verification_views import (
@@ -109,6 +114,8 @@ from quickstart.views import (
     PublicCourseViewSet,
     StudentCourseEnrollmentViewSet,
     BusinessCourseManagementViewSet,
+    CreateGiftCardPaymentIntentView,
+    ValidateGiftCardView,
 )
 
 from quickstart.views.widget.widget_views import (
@@ -138,9 +145,7 @@ public_router.register(r"schedules", PublicScheduleViewSet, basename="public-sch
 public_router.register(
     r"categories", PublicCategoryViewSet, basename="public-categories"
 )
-public_router.register(
-    r"courses", PublicCourseViewSet, basename="public-courses"
-)
+public_router.register(r"courses", PublicCourseViewSet, basename="public-courses")
 
 # --- Business Management Router ---
 business_management_router = DefaultRouter()
@@ -216,7 +221,9 @@ admin_router.register(
 admin_router.register(r"businesses", BusinessAdminViewSet, basename="admin-businesses")
 admin_router.register(r"classes", AdminClassViewSet, basename="admin-classes")
 admin_router.register(r"categories", AdminCategoryViewSet, basename="admin-categories")
-admin_router.register(r"collections", AdminCollectionViewSet, basename="admin-collections")
+admin_router.register(
+    r"collections", AdminCollectionViewSet, basename="admin-collections"
+)
 admin_router.register(r"reviews", AdminReviewViewSet, basename="admin-reviews")
 admin_router.register(r"bookings", AdminBookingViewSet, basename="admin-bookings")
 admin_router.register(r"payments", AdminPaymentViewSet, basename="admin-payments")
@@ -484,7 +491,7 @@ urlpatterns = [
         CreatePaymentIntentView.as_view(),
         name="create-payment-intent",
     ),
-        path(
+    path(
         "payments/update-payment-intent/",
         UpdatePaymentIntentView.as_view(),
         name="update-payment-intent",
@@ -494,6 +501,12 @@ urlpatterns = [
         CancelPendingBookingView.as_view(),
         name="cancel-payment-intent",
     ),
+    path(
+        "gift-cards/purchase-intent/",
+        CreateGiftCardPaymentIntentView.as_view(),
+        name="gc-purchase",
+    ),
+    path("gift-cards/validate/", ValidateGiftCardView.as_view(), name="gc-validate"),
     path(
         "admin/geographical-data/",
         AdminGeographicalDataView.as_view(),

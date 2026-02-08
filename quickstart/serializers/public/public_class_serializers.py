@@ -251,9 +251,6 @@ class PublicClassSerializer(serializers.ModelSerializer):
 
         # Generate a deterministic offset between 10-20 based on classId
         id_str = str(obj.classId)
-        # Using Python's hash is deterministic within a single process execution.
-        # For cross-process/language consistency, a more robust hashing algo like SHA1 could be used,
-        # but for this purpose, hash() is sufficient and simple.
         py_hash = hash(id_str)
         offset = 10 + (abs(py_hash) % 11)  # abs() handles potential negative hash value
 
@@ -321,8 +318,11 @@ class HomepageClassSerializer(PublicClassSerializer):
     1. Returns 'images' as a LIST to maintain structure.
     2. The list contains ONLY one object with ONLY the medium_url.
     3. Strips out heavier fields not needed for the card view.
+    4. Formats 'location' to be 'City, State' instead of full address.
     """
     images = serializers.SerializerMethodField()
+    # OVERRIDE: Use a method field for location to force "City, State" format
+    location = serializers.SerializerMethodField()
     
     class Meta(PublicClassSerializer.Meta):
         fields = [
@@ -367,6 +367,16 @@ class HomepageClassSerializer(PublicClassSerializer):
             return [HomepageClassImageSerializer(target_image).data]
         
         return []
+
+    def get_location(self, obj):
+        """
+        Returns 'City, State' (e.g., 'Toronto, ON') or just 'City' if state missing.
+        Overrides the default behavior of returning the full address.
+        """
+        parts = [p for p in [obj.city, obj.state] if p]
+        if parts:
+            return ", ".join(parts)
+        return None
 
 
 class PublicClassDetailSerializer(PublicClassSerializer):

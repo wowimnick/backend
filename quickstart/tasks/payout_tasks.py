@@ -228,108 +228,115 @@ def process_daily_payouts():
 def process_daily_refunds():
     logger.info("=" * 80)
     logger.info("TASK START: process_daily_refunds")
-    logger.info(f"Task triggered at: {timezone.now()}")
     logger.info("=" * 80)
 
     bookings_to_refund = Booking.objects.filter(payment_status="refund_pending")
 
     if not bookings_to_refund.exists():
         logger.info("No refunds to process.")
-        logger.info("=" * 80)
-        logger.info("TASK END: process_daily_refunds (No work to do)")
-        logger.info("=" * 80)
         return "No refunds to process."
-
-    logger.info(f"Found {bookings_to_refund.count()} bookings requiring refund")
 
     successful_refunds, failed_refunds = 0, 0
 
     for idx, booking in enumerate(bookings_to_refund, 1):
-        logger.info(f"--- Processing Refund {idx}/{bookings_to_refund.count()}: Booking ID={booking.id} ---")
         try:
             with transaction.atomic():
-                # Lock the specific booking row
                 locked_booking = Booking.objects.select_for_update().get(id=booking.id)
                 
-                # Double check status inside the lock
                 if locked_booking.payment_status != "refund_pending":
-                    logger.info(f"Booking {booking.id} status changed (now {locked_booking.payment_status}). Skipping.")
-                    continue
-                
-                payment = locked_booking.payments.filter(
-                    status__in=["succeeded", "partially_refunded"]
-                ).first()
-
-                if not payment:
-                    logger.warning(f"No valid payment found for Booking {booking.id}. Marking as refund_failed.")
-                    locked_booking.payment_status = "refund_failed"
-                    locked_booking.save(update_fields=["payment_status"])
-                    failed_refunds += 1
                     continue
 
-                logger.info(f"Payment found: ID={payment.id}, Available to refund: ${payment.available_refund_amount}")
-
-                # Calculate Refund
+                # 1. Calculate Total Refund Amount based on Policy
                 base_value = locked_booking.amount_paid
                 refund_percentage = (Decimal(locked_booking.cancellation_refund_percentage) / 100)
-                amount_to_refund = (base_value * refund_percentage).quantize(Decimal("0.01"))
-
-                logger.info(f"Refund calculation: Base=${base_value}, Percentage={locked_booking.cancellation_refund_percentage}%, Amount=${amount_to_refund}")
-
-                # Safety cap against available funds
-                if amount_to_refund > payment.available_refund_amount:
-                    logger.warning(f"Refund amount ${amount_to_refund} exceeds available ${payment.available_refund_amount}. Capping.")
-                    amount_to_refund = payment.available_refund_amount
-
-                # Option B: Zero/Low Refund Handling
-                if amount_to_refund < Decimal("0.50"):
-                    logger.info(
-                        f"Booking {locked_booking.id}: Refund ${amount_to_refund} too low. Forfeiting to business."
-                    )
-                    # Switch status so Payout Task picks it up
-                    locked_booking.status = "forfeited" 
-                    locked_booking.payment_status = "paid" 
-                    locked_booking.cancellation_reason = (
-                        f"Cancelled (Non-refundable). Refund calculated: ${amount_to_refund}"
-                    )
-                    locked_booking.save(update_fields=["status", "payment_status", "cancellation_reason"])
-                    successful_refunds += 1
-                    logger.info(f"✓ Booking {locked_booking.id} forfeited to business (sub-minimum refund)")
-                    continue
-
-                # Standard Refund
-                logger.info(f"Initiating Stripe refund: Amount=${amount_to_refund}, Payment Intent={payment.stripe_payment_intent_id}")
+                total_refund_needed = (base_value * refund_percentage).quantize(Decimal("0.01"))
                 
-                stripe_refund = stripe.Refund.create(
-                    payment_intent=payment.stripe_payment_intent_id,
-                    amount=int(amount_to_refund * 100),
-                    reason="requested_by_customer",
-                )
+                remaining_refund_needed = total_refund_needed
+                logger.info(f"Booking {booking.id}: Total refund calculated: ${total_refund_needed}")
 
-                logger.info(f"Stripe refund successful: Refund ID={stripe_refund.id}")
+                # 2. Handle Gift Card Refunds FIRST
+                # Find GC transactions used for THIS booking (redemptions are negative amounts)
+                gc_transactions = locked_booking.gift_card_transactions.filter(
+                    transaction_type='redemption'
+                ).select_related('gift_card')
 
-                payment.refunded_amount += Decimal(stripe_refund.amount) / 100
-                if payment.available_refund_amount <= Decimal("0.00"):
-                    payment.status = "refunded"
+                for txn in gc_transactions:
+                    if remaining_refund_needed <= 0:
+                        break
+                    
+                    # The amount used is negative, so flip it
+                    amount_used_from_card = abs(txn.amount)
+                    
+                    # Calculate how much to restore to this card
+                    # We can't refund more to the card than was taken from it
+                    refund_to_card = min(amount_used_from_card, remaining_refund_needed)
+                    
+                    if refund_to_card > 0:
+                        gift_card = txn.gift_card
+                        # Restore Balance
+                        gift_card.current_balance += refund_to_card
+                        gift_card.save()
+                        
+                        # Create Refund Transaction Log
+                        from quickstart.models import GiftCardTransaction # Delayed import
+                        GiftCardTransaction.objects.create(
+                            gift_card=gift_card,
+                            booking=locked_booking,
+                            amount=refund_to_card,
+                            balance_after=gift_card.current_balance,
+                            transaction_type='refund'
+                        )
+                        
+                        remaining_refund_needed -= refund_to_card
+                        logger.info(f"Refunded ${refund_to_card} to Gift Card {gift_card.code}")
+
+                # 3. Handle Stripe Refunds (If money is still owed)
+                if remaining_refund_needed > 0:
+                    payment = locked_booking.payments.filter(
+                        status__in=["succeeded", "partially_refunded"]
+                    ).first()
+
+                    if payment and payment.available_refund_amount > 0:
+                        # Cap refund at what is available in Stripe
+                        refund_to_stripe = min(remaining_refund_needed, payment.available_refund_amount)
+                        
+                        if refund_to_stripe >= Decimal("0.50"):
+                            stripe.Refund.create(
+                                payment_intent=payment.stripe_payment_intent_id,
+                                amount=int(refund_to_stripe * 100),
+                                reason="requested_by_customer",
+                            )
+                            
+                            payment.refunded_amount += refund_to_stripe
+                            if payment.available_refund_amount <= Decimal("0.00"):
+                                payment.status = "refunded"
+                            else:
+                                payment.status = "partially_refunded"
+                            payment.save()
+                            
+                            remaining_refund_needed -= refund_to_stripe
+                            logger.info(f"Refunded ${refund_to_stripe} to Stripe PI {payment.stripe_payment_intent_id}")
+                        else:
+                            logger.info(f"Remaining Stripe refund ${refund_to_stripe} too small to process. Forfeited.")
+                    else:
+                        logger.warning(f"Booking {booking.id}: Need to refund ${remaining_refund_needed} but no Stripe funds available.")
+
+                # 4. Finalize Booking Status
+                if remaining_refund_needed > 0 and remaining_refund_needed < Decimal("0.50"):
+                     # We processed everything possible, small dust remaining is ignored
+                     locked_booking.payment_status = "refunded"
+                elif remaining_refund_needed > 0:
+                     # We couldn't refund everything (e.g., Stripe limit reached logic error)
+                     locked_booking.payment_status = "refund_failed" 
+                     logger.error(f"Booking {booking.id}: Could not fully refund. Short by ${remaining_refund_needed}")
                 else:
-                    payment.status = "partially_refunded"
-                payment.save(update_fields=["refunded_amount", "status"])
+                     locked_booking.payment_status = "refunded"
 
-                logger.info(f"Updated Payment {payment.id}: Refunded=${payment.refunded_amount}, Status={payment.status}")
-
-                locked_booking.payment_status = "refunded"
                 locked_booking.save(update_fields=["payment_status"])
-
                 successful_refunds += 1
-                logger.info(f"✓ SUCCESS: Booking {locked_booking.id} refunded ${amount_to_refund}")
 
         except Exception as e:
             logger.error(f"✗ ERROR refunding Booking {booking.id}: {e}", exc_info=True)
             failed_refunds += 1
-
-    logger.info("=" * 80)
-    logger.info(f"TASK END: process_daily_refunds")
-    logger.info(f"Summary: Successful={successful_refunds}, Failed={failed_refunds}")
-    logger.info("=" * 80)
 
     return f"Refunds processed. Success: {successful_refunds}, Failed: {failed_refunds}"

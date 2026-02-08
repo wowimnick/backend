@@ -49,12 +49,6 @@ def handle_email_change_signal(sender, request, user, from_email_address, to_ema
     to_email = getattr(to_email_address, "email", "Unknown")
     
     try:
-        send_account_security_email(
-            user,
-            "email_update",
-            new_email=to_email,
-            subject="Your ClassEasily Email Address Was Updated",
-        )
         logger.info(f"Email change notification queued for {user.email}")
     except Exception as e:
         logger.error(f"Failed to trigger email notification for {user.email}: {e}", exc_info=True)
