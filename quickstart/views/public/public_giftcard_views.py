@@ -27,6 +27,7 @@ class CreateGiftCardPaymentIntentView(APIView):
         if serializer.is_valid():
             data = serializer.validated_data
             amount = data["amount"]
+            design_url = request.data.get("design_url", "")
 
             # Metadata is crucial for the webhook to know what to create
             metadata = {
@@ -37,6 +38,7 @@ class CreateGiftCardPaymentIntentView(APIView):
                 "message": data.get("message", ""),
                 "is_scheduled": str(bool(data.get("date"))),
                 "scheduled_date": str(data.get("date")) if data.get("date") else "",
+                "design_url": design_url,
             }
 
             try:

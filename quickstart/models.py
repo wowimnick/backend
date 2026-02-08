@@ -511,7 +511,7 @@ class BusinessInfo(models.Model):
         ("experience-group", "Experience Group"),
         ("venue", "Venue / Studio"),
         ("event-organizer", "Event Organizer"),
-        # Legacy types (kept temporarily for migration safety if needed, 
+        # Legacy types (kept temporarily for migration safety if needed,
         # but ideally removed after running the migration script below)
         ("school", "School (Legacy)"),
         ("studio", "Studio (Legacy)"),
@@ -578,7 +578,7 @@ class BusinessInfo(models.Model):
     reminderNotification = models.BooleanField(default=True)
     scheduleExpiryNotification = models.BooleanField(
         default=True,
-        help_text="Receive warnings when classes are about to run out of scheduled instances."
+        help_text="Receive warnings when classes are about to run out of scheduled instances.",
     )
     smsNotifications = models.BooleanField(default=False)
 
@@ -1195,31 +1195,32 @@ class ClassSubcategory(models.Model):
         db_table = "class_subcategories"
         unique_together = ["category", "key"]
 
+
 class ClassCollection(models.Model):
     """
     Represents curated lists/vibes (e.g., 'Date Night', 'Under $30').
     Separate from functional Categories to allow cross-cutting themes.
     """
+
     name = models.CharField(max_length=100)
     slug = models.SlugField(max_length=120, unique=True)
-    description = models.TextField(blank=True, help_text="Short text for the homepage card")
-    image = models.ImageField(
-        upload_to="originals/collection_images/", 
-        blank=True, 
-        null=True, 
-        max_length=255 
+    description = models.TextField(
+        blank=True, help_text="Short text for the homepage card"
     )
-    
+    image = models.ImageField(
+        upload_to="originals/collection_images/", blank=True, null=True, max_length=255
+    )
+
     # --- AUTOMATION FIELDS ---
     COLLECTION_TYPES = [
         ("manual", "Manual Curation"),
         ("automated", "Automated (AI/Metrics)"),
     ]
     type = models.CharField(max_length=20, choices=COLLECTION_TYPES, default="manual")
-    
-    # Stores the logic, e.g.: 
-    # {"max_price": 30} 
-    # {"min_synthetic_score": 50} 
+
+    # Stores the logic, e.g.:
+    # {"max_price": 30}
+    # {"min_synthetic_score": 50}
     # {"label": "Romantic", "threshold": 0.85}
     automation_rules = models.JSONField(default=dict, blank=True)
     # -------------------------
@@ -1234,16 +1235,17 @@ class ClassCollection(models.Model):
         db_table = "class_collections"
         ordering = ["sort_order", "name"]
 
+
 class ClassesMain(models.Model):
     classId = models.AutoField(primary_key=True)
     businessId = models.ForeignKey(
         "BusinessInfo", on_delete=models.CASCADE, related_name="classes"
     )
     collections = models.ManyToManyField(
-        ClassCollection, 
-        blank=True, 
+        ClassCollection,
+        blank=True,
         related_name="classes",
-        help_text="Assign classes to curated collections (e.g. Date Night)"
+        help_text="Assign classes to curated collections (e.g. Date Night)",
     )
     slug = models.SlugField(
         max_length=255,
@@ -1464,6 +1466,7 @@ def classoption_change_receiver(sender, instance, **kwargs):
                 search_vector=new_vector
             )
 
+
 @receiver(post_save, sender="quickstart.ClassCategory")
 def classcategory_change_receiver(sender, instance, update_fields, **kwargs):
     if kwargs.get("raw", False):
@@ -1572,30 +1575,32 @@ class ClassOption(models.Model):
 
     # --- NEW FIELDS FOR MULTI-TIER ---
     title = models.CharField(
-        max_length=150, 
-        default="General Admission", 
-        help_text="Name of this ticket tier (e.g., VIP, General Admission)."
+        max_length=150,
+        default="General Admission",
+        help_text="Name of this ticket tier (e.g., VIP, General Admission).",
     )
     description = models.TextField(
-        blank=True, 
-        help_text="Specific details for this ticket tier."
+        blank=True, help_text="Specific details for this ticket tier."
     )
-    
+
     SCHEDULE_MODE_CHOICES = [
         ("primary", "Primary"),
         ("synced", "Synced (Same Schedule)"),
         ("independent", "Independent (Separate Schedule)"),
     ]
     schedule_mode = models.CharField(
-        max_length=20, 
-        choices=SCHEDULE_MODE_CHOICES, 
+        max_length=20,
+        choices=SCHEDULE_MODE_CHOICES,
         default="primary",
-        help_text="Determines if this tier follows the main schedule or has its own."
+        help_text="Determines if this tier follows the main schedule or has its own.",
     )
 
     BOOKING_TYPES = [
         ("Single Session", "Single Session"),
-        ("Full Course", "Full Course"), # You might want to rename this to "Multi-Day Adventure" in the future
+        (
+            "Full Course",
+            "Full Course",
+        ),  # You might want to rename this to "Multi-Day Adventure" in the future
     ]
     booking_type = models.CharField(
         max_length=20, choices=BOOKING_TYPES, default="Single Session"
@@ -1611,7 +1616,7 @@ class ClassOption(models.Model):
         ("strenuous", "Strenuous Activity"),
         ("all", "Open to All Levels"),
         # Legacy mappings
-        ("expert", "Expert"), 
+        ("expert", "Expert"),
     ]
     level = models.CharField(
         max_length=20,
@@ -2227,31 +2232,33 @@ class ScheduleInstance(models.Model):
             models.Index(fields=["schedule", "date", "status"]),
         ]
 
+
 class GiftCard(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     code = models.CharField(max_length=20, unique=True, db_index=True, editable=False)
-    
+
     # Balance Info
     initial_amount = models.DecimalField(max_digits=10, decimal_places=2)
     current_balance = models.DecimalField(max_digits=10, decimal_places=2)
     currency = models.CharField(max_length=3, default="CAD")
-    
+
     # Recipient Info
     recipient_email = models.EmailField()
     recipient_name = models.CharField(max_length=150)
     sender_name = models.CharField(max_length=150)
     message = models.TextField(blank=True)
-    
+
     # Delivery Info
     is_scheduled = models.BooleanField(default=False)
     scheduled_date = models.DateField(null=True, blank=True)
     email_sent = models.BooleanField(default=False)
-    
+
     # Metadata
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     is_active = models.BooleanField(default=True)
-    
+    design_url = models.URLField(max_length=500, blank=True, null=True)
+
     # Stripe reference for the initial purchase
     stripe_payment_intent_id = models.CharField(max_length=255, blank=True, null=True)
 
@@ -2266,7 +2273,7 @@ class GiftCard(models.Model):
             # Generate 16 random alphanumeric characters
             chars = string.ascii_uppercase + string.digits
             # Exclude confusing characters if desired (0/O, 1/I), but simple alphanumeric is usually fine
-            raw = ''.join(secrets.choice(chars) for _ in range(16))
+            raw = "".join(secrets.choice(chars) for _ in range(16))
             formatted = f"{raw[:4]}-{raw[4:8]}-{raw[8:12]}-{raw[12:]}"
             if not GiftCard.objects.filter(code=formatted).exists():
                 return formatted
@@ -2283,26 +2290,40 @@ class GiftCardTransaction(models.Model):
     """
     Ledger to track every usage of a gift card.
     """
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    gift_card = models.ForeignKey(GiftCard, on_delete=models.CASCADE, related_name="transactions")
-    booking = models.ForeignKey("Booking", on_delete=models.SET_NULL, null=True, blank=True, related_name="gift_card_transactions")
-    
-    amount = models.DecimalField(max_digits=10, decimal_places=2, help_text="Negative for spend, Positive for refund/load")
+    gift_card = models.ForeignKey(
+        GiftCard, on_delete=models.CASCADE, related_name="transactions"
+    )
+    booking = models.ForeignKey(
+        "Booking",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="gift_card_transactions",
+    )
+
+    amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="Negative for spend, Positive for refund/load",
+    )
     balance_after = models.DecimalField(max_digits=10, decimal_places=2)
-    
+
     TRANSACTION_TYPES = [
-        ('initial_load', 'Initial Load'),
-        ('redemption', 'Redemption'),
-        ('refund', 'Refund'),
+        ("initial_load", "Initial Load"),
+        ("redemption", "Redemption"),
+        ("refund", "Refund"),
     ]
     transaction_type = models.CharField(max_length=20, choices=TRANSACTION_TYPES)
     created_at = models.DateTimeField(auto_now_add=True)
-    
+
     def __str__(self):
         return f"{self.transaction_type}: {self.amount} on {self.gift_card.code}"
 
     class Meta:
         db_table = "gift_card_transactions"
+
 
 class Booking(models.Model):
     id = models.AutoField(primary_key=True)
@@ -2381,10 +2402,10 @@ class Booking(models.Model):
         help_text="Tracks the payout status for this specific booking.",
     )
     allocated_net_payout = models.DecimalField(
-        max_digits=10, 
-        decimal_places=2, 
+        max_digits=10,
+        decimal_places=2,
         default=Decimal("0.00"),
-        help_text="The portion of the net payout allocated to this specific session."
+        help_text="The portion of the net payout allocated to this specific session.",
     )
     discounts = models.ManyToManyField(
         "Discount", through="AppliedDiscount", related_name="bookings"
@@ -2685,29 +2706,41 @@ class Discount(models.Model):
         return (
             f"{self.name} ({self.code or 'Automatic'}) for {self.business.businessName}"
         )
-    
+
     # MODIFIED: Overhauled clean method for new scope logic
     def clean(self):
         if self.code:
             self.code = self.code.upper().strip()
-            
+
         if self.discount_type == self.DiscountType.PERCENTAGE and self.value > 100:
             raise ValidationError("Percentage value cannot be greater than 100.")
 
         # --- Scope Validation ---
         if self.scope == self.DiscountScope.BUSINESS:
-            if self.target_class or self.target_schedule_group_name or self.target_class_option:
-                raise ValidationError("Targets (class, option, group) must not be set for a business-wide discount.")
-        
+            if (
+                self.target_class
+                or self.target_schedule_group_name
+                or self.target_class_option
+            ):
+                raise ValidationError(
+                    "Targets (class, option, group) must not be set for a business-wide discount."
+                )
+
         elif self.scope == self.DiscountScope.CLASS:
             if not self.target_class:
-                raise ValidationError("A 'target_class' must be specified for a class-scoped discount.")
+                raise ValidationError(
+                    "A 'target_class' must be specified for a class-scoped discount."
+                )
             if self.target_schedule_group_name or self.target_class_option:
-                raise ValidationError("Schedule group and option must not be set for a class-scoped discount.")
-        
+                raise ValidationError(
+                    "Schedule group and option must not be set for a class-scoped discount."
+                )
+
         elif self.scope == self.DiscountScope.SCHEDULE_GROUP:
             if not (self.target_schedule_group_name and self.target_class_option):
-                raise ValidationError("Both 'target_schedule_group_name' and 'target_class_option' are required for schedule group discounts.")
+                raise ValidationError(
+                    "Both 'target_schedule_group_name' and 'target_class_option' are required for schedule group discounts."
+                )
 
         if self.valid_to and self.valid_from and self.valid_from > self.valid_to:
             raise ValidationError("'Valid to' date must be after 'Valid from' date.")
@@ -2760,11 +2793,12 @@ class Discount(models.Model):
 
     class Meta:
         # This ensures a specific code is unique ONLY within that specific business
-        unique_together = ("business", "code") 
-        
+        unique_together = ("business", "code")
+
         indexes = [
             models.Index(fields=["business", "code"]),
         ]
+
 
 class AppliedDiscount(models.Model):
     """
