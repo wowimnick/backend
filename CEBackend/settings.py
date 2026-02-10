@@ -475,8 +475,11 @@ AWS_S3_CUSTOM_DOMAIN = f"{AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com"
 AWS_S3_OBJECT_PARAMETERS = {"CacheControl": "max-age=86400"}
 AWS_S3_SIGNATURE_VERSION = "s3v4"
 AWS_S3_ADDRESSING_STYLE = "virtual"
-DEFAULT_FILE_STORAGE = "quickstart.custom_storages.PrivateMediaStorage"
-STATICFILES_STORAGE = "storages.backends.s3boto3.S3StaticStorage"
+# Django 5.0+: use STORAGES instead of DEFAULT_FILE_STORAGE / STATICFILES_STORAGE
+STORAGES = {
+    "default": {"BACKEND": "quickstart.custom_storages.PrivateMediaStorage"},
+    "staticfiles": {"BACKEND": "storages.backends.s3boto3.S3StaticStorage"},
+}
 STATIC_URL = f"https://{AWS_S3_CUSTOM_DOMAIN}/static/"
 
 

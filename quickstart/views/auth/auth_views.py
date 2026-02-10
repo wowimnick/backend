@@ -465,9 +465,10 @@ class CustomPasswordResetConfirmView(APIView):
         token = request.data.get("token")
         User = get_user_model()
 
-        logger.info(f"!!! [PWD-RESET-CONFIRM-RAW] Raw payload received: {request.data}")
-        logger.info(f"!!! [PWD-RESET-CONFIRM-RAW] STEP 1: Processing RAW UID: '{uid}'")
-        logger.info(f"!!! [PWD-RESET-CONFIRM-RAW] STEP 1: Processing Token: '{token}'")
+        logger.info("!!! [PWD-RESET-CONFIRM-RAW] Diagnostic validation started (payload keys: %s)", list(request.data.keys()))
+        logger.info("!!! [PWD-RESET-CONFIRM-RAW] STEP 1: Processing UID: %s", uid)
+        # Do not log the token value; it would expose reset links in log aggregators.
+        logger.info("!!! [PWD-RESET-CONFIRM-RAW] STEP 1: Token present: %s", bool(token))
 
         # 1. Find user directly with the raw UID (pk)
         try:

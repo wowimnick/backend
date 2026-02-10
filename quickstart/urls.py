@@ -368,6 +368,8 @@ urlpatterns = [
         PublicClassViewSet.as_view({"post": "toggle_favorite"}),
         name="public-class-toggle-favorite",
     ),
+    # Redirect integer IDs before the slug detail view so /classes/123/ redirects, not returns JSON.
+    path("classes/<int:class_id>/", class_id_redirect_view, name="class-id-redirect"),
     path(
         "classes/<str:pk>/",
         PublicClassViewSet.as_view({"get": "retrieve"}),
@@ -379,9 +381,6 @@ urlpatterns = [
         PublicClassViewSet.as_view({"get": "list"}),
         name="public-class-list",
     ),
-    # This path will capture old /classes/123 style URLs and permanently redirect them.
-    # It will not be used by the React router.
-    path("classes/<int:class_id>/", class_id_redirect_view, name="class-id-redirect"),
     # --- Other Application Views (Original order maintained) ---
     path(
         "business/<int:business_id>/",

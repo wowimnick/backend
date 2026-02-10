@@ -1,11 +1,17 @@
+from decimal import Decimal
+
 from rest_framework import serializers
 from quickstart.models import GiftCard
+
 
 class GiftCardValidationSerializer(serializers.Serializer):
     code = serializers.CharField(required=True)
 
+
 class GiftCardPurchaseSerializer(serializers.Serializer):
-    amount = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=5.00)
+    amount = serializers.DecimalField(
+        max_digits=10, decimal_places=2, min_value=Decimal("5.00")
+    )
     recipient_email = serializers.EmailField()
     recipient_name = serializers.CharField()
     sender_name = serializers.CharField()
