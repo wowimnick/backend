@@ -3,6 +3,8 @@
 import os
 from django.conf import settings
 from rest_framework import serializers
+
+from quickstart.utils.url_utils import build_cloudfront_url
 from ....models import BusinessInfo, ClassCategory
 from decimal import Decimal
 from rest_framework_gis.serializers import GeoFeatureModelSerializer
@@ -93,7 +95,7 @@ class AdminBusinessListSerializer(serializers.ModelSerializer):
             base_path, _ = os.path.splitext(original_path)
             resized_base_path = base_path.replace("originals/", "public/thumb/", 1)
             webp_path = resized_base_path + ".webp"
-            return f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
+            return build_cloudfront_url(webp_path)
         return None
 
 
@@ -192,7 +194,7 @@ class AdminBusinessDetailSerializer(serializers.ModelSerializer):
             base_path, _ = os.path.splitext(original_path)
             resized_base_path = base_path.replace("originals/", "public/medium/", 1)
             webp_path = resized_base_path + ".webp"
-            return f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
+            return build_cloudfront_url(webp_path)
         return None
 
     def get_classFormats_list(self, obj):

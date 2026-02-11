@@ -3,6 +3,7 @@ from django.conf import settings
 from rest_framework import serializers
 from decimal import Decimal  # Ensure Decimal is imported
 
+from quickstart.utils.url_utils import build_cloudfront_url
 from ....models import (
     ClassCategory,
     ClassCollection,
@@ -143,7 +144,7 @@ class AdminClassImageSerializer(serializers.ModelSerializer):
         resized_base_path = base_path.replace("originals/", f"public/{size}/", 1)
         webp_path = resized_base_path + ".webp"
 
-        return f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
+        return build_cloudfront_url(webp_path)
 
     def get_image_thumb_url(self, obj):
         return self._get_resized_url(obj, "thumb")
@@ -187,7 +188,7 @@ class AdminBusinessSerializer(serializers.ModelSerializer):
         resized_base_path = base_path.replace("originals/", "public/thumb/", 1)
         webp_path = resized_base_path + ".webp"
 
-        return f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
+        return build_cloudfront_url(webp_path)
 
 class SimpleCollectionSerializer(serializers.ModelSerializer):
     class Meta:
@@ -364,7 +365,7 @@ class AdminReviewSerializer(serializers.ModelSerializer):
                 base_path, _ = os.path.splitext(original_path)
                 resized_base_path = base_path.replace("originals/", "public/thumb/", 1)
                 webp_path = resized_base_path + ".webp"
-                avatar_url = f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
+                avatar_url = build_cloudfront_url(webp_path)
 
         return {
             "id": obj.userId.userId,
@@ -471,7 +472,8 @@ class AdminClassCollectionSerializer(serializers.ModelSerializer):
             return None
 
         base_name, _ = os.path.splitext(original_path.replace("originals/", "", 1))
-        return f"{settings.CLOUDFRONT_DOMAIN}/public/medium/{base_name}.webp"
+        path = f"public/medium/{base_name}.webp"
+        return build_cloudfront_url(path)
 
     def _handle_image_update(self, instance, s3_key_data):
         s3_key = s3_key_data.pop("image_s3_key", "NOT_PROVIDED")
@@ -558,7 +560,7 @@ class AdminClassCategorySerializer(serializers.ModelSerializer):
         base_name, _ = os.path.splitext(original_path.replace("originals/", "", 1))
         webp_path = f"public/medium/{base_name}.webp"
 
-        return f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
+        return build_cloudfront_url(webp_path)
 
     def _handle_image_update(self, instance, s3_key_data):
         """Helper to process image updates from an S3 key."""

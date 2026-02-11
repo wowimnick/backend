@@ -2,6 +2,7 @@ import logging
 from django.core.management.base import BaseCommand
 from django.conf import settings
 from quickstart.models import ImportedGoogleReview
+from quickstart.utils.url_utils import build_cloudfront_url
 import os
 
 logger = logging.getLogger(__name__)
@@ -121,7 +122,7 @@ class Command(BaseCommand):
                 if avatar_path.startswith("originals/"):
                     base_path, ext = os.path.splitext(avatar_path)
                     expected_thumb = base_path.replace("originals/", "public/thumb/", 1) + ".webp"
-                    expected_url = f"{settings.CLOUDFRONT_DOMAIN}/{expected_thumb}"
+                    expected_url = build_cloudfront_url(expected_thumb)
                     
                     self.stdout.write(f"   Original extension: {ext}")
                     self.stdout.write(f"   Expected thumb path: {expected_thumb}")

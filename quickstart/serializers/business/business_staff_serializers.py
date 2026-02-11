@@ -2,6 +2,8 @@ import os
 from django.conf import settings
 from rest_framework import serializers
 from django.contrib.auth.models import Permission
+
+from quickstart.utils.url_utils import build_cloudfront_url
 from quickstart.models import (
     BusinessStaff,
     Role,
@@ -134,4 +136,4 @@ class InvitationDetailsSerializer(serializers.ModelSerializer):
         base_path = os.path.splitext(original_path)[0]
         # Replace directory and append .webp extension
         resized_path = base_path.replace("originals/", "public/medium/", 1) + ".webp"
-        return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
+        return build_cloudfront_url(resized_path)

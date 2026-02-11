@@ -3,6 +3,8 @@
 import os
 from django.conf import settings
 from rest_framework import serializers
+
+from quickstart.utils.url_utils import build_cloudfront_url
 from ....models import Payment, Booking, CustomUser
 
 
@@ -248,7 +250,7 @@ class AdminBookingListSerializer(serializers.ModelSerializer):
         resized_base_path = base_path.replace("originals/", "public/thumb/", 1)
         webp_path = resized_base_path + ".webp"
 
-        return f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
+        return build_cloudfront_url(webp_path)
 
     def get_payment(self, obj):
         payment_instance = obj.payments.first()

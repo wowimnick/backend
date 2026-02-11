@@ -3,6 +3,8 @@ import re
 import string
 from django.conf import settings
 from rest_framework import serializers
+
+from quickstart.utils.url_utils import build_cloudfront_url
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import validate_email, URLValidator, RegexValidator
 from rest_framework.exceptions import ValidationError as DRFValidationError
@@ -582,7 +584,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             return None
         base_path = os.path.splitext(original_path)[0]
         resized_path = base_path.replace("originals/", "public/medium/", 1) + ".webp"
-        return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
+        return build_cloudfront_url(resized_path)
 
     def _parse_boolean_from_string(self, value, field_name):
         if isinstance(value, bool):
@@ -896,7 +898,7 @@ class BusinessStatsSerializer(serializers.ModelSerializer):
         if not original_path.startswith("originals/"):
             return None
         resized_path = original_path.replace("originals/", "public/thumb/", 1)
-        return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
+        return build_cloudfront_url(resized_path)
 
     def get_totalReviews(self, obj):
         platform_total = obj.reviews_directly_to_business.filter(

@@ -1,6 +1,8 @@
 import os
 from django.conf import settings
 from rest_framework import serializers
+
+from quickstart.utils.url_utils import build_cloudfront_url
 from quickstart.models import (
     ClassCollection,
     ClassesMain,
@@ -65,7 +67,7 @@ class PublicClassImageSerializer(serializers.ModelSerializer):
                 "originals/", f"public/{size_name}/", 1
             )
             final_path = resized_base_path + ".webp"
-            return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
+            return build_cloudfront_url(final_path)
 
         return None
 
@@ -309,7 +311,7 @@ class HomepageClassImageSerializer(serializers.ModelSerializer):
             base_path, _ = os.path.splitext(original_path)
             resized_base_path = base_path.replace("originals/", "public/medium/", 1)
             final_path = resized_base_path + ".webp"
-            return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
+            return build_cloudfront_url(final_path)
         return None
 
 class HomepageClassSerializer(PublicClassSerializer):
@@ -431,7 +433,7 @@ class PublicCollectionSerializer(serializers.ModelSerializer):
                 "originals/", f"public/{size_name}/", 1
             )
             final_path = resized_base_path + ".webp"
-            return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
+            return build_cloudfront_url(final_path)
 
         return None
     

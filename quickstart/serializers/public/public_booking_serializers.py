@@ -4,6 +4,8 @@ import os
 import uuid
 from django.conf import settings
 from rest_framework import serializers
+
+from quickstart.utils.url_utils import build_cloudfront_url
 from django.utils import timezone
 from django.db import transaction
 
@@ -420,7 +422,7 @@ class StudentBookingSerializer(serializers.ModelSerializer):
                 resized_path = original_path.replace("originals/", "public/thumb/", 1)
                 if not resized_path.endswith(".webp"):
                     resized_path = os.path.splitext(resized_path)[0] + ".webp"
-                return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
+                return build_cloudfront_url(resized_path)
             return None
         except (AttributeError, ValueError, TypeError):
             return None
@@ -446,7 +448,7 @@ class StudentBookingSerializer(serializers.ModelSerializer):
                 resized_path = original_path.replace("originals/", "public/large/", 1)
                 if not resized_path.endswith(".webp"):
                     resized_path = os.path.splitext(resized_path)[0] + ".webp"
-                return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
+                return build_cloudfront_url(resized_path)
             return None
         except (AttributeError, ValueError, TypeError):
             return None

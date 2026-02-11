@@ -2,6 +2,8 @@ from decimal import Decimal
 import os
 from django.conf import settings
 from rest_framework import serializers
+
+from quickstart.utils.url_utils import build_cloudfront_url
 from quickstart.models import (
     Booking,
     BusinessInfo,
@@ -47,7 +49,7 @@ class BusinessStudentNoteSerializer(serializers.ModelSerializer):
 
             base_path = os.path.splitext(original_path)[0]
             resized_path = base_path.replace("originals/", "public/thumb/", 1) + ".webp"
-            return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
+            return build_cloudfront_url(resized_path)
         return None
 
     def get_author_name(self, obj):
@@ -156,5 +158,5 @@ class BusinessStudentProfileSerializer(serializers.ModelSerializer):
                 return None
             base_path = os.path.splitext(original_path)[0]
             resized_path = base_path.replace("originals/", "public/thumb/", 1) + ".webp"
-            return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
+            return build_cloudfront_url(resized_path)
         return None
