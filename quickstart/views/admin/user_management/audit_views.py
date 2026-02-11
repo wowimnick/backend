@@ -1,6 +1,5 @@
 from rest_framework import viewsets, filters, status, pagination
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
 from django.utils import timezone
 from django.db.models import Count, Prefetch
@@ -15,7 +14,8 @@ from quickstart.serializers.admin.user_management.audit_serializers import (
 )
 
 from quickstart.models import AuditLog
-from quickstart.utils.permissions import CanAccessUserAdmin
+from quickstart.utils.permissions import IsAuthenticated, CanAccessUserAdmin
+
 
 User = get_user_model()
 logger = logging.getLogger(__name__)

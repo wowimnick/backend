@@ -2,7 +2,6 @@
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, BasePermission
 from django.db.models import (
     Prefetch,
     Q,
@@ -42,6 +41,11 @@ from quickstart.models import (
     ClassesMain,
     ClassOption,
 )  # Added missing
+from quickstart.utils.permissions import (
+    IsAuthenticated,
+    CanViewBusinessStudents,
+    CanManageBusinessStudentNotes,
+)
 from quickstart.serializers.business.business_student_serializers import (
     BusinessStudentProfileSerializer,
     BusinessStudentNoteSerializer,
@@ -50,39 +54,6 @@ from quickstart.serializers.business.business_student_serializers import (
 import logging
 
 logger = logging.getLogger(__name__)
-
-
-# --- Permissions (Keep as is) ---
-class CanViewBusinessStudents(BasePermission):
-    message = "You do not have permission to view students for this business."
-
-    def has_permission(self, request, view):
-        user = request.user
-        if not user or not user.is_authenticated:
-            return False
-
-        # MODIFIED: This logic now correctly checks for staff membership.
-        # It ensures the user not only has the permission but is also a member of a business.
-        has_permission_codename = user.has_perm("quickstart.view_business_students")
-        is_business_member = BusinessInfo.objects.filter(
-            Q(owner=user)
-            | Q(staff_members__user=user, staff_members__status="accepted")
-        ).exists()
-
-        return has_permission_codename and is_business_member
-
-
-class CanManageBusinessStudentNotes(BasePermission):
-    message = "You do not have permission to manage notes for this student."
-
-    def has_permission(self, request, view):
-        user = request.user
-        if not user or not user.is_authenticated:
-            return False
-        # This check is fine as it only relies on the permission codename.
-        return user.has_perm("quickstart.view_studentnote") or user.has_perm(
-            "quickstart.add_studentnote"
-        )
 
 
 # --- Pagination Class (Keep as is) ---

@@ -1,7 +1,6 @@
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, BasePermission
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Sum, Count, Q, F, Avg
 from django.db.models.functions import Coalesce
@@ -12,6 +11,7 @@ import logging
 import csv
 from django.http import HttpResponse
 
+from quickstart.utils.permissions import IsAuthenticated, BasePermission, CanAccessPayoutAdmin
 from quickstart.models import Payout
 from quickstart.serializers.admin.payout_management.admin_payout_serializers import (
     AdminPayoutListSerializer,
@@ -21,21 +21,6 @@ from quickstart.serializers.admin.payout_management.admin_payout_serializers imp
 from quickstart.tasks import process_daily_payouts
 
 logger = logging.getLogger(__name__)
-
-
-class CanAccessPayoutAdmin(BasePermission):
-    """Custom permission to check if a user can access the payout admin section."""
-
-    message = "You do not have permission to access payout administration."
-
-    def has_permission(self, request, view):
-        if (
-            not request.user
-            or not request.user.is_authenticated
-            or not request.user.is_active
-        ):
-            return False
-        return request.user.has_perm("quickstart.access_payout_admin")
 
 
 class StandardResultsSetPagination(PageNumberPagination):

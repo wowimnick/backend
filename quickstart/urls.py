@@ -35,9 +35,6 @@ from quickstart.views.auth.auth_views import (
 from quickstart.views.auth.social_auth_views import GoogleLogin
 from quickstart.payments.booking_status_views import BookingStatusByPaymentIntentView
 
-from quickstart.views.admin.metrics_monitoring.admin_metrics_views import (
-    AdminMetricsView,
-)
 from quickstart.views.admin.notifications.notification_views import (
     AdminNotificationAttachmentViewSet,
     AdminNotificationCampaignViewSet,
@@ -71,6 +68,7 @@ from quickstart.views.admin.business_management.business_admin_views import (
 from quickstart.views import (
     CustomTokenObtainPairView,
     CustomTokenRefreshView,
+    EndImpersonationView,
     LogoutView,
     UserUpdateView,
     CustomRegisterView,
@@ -292,6 +290,11 @@ urlpatterns = [
     # --- Django Admin & 3rd Party Libs ---
     path("admin/silk/", include("silk.urls", namespace="admin_silk")),
     path("admin/panel/", admin.site.urls),
+    path(
+        "admin/end-impersonation/",
+        EndImpersonationView.as_view(),
+        name="end_impersonation",
+    ),
     path("impersonate/", include("impersonate.urls")),
     path("accounts/", include("allauth.urls")),
     # --- Routers ---
@@ -392,7 +395,6 @@ urlpatterns = [
         generate_presigned_upload_url,
         name="generate-upload-url",
     ),
-    path("admin/metrics/", AdminMetricsView.as_view(), name="admin-metrics"),
     path(
         "classes/<str:identifier>/reviews/",
         paginated_class_reviews,

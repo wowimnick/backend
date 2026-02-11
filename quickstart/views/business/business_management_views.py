@@ -990,6 +990,8 @@ class MyBusinessProfileView(generics.RetrieveUpdateDestroyAPIView):
 
         # 4. Revalidate the businesses list/explore pages
         trigger_nextjs_revalidation(tag="businesses-list")
+        trigger_nextjs_revalidation(tag="businesses")
+        trigger_nextjs_revalidation(tag="public-businesses")
 
         # 5. Let homepage and explore pages invalidate naturally with their 1-hour cache
         # No need to revalidate them immediately for business updates

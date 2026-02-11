@@ -2,7 +2,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.db import transaction
-from rest_framework.permissions import IsAuthenticated
+from quickstart.utils.permissions import IsAuthenticated, CanAccessUserAdmin
 from django.contrib.auth.models import Permission
 from django.db.models import Count, Prefetch, Max
 from django.contrib.contenttypes.models import ContentType
@@ -15,7 +15,6 @@ from quickstart.serializers.admin.user_management.role_serializers import (
 )
 
 from quickstart.models import Role, PermissionGroup, EnhancedPermission, AuditLog
-from quickstart.utils.permissions import CanAccessUserAdmin
 
 logger = logging.getLogger(__name__)
 

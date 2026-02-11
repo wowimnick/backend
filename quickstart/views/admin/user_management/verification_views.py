@@ -3,8 +3,8 @@
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
+from datetime import timedelta
 import logging
 from django.db.models import Q
 
@@ -36,6 +36,7 @@ from quickstart.utils.email_utils import (
     send_admin_new_verification_request_email,
 )
 from quickstart.utils.permissions import (
+    IsAuthenticated,
     CanProcessVerificationRequests,
     CanViewAllVerificationRequests,
 )
@@ -67,7 +68,7 @@ class VerificationRequestViewSet(viewsets.ModelViewSet):
             "submit_verification",
         ]: 
             return [IsAuthenticated()]
-        elif self.action in ["list", "retrieve"]:  # Admin viewing
+        elif self.action in ["list", "retrieve", "stats"]:  # Admin viewing
             return [IsAuthenticated(), CanViewAllVerificationRequests()]
         elif self.action in [
             "process_verification",
@@ -436,6 +437,27 @@ class VerificationRequestViewSet(viewsets.ModelViewSet):
             VerificationRequestDetailSerializer(
                 verification, context={"request": request}
             ).data
+        )
+
+    @action(detail=False, methods=["get"])
+    def stats(self, request):
+        """Return counts for Verification Overview: pending, verified_30d, rejected_30d."""
+        qs = self.get_queryset()
+        now = timezone.now()
+        thirty_days_ago = now - timedelta(days=30)
+        pending = qs.filter(status="pending").count()
+        verified_30d = qs.filter(
+            status=VERIFIED_STATUS, reviewed_at__gte=thirty_days_ago
+        ).count()
+        rejected_30d = qs.filter(
+            status="rejected", reviewed_at__gte=thirty_days_ago
+        ).count()
+        return Response(
+            {
+                "pending": pending,
+                "verified_30d": verified_30d,
+                "rejected_30d": rejected_30d,
+            }
         )
 
     @action(detail=True, methods=["get"])

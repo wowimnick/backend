@@ -208,6 +208,11 @@ class CustomTokenRefreshView(APIView):
                         pass
 
                 new_refresh = RefreshToken.for_user(user)
+                # Preserve impersonation claims so "Return to admin" still works after reload
+                if refresh.payload.get("is_impersonated"):
+                    new_refresh["is_impersonated"] = True
+                    new_refresh["impersonator_id"] = refresh.payload.get("impersonator_id")
+                    new_refresh["impersonator_email"] = refresh.payload.get("impersonator_email")
                 data["refresh"] = str(new_refresh)
 
             response = Response(data, status=status.HTTP_200_OK)
@@ -324,6 +329,78 @@ class CustomTokenRefreshView(APIView):
     def _delete_auth_cookies(self, response):
         response.delete_cookie(settings.SIMPLE_JWT["AUTH_COOKIE"])
         response.delete_cookie(settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"])
+
+
+class EndImpersonationView(APIView):
+    """
+    Restore the original admin session when ending impersonation.
+    Reads the current (impersonated) refresh token from cookies, validates
+    is_impersonated and impersonator_id, then issues new tokens for the admin
+    and sets them in cookies. No re-login required.
+    """
+    permission_classes = [AllowAny]
+
+    def _set_auth_cookies(self, response, access_token, refresh_token=None):
+        response.set_cookie(
+            settings.SIMPLE_JWT["AUTH_COOKIE"],
+            access_token,
+            max_age=settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"].total_seconds(),
+            httponly=True,
+            samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],
+            secure=settings.SIMPLE_JWT["AUTH_COOKIE_SECURE"],
+        )
+        if refresh_token:
+            response.set_cookie(
+                settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"],
+                refresh_token,
+                max_age=settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds(),
+                httponly=True,
+                samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],
+                secure=settings.SIMPLE_JWT["AUTH_COOKIE_SECURE"],
+            )
+
+    def post(self, request):
+        User = get_user_model()
+        refresh_token_str = request.COOKIES.get(
+            settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"]
+        )
+        if not refresh_token_str:
+            return Response(
+                {"detail": "Refresh token not found."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+        try:
+            refresh = RefreshToken(refresh_token_str)
+            payload = refresh.payload
+            if not payload.get("is_impersonated") or not payload.get("impersonator_id"):
+                return Response(
+                    {"detail": "Not in an impersonation session."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            impersonator_id = payload.get("impersonator_id")
+            admin_user = (
+                User.objects.select_related("role")
+                .prefetch_related("role__permissions", "role__permissions__content_type")
+                .get(userId=impersonator_id)
+            )
+        except (TokenError, User.DoesNotExist) as e:
+            logger.warning(f"End impersonation failed: {e}")
+            return Response(
+                {"detail": "Invalid or expired session. Please log in again."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+        new_refresh = RefreshToken.for_user(admin_user)
+        user_serializer = CustomUserDetailsSerializer(admin_user)
+        response = Response(
+            {"user": user_serializer.data},
+            status=status.HTTP_200_OK,
+        )
+        self._set_auth_cookies(
+            response,
+            str(new_refresh.access_token),
+            str(new_refresh),
+        )
+        return response
 
 
 class UserUpdateView(APIView):

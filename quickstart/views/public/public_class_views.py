@@ -433,7 +433,30 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         next_week_qs = base_qs.filter(Exists(next_week_instances)).order_by(
             "-review_count", "-average_rating"
         )[:10]
-        data["next_week"] = HomepageClassSerializer(next_week_qs, many=True, context=context).data
+        # Soonest (date, time) per class for "Happening Next Week" cards
+        next_week_class_ids = list(next_week_qs.values_list("pk", flat=True))
+        soonest_per_class = {}
+        if next_week_class_ids:
+            soonest_instances = (
+                ScheduleInstance.objects.filter(
+                    schedule__option__classId__in=next_week_class_ids,
+                    date__gte=next_week_start,
+                    date__lte=next_week_end,
+                    status="scheduled",
+                )
+                .order_by("schedule__option__classId", "date", "time")
+                .distinct("schedule__option__classId")
+                .values("schedule__option__classId", "date", "time")
+            )
+            for row in soonest_instances:
+                soonest_per_class[row["schedule__option__classId"]] = {
+                    "date": row["date"],
+                    "time": row["time"],
+                }
+        next_week_context = {**context, "soonest_per_class": soonest_per_class}
+        data["next_week"] = HomepageClassSerializer(
+            next_week_qs, many=True, context=next_week_context
+        ).data
 
         # 4. Mode Selection (Categories vs Collections pills)
         mode = request.query_params.get('mode', 'categories')
@@ -693,17 +716,54 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 ).first()
 
             if boundary:
-                logger.info(
-                    f"Performing precise boundary search for: '{boundary.name}' using its stored polygon."
-                )
-                queryset = queryset.filter(point__within=boundary.geom)
-                if req_lat_str and req_lng_str:
+                queryset_in_boundary = queryset.filter(point__within=boundary.geom)
+                if queryset_in_boundary.exists():
+                    logger.info(
+                        f"Performing precise boundary search for: '{boundary.name}' using its stored polygon."
+                    )
+                    queryset = queryset_in_boundary
+                    if req_lat_str and req_lng_str:
+                        try:
+                            user_location_point = Point(
+                                float(req_lng_str), float(req_lat_str), srid=4326
+                            )
+                        except (ValueError, TypeError):
+                            user_location_point = None
+                else:
+                    # No classes inside boundary (e.g. Newmarket); show classes in nearby areas
+                    queryset_before_fallback = queryset
                     try:
-                        user_location_point = Point(
-                            float(req_lng_str), float(req_lat_str), srid=4326
-                        )
-                    except (ValueError, TypeError):
-                        user_location_point = None
+                        centroid = boundary.geom.centroid
+                        if centroid:
+                            nearby_radius_km = (
+                                float(req_radius_km_str)
+                                if req_radius_km_str
+                                and req_radius_km_str.replace(".", "", 1).isdigit()
+                                else DEFAULT_SEARCH_RADIUS_KM
+                            )
+                            queryset = queryset.filter(
+                                point__distance_lte=(
+                                    centroid,
+                                    D(km=nearby_radius_km),
+                                )
+                            )
+                            logger.info(
+                                f"No classes in '{boundary.name}'; showing classes within "
+                                f"{nearby_radius_km}km of area (nearby neighborhoods)."
+                            )
+                            # Use user's lat/lng for distance sort when available
+                            if req_lat_str and req_lng_str:
+                                try:
+                                    user_location_point = Point(
+                                        float(req_lng_str), float(req_lat_str), srid=4326
+                                    )
+                                except (ValueError, TypeError):
+                                    user_location_point = centroid
+                            else:
+                                user_location_point = centroid
+                    except Exception as e:
+                        logger.warning(f"Boundary fallback failed: {e}")
+                        queryset = queryset_before_fallback
 
             elif req_lat_str and req_lng_str and not is_province_search:
                 try:

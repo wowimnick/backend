@@ -17,6 +17,10 @@ from django.db.models import Q
 import logging
 
 from quickstart.utils.email_utils import send_review_submission_confirmation_email
+from quickstart.utils.revalidation import (
+    trigger_nextjs_revalidation,
+    trigger_multiple_revalidations,
+)
 
 # Adjust import paths
 from quickstart.models import ImportedGoogleReview, Reviews, Booking
@@ -133,6 +137,24 @@ class ReviewSubmission(APIView):
                     f"Failed to send review submission confirmation email for review {review.reviewId}: {email_error}",
                     exc_info=True,
                 )
+
+            try:
+                class_slug = getattr(class_instance, "slug", None) or str(class_instance.classId)
+                business_slug = getattr(business_instance, "slug", None) or str(business_instance.businessId)
+                tags = [
+                    "reviews",
+                    f"class-{class_slug}",
+                    f"business-{business_slug}",
+                    f"class-{class_slug}-reviews",
+                    f"business-{business_slug}-reviews",
+                ]
+                trigger_multiple_revalidations(tags=tags)
+                if class_slug:
+                    trigger_nextjs_revalidation(path=f"/classes/{class_slug}")
+                if business_slug:
+                    trigger_nextjs_revalidation(path=f"/business/{business_slug}")
+            except Exception as reval_err:
+                logger.warning("Revalidation after review submit failed: %s", reval_err)
 
             response_serializer = PublicReviewSerializer(
                 review, context={"request": request}

@@ -503,19 +503,25 @@ def send_gift_card_email(gift_card):
         f"Preparing gift card email for {gift_card.code} to {gift_card.recipient_email}"
     )
 
-    # Logic: if sender name is in recipient name, implied self-purchase
-    is_self = False
-    if gift_card.sender_name and gift_card.recipient_name:
+    # Determine if this is a self-purchase (reliable if we have the flag, else infer from names)
+    is_self = getattr(gift_card, "send_to_self", False)
+    if not is_self and gift_card.sender_name and gift_card.recipient_name:
         if (
             gift_card.sender_name.lower().strip()
             in gift_card.recipient_name.lower().strip()
         ):
             is_self = True
 
+    # Only use design_url in email if it's an absolute URL (many clients block relative URLs)
+    design_image_url = None
+    if gift_card.design_url and str(gift_card.design_url).strip().lower().startswith("http"):
+        design_image_url = gift_card.design_url
+
     context = {
         "gift_card": gift_card,
         "is_self": is_self,
         "recipient_email": gift_card.recipient_email,
+        "design_image_url": design_image_url,
     }
 
     send_templated_email(

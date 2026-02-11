@@ -1,10 +1,6 @@
 from rest_framework import viewsets, status, filters  # Added filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import (
-    IsAuthenticated,
-    BasePermission,
-)
 from rest_framework.pagination import PageNumberPagination
 from django.utils import timezone
 from django.db import transaction
@@ -14,13 +10,15 @@ from datetime import timedelta
 from decimal import Decimal
 
 from quickstart.models import AuditLog, Payment
-
+from quickstart.utils.permissions import (
+    IsAuthenticated,
+    BasePermission,
+    CanAccessPaymentAdmin,
+    CanManageTargetPayment,
+)
 from quickstart.serializers.admin.booking_management.payment_serializers import (
     AdminPaymentSerializer,
 )  # No need for AdminBookingPaymentSerializer here
-from quickstart.views.admin.user_management.user_admin_views import (
-    user_can_manage,
-)  # Import hierarchy helper
 
 import stripe
 from django.conf import settings
@@ -36,40 +34,6 @@ class AdminPaymentPagination(PageNumberPagination):
     page_size = 10
     page_size_query_param = "page_size"
     max_page_size = 100
-
-
-class CanAccessPaymentAdmin(BasePermission):
-    message = "You do not have permission to access payment administration."
-
-    def has_permission(self, request, view):
-        if (
-            not request.user
-            or not request.user.is_authenticated
-            or not request.user.is_active
-        ):
-            return False
-        # Check for the base access permission
-        return request.user.has_perm("quickstart.access_payment_admin")
-
-
-class CanManageTargetPayment(BasePermission):
-    """Checks if the user can manage the payment based on booking user hierarchy"""
-
-    message = "You cannot manage this payment due to hierarchy restrictions."
-
-    def has_object_permission(self, request, view, obj):
-        # obj is the Payment instance
-        if (
-            not request.user
-            or not request.user.is_authenticated
-            or not request.user.is_active
-        ):
-            return False
-        # Allow if payment has no associated booking/user (shouldn't happen often)
-        if not obj.booking or not obj.booking.user:
-            return True
-        # Check hierarchy
-        return user_can_manage(request.user, obj.booking.user)
 
 
 # --- ViewSet ---

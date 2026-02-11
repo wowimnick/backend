@@ -2,17 +2,19 @@ from datetime import timedelta
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import (
-    IsAuthenticated,
-    BasePermission,
-)
 from rest_framework.pagination import PageNumberPagination
 from django.contrib.auth import get_user_model
 from django.db.models import Count, Q
 from django.utils import timezone
 from django.db.models.functions import TruncDay
 import logging
-from quickstart.utils.permissions import CanAccessUserAdmin
+from quickstart.utils.permissions import (
+    IsAuthenticated,
+    BasePermission,
+    CanAccessUserAdmin,
+    CanImpersonateUser,
+    CanManageTargetUser,
+)
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.conf import settings
 
@@ -35,55 +37,6 @@ class StandardResultsSetPagination(PageNumberPagination):
     page_size = 10
     page_size_query_param = "page_size"
     max_page_size = 50
-
-
-# --- Permission Helper Functions ---
-def user_can_manage(requesting_user, target_user):
-    if not requesting_user or not target_user:
-        return False
-    if not requesting_user.is_authenticated:
-        return False
-
-    if requesting_user.is_superuser or (
-        requesting_user.role and requesting_user.role.name == "Super Admin"
-    ):
-        return True
-
-    if not target_user.role:
-        return True
-
-    if not requesting_user.role:
-        return False
-
-    return requesting_user.role.hierarchy_level > target_user.role.hierarchy_level
-
-
-# --- Custom Permission Classes ---
-class CanImpersonateUser(BasePermission):
-    def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and hasattr(request.user, "role")
-            and request.user.role is not None
-            and request.user.role.name == "Super Admin"
-        )
-
-
-
-
-
-class CanManageTargetUser(BasePermission):
-    message = "You cannot manage this user due to hierarchy restrictions."
-
-    def has_object_permission(self, request, view, obj):
-        if (
-            not request.user
-            or not request.user.is_authenticated
-            or not request.user.is_active
-        ):
-            return False
-        return user_can_manage(request.user, obj)
 
 
 # --- ViewSet ---
@@ -477,7 +430,7 @@ class UserAdminViewSet(viewsets.ModelViewSet):
     @action(
         detail=True,
         methods=["post"],
-        permission_classes=[CanImpersonateUser],
+        permission_classes=[IsAuthenticated, CanImpersonateUser],
         url_path="impersonate",
         url_name="impersonate",
     )
@@ -500,7 +453,7 @@ class UserAdminViewSet(viewsets.ModelViewSet):
                 target_user=target_user,
             )
         except Exception as e:
-            print(f"Failed to create impersonation audit log: {e}")
+            logger.error("Failed to create impersonation audit log: %s", e)
 
         refresh = RefreshToken.for_user(target_user)
         refresh["is_impersonated"] = True

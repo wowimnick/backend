@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
+from django.db.models import Q
 
 from quickstart.utils.permissions import CanManageOwnClasses
 from quickstart.models import BusinessInfo, ClassesMain
@@ -26,8 +27,14 @@ class WidgetConfigManagementView(APIView):
     permission_classes = [IsAuthenticated, CanManageOwnClasses]
 
     def get_business(self, user):
-        """Helper to get the business profile for the current user."""
-        return get_object_or_404(BusinessInfo, owner=user)
+        """Helper to get the business profile for the current user (owner or accepted staff)."""
+        business = BusinessInfo.objects.filter(
+            Q(owner=user) | Q(staff_members__user=user, staff_members__status="accepted")
+        ).first()
+        if not business:
+            from rest_framework.exceptions import NotFound
+            raise NotFound("You are not a member of any business.")
+        return business
 
     def get(self, request, *args, **kwargs):
         """

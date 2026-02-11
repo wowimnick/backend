@@ -43,7 +43,6 @@ from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError, PermissionDenied, NotFound
-from rest_framework.permissions import IsAuthenticated, BasePermission
 from rest_framework.pagination import PageNumberPagination
 
 from quickstart.models import (
@@ -57,7 +56,12 @@ from quickstart.serializers.business.business_booking_serializers import (
     BusinessBookingListSerializer,
     BusinessBookingDetailSerializer,
 )
-from quickstart.utils.permissions import CanManageOwnClasses
+from quickstart.utils.permissions import (
+    IsAuthenticated,
+    CanViewOwnBusinessBookings,
+    CanManageOwnBusinessBookings,
+    CanManageOwnClasses,
+)
 from quickstart.utils.email_utils import (
     send_booking_cancelled_by_other_email,
     send_booking_rescheduled_by_business_email,
@@ -65,38 +69,6 @@ from quickstart.utils.email_utils import (
 import logging
 
 logger = logging.getLogger(__name__)
-from quickstart.utils.permissions import CanViewOwnBusinessBookings
-
-
-class CanManageOwnBusinessBookings(BasePermission):
-    message = "You do not have permission to manage this booking."
-
-    def has_permission(self, request, view):
-        user = request.user
-        if not user or not user.is_authenticated:
-            return False
-        # Simplified permission check without attendance
-        return (
-            user.has_perm("quickstart.view_own_business_bookings")
-            and user.has_perm("quickstart.cancel_business_booking")
-            and BusinessInfo.objects.filter(
-                Q(owner=user)
-                | Q(staff_members__user=user, staff_members__status="accepted")
-            ).exists()
-        )
-
-    def has_object_permission(self, request, view, obj):  # obj is Booking instance
-        user = request.user
-        business = BusinessInfo.objects.filter(
-            Q(owner=user)
-            | Q(staff_members__user=user, staff_members__status="accepted")
-        ).first()
-        if not business:
-            return False
-        try:
-            return obj.schedule_instance.schedule.option.classId.businessId == business
-        except AttributeError:
-            return False
 
 
 class BusinessBookingPagination(PageNumberPagination):

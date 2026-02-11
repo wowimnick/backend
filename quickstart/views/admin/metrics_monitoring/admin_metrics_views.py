@@ -2,7 +2,6 @@
 
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, BasePermission
 from rest_framework import status
 from django.core.cache import cache
 from django.conf import settings
@@ -40,23 +39,9 @@ except ImportError:
     SQLQuery = None
     SILK_ENABLED = False
 
+from quickstart.utils.permissions import IsAuthenticated, BasePermission, CanViewSystemMetrics
+
 logger = logging.getLogger(__name__)
-
-
-# --- Permission Class ---
-class CanViewSystemMetrics(BasePermission):
-    """Allows access only to users with 'view_system_metrics' permission."""
-
-    message = "You do not have permission to view system metrics."
-
-    def has_permission(self, request, view):
-        if (
-            not request.user
-            or not request.user.is_authenticated
-            or not request.user.is_active
-        ):
-            return False
-        return request.user.has_perm("quickstart.view_system_metrics")
 
 
 # --- Data Fetching Logic ---

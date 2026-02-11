@@ -4,10 +4,6 @@ from decimal import Decimal
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import (
-    IsAuthenticated,
-    BasePermission,
-)  # Added BasePermission
 from django.utils import timezone
 from django.db import transaction
 from django.db.models import Q, Sum, Count, DecimalField, IntegerField, Prefetch
@@ -27,8 +23,12 @@ from quickstart.serializers.admin.booking_management.payment_serializers import 
     AdminBookingPaymentSerializer,
 )
 from quickstart.serializers import BookingDetailSerializer
-
-from quickstart.views.admin.user_management.user_admin_views import user_can_manage
+from quickstart.utils.permissions import (
+    IsAuthenticated,
+    BasePermission,
+    CanAccessBookingAdmin,
+    CanManageTargetBooking,
+)
 
 try:
     from quickstart.utils.email_utils import send_booking_cancelled_by_other_email
@@ -42,33 +42,6 @@ except ImportError:
 
 
 logger = logging.getLogger(__name__)
-
-
-# --- Custom Permission Classes ---
-class CanAccessBookingAdmin(BasePermission):
-    message = "You do not have permission to access booking administration."
-
-    def has_permission(self, request, view):
-        if (
-            not request.user
-            or not request.user.is_authenticated
-            or not request.user.is_active
-        ):
-            return False
-        return request.user.has_perm("quickstart.access_booking_admin")
-
-
-class CanManageTargetBooking(BasePermission):
-    message = "You cannot manage this booking due to hierarchy restrictions."
-
-    def has_object_permission(self, request, view, obj):
-        if (
-            not request.user
-            or not request.user.is_authenticated
-            or not request.user.is_active
-        ):
-            return False
-        return user_can_manage(request.user, obj.user)
 
 
 class StandardResultsSetPagination(PageNumberPagination):

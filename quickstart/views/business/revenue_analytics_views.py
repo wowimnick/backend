@@ -47,12 +47,13 @@ from quickstart.models import (
     PartnerTier,
     Payment,
 )
+from quickstart.utils.permissions import IsBusinessMember
 
 logger = logging.getLogger(__name__)
 
 
 class RevenueAnalyticsView(views.APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsBusinessMember]
 
     def get_business(self, user):
         business = (

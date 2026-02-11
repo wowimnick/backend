@@ -2,7 +2,6 @@ import pytz
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, BasePermission
 from rest_framework.exceptions import (
     PermissionDenied,
     ValidationError as DRFValidationError,
@@ -23,39 +22,10 @@ from quickstart.serializers.public.public_review_serializers import (
     ImportedGoogleReviewSerializer,
 )
 
+from quickstart.utils.permissions import IsAuthenticated, CanManageOwnBusinessReviews
 from quickstart.utils.email_utils import send_review_response_notification_email
 
 logger = logging.getLogger(__name__)
-
-
-# --- Permissions ---
-class CanManageOwnBusinessReviews(BasePermission):
-    message = "You do not have permission to manage reviews for this business."
-
-    def has_permission(self, request, view):
-        user = request.user
-        if not user or not user.is_authenticated:
-            return False
-
-        # CORRECTED: This query now correctly checks for staff membership
-        has_permission_codename = user.has_perm("quickstart.view_own_business_reviews")
-        is_business_member = BusinessInfo.objects.filter(
-            Q(owner=user)
-            | Q(staff_members__user=user, staff_members__status="accepted")
-        ).exists()
-
-        return has_permission_codename and is_business_member
-
-    def has_object_permission(self, request, view, obj):  # obj is the Review instance
-        user = request.user
-        # CORRECTED: This query now correctly finds the business for a staff member
-        business = BusinessInfo.objects.filter(
-            Q(owner=user)
-            | Q(staff_members__user=user, staff_members__status="accepted")
-        ).first()
-        if not business:
-            return False
-        return obj.classId and obj.classId.businessId == business
 
 
 # --- ViewSet ---
