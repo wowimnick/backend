@@ -44,6 +44,7 @@ import pytz
 import logging
 
 from quickstart.utils.revalidation import trigger_nextjs_revalidation
+from quickstart.utils.url_utils import sanitize_filename_for_s3
 from quickstart.models import (
     BusinessInfo,
     Booking,
@@ -122,6 +123,9 @@ def generate_presigned_upload_url(request):
             {"error": "Only image content types are allowed."},
             status=status.HTTP_400_BAD_REQUEST,
         )
+
+    # Sanitize filename: replace + and space with - to prevent CloudFront/S3 URL issues
+    file_name = sanitize_filename_for_s3(file_name)
 
     # Create a unique key in the correct subdirectory within 'originals/'
     unique_key = f"originals/{subfolder}{uuid.uuid4()}-{file_name}"
@@ -986,6 +990,8 @@ class MyBusinessProfileView(generics.RetrieveUpdateDestroyAPIView):
 
         # 4. Revalidate the businesses list/explore pages
         trigger_nextjs_revalidation(tag="businesses-list")
+        trigger_nextjs_revalidation(tag="businesses")
+        trigger_nextjs_revalidation(tag="public-businesses")
 
         # 5. Let homepage and explore pages invalidate naturally with their 1-hour cache
         # No need to revalidate them immediately for business updates

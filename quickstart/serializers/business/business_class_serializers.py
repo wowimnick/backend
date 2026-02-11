@@ -3,6 +3,8 @@ import json
 import os
 from django.conf import settings
 from rest_framework.exceptions import PermissionDenied
+
+from quickstart.utils.url_utils import build_cloudfront_url
 from django.contrib.gis.geos import Point
 from rest_framework import serializers
 from django.db.models.functions import Coalesce
@@ -50,7 +52,7 @@ class PublicCategorySerializer(serializers.ModelSerializer):
         resized_path = original_path.replace("originals/", "public/medium/", 1)
         if not resized_path.endswith(".webp"):
             resized_path = os.path.splitext(resized_path)[0] + ".webp"
-        return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
+        return build_cloudfront_url(resized_path)
 
 
 class ScheduleGroupActionSerializer(serializers.Serializer):
@@ -120,7 +122,7 @@ class ClassImageSerializer(serializers.ModelSerializer):
         resized_path = (
             base_path.replace("originals/", f"public/{size_name}/", 1) + ".webp"
         )
-        return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
+        return build_cloudfront_url(resized_path)
 
     def get_image_thumb_url(self, obj):
         return self._get_resized_image_url(obj, "thumb")

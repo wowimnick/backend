@@ -4,6 +4,8 @@ import os
 import uuid
 from django.conf import settings
 from rest_framework import serializers
+
+from quickstart.utils.url_utils import build_cloudfront_url
 from django.utils import timezone
 from django.db import transaction
 
@@ -227,19 +229,15 @@ class BookingDetailSerializer(serializers.ModelSerializer):
         source="schedule_instance.schedule.duration", read_only=True
     )
     user_name = serializers.SerializerMethodField(read_only=True)
-    user_email = serializers.EmailField(source="user.email", read_only=True)
+    user_email = serializers.SerializerMethodField(read_only=True)
     business_timezone = serializers.CharField(
         source="schedule_instance.schedule.option.classId.businessId.business_timezone",
         read_only=True,
     )
 
-    user_avatar = serializers.URLField(
-        source="user.get_avatar_url", read_only=True, allow_null=True
-    )
-    user_phone_number = serializers.CharField(
-        source="user.phone_number", read_only=True
-    )
-    user_timezone = serializers.CharField(source="user.user_timezone", read_only=True)
+    user_avatar = serializers.SerializerMethodField(read_only=True)
+    user_phone_number = serializers.SerializerMethodField(read_only=True)
+    user_timezone = serializers.SerializerMethodField(read_only=True)
     user_facing_reference = serializers.CharField(read_only=True, allow_null=True)
     session_info = serializers.SerializerMethodField()
 
@@ -280,7 +278,33 @@ class BookingDetailSerializer(serializers.ModelSerializer):
     def get_user_name(self, obj):
         if obj.user:
             return f"{obj.user.first_name} {obj.user.last_name}".strip()
+        if obj.contact:
+            return f"{obj.contact.first_name} {obj.contact.last_name}".strip()
         return "N/A"
+
+    def get_user_email(self, obj):
+        if obj.user:
+            return obj.user.email
+        if obj.contact:
+            return obj.contact.email
+        return None
+
+    def get_user_avatar(self, obj):
+        if obj.user and hasattr(obj.user, "get_avatar_url"):
+            return obj.user.get_avatar_url()
+        return None
+
+    def get_user_phone_number(self, obj):
+        if obj.user:
+            return getattr(obj.user, "phone_number", None) or None
+        if obj.contact:
+            return getattr(obj.contact, "phone_number", None) or None
+        return None
+
+    def get_user_timezone(self, obj):
+        if obj.user:
+            return getattr(obj.user, "user_timezone", None) or None
+        return None
 
     def get_session_info(self, obj):
         if obj.enrollment_type == "Full Course" and obj.booking_group_id:
@@ -420,7 +444,7 @@ class StudentBookingSerializer(serializers.ModelSerializer):
                 resized_path = original_path.replace("originals/", "public/thumb/", 1)
                 if not resized_path.endswith(".webp"):
                     resized_path = os.path.splitext(resized_path)[0] + ".webp"
-                return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
+                return build_cloudfront_url(resized_path)
             return None
         except (AttributeError, ValueError, TypeError):
             return None
@@ -446,7 +470,7 @@ class StudentBookingSerializer(serializers.ModelSerializer):
                 resized_path = original_path.replace("originals/", "public/large/", 1)
                 if not resized_path.endswith(".webp"):
                     resized_path = os.path.splitext(resized_path)[0] + ".webp"
-                return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
+                return build_cloudfront_url(resized_path)
             return None
         except (AttributeError, ValueError, TypeError):
             return None

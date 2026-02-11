@@ -29,6 +29,8 @@ class CreateGiftCardPaymentIntentView(APIView):
             amount = data["amount"]
             design_url = request.data.get("design_url", "")
 
+            send_to_self = request.data.get("send_to_self") in (True, "true", "1", "yes")
+
             # Metadata is crucial for the webhook to know what to create
             metadata = {
                 "type": "gift_card_purchase",
@@ -39,6 +41,7 @@ class CreateGiftCardPaymentIntentView(APIView):
                 "is_scheduled": str(bool(data.get("date"))),
                 "scheduled_date": str(data.get("date")) if data.get("date") else "",
                 "design_url": design_url,
+                "send_to_self": str(send_to_self),
             }
 
             try:

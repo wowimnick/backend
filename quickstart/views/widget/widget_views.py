@@ -30,23 +30,10 @@ from quickstart.serializers.widget.widget_serializers import (
     GuestBookingCreateSerializer,
 )
 
-# A custom permission that just checks if the middleware found a business
-from rest_framework.permissions import BasePermission
+from quickstart.utils.permissions import IsValidWidgetRequest
 
 logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
-
-
-class IsValidWidgetRequest(BasePermission):
-    message = "Invalid or missing Business ID."
-
-    def has_permission(self, request, view):
-        if not request.business_context:
-            return False
-        return (
-            request.business_context.isActive
-            and request.business_context.verificationStatus == "verified"
-        )
 
 
 class WidgetConfigView(generics.RetrieveAPIView):

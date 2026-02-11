@@ -1,5 +1,7 @@
 from django.conf import settings
 from rest_framework import serializers
+
+from quickstart.utils.url_utils import build_cloudfront_url
 from quickstart.models import CustomUser
 
 
@@ -62,8 +64,7 @@ class MyProfileSerializer(serializers.ModelSerializer):
 
         resized_path = original_path.replace("originals/", f"public/{size_name}/", 1)
 
-        # Prepend the domain from settings
-        return f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
+        return build_cloudfront_url(resized_path)
 
     def get_avatar_thumb_url(self, obj):
         return self._get_resized_avatar_url(obj, "thumb")

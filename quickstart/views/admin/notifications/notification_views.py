@@ -2,15 +2,17 @@ import time
 from rest_framework import viewsets, status, filters  # Added filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import (
-    IsAuthenticated,
-    BasePermission,
-)  # Added BasePermission
 from django.utils import timezone
 from django.db import transaction  # Added transaction
 from django.db.models import Q, Count, Sum, Avg, F, Value
 from django.db.models.functions import Coalesce  # Added Coalesce
 from rest_framework.pagination import PageNumberPagination
+from quickstart.utils.permissions import (
+    IsAuthenticated,
+    BasePermission,
+    CanAccessNotificationAdmin,
+    CanAccessSegmentAdmin,
+)
 from quickstart.models import (
     NotificationCampaign,
     NotificationAttachment,
@@ -36,34 +38,6 @@ from datetime import timedelta
 # Configure Resend
 resend.api_key = settings.RESEND_API_KEY
 logger = logging.getLogger(__name__)
-
-# --- Custom Permission Classes ---
-
-
-class CanAccessNotificationAdmin(BasePermission):
-    message = "You do not have permission to access notification management."
-
-    def has_permission(self, request, view):
-        if (
-            not request.user
-            or not request.user.is_authenticated
-            or not request.user.is_active
-        ):
-            return False
-        return request.user.has_perm("quickstart.access_notification_admin")
-
-
-class CanAccessSegmentAdmin(BasePermission):
-    message = "You do not have permission to access user segment management."
-
-    def has_permission(self, request, view):
-        if (
-            not request.user
-            or not request.user.is_authenticated
-            or not request.user.is_active
-        ):
-            return False
-        return request.user.has_perm("quickstart.access_segment_admin")
 
 
 # --- AdminNotificationCampaignViewSet ---

@@ -35,9 +35,6 @@ from quickstart.views.auth.auth_views import (
 from quickstart.views.auth.social_auth_views import GoogleLogin
 from quickstart.payments.booking_status_views import BookingStatusByPaymentIntentView
 
-from quickstart.views.admin.metrics_monitoring.admin_metrics_views import (
-    AdminMetricsView,
-)
 from quickstart.views.admin.notifications.notification_views import (
     AdminNotificationAttachmentViewSet,
     AdminNotificationCampaignViewSet,
@@ -71,6 +68,7 @@ from quickstart.views.admin.business_management.business_admin_views import (
 from quickstart.views import (
     CustomTokenObtainPairView,
     CustomTokenRefreshView,
+    EndImpersonationView,
     LogoutView,
     UserUpdateView,
     CustomRegisterView,
@@ -292,6 +290,11 @@ urlpatterns = [
     # --- Django Admin & 3rd Party Libs ---
     path("admin/silk/", include("silk.urls", namespace="admin_silk")),
     path("admin/panel/", admin.site.urls),
+    path(
+        "admin/end-impersonation/",
+        EndImpersonationView.as_view(),
+        name="end_impersonation",
+    ),
     path("impersonate/", include("impersonate.urls")),
     path("accounts/", include("allauth.urls")),
     # --- Routers ---
@@ -368,6 +371,8 @@ urlpatterns = [
         PublicClassViewSet.as_view({"post": "toggle_favorite"}),
         name="public-class-toggle-favorite",
     ),
+    # Redirect integer IDs before the slug detail view so /classes/123/ redirects, not returns JSON.
+    path("classes/<int:class_id>/", class_id_redirect_view, name="class-id-redirect"),
     path(
         "classes/<str:pk>/",
         PublicClassViewSet.as_view({"get": "retrieve"}),
@@ -379,9 +384,6 @@ urlpatterns = [
         PublicClassViewSet.as_view({"get": "list"}),
         name="public-class-list",
     ),
-    # This path will capture old /classes/123 style URLs and permanently redirect them.
-    # It will not be used by the React router.
-    path("classes/<int:class_id>/", class_id_redirect_view, name="class-id-redirect"),
     # --- Other Application Views (Original order maintained) ---
     path(
         "business/<int:business_id>/",
@@ -393,7 +395,6 @@ urlpatterns = [
         generate_presigned_upload_url,
         name="generate-upload-url",
     ),
-    path("admin/metrics/", AdminMetricsView.as_view(), name="admin-metrics"),
     path(
         "classes/<str:identifier>/reviews/",
         paginated_class_reviews,

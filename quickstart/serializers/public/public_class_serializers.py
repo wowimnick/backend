@@ -1,6 +1,8 @@
 import os
 from django.conf import settings
 from rest_framework import serializers
+
+from quickstart.utils.url_utils import build_cloudfront_url
 from quickstart.models import (
     ClassCollection,
     ClassesMain,
@@ -65,7 +67,7 @@ class PublicClassImageSerializer(serializers.ModelSerializer):
                 "originals/", f"public/{size_name}/", 1
             )
             final_path = resized_base_path + ".webp"
-            return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
+            return build_cloudfront_url(final_path)
 
         return None
 
@@ -172,6 +174,7 @@ class PublicClassSerializer(serializers.ModelSerializer):
         max_digits=10, decimal_places=2, read_only=True
     )
     coordinates = serializers.SerializerMethodField(read_only=True)
+    location = serializers.SerializerMethodField(read_only=True)
     is_favorited = serializers.SerializerMethodField()
 
     class Meta:
@@ -218,6 +221,15 @@ class PublicClassSerializer(serializers.ModelSerializer):
             return f"{lat:.8f},{lng:.8f}"
         except (ValueError, TypeError):
             return None
+
+    def get_location(self, obj):
+        """
+        When saltLocation is True, expose only city/state for privacy; otherwise full address.
+        """
+        if obj.saltLocation:
+            parts = [p for p in [obj.city, obj.state] if p]
+            return ", ".join(parts) if parts else None
+        return obj.location
 
     def get_is_favorited(self, obj):
         request = self.context.get("request")
@@ -309,7 +321,7 @@ class HomepageClassImageSerializer(serializers.ModelSerializer):
             base_path, _ = os.path.splitext(original_path)
             resized_base_path = base_path.replace("originals/", "public/medium/", 1)
             final_path = resized_base_path + ".webp"
-            return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
+            return build_cloudfront_url(final_path)
         return None
 
 class HomepageClassSerializer(PublicClassSerializer):
@@ -319,11 +331,13 @@ class HomepageClassSerializer(PublicClassSerializer):
     2. The list contains ONLY one object with ONLY the medium_url.
     3. Strips out heavier fields not needed for the card view.
     4. Formats 'location' to be 'City, State' instead of full address.
+    5. Optional 'soonest_next_week' when context includes soonest_per_class (for "Happening Next Week").
     """
     images = serializers.SerializerMethodField()
     # OVERRIDE: Use a method field for location to force "City, State" format
     location = serializers.SerializerMethodField()
-    
+    soonest_next_week = serializers.SerializerMethodField()
+
     class Meta(PublicClassSerializer.Meta):
         fields = [
             "classId",
@@ -339,6 +353,7 @@ class HomepageClassSerializer(PublicClassSerializer):
             "min_course_price",
             "images", # Maintained strictly as a list
             "is_favorited",
+            "soonest_next_week",
         ]
 
     def get_images(self, obj):
@@ -377,6 +392,23 @@ class HomepageClassSerializer(PublicClassSerializer):
         if parts:
             return ", ".join(parts)
         return None
+
+    def get_soonest_next_week(self, obj):
+        """
+        For "Happening Next Week" section: short label for soonest date/time (e.g. "Mon 6:00 PM").
+        Only set when context includes soonest_per_class and this class is in it.
+        """
+        soonest = self.context.get("soonest_per_class") or {}
+        entry = soonest.get(obj.pk)
+        if not entry:
+            return None
+        date_val = entry.get("date")
+        time_val = entry.get("time")
+        if not date_val or time_val is None:
+            return None
+        day_str = date_val.strftime("%a") if hasattr(date_val, "strftime") else str(date_val)[:3]
+        time_str = time_val.strftime("%I:%M %p").lstrip("0") if hasattr(time_val, "strftime") else str(time_val)
+        return f"{day_str} {time_str}"
 
 
 class PublicClassDetailSerializer(PublicClassSerializer):
@@ -431,7 +463,7 @@ class PublicCollectionSerializer(serializers.ModelSerializer):
                 "originals/", f"public/{size_name}/", 1
             )
             final_path = resized_base_path + ".webp"
-            return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
+            return build_cloudfront_url(final_path)
 
         return None
     

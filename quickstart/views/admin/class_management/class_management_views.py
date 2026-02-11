@@ -4,7 +4,6 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.authentication import TokenAuthentication
 from rest_framework.pagination import PageNumberPagination
-from rest_framework.permissions import IsAuthenticated, BasePermission
 from rest_framework.parsers import JSONParser, FormParser
 from rest_framework.exceptions import ValidationError
 import json
@@ -34,6 +33,13 @@ from django.http import HttpResponse  # For CSV export
 import csv  # For CSV export
 import logging
 
+from quickstart.utils.permissions import (
+    IsAuthenticated,
+    BasePermission,
+    CanAccessClassAdmin,
+    CanAccessCategoryAdmin,
+    CanAccessReviewAdmin,
+)
 from quickstart.utils.revalidation import trigger_nextjs_revalidation
 from quickstart.models import (
     ClassCategory,
@@ -64,54 +70,6 @@ from quickstart.serializers.admin.class_management.class_management_serializers 
 from quickstart.serializers import ManagedClassOptionSerializer, ManagedClassSerializer
 
 logger = logging.getLogger(__name__)
-
-
-class CanAccessClassAdmin(BasePermission):
-    message = "You do not have permission to access class administration."
-
-    def has_permission(self, request, view):
-        if (
-            not request.user
-            or not request.user.is_authenticated
-            or not request.user.is_active
-        ):
-            return False
-        # Check for a specific permission related to class admin access
-        return request.user.has_perm(
-            "quickstart.access_class_admin"
-        )  # Make sure this permission exists
-
-
-class CanAccessCategoryAdmin(BasePermission):
-    message = "You do not have permission to access category administration."
-
-    def has_permission(self, request, view):
-        if (
-            not request.user
-            or not request.user.is_authenticated
-            or not request.user.is_active
-        ):
-            return False
-        return request.user.has_perm(
-            "quickstart.access_category_admin"
-        )  # Make sure this permission exists
-
-
-class CanAccessReviewAdmin(BasePermission):
-    message = "You do not have permission to access review moderation."
-
-    def has_permission(self, request, view):
-        if (
-            not request.user
-            or not request.user.is_authenticated
-            or not request.user.is_active
-        ):
-            return False
-        return request.user.has_perm(
-            "quickstart.access_review_admin"
-        )  # Make sure this permission exists
-
-
 
 
 class StandardResultsSetPagination(PageNumberPagination):
@@ -549,8 +507,8 @@ class AdminClassViewSet(viewsets.ModelViewSet):
             )
             status_counts = {item["status"]: item["count"] for item in status_counts_qs}
 
-            # --- NEW: Schedule Warning Stats ---
-            one_week_from_now = timezone.now() + timedelta(days=7)
+            # --- NEW: Schedule Warning Stats (show when < 2 weeks of schedules left) ---
+            two_weeks_from_now = timezone.now() + timedelta(days=14)
 
             classes_with_low_schedules = []
             active_classes = base_qs.filter(
@@ -569,7 +527,7 @@ class AdminClassViewSet(viewsets.ModelViewSet):
 
                 if (
                     latest_instance is None
-                    or latest_instance.date < one_week_from_now.date()
+                    or latest_instance.date < two_weeks_from_now.date()
                 ):
                     classes_with_low_schedules.append(
                         {
@@ -582,6 +540,11 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                                 cls.businessId.owner.email
                                 if cls.businessId and cls.businessId.owner
                                 else "N/A"
+                            ),
+                            "ownerId": (
+                                cls.businessId.owner.userId
+                                if cls.businessId and cls.businessId.owner
+                                else None
                             ),
                             "lastScheduleDate": (
                                 latest_instance.date.isoformat()
@@ -812,6 +775,8 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
             trigger_nextjs_revalidation(path="/")
             trigger_nextjs_revalidation(tag="classes-search")
             trigger_nextjs_revalidation(tag="homepage-categories")
+            trigger_nextjs_revalidation(tag="categories")
+            trigger_nextjs_revalidation(tag="business-categories")
             trigger_nextjs_revalidation(tag="homepage-classes")
             logger.info(f"Revalidated homepage and class pages after category creation")
 
@@ -836,7 +801,8 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
             trigger_nextjs_revalidation(path="/")
             trigger_nextjs_revalidation(tag="classes-search")
             trigger_nextjs_revalidation(tag="homepage-categories")
-
+            trigger_nextjs_revalidation(tag="categories")
+            trigger_nextjs_revalidation(tag="business-categories")
             trigger_nextjs_revalidation(tag="homepage-classes")
 
             # Revalidate old category key if it changed
@@ -880,7 +846,8 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
         trigger_nextjs_revalidation(path="/")
         trigger_nextjs_revalidation(tag="classes-search")
         trigger_nextjs_revalidation(tag="homepage-categories")
-
+        trigger_nextjs_revalidation(tag="categories")
+        trigger_nextjs_revalidation(tag="business-categories")
         trigger_nextjs_revalidation(tag="homepage-classes")
         trigger_nextjs_revalidation(tag=f"category-{category_key}")
 

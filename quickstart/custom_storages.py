@@ -6,6 +6,8 @@ from PIL import Image
 from django.core.files.base import ContentFile
 import os
 
+from quickstart.utils.url_utils import sanitize_filename_for_s3
+
 logger = logging.getLogger(__name__)
 
 
@@ -98,6 +100,8 @@ class WebPStorage(S3Boto3Storage):
 
         # --- Change the filename's extension to .webp ---
         base_name, _ = os.path.splitext(name)
+        # Sanitize base_name: replace + and space with - to prevent URL encoding issues
+        base_name = sanitize_filename_for_s3(base_name)
         webp_name = base_name + ".webp"
 
         # Now, call the parent S3Boto3Storage's _save method with the

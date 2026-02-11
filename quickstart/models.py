@@ -17,9 +17,7 @@ import secrets
 import string
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.contrib.postgres.search import SearchVectorField
-from django.contrib.postgres.search import SearchVector
 from django.contrib.postgres.indexes import GinIndex
-from django.db.models.signals import pre_delete
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.db.models import (
@@ -30,15 +28,12 @@ from django.db.models import (
     Sum,
     JSONField,
     Avg,
-    Value,
     F,
 )
 from django.db.models.functions import Coalesce
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from decimal import Decimal
 from django.utils import timezone
-from django.db.models.signals import post_save, post_delete
-from django.dispatch import receiver
 import jsonfield
 import uuid
 
@@ -1395,160 +1390,6 @@ class GeographicBoundary(models.Model):
         ]
 
 
-# --- Signal Handlers to Update Search Vector for ClassesMain ---
-def get_classesmain_search_vector(instance: ClassesMain):
-    """Helper function to construct the search vector for a ClassesMain instance."""
-    vector_components = [
-        SearchVector(Value(instance.title), weight="A", config="english"),
-        SearchVector(Value(instance.description), weight="B", config="english"),
-    ]
-    if instance.businessId:
-        vector_components.append(
-            SearchVector(
-                Value(instance.businessId.businessName), weight="B", config="english"
-            )
-        )
-    if instance.category:
-        vector_components.append(
-            SearchVector(
-                Value(instance.category.name), weight="C", config="pg_catalog.english"
-            )
-        )
-    if instance.subcategory:
-        vector_components.append(
-            SearchVector(
-                Value(instance.subcategory.name),
-                weight="D",
-                config="pg_catalog.english",
-            )
-        )
-
-    if not vector_components:
-        return SearchVector(Value(""))
-
-    final_vector = vector_components[0]
-    for component in vector_components[1:]:
-        final_vector += component
-    return final_vector
-
-
-@receiver(post_save, sender=ClassesMain)
-def classesmain_post_save_receiver(sender, instance, created, update_fields, **kwargs):
-    if kwargs.get("raw", False):
-        return  # Skip for fixture loading
-
-    # Determine if vector needs update: new, or relevant fields changed (simplified)
-    # A more robust check would compare old values of text fields to new values.
-    should_update = created
-    if not created and update_fields:
-        text_fields = {"title", "description"}  # Fields on ClassesMain itself
-        if any(f in update_fields for f in text_fields):
-            should_update = True
-    elif not created and update_fields is None:  # Full save, assume update needed
-        should_update = True
-
-    if should_update:
-        new_vector = get_classesmain_search_vector(instance)
-        # Update only if vector changed to avoid recursion if a field in vector didn't change
-        # This direct comparison might not be perfect.
-        if instance.search_vector != new_vector:  # Check if change is needed
-            ClassesMain.objects.filter(pk=instance.pk).update(search_vector=new_vector)
-            # logger.info(f"Search vector updated for ClassesMain {instance.pk}")
-
-
-@receiver(post_save, sender="quickstart.ClassOption")
-@receiver(post_delete, sender="quickstart.ClassOption")  # Also update on delete
-def classoption_change_receiver(sender, instance, **kwargs):
-    if hasattr(instance, "classId") and instance.classId:
-        class_instance = instance.classId
-        new_vector = get_classesmain_search_vector(class_instance)
-        if class_instance.search_vector != new_vector:
-            ClassesMain.objects.filter(pk=class_instance.pk).update(
-                search_vector=new_vector
-            )
-
-
-@receiver(post_save, sender="quickstart.ClassCategory")
-def classcategory_change_receiver(sender, instance, update_fields, **kwargs):
-    if kwargs.get("raw", False):
-        return
-    if update_fields is None or "name" in update_fields:
-        with transaction.atomic():
-            for class_instance in instance.classes_in_category.iterator():
-                new_vector = get_classesmain_search_vector(class_instance)
-                if class_instance.search_vector != new_vector:
-                    ClassesMain.objects.filter(pk=class_instance.pk).update(
-                        search_vector=new_vector
-                    )
-
-
-@receiver(post_save, sender="quickstart.ClassSubcategory")
-def classsubcategory_change_receiver(sender, instance, update_fields, **kwargs):
-    if kwargs.get("raw", False):
-        return
-    if update_fields is None or "name" in update_fields:
-        with transaction.atomic():
-            for class_instance in instance.classes_in_subcategory.iterator():
-                new_vector = get_classesmain_search_vector(class_instance)
-                if class_instance.search_vector != new_vector:
-                    ClassesMain.objects.filter(pk=class_instance.pk).update(
-                        search_vector=new_vector
-                    )
-
-
-@receiver(post_save, sender=CustomUser)
-def link_contact_on_user_creation(sender, instance, created, **kwargs):
-    """
-    After a new user registers, check if a CRM contact with their email exists
-    and link them if it does.
-    """
-    if created and instance.email:
-        try:
-            with transaction.atomic():
-                # Find a contact with a matching email that is not yet linked to any user
-                contact_to_link = Contact.objects.select_for_update().get(
-                    email__iexact=instance.email, user__isnull=True
-                )
-
-                # Link the new user to this contact record
-                contact_to_link.user = instance
-                # Potentially update contact details from the more "official" user profile
-                if instance.first_name and not contact_to_link.first_name:
-                    contact_to_link.first_name = instance.first_name
-                if instance.last_name and not contact_to_link.last_name:
-                    contact_to_link.last_name = instance.last_name
-                if instance.phone_number and not contact_to_link.phone_number:
-                    contact_to_link.phone_number = instance.phone_number
-
-                contact_to_link.save()
-                logger.info(
-                    f"Successfully linked new user {instance.email} to existing CRM Contact ID {contact_to_link.id} for Business ID {contact_to_link.business_id}."
-                )
-
-        except Contact.DoesNotExist:
-            # This is a common and expected case: a new user who was not previously a CRM contact.
-            pass
-        except Exception as e:
-            # Log any other unexpected errors during the linking process
-            logger.error(
-                f"Error linking new user {instance.email} to a CRM contact: {e}",
-                exc_info=True,
-            )
-
-
-@receiver(pre_delete, sender="quickstart.Contact")
-def delete_contact_notes(sender, instance, **kwargs):
-    """
-    When a Contact is deleted, also delete any StudentNote
-    records that point to it via the GenericForeignKey.
-    """
-    content_type = ContentType.objects.get_for_model(instance)
-    StudentNote.objects.filter(
-        content_type=content_type, object_id=instance.pk
-    ).delete()
-    logger.info(f"Deleted all notes associated with Contact ID {instance.pk}.")
-
-
 class Favorites(models.Model):
     favoriteId = models.AutoField(primary_key=True)
     userId = models.ForeignKey(
@@ -2253,6 +2094,10 @@ class GiftCard(models.Model):
     is_scheduled = models.BooleanField(default=False)
     scheduled_date = models.DateField(null=True, blank=True)
     email_sent = models.BooleanField(default=False)
+    send_to_self = models.BooleanField(
+        default=False,
+        help_text="True when purchaser chose 'Email to me' (recipient is themselves).",
+    )
 
     # Metadata
     created_at = models.DateTimeField(auto_now_add=True)
@@ -2558,49 +2403,6 @@ class Booking(models.Model):
             ),
             ("cancel_business_booking", "Can cancel bookings within own business"),
         ]
-
-
-@receiver(post_save, sender=Booking)
-def create_contact_on_first_booking(sender, instance, created, **kwargs):
-    """
-    When a booking is first created, ensure a Contact record exists for the user
-    at the business they booked with.
-    """
-
-    if not instance.user:
-        return
-    if created:  # Only run on initial creation
-        try:
-            # Use a transaction to ensure this is an atomic operation
-            with transaction.atomic():
-                user = instance.user
-                business = instance.schedule_instance.schedule.option.classId.businessId
-
-                # get_or_create is the safest way to do this, preventing race conditions
-                contact, contact_created = Contact.objects.get_or_create(
-                    business=business,
-                    user=user,
-                    defaults={
-                        "first_name": user.first_name or "",
-                        "last_name": user.last_name or "",
-                        "email": user.email,
-                        "phone_number": user.phone_number or "",
-                        "source": "platform_booking",
-                    },
-                )
-
-                if contact_created:
-                    logger.info(
-                        f"Automatically created Contact record for user '{user.email}' "
-                        f"at business '{business.businessName}' due to new booking."
-                    )
-        except Exception as e:
-            # Log an error if the business or user context can't be found,
-            # but don't crash the booking process.
-            logger.error(
-                f"Could not create Contact on booking for user {instance.user.userId}. Error: {e}",
-                exc_info=True,
-            )
 
 
 class Discount(models.Model):

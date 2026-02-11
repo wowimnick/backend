@@ -30,14 +30,17 @@ from datetime import datetime, timedelta
 from rest_framework import viewsets, status, filters, generics
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import (
-    IsAuthenticated,
-    BasePermission,
-)
 import csv
 from django.http import Http404, HttpResponse
 import logging
 
+from quickstart.utils.permissions import (
+    IsAuthenticated,
+    BasePermission,
+    CanAccessBusinessAdmin,
+    CanManageTargetBusiness,
+    CanAccessClassAdmin,
+)
 from quickstart.models import (
     AuditLog,
     BusinessInfo,
@@ -47,6 +50,7 @@ from quickstart.models import (
     ClassesMain,
     Payment,
     Reviews,
+    ImportedGoogleReview,
     GeographicBoundary,
     Role,
 )
@@ -56,14 +60,6 @@ from quickstart.serializers.admin.business_management.admin_business_serializers
     GeographicBoundaryDataSerializer,
 )
 
-from ..class_management.class_management_views import CanAccessClassAdmin
-
-try:
-    from quickstart.views.admin.user_management.user_admin_views import user_can_manage
-except ImportError:
-    raise ImportError("Could not import user_can_manage helper function. Check path.")
-
-
 logger = logging.getLogger(__name__)
 
 
@@ -71,48 +67,6 @@ class AdminBusinessPagination(PageNumberPagination):
     page_size = 10
     page_size_query_param = "page_size"
     max_page_size = 100
-
-
-class CanAccessBusinessAdmin(BasePermission):
-    """Allows access only to users with 'access_business_admin' permission."""
-
-    message = "You do not have permission to access business administration."
-
-    def has_permission(self, request, view):
-        if (
-            not request.user
-            or not request.user.is_authenticated
-            or not request.user.is_active
-        ):
-            return False
-        return request.user.has_perm("quickstart.access_business_admin")
-
-
-class CanManageTargetBusiness(BasePermission):
-    """Checks if the requesting user can manage the target business based on owner hierarchy."""
-
-    message = (
-        "You cannot manage this business due to hierarchy or ownership restrictions."
-    )
-
-    def has_object_permission(self, request, view, obj):
-        # obj is the BusinessInfo instance
-        if (
-            not request.user
-            or not request.user.is_authenticated
-            or not request.user.is_active
-        ):
-            return False
-        # Allow if user has a specific override permission (Optional - uncomment if using)
-        # if request.user.has_perm('quickstart.manage_all_businesses'):
-        #     return True
-        # Check if requester can manage the business owner via hierarchy
-        if not hasattr(obj, "owner") or not obj.owner:
-            logger.warning(
-                f"BusinessInfo object (ID: {obj.pk}) is missing an owner. Denying management access."
-            )
-            return False  # Cannot manage if owner is missing
-        return user_can_manage(request.user, obj.owner)
 
 
 # --- ViewSet ---
@@ -193,6 +147,13 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
             .values("c"),
             output_field=IntegerField(),
         )
+        google_review_count_subquery = Subquery(
+            ImportedGoogleReview.objects.filter(business=OuterRef("pk"))
+            .values("business")
+            .annotate(c=Count("pk"))
+            .values("c"),
+            output_field=IntegerField(),
+        )
         rating_subquery = Subquery(
             Reviews.objects.filter(businessId=OuterRef("pk"), status="approved")
             .values("businessId")
@@ -215,6 +176,7 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
             revenue=Coalesce(revenue_subquery, Value(Decimal("0.00"))),
             rating=Coalesce(rating_subquery, Value(0.0)),
             review_count=Coalesce(review_count_subquery, 0),
+            google_review_count=Coalesce(google_review_count_subquery, 0),
             status=Case(
                 When(
                     Q(isActive=True) & Q(has_active_schedules=True),
@@ -324,7 +286,13 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
                     businessId=instance
                 ).select_related("category", "subcategory")
 
-                tags_to_revalidate = ["classes-search", "homepage-classes"]
+                tags_to_revalidate = [
+                    "classes-search",
+                    "homepage-classes",
+                    "businesses-list",
+                    "businesses",
+                    "public-businesses",
+                ]
 
                 for class_obj in business_classes:
                     # Tag for the class detail page
@@ -513,7 +481,13 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
             all_tags_to_revalidate = (
                 class_tags
                 + list(categories_to_revalidate)
-                + ["classes-search", "homepage-classes"]
+                + [
+                    "classes-search",
+                    "homepage-classes",
+                    "businesses-list",
+                    "businesses",
+                    "public-businesses",
+                ]
             )
             result = trigger_multiple_revalidations(tags=all_tags_to_revalidate)
             logger.info(
@@ -1131,7 +1105,7 @@ class AdminGeographicalDataView(generics.ListAPIView):
     - `bubble`: Aggregates data by city, providing a centroid for mapping.
     """
 
-    permission_classes = [CanAccessClassAdmin]
+    permission_classes = [IsAuthenticated, CanAccessClassAdmin]
     serializer_class = GeographicBoundaryDataSerializer
 
     def get_queryset_for_choropleth(self):

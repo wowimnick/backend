@@ -48,12 +48,14 @@ from django.utils.decorators import method_decorator
 from django.views.decorators.cache import cache_page
 from django.views.decorators.vary import vary_on_headers
 from django.utils import timezone
+from django.core.cache import cache
 from decimal import Decimal, InvalidOperation
 import logging
 from urllib.parse import quote
 from datetime import (
     datetime,
     time,
+    timedelta,
 )
 
 from quickstart.models import (
@@ -118,6 +120,88 @@ PROVINCE_ABBREVIATIONS = {v: k for k, v in CANADIAN_PROVINCES.items()}
 
 # Create comprehensive set of all province identifiers
 ALL_PROVINCE_NAMES = set(CANADIAN_PROVINCES.keys()) | set(PROVINCE_ABBREVIATIONS.keys())
+
+# Preset locations used by the frontend banner search (SearchContext GTA_PRESETS). Used to cache
+# public class search results so repeated banner searches are fast; cache is invalidated when
+# classes/schedules/instances are added or removed.
+PRESET_LOCATIONS = {
+    "Toronto": (43.6532, -79.3832),
+    "Mississauga": (43.589, -79.6441),
+    "Brampton": (43.7315, -79.7624),
+    "Vaughan": (43.8367, -79.4982),
+    "Markham": (43.8561, -79.337),
+    "Richmond Hill": (43.8828, -79.4403),
+    "Oakville": (43.4675, -79.6877),
+    "Burlington": (43.3255, -79.799),
+    "Hamilton": (43.2557, -79.8711),
+    "Ottawa": (45.4215, -75.6972),
+    "Pickering": (43.8374, -79.0863),
+    "Ajax": (43.8501, -79.0329),
+    "Whitby": (43.8762, -78.9413),
+    "Oshawa": (43.8971, -78.8658),
+    "Milton": (43.5183, -79.8774),
+    "Newmarket": (44.0553, -79.4593),
+    "Aurora": (44.0056, -79.4663),
+    "Etobicoke": (43.6532, -79.5672),
+    "Scarborough": (43.7731, -79.2574),
+    "North York": (43.7615, -79.4111),
+}
+PRESET_CACHE_PREFIX = "public_class_search_preset"
+# Version key must match PUBLIC_CLASS_SEARCH_PRESET_VERSION_KEY in quickstart.signals
+PRESET_CACHE_VERSION_KEY = "public_class_search_preset_version"
+PRESET_CACHE_TTL = 60 * 15  # 15 minutes (fallback; invalidation on class/schedule change is primary)
+
+
+def _get_preset_search_cache_version():
+    """Get current cache version for preset search; used so invalidation can bump version."""
+    return cache.get(PRESET_CACHE_VERSION_KEY, 0) or 0
+
+
+def _is_preset_location_request(search_name, lat_str, lng_str):
+    """Return True if (search_name, lat, lng) match a known preset (banner) location."""
+    if not search_name:
+        return False
+    preset = PRESET_LOCATIONS.get(search_name)
+    if not preset:
+        return False
+    try:
+        lat, lng = float(lat_str), float(lng_str)
+        # Allow small tolerance for float/rounding (e.g. from geocode)
+        return abs(lat - preset[0]) < 0.01 and abs(lng - preset[1]) < 0.01
+    except (TypeError, ValueError):
+        return False
+
+
+def _build_preset_search_cache_key(request, search_name):
+    """Build cache key for a preset location search, or None if not cacheable."""
+    # Only cache when there are no extra filters (keyword, tag, category, etc.) so banner-style
+    # searches hit the same key and we don't explode key space.
+    if request.query_params.get("keyword") or request.query_params.get("tag"):
+        return None
+    if request.query_params.get("category_key") or request.query_params.get("subcategory_key"):
+        return None
+    if request.query_params.get("price_max") or request.query_params.get("collection"):
+        return None
+    page = request.query_params.get("page", "1")
+    page_size = request.query_params.get("page_size", "24")
+    participants = request.query_params.get("participants", "1")
+    sort_by = request.query_params.get("sort_by", "relevance")
+    start_date = request.query_params.get("start_date") or ""
+    end_date = request.query_params.get("end_date") or ""
+    version = _get_preset_search_cache_version()
+    # Normalize location for key (e.g. "North York" -> "north_york")
+    location_slug = search_name.lower().replace(" ", "_")
+    return f"{PRESET_CACHE_PREFIX}:v{version}:{location_slug}:p{page}:ps{page_size}:n{participants}:s{sort_by}:{start_date}:{end_date}"
+
+
+def invalidate_public_class_search_preset_cache():
+    """Call when classes/schedules/instances change so preset search cache is refreshed."""
+    try:
+        version = _get_preset_search_cache_version()
+        cache.set(PRESET_CACHE_VERSION_KEY, version + 1, timeout=None)
+        logger.info("Invalidated public class search preset cache (version bump).")
+    except Exception as e:
+        logger.warning("Failed to invalidate preset search cache: %s", e, exc_info=True)
 
 
 def normalize_province_name(location_text):
@@ -416,6 +500,48 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         
         data["date_night"] = HomepageClassSerializer(date_night_qs, many=True, context=context).data
 
+        # 3b. Next Week — classes with at least one schedule in the next calendar week, ordered by most reviews
+        today = timezone.now().date()
+        # Next Monday (weekday 0); if today is Monday, "next week" starts next Monday
+        days_until_next_monday = (7 - today.weekday()) % 7
+        if days_until_next_monday == 0:
+            days_until_next_monday = 7
+        next_week_start = today + timedelta(days=days_until_next_monday)
+        next_week_end = next_week_start + timedelta(days=6)
+        next_week_instances = ScheduleInstance.objects.filter(
+            schedule__option__classId=OuterRef("pk"),
+            date__gte=next_week_start,
+            date__lte=next_week_end,
+            status="scheduled",
+        )
+        next_week_qs = base_qs.filter(Exists(next_week_instances)).order_by(
+            "-review_count", "-average_rating"
+        )[:10]
+        # Soonest (date, time) per class for "Happening Next Week" cards
+        next_week_class_ids = list(next_week_qs.values_list("pk", flat=True))
+        soonest_per_class = {}
+        if next_week_class_ids:
+            soonest_instances = (
+                ScheduleInstance.objects.filter(
+                    schedule__option__classId__in=next_week_class_ids,
+                    date__gte=next_week_start,
+                    date__lte=next_week_end,
+                    status="scheduled",
+                )
+                .order_by("schedule__option__classId", "date", "time")
+                .distinct("schedule__option__classId")
+                .values("schedule__option__classId", "date", "time")
+            )
+            for row in soonest_instances:
+                soonest_per_class[row["schedule__option__classId"]] = {
+                    "date": row["date"],
+                    "time": row["time"],
+                }
+        next_week_context = {**context, "soonest_per_class": soonest_per_class}
+        data["next_week"] = HomepageClassSerializer(
+            next_week_qs, many=True, context=next_week_context
+        ).data
+
         # 4. Mode Selection (Categories vs Collections pills)
         mode = request.query_params.get('mode', 'categories')
         
@@ -584,11 +710,9 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         - Uses precise polygon boundaries for known city/area searches.
         - Handles province-wide searches.
         - Falls back to a radius search for specific addresses or landmarks.
+        - Caches results for preset (banner) locations; cache invalidates when classes/schedules change.
         """
         try:
-            logger.info(f"--- PUBLIC CLASS SEARCH INITIATED ---")
-            logger.info(f"Params: {request.query_params}")
-
             # --- 1. Parameter Extraction ---
             req_lat_str = request.query_params.get("lat")
             req_lng_str = request.query_params.get("lng")
@@ -596,6 +720,19 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 "location"
             ) or request.query_params.get("location_search", "")
             search_name = location_param_text.split(",")[0].strip()
+
+            # Preset (banner) location cache: return cached response if available
+            preset_cache_key = None
+            if _is_preset_location_request(search_name, req_lat_str, req_lng_str):
+                preset_cache_key = _build_preset_search_cache_key(request, search_name)
+                if preset_cache_key:
+                    cached = cache.get(preset_cache_key)
+                    if cached is not None:
+                        logger.info("Returning cached preset search result for %s", search_name)
+                        return Response(cached)
+
+            logger.info(f"--- PUBLIC CLASS SEARCH INITIATED ---")
+            logger.info(f"Params: {request.query_params}")
             
             req_radius_km_str = request.query_params.get("radius")
             keyword_query_text = request.query_params.get("keyword")
@@ -674,17 +811,54 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 ).first()
 
             if boundary:
-                logger.info(
-                    f"Performing precise boundary search for: '{boundary.name}' using its stored polygon."
-                )
-                queryset = queryset.filter(point__within=boundary.geom)
-                if req_lat_str and req_lng_str:
+                queryset_in_boundary = queryset.filter(point__within=boundary.geom)
+                if queryset_in_boundary.exists():
+                    logger.info(
+                        f"Performing precise boundary search for: '{boundary.name}' using its stored polygon."
+                    )
+                    queryset = queryset_in_boundary
+                    if req_lat_str and req_lng_str:
+                        try:
+                            user_location_point = Point(
+                                float(req_lng_str), float(req_lat_str), srid=4326
+                            )
+                        except (ValueError, TypeError):
+                            user_location_point = None
+                else:
+                    # No classes inside boundary (e.g. Newmarket); show classes in nearby areas
+                    queryset_before_fallback = queryset
                     try:
-                        user_location_point = Point(
-                            float(req_lng_str), float(req_lat_str), srid=4326
-                        )
-                    except (ValueError, TypeError):
-                        user_location_point = None
+                        centroid = boundary.geom.centroid
+                        if centroid:
+                            nearby_radius_km = (
+                                float(req_radius_km_str)
+                                if req_radius_km_str
+                                and req_radius_km_str.replace(".", "", 1).isdigit()
+                                else DEFAULT_SEARCH_RADIUS_KM
+                            )
+                            queryset = queryset.filter(
+                                point__distance_lte=(
+                                    centroid,
+                                    D(km=nearby_radius_km),
+                                )
+                            )
+                            logger.info(
+                                f"No classes in '{boundary.name}'; showing classes within "
+                                f"{nearby_radius_km}km of area (nearby neighborhoods)."
+                            )
+                            # Use user's lat/lng for distance sort when available
+                            if req_lat_str and req_lng_str:
+                                try:
+                                    user_location_point = Point(
+                                        float(req_lng_str), float(req_lat_str), srid=4326
+                                    )
+                                except (ValueError, TypeError):
+                                    user_location_point = centroid
+                            else:
+                                user_location_point = centroid
+                    except Exception as e:
+                        logger.warning(f"Boundary fallback failed: {e}")
+                        queryset = queryset_before_fallback
 
             elif req_lat_str and req_lng_str and not is_province_search:
                 try:
@@ -859,12 +1033,18 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 serializer = self.get_serializer(
                     page, many=True, context={"request": request}
                 )
-                return self.get_paginated_response(serializer.data)
+                response = self.get_paginated_response(serializer.data)
+                if preset_cache_key:
+                    cache.set(preset_cache_key, response.data, timeout=PRESET_CACHE_TTL)
+                return response
 
             serializer = self.get_serializer(
                 queryset, many=True, context={"request": request}
             )
-            return Response(serializer.data)
+            response = Response(serializer.data)
+            if preset_cache_key:
+                cache.set(preset_cache_key, response.data, timeout=PRESET_CACHE_TTL)
+            return response
 
         except Exception as e:
             logger.error(f"Public class search error: {str(e)}", exc_info=True)

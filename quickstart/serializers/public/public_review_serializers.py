@@ -2,6 +2,8 @@ import os
 import logging
 from django.conf import settings
 from rest_framework import serializers
+
+from quickstart.utils.url_utils import build_cloudfront_url
 from quickstart.models import CustomUser, ImportedGoogleReview, Reviews
 
 logger = logging.getLogger(__name__)
@@ -79,7 +81,7 @@ class UserReviewSerializer(serializers.ModelSerializer):
         # Remove original extension and add .webp
         base_path, _ = os.path.splitext(original_path)
         resized_path = base_path.replace("originals/", "public/thumb/", 1) + ".webp"
-        final_url = f"{settings.CLOUDFRONT_DOMAIN}/{resized_path}"
+        final_url = build_cloudfront_url(resized_path)
         logger.info(f"UserReviewSerializer: Returning avatar URL: {final_url}")
         return final_url
 
@@ -137,7 +139,7 @@ class PublicReviewSerializer(serializers.ModelSerializer):
             final_path = resized_base_path + ".webp"
 
             # 4. Construct the full URL
-            final_url = f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
+            final_url = build_cloudfront_url(final_path)
             logger.info(
                 f"PublicReviewSerializer: Returning {size_name} URL: {final_url}"
             )
@@ -208,7 +210,7 @@ class ImportedGoogleReviewSerializer(serializers.ModelSerializer):
 
         # If it's already in public/, return as-is (legacy data)
         if original_path.startswith("public/"):
-            final_url = f"{settings.CLOUDFRONT_DOMAIN}/{original_path}"
+            final_url = build_cloudfront_url(original_path)
             logger.info(
                 f"ImportedGoogleReviewSerializer: Legacy avatar, returning: {final_url}"
             )
@@ -218,7 +220,7 @@ class ImportedGoogleReviewSerializer(serializers.ModelSerializer):
         if original_path.startswith("originals/"):
             base_path, _ = os.path.splitext(original_path)
             thumb_path = base_path.replace("originals/", "public/thumb/", 1) + ".webp"
-            final_url = f"{settings.CLOUDFRONT_DOMAIN}/{thumb_path}"
+            final_url = build_cloudfront_url(thumb_path)
             logger.info(
                 f"ImportedGoogleReviewSerializer: Converted avatar to: {final_url}"
             )
@@ -251,7 +253,7 @@ class ImportedGoogleReviewSerializer(serializers.ModelSerializer):
                 processed_path = (
                     base_path.replace("originals/", f"public/{size_name}/", 1) + ".webp"
                 )
-                final_url = f"{settings.CLOUDFRONT_DOMAIN}/{processed_path}"
+                final_url = build_cloudfront_url(processed_path)
                 logger.info(
                     f"ImportedGoogleReviewSerializer: Converted image {idx} to: {final_url}"
                 )

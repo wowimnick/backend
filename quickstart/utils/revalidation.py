@@ -120,3 +120,16 @@ def trigger_multiple_revalidations(
     )
 
     return results
+
+
+# Tag constants for consistent revalidation across the platform
+REVALIDATION_TAGS = {
+    "classes_search": "classes-search",
+    "homepage_content": "homepage-content",
+    "homepage_classes": "homepage-classes",
+    "classes": "classes",
+    "businesses_list": "businesses-list",
+    "business_categories": "business-categories",
+    "categories": "categories",
+    "collections": "collections",
+}

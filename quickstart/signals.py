@@ -9,9 +9,10 @@ from django.db import transaction
 
 from allauth.account.signals import email_changed
 
-from django.db.models.signals import pre_save, post_save
+from django.db.models.signals import pre_save, post_save, post_delete
 from django.contrib.contenttypes.models import ContentType
 from django.utils import timezone
+from django.contrib.postgres.search import SearchVector
 
 from django.contrib.auth.models import Permission
 from django.core.cache import cache
@@ -22,6 +23,9 @@ from .models import (
     BusinessRole,
     BusinessStaff,
     ClassCollection,
+    ClassCategory,
+    ClassSubcategory,
+    Contact,
     Reviews,
     Payment,
     Notification,
@@ -30,9 +34,23 @@ from .models import (
     ClassesMain,
     ClassOption,
     Schedule,
+    ScheduleInstance,
+    StudentNote,
     VerificationRequest,
     Payout,
 )
+
+# Cache key for public class search preset cache version (must match quickstart.views.public.public_class_views)
+PUBLIC_CLASS_SEARCH_PRESET_VERSION_KEY = "public_class_search_preset_version"
+
+
+def _invalidate_public_class_search_preset_cache():
+    """Bump version so all preset location search cache keys are effectively invalidated."""
+    try:
+        version = cache.get(PUBLIC_CLASS_SEARCH_PRESET_VERSION_KEY, 0) or 0
+        cache.set(PUBLIC_CLASS_SEARCH_PRESET_VERSION_KEY, version + 1, timeout=None)
+    except Exception as e:
+        logger.warning("Failed to invalidate public class search preset cache: %s", e)
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -507,6 +525,19 @@ def notify_users_of_new_schedule(sender, instance: Schedule, created, **kwargs):
             f"Error in notify_users_of_new_schedule signal for schedule {instance.id}: {e}",
             exc_info=True,
         )
+    _invalidate_public_class_search_preset_cache()
+
+
+@receiver(post_delete, sender=Schedule)
+def schedule_post_delete_invalidate_search_cache(sender, instance, **kwargs):
+    _invalidate_public_class_search_preset_cache()
+
+
+@receiver(post_save, sender=ScheduleInstance)
+@receiver(post_delete, sender=ScheduleInstance)
+def schedule_instance_change_invalidate_search_cache(sender, instance, **kwargs):
+    _invalidate_public_class_search_preset_cache()
+
 
 @receiver(post_save, sender=ClassesMain)
 def trigger_classification(sender, instance, created, update_fields, **kwargs):
@@ -702,4 +733,179 @@ def create_default_business_role(sender, instance, created, **kwargs):
             status="accepted",  # The owner is automatically accepted
             invited_email=instance.owner.email,
             invited_by=instance.owner,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Search vector and contact/booking signals (moved from models.py)
+# ---------------------------------------------------------------------------
+
+
+def get_classesmain_search_vector(instance):
+    """Build the search vector for a ClassesMain instance (for full-text search)."""
+    from django.db.models import Value
+
+    vector_components = [
+        SearchVector(Value(instance.title), weight="A", config="english"),
+        SearchVector(Value(instance.description), weight="B", config="english"),
+    ]
+    if instance.businessId:
+        vector_components.append(
+            SearchVector(
+                Value(instance.businessId.businessName), weight="B", config="english"
+            )
+        )
+    if instance.category:
+        vector_components.append(
+            SearchVector(
+                Value(instance.category.name), weight="C", config="pg_catalog.english"
+            )
+        )
+    if instance.subcategory:
+        vector_components.append(
+            SearchVector(
+                Value(instance.subcategory.name),
+                weight="D",
+                config="pg_catalog.english",
+            )
+        )
+    if not vector_components:
+        return SearchVector(Value(""))
+    final_vector = vector_components[0]
+    for component in vector_components[1:]:
+        final_vector += component
+    return final_vector
+
+
+@receiver(post_save, sender=ClassesMain)
+def classesmain_post_save_receiver(sender, instance, created, update_fields, **kwargs):
+    if kwargs.get("raw", False):
+        return
+    should_update = created
+    if not created and update_fields:
+        text_fields = {"title", "description"}
+        if any(f in update_fields for f in text_fields):
+            should_update = True
+    elif not created and update_fields is None:
+        should_update = True
+    if should_update:
+        new_vector = get_classesmain_search_vector(instance)
+        if instance.search_vector != new_vector:
+            ClassesMain.objects.filter(pk=instance.pk).update(search_vector=new_vector)
+    _invalidate_public_class_search_preset_cache()
+
+
+@receiver(post_delete, sender=ClassesMain)
+def classesmain_post_delete_invalidate_search_cache(sender, instance, **kwargs):
+    _invalidate_public_class_search_preset_cache()
+
+
+@receiver(post_save, sender="quickstart.ClassOption")
+@receiver(post_delete, sender="quickstart.ClassOption")
+def classoption_change_receiver(sender, instance, **kwargs):
+    if hasattr(instance, "classId") and instance.classId:
+        class_instance = instance.classId
+        new_vector = get_classesmain_search_vector(class_instance)
+        if class_instance.search_vector != new_vector:
+            ClassesMain.objects.filter(pk=class_instance.pk).update(
+                search_vector=new_vector
+            )
+    _invalidate_public_class_search_preset_cache()
+
+
+@receiver(post_save, sender="quickstart.ClassCategory")
+def classcategory_change_receiver(sender, instance, update_fields, **kwargs):
+    if kwargs.get("raw", False):
+        return
+    if update_fields is None or "name" in update_fields:
+        with transaction.atomic():
+            for class_instance in instance.classes_in_category.iterator():
+                new_vector = get_classesmain_search_vector(class_instance)
+                if class_instance.search_vector != new_vector:
+                    ClassesMain.objects.filter(pk=class_instance.pk).update(
+                        search_vector=new_vector
+                    )
+
+
+@receiver(post_save, sender="quickstart.ClassSubcategory")
+def classsubcategory_change_receiver(sender, instance, update_fields, **kwargs):
+    if kwargs.get("raw", False):
+        return
+    if update_fields is None or "name" in update_fields:
+        with transaction.atomic():
+            for class_instance in instance.classes_in_subcategory.iterator():
+                new_vector = get_classesmain_search_vector(class_instance)
+                if class_instance.search_vector != new_vector:
+                    ClassesMain.objects.filter(pk=class_instance.pk).update(
+                        search_vector=new_vector
+                    )
+
+
+@receiver(post_save, sender=CustomUser)
+def link_contact_on_user_creation(sender, instance, created, **kwargs):
+    """After a new user registers, link them to an existing CRM contact if one exists."""
+    if created and instance.email:
+        try:
+            with transaction.atomic():
+                contact_to_link = Contact.objects.select_for_update().get(
+                    email__iexact=instance.email, user__isnull=True
+                )
+                contact_to_link.user = instance
+                if instance.first_name and not contact_to_link.first_name:
+                    contact_to_link.first_name = instance.first_name
+                if instance.last_name and not contact_to_link.last_name:
+                    contact_to_link.last_name = instance.last_name
+                if instance.phone_number and not contact_to_link.phone_number:
+                    contact_to_link.phone_number = instance.phone_number
+                contact_to_link.save()
+                logger.info(
+                    f"Successfully linked new user {instance.email} to existing CRM Contact ID {contact_to_link.id}."
+                )
+        except Contact.DoesNotExist:
+            pass
+        except Exception as e:
+            logger.error(
+                f"Error linking new user {instance.email} to a CRM contact: {e}",
+                exc_info=True,
+            )
+
+
+@receiver(post_delete, sender="quickstart.Contact")
+def delete_contact_notes(sender, instance, **kwargs):
+    """When a Contact is deleted, delete any StudentNote records that point to it."""
+    content_type = ContentType.objects.get_for_model(instance)
+    StudentNote.objects.filter(
+        content_type=content_type, object_id=instance.pk
+    ).delete()
+    logger.info(f"Deleted all notes associated with Contact ID {instance.pk}.")
+
+
+@receiver(post_save, sender=Booking)
+def create_contact_on_first_booking(sender, instance, created, **kwargs):
+    """When a booking is first created, ensure a Contact record exists for the user at the business."""
+    if not instance.user or not created:
+        return
+    try:
+        with transaction.atomic():
+            user = instance.user
+            business = instance.schedule_instance.schedule.option.classId.businessId
+            contact, contact_created = Contact.objects.get_or_create(
+                business=business,
+                user=user,
+                defaults={
+                    "first_name": user.first_name or "",
+                    "last_name": user.last_name or "",
+                    "email": user.email,
+                    "phone_number": user.phone_number or "",
+                    "source": "platform_booking",
+                },
+            )
+            if contact_created:
+                logger.info(
+                    f"Automatically created Contact for user '{user.email}' at business '{business.businessName}' due to new booking."
+                )
+    except Exception as e:
+        logger.error(
+            f"Could not create Contact on booking for user {instance.user.userId}: {e}",
+            exc_info=True,
         )

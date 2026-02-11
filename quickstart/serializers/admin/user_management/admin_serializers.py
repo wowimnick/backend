@@ -2,6 +2,8 @@ import os
 from django.conf import settings
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
+
+from quickstart.utils.url_utils import build_cloudfront_url
 from django.db.models import Count
 
 from ....models import Booking, Role
@@ -118,7 +120,7 @@ class AdminUserListSerializer(serializers.ModelSerializer):
         resized_base_path = base_path.replace("originals/", "public/thumb/", 1)
         webp_path = resized_base_path + ".webp"
 
-        return f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
+        return build_cloudfront_url(webp_path)
 
     def get_owned_business_name(self, obj):
         businesses = obj.owned_businesses.all()
@@ -205,7 +207,7 @@ class AdminUserDetailSerializer(serializers.ModelSerializer):
         resized_base_path = base_path.replace("originals/", "public/thumb/", 1)
         webp_path = resized_base_path + ".webp"
 
-        return f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
+        return build_cloudfront_url(webp_path)
 
     def get_avatar_medium_url(self, obj):
         if not obj.avatar or not hasattr(obj.avatar, "name") or not obj.avatar.name:
@@ -221,7 +223,7 @@ class AdminUserDetailSerializer(serializers.ModelSerializer):
         resized_base_path = base_path.replace("originals/", "public/medium/", 1)
         webp_path = resized_base_path + ".webp"
 
-        return f"{settings.CLOUDFRONT_DOMAIN}/{webp_path}"
+        return build_cloudfront_url(webp_path)
 
     def get_owned_businesses_info(self, obj):
         # Using the prefetched related manager

@@ -1,12 +1,12 @@
 from rest_framework import viewsets, status, serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
 from django.db.models import Q, F, Avg
 from django.contrib.auth import get_user_model
 from quickstart.models import SupportTicket, TicketMessage, TicketHistoryLog
 from rest_framework.pagination import PageNumberPagination
+from quickstart.utils.permissions import IsAuthenticated, BasePermission, CanAccessSupportAdmin
 
 User = get_user_model()
 
@@ -129,7 +129,7 @@ class StandardResultsSetPagination(PageNumberPagination):
 
 
 class AdminSupportTicketViewSet(viewsets.ReadOnlyModelViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, CanAccessSupportAdmin]
     queryset = (
         SupportTicket.objects.select_related("user", "assigned_to")
         .prefetch_related("conversation__sender")
@@ -145,13 +145,6 @@ class AdminSupportTicketViewSet(viewsets.ReadOnlyModelViewSet):
         )
 
     def list(self, request, *args, **kwargs):
-        # FIX: Add explicit permission check for this admin-only endpoint
-        if not request.user.has_perm("quickstart.access_support_admin"):
-            return Response(
-                {"detail": "You do not have permission to access this resource."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
         queryset = self.get_queryset().order_by("-updated_at")
         filters = request.query_params
         if filters.get("status") and filters["status"] != "all":

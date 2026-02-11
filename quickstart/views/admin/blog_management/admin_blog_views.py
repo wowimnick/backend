@@ -1,9 +1,10 @@
-from rest_framework import viewsets, permissions, filters, status
+from rest_framework import viewsets, filters, status
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from django.db.models import Count
 from django.db.models.deletion import ProtectedError
 
+from quickstart.utils.permissions import IsAuthenticated, CanAccessBlogAdmin
 from quickstart.utils.revalidation import trigger_nextjs_revalidation
 from quickstart.serializers.admin.blog_management.admin_blog_serializers import (
     AdminBlogCategorySerializer,
@@ -16,24 +17,11 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class CanAccessBlogAdmin(permissions.BasePermission):
-    """
-    Allows access only to users with the 'access_blog_admin' permission.
-    """
-
-    def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.has_perm("quickstart.access_blog_admin")
-        )
-
-
 # --- Admin Views ---
 class AdminBlogPostViewSet(viewsets.ModelViewSet):
     """Admin viewset for managing blog posts."""
 
-    permission_classes = [permissions.IsAuthenticated, CanAccessBlogAdmin]
+    permission_classes = [IsAuthenticated, CanAccessBlogAdmin]
     serializer_class = AdminBlogPostSerializer
     queryset = BlogPost.objects.all().select_related("author", "category")
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
@@ -113,10 +101,7 @@ class AdminBlogPostViewSet(viewsets.ModelViewSet):
 class AdminBlogCategoryViewSet(viewsets.ModelViewSet):
     """Admin viewset for managing blog categories."""
 
-    permission_classes = [
-        permissions.IsAuthenticated,
-        CanAccessBlogAdmin,
-    ]
+    permission_classes = [IsAuthenticated, CanAccessBlogAdmin]
     serializer_class = AdminBlogCategorySerializer
     queryset = BlogCategory.objects.annotate(post_count=Count("posts"))
 

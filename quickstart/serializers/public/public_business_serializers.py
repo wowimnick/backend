@@ -1,6 +1,8 @@
 import os
 from django.conf import settings
 from rest_framework import serializers
+
+from quickstart.utils.url_utils import build_cloudfront_url
 from quickstart.models import BusinessInfo, Reviews, ImportedGoogleReview
 from .public_class_serializers import PublicClassSerializer
 from .public_review_serializers import (
@@ -85,7 +87,7 @@ class PublicBusinessInfoSerializer(serializers.ModelSerializer):
                 "originals/", f"public/{size_name}/", 1
             )
             final_path = resized_base_path + ".webp"
-            return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
+            return build_cloudfront_url(final_path)
         return None
 
     def get_business_image_medium_url(self, obj):

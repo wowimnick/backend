@@ -43,7 +43,37 @@ from quickstart.utils.email_utils import (
 
 import logging
 
+from quickstart.utils.revalidation import (
+    trigger_nextjs_revalidation,
+    trigger_multiple_revalidations,
+)
+
 logger = logging.getLogger(__name__)
+
+
+def _revalidate_for_booking(booking):
+    """Trigger Next.js cache revalidation for pages affected by a booking (create/cancel/update)."""
+    if not booking:
+        return
+    try:
+        option = booking.schedule_instance.schedule.option
+        class_obj = option.classId
+        business = class_obj.businessId
+        class_slug = getattr(class_obj, "slug", None) or str(class_obj.classId)
+        business_slug = getattr(business, "slug", None) or str(business.businessId)
+        tags = [
+            "classes-search",
+            "homepage-content",
+            "homepage-classes",
+            "classes",
+            f"class-{class_slug}",
+            f"business-{business_slug}",
+        ]
+        trigger_multiple_revalidations(tags=tags)
+        if class_slug:
+            trigger_nextjs_revalidation(path=f"/classes/{class_slug}")
+    except Exception as e:
+        logger.warning("Revalidation for booking failed: %s", e)
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 HST_RATE = Decimal("0.13")
@@ -506,6 +536,7 @@ class CreatePaymentIntentView(APIView):
                         "status": "confirmed",
                         "message": "Booking confirmed successfully.",
                     }
+                    _revalidate_for_booking(first_booking)
                     return Response(response_data)
 
                 except Exception as e:
@@ -876,6 +907,7 @@ class ProcessBookingWebhook(APIView):
                 logger.warning(
                     f"Marked Booking {booking_record.id} and Payment {payment_record.id} as FAILED. Reason: {reason}"
                 )
+                _revalidate_for_booking(booking_record)
         except (Payment.DoesNotExist, Booking.DoesNotExist):
             logger.error(
                 f"FAILURE_MARKER: Could not find pending booking/payment for PI {payment_intent_id} to mark as failed."
@@ -901,6 +933,7 @@ class ProcessBookingWebhook(APIView):
             scheduled_date = (
                 meta.get("scheduled_date") if meta.get("scheduled_date") else None
             )
+            send_to_self = meta.get("send_to_self", "").lower() in ("true", "1", "yes")
 
             # Create Gift Card
             gc = GiftCard.objects.create(
@@ -910,10 +943,10 @@ class ProcessBookingWebhook(APIView):
                 recipient_name=meta.get("recipient_name"),
                 sender_name=meta.get("sender_name"),
                 message=meta.get("message", ""),
-                # NEW: Save the design URL
                 design_url=meta.get("design_url"),
                 is_scheduled=is_scheduled,
                 scheduled_date=scheduled_date,
+                send_to_self=send_to_self,
                 stripe_payment_intent_id=payment_intent.id,
             )
 
@@ -1035,6 +1068,7 @@ class ProcessBookingWebhook(APIView):
                         logger.info(
                             f"Set booking {booking_to_fail.id} to cancelled due to failed payment."
                         )
+                        _revalidate_for_booking(booking_to_fail)
 
             except Payment.DoesNotExist:
                 logger.warning(
@@ -1331,6 +1365,7 @@ class ProcessBookingWebhook(APIView):
                 logger.info(
                     f"[{webhook_id}] 1/N Payout processed. Total Net: {total_net_payout_to_business}, Per Booking: {share_per_booking}"
                 )
+                _revalidate_for_booking(first_booking)
                 return {"message": "Course payment processed successfully"}
 
         except Exception as e:
@@ -1602,6 +1637,7 @@ class ProcessBookingWebhook(APIView):
                 if recipient and recipient.email:
                     send_business_new_booking_email(recipient, pending_booking)
 
+        _revalidate_for_booking(pending_booking)
         return {
             "booking_id": pending_booking.id,
             "user_facing_reference": pending_booking.user_facing_reference,
@@ -1767,6 +1803,7 @@ class CancelPendingBookingView(APIView):
                     booking = payment.booking
 
                     if booking:
+                        _revalidate_for_booking(booking)
                         # If it's a course, we need to clean up the whole group and enrollment
                         if booking.booking_group_id:
                             # Delete Enrollment (Parent)

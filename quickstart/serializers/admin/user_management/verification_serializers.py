@@ -3,6 +3,8 @@
 import os
 from django.conf import settings
 from rest_framework import serializers
+
+from quickstart.utils.url_utils import build_cloudfront_url
 from django.utils import timezone
 from ....models import VerificationRequest, VerificationDocument
 
@@ -98,7 +100,7 @@ class VerificationRequestListSerializer(serializers.ModelSerializer):
             return None
         # The logic to create the thumb URL is already correct.
         final_path = original_path.replace("originals/", "public/thumb/", 1)
-        return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
+        return build_cloudfront_url(final_path)
 
     def get_business_avatar(self, obj):
         if (
@@ -114,7 +116,7 @@ class VerificationRequestListSerializer(serializers.ModelSerializer):
         if not original_path.startswith("originals/"):
             return None
         final_path = original_path.replace("originals/", "public/thumb/", 1)
-        return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
+        return build_cloudfront_url(final_path)
 
     def get_reviewer_name(self, obj):
         if obj.reviewed_by:
@@ -227,7 +229,7 @@ class VerificationRequestDetailSerializer(serializers.ModelSerializer):
         final_path = original_path.replace(
             "originals/", "public/medium/", 1
         )  # Using medium for detail
-        return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
+        return build_cloudfront_url(final_path)
 
     def get_business_image_medium_url(self, obj):
         if (
@@ -243,7 +245,7 @@ class VerificationRequestDetailSerializer(serializers.ModelSerializer):
         if not original_path.startswith("originals/"):
             return None
         final_path = original_path.replace("originals/", "public/medium/", 1)
-        return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
+        return build_cloudfront_url(final_path)
 
 
 class VerificationSubmissionSerializer(serializers.ModelSerializer):

@@ -1,6 +1,7 @@
 from .auth.auth_views import (
     CustomTokenObtainPairView,
     CustomTokenRefreshView,
+    EndImpersonationView,
     LogoutView,
     UserUpdateView,
     CustomRegisterView,
@@ -103,6 +104,7 @@ __all__ = [
     # Auth Views
     "CustomTokenObtainPairView",
     "CustomTokenRefreshView",
+    "EndImpersonationView",
     "LogoutView",
     "UserUpdateView",
     "CustomRegisterView",

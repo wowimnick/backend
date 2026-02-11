@@ -3,6 +3,8 @@
 import os
 from django.conf import settings
 from rest_framework import serializers
+
+from quickstart.utils.url_utils import build_cloudfront_url
 from dj_rest_auth.registration.serializers import RegisterSerializer
 from dj_rest_auth.serializers import LoginSerializer as DefaultLoginSerializer
 from django.contrib.auth import get_user_model
@@ -106,7 +108,7 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
 
         original_path = obj.avatar.name
         if "originals/" not in original_path:
-            return f"{settings.CLOUDFRONT_DOMAIN}/{original_path}"
+            return build_cloudfront_url(original_path)
 
         if size:
             base_name, _ = os.path.splitext(original_path.replace("originals/", "", 1))
@@ -114,7 +116,7 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
         else:
             final_path = original_path
 
-        return f"{settings.CLOUDFRONT_DOMAIN}/{final_path}"
+        return build_cloudfront_url(final_path)
 
     def get_avatar_thumb_url(self, obj):
         return self._get_avatar_url(obj, "thumb")
@@ -125,7 +127,7 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
     def get_avatar_original_url(self, obj):
         if not obj.avatar or not hasattr(obj.avatar, "name") or not obj.avatar.name:
             return None
-        return f"{settings.CLOUDFRONT_DOMAIN}/{obj.avatar.name}"
+        return build_cloudfront_url(obj.avatar.name)
 
     def get_permissions(self, user):
         # MODIFIED: Combine base permissions with business role permissions
