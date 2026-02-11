@@ -34,10 +34,23 @@ from .models import (
     ClassesMain,
     ClassOption,
     Schedule,
+    ScheduleInstance,
     StudentNote,
     VerificationRequest,
     Payout,
 )
+
+# Cache key for public class search preset cache version (must match quickstart.views.public.public_class_views)
+PUBLIC_CLASS_SEARCH_PRESET_VERSION_KEY = "public_class_search_preset_version"
+
+
+def _invalidate_public_class_search_preset_cache():
+    """Bump version so all preset location search cache keys are effectively invalidated."""
+    try:
+        version = cache.get(PUBLIC_CLASS_SEARCH_PRESET_VERSION_KEY, 0) or 0
+        cache.set(PUBLIC_CLASS_SEARCH_PRESET_VERSION_KEY, version + 1, timeout=None)
+    except Exception as e:
+        logger.warning("Failed to invalidate public class search preset cache: %s", e)
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -512,6 +525,19 @@ def notify_users_of_new_schedule(sender, instance: Schedule, created, **kwargs):
             f"Error in notify_users_of_new_schedule signal for schedule {instance.id}: {e}",
             exc_info=True,
         )
+    _invalidate_public_class_search_preset_cache()
+
+
+@receiver(post_delete, sender=Schedule)
+def schedule_post_delete_invalidate_search_cache(sender, instance, **kwargs):
+    _invalidate_public_class_search_preset_cache()
+
+
+@receiver(post_save, sender=ScheduleInstance)
+@receiver(post_delete, sender=ScheduleInstance)
+def schedule_instance_change_invalidate_search_cache(sender, instance, **kwargs):
+    _invalidate_public_class_search_preset_cache()
+
 
 @receiver(post_save, sender=ClassesMain)
 def trigger_classification(sender, instance, created, update_fields, **kwargs):
@@ -776,6 +802,12 @@ def classesmain_post_save_receiver(sender, instance, created, update_fields, **k
         new_vector = get_classesmain_search_vector(instance)
         if instance.search_vector != new_vector:
             ClassesMain.objects.filter(pk=instance.pk).update(search_vector=new_vector)
+    _invalidate_public_class_search_preset_cache()
+
+
+@receiver(post_delete, sender=ClassesMain)
+def classesmain_post_delete_invalidate_search_cache(sender, instance, **kwargs):
+    _invalidate_public_class_search_preset_cache()
 
 
 @receiver(post_save, sender="quickstart.ClassOption")
@@ -788,6 +820,7 @@ def classoption_change_receiver(sender, instance, **kwargs):
             ClassesMain.objects.filter(pk=class_instance.pk).update(
                 search_vector=new_vector
             )
+    _invalidate_public_class_search_preset_cache()
 
 
 @receiver(post_save, sender="quickstart.ClassCategory")
