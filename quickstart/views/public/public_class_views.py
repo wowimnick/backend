@@ -53,6 +53,7 @@ from urllib.parse import quote
 from datetime import (
     datetime,
     time,
+    timedelta,
 )
 
 from quickstart.models import (
@@ -414,6 +415,25 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         date_night_qs = date_night_qs.order_by('?')[:10]
         
         data["date_night"] = HomepageClassSerializer(date_night_qs, many=True, context=context).data
+
+        # 3b. Next Week — classes with at least one schedule in the next calendar week, ordered by most reviews
+        today = timezone.now().date()
+        # Next Monday (weekday 0); if today is Monday, "next week" starts next Monday
+        days_until_next_monday = (7 - today.weekday()) % 7
+        if days_until_next_monday == 0:
+            days_until_next_monday = 7
+        next_week_start = today + timedelta(days=days_until_next_monday)
+        next_week_end = next_week_start + timedelta(days=6)
+        next_week_instances = ScheduleInstance.objects.filter(
+            schedule__option__classId=OuterRef("pk"),
+            date__gte=next_week_start,
+            date__lte=next_week_end,
+            status="scheduled",
+        )
+        next_week_qs = base_qs.filter(Exists(next_week_instances)).order_by(
+            "-review_count", "-average_rating"
+        )[:10]
+        data["next_week"] = HomepageClassSerializer(next_week_qs, many=True, context=context).data
 
         # 4. Mode Selection (Categories vs Collections pills)
         mode = request.query_params.get('mode', 'categories')
