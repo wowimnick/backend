@@ -352,6 +352,9 @@ CELERY_BEAT_SCHEDULE = {
 CELERYD_PREFETCH_MULTIPLIER = 1  # Worker only grabs 1 task at a time
 CELERY_ACKS_LATE = True  # Don't acknowledge task until it's actually completed
 
+# Use Django's LOGGING config in worker so task logs (e.g. prewarm) show at INFO
+CELERY_WORKER_HIJACK_ROOT_LOGGER = False
+
 # Email-specific settings
 EMAIL_RATE_LIMIT_SETTINGS = {
     "RESEND_RATE_LIMIT": 2,  # requests per second
