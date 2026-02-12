@@ -85,8 +85,12 @@ from quickstart.serializers import (
 from django.contrib.gis.geos import Point
 from django.contrib.gis.db.models.functions import Distance
 from django.contrib.gis.measure import D
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
+
+# Scope cache keys by environment so staging and prod share Redis without clearing each other's cache
+_CACHE_ENV = getattr(settings, "DJANGO_ENV", "local")
 
 DEFAULT_SEARCH_RADIUS_KM = 80
 W_FEATURED = 1.3
@@ -148,8 +152,8 @@ PRESET_LOCATIONS = {
     "North York": (43.7615, -79.4111),
 }
 PRESET_CACHE_PREFIX = "public_class_search_preset"
-# Version key must match PUBLIC_CLASS_SEARCH_PRESET_VERSION_KEY in quickstart.signals
-PRESET_CACHE_VERSION_KEY = "public_class_search_preset_version"
+# Version key per env so staging/prod can share Redis without clearing each other
+PRESET_CACHE_VERSION_KEY = f"public_class_search_preset_version:{_CACHE_ENV}"
 # TTL so old keys expire and Redis does not grow unbounded (OOM). Version invalidation still avoids stale reads.
 PRESET_CACHE_TTL = 24 * 60 * 60  # 24 hours
 _prewarm_version_local = threading.local()
@@ -163,8 +167,8 @@ PRESET_CATEGORY_CACHE_PREFIX = "public_class_search_preset_category"
 # Category-only or category+subcategory (no location); same version invalidation for explore page
 CATEGORY_ONLY_CACHE_PREFIX = "public_class_search_category_only"
 PRESET_PREWARM_PAGE_SIZE = 50
-# Collections list (homepage_content mode=collections); invalidate when a collection is created/updated/deleted
-HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY = "homepage_content_collections"
+# Collections list (homepage_content mode=collections); per-env so staging/prod don't overwrite
+HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY = f"homepage_content_collections:{_CACHE_ENV}"
 HOMEPAGE_CONTENT_COLLECTIONS_CACHE_TIMEOUT = 60 * 60  # 1 hour (only used until next collection change)
 
 
@@ -228,7 +232,7 @@ def _build_preset_search_cache_key(request, search_name):
     version = _get_preset_search_cache_version()
     # Normalize location for key (e.g. "North York" -> "north_york")
     location_slug = search_name.lower().replace(" ", "_")
-    return f"{PRESET_CACHE_PREFIX}:v{version}:{location_slug}:p{page}:ps{page_size}:n{participants}:s{sort_by}:{start_date}:{end_date}"
+    return f"{PRESET_CACHE_PREFIX}:{_CACHE_ENV}:v{version}:{location_slug}:p{page}:ps{page_size}:n{participants}:s{sort_by}:{start_date}:{end_date}"
 
 
 def invalidate_public_class_search_preset_cache():
@@ -295,7 +299,7 @@ def _build_collection_search_cache_key(request, collection_slug):
     end_date = request.query_params.get("end_date") or ""
     version = _get_preset_search_cache_version()
     slug = (collection_slug or "").lower().replace(" ", "_")
-    return f"{COLLECTION_CACHE_PREFIX}:v{version}:{slug}:p{page}:ps{page_size}:n{participants}:s{sort_by}:{start_date}:{end_date}"
+    return f"{COLLECTION_CACHE_PREFIX}:{_CACHE_ENV}:v{version}:{slug}:p{page}:ps{page_size}:n{participants}:s{sort_by}:{start_date}:{end_date}"
 
 
 def _build_preset_location_collection_cache_key(request, search_name, collection_slug):
@@ -315,7 +319,7 @@ def _build_preset_location_collection_cache_key(request, search_name, collection
     version = _get_preset_search_cache_version()
     location_slug = (search_name or "").lower().replace(" ", "_")
     coll_slug = (collection_slug or "").lower().replace(" ", "_")
-    return f"{PRESET_COLLECTION_CACHE_PREFIX}:v{version}:{location_slug}:{coll_slug}:p{page}:ps{page_size}:n{participants}:s{sort_by}:{start_date}:{end_date}"
+    return f"{PRESET_COLLECTION_CACHE_PREFIX}:{_CACHE_ENV}:v{version}:{location_slug}:{coll_slug}:p{page}:ps{page_size}:n{participants}:s{sort_by}:{start_date}:{end_date}"
 
 
 def _build_preset_location_category_cache_key(
@@ -338,7 +342,7 @@ def _build_preset_location_category_cache_key(
     location_slug = (search_name or "").lower().replace(" ", "_")
     cat_slug = (category_key or "").lower().replace(" ", "_")
     sub_slug = (subcategory_key or "").lower().replace(" ", "_") if subcategory_key else ""
-    return f"{PRESET_CATEGORY_CACHE_PREFIX}:v{version}:{location_slug}:{cat_slug}:{sub_slug}:p{page}:ps{page_size}:n{participants}:s{sort_by}:{start_date}:{end_date}"
+    return f"{PRESET_CATEGORY_CACHE_PREFIX}:{_CACHE_ENV}:v{version}:{location_slug}:{cat_slug}:{sub_slug}:p{page}:ps{page_size}:n{participants}:s{sort_by}:{start_date}:{end_date}"
 
 
 def _is_category_only_request(request):
@@ -376,7 +380,7 @@ def _build_category_only_cache_key(request, category_key, subcategory_key=None):
     version = _get_preset_search_cache_version()
     cat_slug = (category_key or "").lower().replace(" ", "_")
     sub_slug = (subcategory_key or "").lower().replace(" ", "_") if subcategory_key else ""
-    return f"{CATEGORY_ONLY_CACHE_PREFIX}:v{version}:{cat_slug}:{sub_slug}:p{page}:ps{page_size}:n{participants}:s{sort_by}:{start_date}:{end_date}"
+    return f"{CATEGORY_ONLY_CACHE_PREFIX}:{_CACHE_ENV}:v{version}:{cat_slug}:{sub_slug}:p{page}:ps{page_size}:n{participants}:s{sort_by}:{start_date}:{end_date}"
 
 
 def normalize_province_name(location_text):

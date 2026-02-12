@@ -276,6 +276,53 @@ def _run_prewarm(locations=True, collections=True, categories=True):
                             e,
                             exc_info=True,
                         )
+                # Preset location + category + each subcategory (all combinations cached)
+                for sub in cat.subcategories.all().order_by("name"):
+                    skey = (getattr(sub, "key", None) or "").strip()
+                    if not skey:
+                        continue
+                    for page_size in PAGE_SIZES:
+                        params = {
+                            "lat": lat,
+                            "lng": lng,
+                            "location": name,
+                            "location_search": f"{name}, ON",
+                            "category_key": ckey,
+                            "subcategory_key": skey,
+                            "page": "1",
+                            "page_size": str(page_size),
+                        }
+                        try:
+                            resp = client.get(BASE_PATH, params)
+                            if resp.status_code == 200:
+                                count = len(resp.json().get("results", []))
+                                logger.info(
+                                    "Prewarm %s + category %s + subcategory %s (page_size=%s): %s results cached",
+                                    name,
+                                    ckey,
+                                    skey,
+                                    page_size,
+                                    count,
+                                )
+                            else:
+                                logger.warning(
+                                    "Prewarm %s + %s + %s (page_size=%s): HTTP %s",
+                                    name,
+                                    ckey,
+                                    skey,
+                                    page_size,
+                                    resp.status_code,
+                                )
+                        except Exception as e:
+                            logger.warning(
+                                "Prewarm %s + %s + %s (page_size=%s) failed: %s",
+                                name,
+                                ckey,
+                                skey,
+                                page_size,
+                                e,
+                                exc_info=True,
+                            )
 
     # Preset location + collection (e.g. Toronto + trending) — what the frontend often sends
     if locations and collections:

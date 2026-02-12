@@ -15,15 +15,18 @@ def prewarm_class_search_cache_task(
     locations=True, collections=True, categories=True, version=None
 ):
     """
-    Prewarm class search cache for preset locations, collections, and location+category.
+    Prewarm class search cache for preset locations, collections, and location+category+subcategory.
     If version is set (e.g. after invalidation), prewarm fills cache for that version
-    then bumps the live version so users always get cached responses.
+    then bumps the live version and flushes stale keys for the previous version.
     Only runs when IS_DEPLOYED_ENV is True; otherwise no-op.
     """
     from django.conf import settings
     from django.core.cache import cache
     from quickstart.views.public.public_class_views import (
         PRESET_CACHE_VERSION_KEY,
+    )
+    from quickstart.utils.class_search_cache_flush import (
+        flush_class_search_cache_for_version,
     )
 
     if not getattr(settings, "IS_DEPLOYED_ENV", False):
@@ -45,3 +48,7 @@ def prewarm_class_search_cache_task(
                 "Prewarm complete; cache version set to %s.",
                 version,
             )
+            # Remove stale keys for the previous version so cache is properly cleaned
+            old_version = version - 1
+            if old_version >= 0:
+                flush_class_search_cache_for_version(cache, old_version)

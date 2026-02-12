@@ -26,8 +26,9 @@ if [ "$CONTAINER_ROLE" = "web" ]; then
     echo "--- [WEB] Running Django migrations ---"
     python manage.py migrate --no-input
 
-    # Clear public caches on startup so each deploy serves fresh data (no stale image URLs / OOM-stuck cache).
-    echo "--- [WEB] Clearing public caches (homepage + search preset version) ---"
+    # Clear public caches on startup: flush all class search cache keys, bump version, clear homepage cache.
+    # Ensures each deploy starts with a clean cache; prewarm/requests repopulate as needed.
+    echo "--- [WEB] Clearing public caches (homepage + class search flush + version bump) ---"
     python manage.py clear_public_caches || true
 
     echo "--- [WEB] Starting Gunicorn server ---"
