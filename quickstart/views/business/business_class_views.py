@@ -95,7 +95,8 @@ class PublicCategoryViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Provides a list of ALL public class categories. For each category,
     it only includes subcategories that contain at least one class.
-    MODIFIED: This endpoint is now cached for 15 minutes for performance.
+    Cached long-term (30 days); categories rarely change. Invalidated by
+    admin category create/update/delete via Next.js revalidateTag("categories").
     """
 
     permission_classes = [AllowAny]
@@ -119,8 +120,8 @@ class PublicCategoryViewSet(viewsets.ReadOnlyModelViewSet):
             )
         )
 
-    # --- ADDED: Caching decorator for the list view ---
-    @method_decorator(cache_page(60 * 15))  # Cache for 15 minutes
+    # Cache for 30 days so explore page categories load instantly; admin revalidates when needed
+    @method_decorator(cache_page(60 * 60 * 24 * 30))  # 30 days
     @method_decorator(vary_on_headers("Authorization"))
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)

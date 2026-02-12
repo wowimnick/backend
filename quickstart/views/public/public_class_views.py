@@ -160,6 +160,8 @@ COLLECTION_CACHE_PREFIX = "public_class_search_collection"
 PRESET_COLLECTION_CACHE_PREFIX = "public_class_search_preset_collection"
 # Preset location + category (and optional subcategory); same version invalidation
 PRESET_CATEGORY_CACHE_PREFIX = "public_class_search_preset_category"
+# Category-only or category+subcategory (no location); same version invalidation for explore page
+CATEGORY_ONLY_CACHE_PREFIX = "public_class_search_category_only"
 PRESET_PREWARM_PAGE_SIZE = 50
 
 
@@ -239,7 +241,10 @@ def invalidate_public_class_search_preset_cache():
                 from quickstart.tasks.cache_tasks import prewarm_class_search_cache_task
 
                 prewarm_class_search_cache_task.delay(
-                    locations=True, collections=True, version=new_version
+                    locations=True,
+                    collections=True,
+                    categories=True,
+                    version=new_version,
                 )
             except Exception as e:
                 logger.warning(
@@ -323,6 +328,44 @@ def _build_preset_location_category_cache_key(
     cat_slug = (category_key or "").lower().replace(" ", "_")
     sub_slug = (subcategory_key or "").lower().replace(" ", "_") if subcategory_key else ""
     return f"{PRESET_CATEGORY_CACHE_PREFIX}:v{version}:{location_slug}:{cat_slug}:{sub_slug}:p{page}:ps{page_size}:n{participants}:s{sort_by}:{start_date}:{end_date}"
+
+
+def _is_category_only_request(request):
+    """Return True if request has only category (and optional subcategory), no location/collection."""
+    if request.query_params.get("location") or request.query_params.get("location_search"):
+        return False
+    if request.query_params.get("lat") or request.query_params.get("lng"):
+        return False
+    if request.query_params.get("collection"):
+        return False
+    if request.query_params.get("keyword") or request.query_params.get("tag"):
+        return False
+    if request.query_params.get("price_max"):
+        return False
+    category_key = request.query_params.get("category_key")
+    if not category_key or (category_key or "").lower() == "all":
+        return False
+    return True
+
+
+def _build_category_only_cache_key(request, category_key, subcategory_key=None):
+    """Build cache key for category-only or category+subcategory (no location). Explore page instant load."""
+    if request.query_params.get("keyword") or request.query_params.get("tag"):
+        return None
+    if request.query_params.get("collection") or request.query_params.get("price_max"):
+        return None
+    if not category_key or (category_key or "").lower() == "all":
+        return None
+    page = request.query_params.get("page", "1")
+    page_size = request.query_params.get("page_size", "24")
+    participants = request.query_params.get("participants", "1")
+    sort_by = request.query_params.get("sort_by", "relevance")
+    start_date = request.query_params.get("start_date") or ""
+    end_date = request.query_params.get("end_date") or ""
+    version = _get_preset_search_cache_version()
+    cat_slug = (category_key or "").lower().replace(" ", "_")
+    sub_slug = (subcategory_key or "").lower().replace(" ", "_") if subcategory_key else ""
+    return f"{CATEGORY_ONLY_CACHE_PREFIX}:v{version}:{cat_slug}:{sub_slug}:p{page}:ps{page_size}:n{participants}:s{sort_by}:{start_date}:{end_date}"
 
 
 def normalize_province_name(location_text):
@@ -934,6 +977,24 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                         )
                         return Response(cached)
 
+            # Category-only (and category+subcategory) cache: no location, explore page instant load
+            category_only_cache_key = None
+            _cat_key = request.query_params.get("category_key")
+            _sub_key = request.query_params.get("subcategory_key")
+            if _is_category_only_request(request) and _cat_key:
+                category_only_cache_key = _build_category_only_cache_key(
+                    request, _cat_key, _sub_key
+                )
+                if category_only_cache_key:
+                    cached = cache.get(category_only_cache_key)
+                    if cached is not None:
+                        logger.info(
+                            "Returning cached category-only search result for %s%s",
+                            _cat_key,
+                            f"+{_sub_key}" if _sub_key else "",
+                        )
+                        return Response(cached)
+
             # Get Base Queryset
             queryset = self.get_queryset()
 
@@ -1234,6 +1295,12 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     cache.set(
                         collection_cache_key, response.data, timeout=PRESET_CACHE_TTL
                     )
+                if category_only_cache_key:
+                    cache.set(
+                        category_only_cache_key,
+                        response.data,
+                        timeout=PRESET_CACHE_TTL,
+                    )
                 return response
 
             serializer = self.get_serializer(
@@ -1257,6 +1324,10 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             if collection_cache_key:
                 cache.set(
                     collection_cache_key, response.data, timeout=PRESET_CACHE_TTL
+                )
+            if category_only_cache_key:
+                cache.set(
+                    category_only_cache_key, response.data, timeout=PRESET_CACHE_TTL
                 )
             return response
 
