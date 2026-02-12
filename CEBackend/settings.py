@@ -68,9 +68,11 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 
 # --- Security & Network Settings ---
-ALLOWED_HOSTS = os.environ.get(
+_allowed = os.environ.get(
     "ALLOWED_HOSTS", "localhost,127.0.0.1,172.21.16.1"
 ).split(",")
+# testserver: used by Django test client (e.g. cache prewarm in Celery worker)
+ALLOWED_HOSTS = [h.strip() for h in _allowed] + ["testserver"]
 CSRF_TRUSTED_ORIGINS = os.environ.get(
     "CSRF_TRUSTED_ORIGINS", "http://localhost:3000"
 ).split(",")
@@ -260,14 +262,10 @@ CHANNEL_LAYERS = {
     },
 }
 
-if DEBUG:
-    CACHES = {
-        "default": {
-            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-            "LOCATION": "unique-snowflake",
-        }
-    }
-else:
+# Use Redis when we have a cache URL (from CACHE_URL env or default) so prewarm (Celery) and API
+# server share the same cache. Only use LocMem when explicitly no Redis (env unset and no default).
+_use_redis_cache = bool(CACHE_URL)
+if _use_redis_cache:
     CACHES = {
         "default": {
             "BACKEND": "django_redis.cache.RedisCache",
@@ -281,6 +279,13 @@ else:
                 ),
             },
             "KEY_PREFIX": "classeasily",
+        }
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "unique-snowflake",
         }
     }
 
@@ -348,6 +353,9 @@ CELERY_BEAT_SCHEDULE = {
 # Celery Worker Settings - Prevent prefetch issues
 CELERYD_PREFETCH_MULTIPLIER = 1  # Worker only grabs 1 task at a time
 CELERY_ACKS_LATE = True  # Don't acknowledge task until it's actually completed
+
+# Use Django's LOGGING config in worker so task logs (e.g. prewarm) show at INFO
+CELERY_WORKER_HIJACK_ROOT_LOGGER = False
 
 # Email-specific settings
 EMAIL_RATE_LIMIT_SETTINGS = {

@@ -17,6 +17,8 @@ from django.contrib.postgres.search import SearchVector
 from django.contrib.auth.models import Permission
 from django.core.cache import cache
 
+logger = logging.getLogger(__name__)
+
 from quickstart.tasks.business_tasks import classify_class_task, update_trending_collections_task
 from .models import (
     Booking,
@@ -40,19 +42,18 @@ from .models import (
     Payout,
 )
 
-# Cache key for public class search preset cache version (must match quickstart.views.public.public_class_views)
-PUBLIC_CLASS_SEARCH_PRESET_VERSION_KEY = "public_class_search_preset_version"
-
-
 def _invalidate_public_class_search_preset_cache():
-    """Bump version so all preset location search cache keys are effectively invalidated."""
+    """Invalidate and repopulate public class search cache (class/schedule/booking change).
+    Delegates to view so prewarm runs with new version before bump — users always get cached."""
     try:
-        version = cache.get(PUBLIC_CLASS_SEARCH_PRESET_VERSION_KEY, 0) or 0
-        cache.set(PUBLIC_CLASS_SEARCH_PRESET_VERSION_KEY, version + 1, timeout=None)
+        from quickstart.views.public.public_class_views import (
+            invalidate_public_class_search_preset_cache,
+        )
+        invalidate_public_class_search_preset_cache()
     except Exception as e:
         logger.warning("Failed to invalidate public class search preset cache: %s", e)
 
-logger = logging.getLogger(__name__)
+
 User = get_user_model()
 
 @receiver(email_changed)
