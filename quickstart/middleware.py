@@ -107,37 +107,30 @@ class JWTCookieMiddleware:
         return response
 
 
+# Normalized health-check paths (with or without trailing slash).
+_HEALTH_CHECK_PATHS = frozenset({"/health-check", "/api/health-check", "/"})
+
+
 class HealthCheckMiddleware:
     """
-    Enhanced middleware that handles health checks with better error handling
+    Returns 200 for health-check requests before any other middleware or views run.
+    Matches with or without trailing slash so ALB never gets 302/404.
     """
 
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request):
-        # Handle both health check paths
-        if request.path in ["/api/health-check/", "/health-check/"]:
+        path = (request.path or "/").rstrip("/") or "/"
+        if path in _HEALTH_CHECK_PATHS:
             try:
-                logger.debug(
-                    f"Health check request from {request.META.get('REMOTE_ADDR', 'unknown')}"
-                )
-
-                # Always return 200 OK for ELB health checks
                 response = HttpResponse("OK", status=200)
-
-                # Add headers to help with debugging
                 response["X-Health-Check"] = "OK"
                 response["X-Container-ID"] = request.META.get("HOSTNAME", "unknown")
-
                 return response
-
-            except Exception as e:
-                logger.error(f"Health check middleware error: {e}")
-                # Even if there's an error, return 200 for ELB
+            except Exception:
                 return HttpResponse("OK", status=200)
 
-        # If it's not a health check, let Django process the request normally
         return self.get_response(request)
 
 

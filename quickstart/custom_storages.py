@@ -24,7 +24,9 @@ class PrivateMediaStorage(S3Boto3Storage):
     custom_domain = False  # Important: MUST be False for pre-signing to work
 
     querystring_auth = True
-    querystring_expire = 3600  # URLs expire in 1 hour (3600 seconds)
+    # 1 week expiry for read-only GET; cached list/explore responses stay valid.
+    # New requests get fresh URLs; unused old URLs simply expire.
+    querystring_expire = 7 * 24 * 3600  # 604800 seconds = 1 week
 
     def url(self, name, parameters=None, expire=None, http_method=None):
         """
