@@ -150,8 +150,8 @@ PRESET_LOCATIONS = {
 PRESET_CACHE_PREFIX = "public_class_search_preset"
 # Version key must match PUBLIC_CLASS_SEARCH_PRESET_VERSION_KEY in quickstart.signals
 PRESET_CACHE_VERSION_KEY = "public_class_search_preset_version"
-# No TTL: cache lives until invalidated (class/schedule/booking change). Prewarm fills new version before bump so users always get cached.
-PRESET_CACHE_TTL = None
+# TTL so old keys expire and Redis does not grow unbounded (OOM). Version invalidation still avoids stale reads.
+PRESET_CACHE_TTL = 24 * 60 * 60  # 24 hours
 _prewarm_version_local = threading.local()
 
 # Collection-only search cache (no location/category/keyword); same version invalidation as preset
@@ -166,6 +166,14 @@ PRESET_PREWARM_PAGE_SIZE = 50
 # Collections list (homepage_content mode=collections); invalidate when a collection is created/updated/deleted
 HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY = "homepage_content_collections"
 HOMEPAGE_CONTENT_COLLECTIONS_CACHE_TIMEOUT = 60 * 60  # 1 hour (only used until next collection change)
+
+
+def _safe_cache_set(key, value, timeout=None):
+    """Set cache key; on failure (e.g. Redis OOM) log and continue so the request still returns the response."""
+    try:
+        cache.set(key, value, timeout=timeout)
+    except Exception as e:
+        logger.warning("Cache set failed (e.g. Redis OOM): key=%s, error=%s", key, e)
 
 
 def set_prewarm_cache_version(version):
@@ -255,7 +263,7 @@ def invalidate_public_class_search_preset_cache():
                 )
         else:
             # Local/dev: bump immediately so at least cache keys change
-            cache.set(PRESET_CACHE_VERSION_KEY, new_version, timeout=None)
+            _safe_cache_set(PRESET_CACHE_VERSION_KEY, new_version, timeout=None)
     except Exception as e:
         logger.warning("Failed to invalidate preset search cache: %s", e, exc_info=True)
 
@@ -723,7 +731,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             data["collections"] = PublicCollectionSerializer(
                 collections_qs, many=True, context=context
             ).data
-            cache.set(
+            _safe_cache_set(
                 HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY,
                 data,
                 timeout=HOMEPAGE_CONTENT_COLLECTIONS_CACHE_TIMEOUT,
@@ -1296,25 +1304,25 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 )
                 response = self.get_paginated_response(serializer.data)
                 if preset_collection_cache_key:
-                    cache.set(
+                    _safe_cache_set(
                         preset_collection_cache_key,
                         response.data,
                         timeout=PRESET_CACHE_TTL,
                     )
                 if preset_cache_key:
-                    cache.set(preset_cache_key, response.data, timeout=PRESET_CACHE_TTL)
+                    _safe_cache_set(preset_cache_key, response.data, timeout=PRESET_CACHE_TTL)
                 if preset_category_cache_key:
-                    cache.set(
+                    _safe_cache_set(
                         preset_category_cache_key,
                         response.data,
                         timeout=PRESET_CACHE_TTL,
                     )
                 if collection_cache_key:
-                    cache.set(
+                    _safe_cache_set(
                         collection_cache_key, response.data, timeout=PRESET_CACHE_TTL
                     )
                 if category_only_cache_key:
-                    cache.set(
+                    _safe_cache_set(
                         category_only_cache_key,
                         response.data,
                         timeout=PRESET_CACHE_TTL,
@@ -1326,25 +1334,25 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             )
             response = Response(serializer.data)
             if preset_collection_cache_key:
-                cache.set(
+                _safe_cache_set(
                     preset_collection_cache_key,
                     response.data,
                     timeout=PRESET_CACHE_TTL,
                 )
             if preset_cache_key:
-                cache.set(preset_cache_key, response.data, timeout=PRESET_CACHE_TTL)
+                _safe_cache_set(preset_cache_key, response.data, timeout=PRESET_CACHE_TTL)
             if preset_category_cache_key:
-                cache.set(
+                _safe_cache_set(
                     preset_category_cache_key,
                     response.data,
                     timeout=PRESET_CACHE_TTL,
                 )
             if collection_cache_key:
-                cache.set(
+                _safe_cache_set(
                     collection_cache_key, response.data, timeout=PRESET_CACHE_TTL
                 )
             if category_only_cache_key:
-                cache.set(
+                _safe_cache_set(
                     category_only_cache_key, response.data, timeout=PRESET_CACHE_TTL
                 )
             return response

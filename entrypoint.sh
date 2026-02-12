@@ -26,6 +26,10 @@ if [ "$CONTAINER_ROLE" = "web" ]; then
     echo "--- [WEB] Running Django migrations ---"
     python manage.py migrate --no-input
 
+    # Clear public caches on startup so each deploy serves fresh data (no stale image URLs / OOM-stuck cache).
+    echo "--- [WEB] Clearing public caches (homepage + search preset version) ---"
+    python manage.py clear_public_caches || true
+
     echo "--- [WEB] Starting Gunicorn server ---"
     # The 'exec "$@"' will run the CMD from the ECS Task Definition (e.g., gunicorn)
     exec "$@"
