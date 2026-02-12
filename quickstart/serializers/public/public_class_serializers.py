@@ -309,14 +309,16 @@ class PublicClassSerializer(serializers.ModelSerializer):
 
 class HomepageClassImageSerializer(serializers.ModelSerializer):
     """
-    Lightweight image serializer for homepage.
-    Only returns the medium_url to reduce payload size.
+    Lightweight image serializer for homepage (cover/first image only).
+    Returns medium_url (CloudFront) with original_url as fallback when CloudFront
+    is not configured or cache was built without it, so cards show the same way as explore.
     """
+    original_url = serializers.ImageField(source="image", read_only=True)
     medium_url = serializers.SerializerMethodField()
 
     class Meta:
         model = ClassImage
-        fields = ['medium_url'] # Only medium_url requested
+        fields = ["medium_url", "original_url"]
 
     def get_medium_url(self, obj):
         # Re-use logic from PublicClassImageSerializer for consistency
