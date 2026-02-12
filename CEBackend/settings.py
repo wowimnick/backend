@@ -260,14 +260,10 @@ CHANNEL_LAYERS = {
     },
 }
 
-if DEBUG:
-    CACHES = {
-        "default": {
-            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-            "LOCATION": "unique-snowflake",
-        }
-    }
-else:
+# Use Redis when we have a cache URL (from CACHE_URL env or default) so prewarm (Celery) and API
+# server share the same cache. Only use LocMem when explicitly no Redis (env unset and no default).
+_use_redis_cache = bool(CACHE_URL)
+if _use_redis_cache:
     CACHES = {
         "default": {
             "BACKEND": "django_redis.cache.RedisCache",
@@ -281,6 +277,13 @@ else:
                 ),
             },
             "KEY_PREFIX": "classeasily",
+        }
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "unique-snowflake",
         }
     }
 

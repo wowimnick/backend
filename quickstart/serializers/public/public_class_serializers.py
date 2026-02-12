@@ -26,6 +26,16 @@ from django.db.models import Count, Avg
 
 logger = logging.getLogger(__name__)
 
+# Warn about missing CLOUDFRONT_DOMAIN only once per process to avoid log spam (e.g. during cache prewarm).
+_cloudfront_warned = False
+
+
+def _warn_cloudfront_once():
+    global _cloudfront_warned
+    if not _cloudfront_warned and not getattr(settings, "CLOUDFRONT_DOMAIN", None):
+        logger.warning("CLOUDFRONT_DOMAIN is not configured in settings.py")
+        _cloudfront_warned = True
+
 
 class PublicClassImageSerializer(serializers.ModelSerializer):
     """
@@ -53,7 +63,7 @@ class PublicClassImageSerializer(serializers.ModelSerializer):
         Constructs a public CloudFront URL for a resized WebP image.
         """
         if not getattr(settings, "CLOUDFRONT_DOMAIN", None):
-            logger.warning("CLOUDFRONT_DOMAIN is not configured in settings.py")
+            _warn_cloudfront_once()
             return None
 
         if obj.image and obj.image.name:
@@ -449,7 +459,7 @@ class PublicCollectionSerializer(serializers.ModelSerializer):
         Constructs a public CloudFront URL for a resized WebP image.
         """
         if not getattr(settings, "CLOUDFRONT_DOMAIN", None):
-            logger.warning("CLOUDFRONT_DOMAIN is not configured in settings.py")
+            _warn_cloudfront_once()
             return None
 
         if obj.image and obj.image.name:

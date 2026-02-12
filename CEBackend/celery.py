@@ -1,21 +1,34 @@
 import os
-from celery import Celery
-from celery.signals import task_failure 
-from django.conf import settings
-from django.core.cache import cache 
-import time
 import logging
+import time
+
+from celery import Celery
+from celery.signals import task_failure, worker_ready
+from django.conf import settings
+from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
 # Set the default Django settings module for the 'celery' program.
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'CEBackend.settings')
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "CEBackend.settings")
 
-app = Celery('CEBackend')
+app = Celery("CEBackend")
 
-app.config_from_object('django.conf:settings', namespace='CELERY')
+app.config_from_object("django.conf:settings", namespace="CELERY")
 
 app.autodiscover_tasks()
+
+
+@worker_ready.connect
+def on_worker_ready(sender, **kwargs):
+    """In production, prewarm class search cache after worker starts."""
+    if getattr(settings, "IS_DEPLOYED_ENV", False):
+        try:
+            from quickstart.tasks.cache_tasks import prewarm_class_search_cache_task
+            prewarm_class_search_cache_task.delay()
+            logger.info("Enqueued class search cache prewarm task after worker ready.")
+        except Exception as e:
+            logger.warning("Could not enqueue prewarm task: %s", e, exc_info=True)
 
 @task_failure.connect
 def handle_task_failure(sender=None, task_id=None, exception=None, args=None, kwargs=None, traceback=None, einfo=None, **kw):

@@ -1,4 +1,6 @@
 import math
+import random
+import threading
 from django.http import Http404
 from django.shortcuts import get_object_or_404
 from rest_framework import viewsets, filters, status
@@ -148,11 +150,34 @@ PRESET_LOCATIONS = {
 PRESET_CACHE_PREFIX = "public_class_search_preset"
 # Version key must match PUBLIC_CLASS_SEARCH_PRESET_VERSION_KEY in quickstart.signals
 PRESET_CACHE_VERSION_KEY = "public_class_search_preset_version"
-PRESET_CACHE_TTL = 60 * 15  # 15 minutes (fallback; invalidation on class/schedule change is primary)
+# No TTL: cache lives until invalidated (class/schedule/booking change). Prewarm fills new version before bump so users always get cached.
+PRESET_CACHE_TTL = None
+_prewarm_version_local = threading.local()
+
+# Collection-only search cache (no location/category/keyword); same version invalidation as preset
+COLLECTION_CACHE_PREFIX = "public_class_search_collection"
+# Preset location + collection (e.g. Toronto + trending); same version invalidation
+PRESET_COLLECTION_CACHE_PREFIX = "public_class_search_preset_collection"
+# Preset location + category (and optional subcategory); same version invalidation
+PRESET_CATEGORY_CACHE_PREFIX = "public_class_search_preset_category"
+PRESET_PREWARM_PAGE_SIZE = 50
+
+
+def set_prewarm_cache_version(version):
+    """Used by prewarm task so cache keys are written with the new version before it goes live."""
+    _prewarm_version_local.version = version
+
+
+def clear_prewarm_cache_version():
+    """Clear thread-local after prewarm run."""
+    if hasattr(_prewarm_version_local, "version"):
+        delattr(_prewarm_version_local, "version")
 
 
 def _get_preset_search_cache_version():
-    """Get current cache version for preset search; used so invalidation can bump version."""
+    """Current cache version for preset search. Prewarm can set version via thread-local before bumping live."""
+    if hasattr(_prewarm_version_local, "version"):
+        return _prewarm_version_local.version
     return cache.get(PRESET_CACHE_VERSION_KEY, 0) or 0
 
 
@@ -194,13 +219,110 @@ def _build_preset_search_cache_key(request, search_name):
 
 
 def invalidate_public_class_search_preset_cache():
-    """Call when classes/schedules/instances change so preset search cache is refreshed."""
+    """
+    Call when classes/schedules/instances/bookings change. Does NOT bump version immediately:
+    enqueues prewarm with new version; task fills cache for new version then bumps live version,
+    so users always get cached responses (never a refetch in front of them).
+    """
     try:
-        version = _get_preset_search_cache_version()
-        cache.set(PRESET_CACHE_VERSION_KEY, version + 1, timeout=None)
-        logger.info("Invalidated public class search preset cache (version bump).")
+        # Use cache directly so we get live version, not thread-local
+        version = cache.get(PRESET_CACHE_VERSION_KEY, 0) or 0
+        new_version = version + 1
+        logger.info(
+            "Invalidating public class search preset cache (enqueue prewarm for v%s).",
+            new_version,
+        )
+        from django.conf import settings
+
+        if getattr(settings, "IS_DEPLOYED_ENV", False):
+            try:
+                from quickstart.tasks.cache_tasks import prewarm_class_search_cache_task
+
+                prewarm_class_search_cache_task.delay(
+                    locations=True, collections=True, version=new_version
+                )
+            except Exception as e:
+                logger.warning(
+                    "Could not enqueue prewarm after cache invalidation: %s", e
+                )
+        else:
+            # Local/dev: bump immediately so at least cache keys change
+            cache.set(PRESET_CACHE_VERSION_KEY, new_version, timeout=None)
     except Exception as e:
         logger.warning("Failed to invalidate preset search cache: %s", e, exc_info=True)
+
+
+def _is_collection_only_request(request):
+    """Return True if request has only collection filter (no location, keyword, category, etc.)."""
+    if not request.query_params.get("collection"):
+        return False
+    if request.query_params.get("location") or request.query_params.get("location_search"):
+        return False
+    if request.query_params.get("lat") or request.query_params.get("lng"):
+        return False
+    if request.query_params.get("keyword") or request.query_params.get("tag"):
+        return False
+    if request.query_params.get("category_key") or request.query_params.get("subcategory_key"):
+        return False
+    if request.query_params.get("price_max"):
+        return False
+    return True
+
+
+def _build_collection_search_cache_key(request, collection_slug):
+    """Build cache key for a collection-only search, or None if not cacheable."""
+    page = request.query_params.get("page", "1")
+    page_size = request.query_params.get("page_size", "24")
+    participants = request.query_params.get("participants", "1")
+    sort_by = request.query_params.get("sort_by", "relevance")
+    start_date = request.query_params.get("start_date") or ""
+    end_date = request.query_params.get("end_date") or ""
+    version = _get_preset_search_cache_version()
+    slug = (collection_slug or "").lower().replace(" ", "_")
+    return f"{COLLECTION_CACHE_PREFIX}:v{version}:{slug}:p{page}:ps{page_size}:n{participants}:s{sort_by}:{start_date}:{end_date}"
+
+
+def _build_preset_location_collection_cache_key(request, search_name, collection_slug):
+    """Build cache key for preset location + collection (e.g. Toronto + trending)."""
+    if request.query_params.get("keyword") or request.query_params.get("tag"):
+        return None
+    if request.query_params.get("category_key") or request.query_params.get("subcategory_key"):
+        return None
+    if request.query_params.get("price_max"):
+        return None
+    page = request.query_params.get("page", "1")
+    page_size = request.query_params.get("page_size", "24")
+    participants = request.query_params.get("participants", "1")
+    sort_by = request.query_params.get("sort_by", "relevance")
+    start_date = request.query_params.get("start_date") or ""
+    end_date = request.query_params.get("end_date") or ""
+    version = _get_preset_search_cache_version()
+    location_slug = (search_name or "").lower().replace(" ", "_")
+    coll_slug = (collection_slug or "").lower().replace(" ", "_")
+    return f"{PRESET_COLLECTION_CACHE_PREFIX}:v{version}:{location_slug}:{coll_slug}:p{page}:ps{page_size}:n{participants}:s{sort_by}:{start_date}:{end_date}"
+
+
+def _build_preset_location_category_cache_key(
+    request, search_name, category_key, subcategory_key=None
+):
+    """Build cache key for preset location + category (and optional subcategory)."""
+    if request.query_params.get("keyword") or request.query_params.get("tag"):
+        return None
+    if request.query_params.get("collection") or request.query_params.get("price_max"):
+        return None
+    if not category_key or (category_key or "").lower() == "all":
+        return None
+    page = request.query_params.get("page", "1")
+    page_size = request.query_params.get("page_size", "24")
+    participants = request.query_params.get("participants", "1")
+    sort_by = request.query_params.get("sort_by", "relevance")
+    start_date = request.query_params.get("start_date") or ""
+    end_date = request.query_params.get("end_date") or ""
+    version = _get_preset_search_cache_version()
+    location_slug = (search_name or "").lower().replace(" ", "_")
+    cat_slug = (category_key or "").lower().replace(" ", "_")
+    sub_slug = (subcategory_key or "").lower().replace(" ", "_") if subcategory_key else ""
+    return f"{PRESET_CATEGORY_CACHE_PREFIX}:v{version}:{location_slug}:{cat_slug}:{sub_slug}:p{page}:ps{page_size}:n{participants}:s{sort_by}:{start_date}:{end_date}"
 
 
 def normalize_province_name(location_text):
@@ -719,8 +841,34 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 "location"
             ) or request.query_params.get("location_search", "")
             search_name = location_param_text.split(",")[0].strip()
+            collection_slug = request.query_params.get("collection")
 
-            # Preset (banner) location cache: return cached response if available
+            # Preset location + collection cache (e.g. Toronto + trending): return cached if available
+            preset_collection_cache_key = None
+            preset_category_cache_key = None
+            if (
+                _is_preset_location_request(search_name, req_lat_str, req_lng_str)
+                and collection_slug
+                and not request.query_params.get("keyword")
+                and not request.query_params.get("tag")
+                and not request.query_params.get("category_key")
+                and not request.query_params.get("subcategory_key")
+                and not request.query_params.get("price_max")
+            ):
+                preset_collection_cache_key = _build_preset_location_collection_cache_key(
+                    request, search_name, collection_slug
+                )
+                if preset_collection_cache_key:
+                    cached = cache.get(preset_collection_cache_key)
+                    if cached is not None:
+                        logger.info(
+                            "Returning cached preset+collection result for %s + %s",
+                            search_name,
+                            collection_slug,
+                        )
+                        return Response(cached)
+
+            # Preset (banner) location cache only (no collection): return cached if available
             preset_cache_key = None
             if _is_preset_location_request(search_name, req_lat_str, req_lng_str):
                 preset_cache_key = _build_preset_search_cache_key(request, search_name)
@@ -728,6 +876,30 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     cached = cache.get(preset_cache_key)
                     if cached is not None:
                         logger.info("Returning cached preset search result for %s", search_name)
+                        return Response(cached)
+
+            # Preset location + category (and optional subcategory) cache: return cached if available
+            _cat_key = request.query_params.get("category_key")
+            _sub_key = request.query_params.get("subcategory_key")
+            if (
+                _is_preset_location_request(search_name, req_lat_str, req_lng_str)
+                and (_cat_key or _sub_key)
+                and not collection_slug
+                and not request.query_params.get("keyword")
+                and not request.query_params.get("tag")
+                and not request.query_params.get("price_max")
+            ):
+                preset_category_cache_key = _build_preset_location_category_cache_key(
+                    request, search_name, _cat_key or "", _sub_key
+                )
+                if preset_category_cache_key:
+                    cached = cache.get(preset_category_cache_key)
+                    if cached is not None:
+                        logger.info(
+                            "Returning cached preset+category result for %s + %s",
+                            search_name,
+                            _cat_key or _sub_key,
+                        )
                         return Response(cached)
 
             logger.info(f"--- PUBLIC CLASS SEARCH INITIATED ---")
@@ -748,8 +920,19 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             req_participants_str = request.query_params.get("participants")
             time_preferences = request.query_params.getlist("time_preference")
             sort_by = request.query_params.get("sort_by", "relevance")
-            
-            collection_slug = request.query_params.get("collection")
+
+            # Collection-only cache: return cached response if available
+            collection_cache_key = None  # set below when request is collection-only
+            if _is_collection_only_request(request) and collection_slug:
+                collection_cache_key = _build_collection_search_cache_key(request, collection_slug)
+                if collection_cache_key:
+                    cached = cache.get(collection_cache_key)
+                    if cached is not None:
+                        logger.info(
+                            "Returning cached collection search result for %s",
+                            collection_slug,
+                        )
+                        return Response(cached)
 
             # Get Base Queryset
             queryset = self.get_queryset()
@@ -1033,16 +1216,48 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     page, many=True, context={"request": request}
                 )
                 response = self.get_paginated_response(serializer.data)
+                if preset_collection_cache_key:
+                    cache.set(
+                        preset_collection_cache_key,
+                        response.data,
+                        timeout=PRESET_CACHE_TTL,
+                    )
                 if preset_cache_key:
                     cache.set(preset_cache_key, response.data, timeout=PRESET_CACHE_TTL)
+                if preset_category_cache_key:
+                    cache.set(
+                        preset_category_cache_key,
+                        response.data,
+                        timeout=PRESET_CACHE_TTL,
+                    )
+                if collection_cache_key:
+                    cache.set(
+                        collection_cache_key, response.data, timeout=PRESET_CACHE_TTL
+                    )
                 return response
 
             serializer = self.get_serializer(
                 queryset, many=True, context={"request": request}
             )
             response = Response(serializer.data)
+            if preset_collection_cache_key:
+                cache.set(
+                    preset_collection_cache_key,
+                    response.data,
+                    timeout=PRESET_CACHE_TTL,
+                )
             if preset_cache_key:
                 cache.set(preset_cache_key, response.data, timeout=PRESET_CACHE_TTL)
+            if preset_category_cache_key:
+                cache.set(
+                    preset_category_cache_key,
+                    response.data,
+                    timeout=PRESET_CACHE_TTL,
+                )
+            if collection_cache_key:
+                cache.set(
+                    collection_cache_key, response.data, timeout=PRESET_CACHE_TTL
+                )
             return response
 
         except Exception as e:
