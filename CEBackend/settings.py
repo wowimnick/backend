@@ -68,9 +68,11 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 
 # --- Security & Network Settings ---
-ALLOWED_HOSTS = os.environ.get(
+_allowed = os.environ.get(
     "ALLOWED_HOSTS", "localhost,127.0.0.1,172.21.16.1"
 ).split(",")
+# testserver: used by Django test client (e.g. cache prewarm in Celery worker)
+ALLOWED_HOSTS = [h.strip() for h in _allowed] + ["testserver"]
 CSRF_TRUSTED_ORIGINS = os.environ.get(
     "CSRF_TRUSTED_ORIGINS", "http://localhost:3000"
 ).split(",")
