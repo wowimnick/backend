@@ -163,6 +163,9 @@ PRESET_CATEGORY_CACHE_PREFIX = "public_class_search_preset_category"
 # Category-only or category+subcategory (no location); same version invalidation for explore page
 CATEGORY_ONLY_CACHE_PREFIX = "public_class_search_category_only"
 PRESET_PREWARM_PAGE_SIZE = 50
+# Collections list (homepage_content mode=collections); invalidate when a collection is created/updated/deleted
+HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY = "homepage_content_collections"
+HOMEPAGE_CONTENT_COLLECTIONS_CACHE_TIMEOUT = 60 * 60  # 1 hour (only used until next collection change)
 
 
 def set_prewarm_cache_version(version):
@@ -616,7 +619,8 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             
         return queryset.distinct()
     
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=["get"])
+    @method_decorator(vary_on_headers("Authorization"))
     def homepage_content(self, request):
         """
         Custom endpoint for homepage data.
@@ -624,7 +628,14 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         1. Trending classes (Top by relevance)
         2. Date Night classes (Specific collection) - Randomized AND De-duplicated
         3. All Collections/Categories (Metadata pills)
+        Cache: mode=collections uses key HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY; invalidated when a collection changes.
         """
+        mode = request.query_params.get("mode", "categories")
+        if mode == "collections":
+            cached = cache.get(HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY)
+            if cached is not None:
+                return Response(cached)
+
         # 1. Base Query with availability check
         base_qs = self.get_queryset()
 
@@ -707,14 +718,21 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         ).data
 
         # 4. Mode Selection (Categories vs Collections pills)
-        mode = request.query_params.get('mode', 'categories')
-        
-        if mode == 'collections':
-            collections_qs = ClassCollection.objects.filter(is_active=True).order_by('sort_order')
-            data['collections'] = PublicCollectionSerializer(collections_qs, many=True, context=context).data
+        if mode == "collections":
+            collections_qs = ClassCollection.objects.filter(is_active=True).order_by("sort_order")
+            data["collections"] = PublicCollectionSerializer(
+                collections_qs, many=True, context=context
+            ).data
+            cache.set(
+                HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY,
+                data,
+                timeout=HOMEPAGE_CONTENT_COLLECTIONS_CACHE_TIMEOUT,
+            )
         else:
-            categories_qs = ClassCategory.objects.all().order_by('sort_order')
-            data['categories'] = PublicCategorySerializer(categories_qs, many=True, context=context).data
+            categories_qs = ClassCategory.objects.all().order_by("sort_order")
+            data["categories"] = PublicCategorySerializer(
+                categories_qs, many=True, context=context
+            ).data
 
         return Response(data)
 

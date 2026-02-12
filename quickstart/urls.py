@@ -64,6 +64,12 @@ from quickstart.views.admin.business_management.business_admin_views import (
     AdminGeographicalDataView,
     BusinessAdminViewSet,
 )
+from quickstart.views.admin.global_discount.admin_global_discount_views import (
+    AdminGlobalDiscountViewSet,
+)
+from quickstart.views.public.public_global_discount_views import (
+    ActiveGlobalDiscountView,
+)
 
 from quickstart.views import (
     CustomTokenObtainPairView,
@@ -240,6 +246,11 @@ admin_router.register(
     r"notification-attachments",
     AdminNotificationAttachmentViewSet,
     basename="admin-notification-attachments",
+)
+admin_router.register(
+    r"global-discounts",
+    AdminGlobalDiscountViewSet,
+    basename="admin-global-discounts",
 )
 
 
@@ -507,6 +518,11 @@ urlpatterns = [
         name="gc-purchase",
     ),
     path("gift-cards/validate/", ValidateGiftCardView.as_view(), name="gc-validate"),
+    path(
+        "global-discount/active/",
+        ActiveGlobalDiscountView.as_view(),
+        name="active-global-discount",
+    ),
     path(
         "admin/geographical-data/",
         AdminGeographicalDataView.as_view(),

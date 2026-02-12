@@ -425,6 +425,7 @@ class CustomUser(AbstractUser):
                 "Can access the main platform administration dashboard",
             ),
             ("access_blog_admin", "Can access the Blog Management section"),
+            ("access_global_discount_admin", "Can access Global Discount management"),
             # --- User/Student Permissions (Keep these as they are) ---
             ("reply_own_support_ticket", "Can reply to own support tickets"),
             (
@@ -2619,6 +2620,123 @@ class AppliedDiscount(models.Model):
     class Meta:
         db_table = "applied_discounts"
         unique_together = ("booking", "discount")
+
+
+class GlobalDiscount(models.Model):
+    """
+    Platform-wide discount applied automatically at checkout.
+    The discount is absorbed by the platform (from commission); business payouts
+    are calculated on the pre-global-discount subtotal so businesses never lose money.
+    """
+
+    class DiscountType(models.TextChoices):
+        PERCENTAGE = "percentage", "Percentage"
+        FIXED_AMOUNT = "fixed_amount", "Fixed Amount"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(
+        max_length=150,
+        help_text="Internal name for this global discount (e.g. 'Summer Sale 2025').",
+    )
+    discount_type = models.CharField(max_length=20, choices=DiscountType.choices)
+    value = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="The value of the discount (e.g., 20.00 for 20% or 10.00 for $10).",
+    )
+
+    is_active = models.BooleanField(default=True, db_index=True)
+    valid_from = models.DateTimeField(
+        null=True, blank=True, help_text="Leave blank for no start date."
+    )
+    valid_to = models.DateTimeField(
+        null=True, blank=True, help_text="Leave blank for no expiration date."
+    )
+
+    usage_limit = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Max number of times this can be used in total.",
+    )
+    usage_count = models.PositiveIntegerField(default=0, editable=False)
+
+    min_purchase_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="The minimum booking subtotal required to use this discount.",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.name} (Global)"
+
+    def clean(self):
+        if self.discount_type == self.DiscountType.PERCENTAGE and self.value > 100:
+            raise ValidationError("Percentage value cannot be greater than 100.")
+        if self.valid_to and self.valid_from and self.valid_from > self.valid_to:
+            raise ValidationError("'Valid to' date must be after 'Valid from' date.")
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
+
+    def is_valid_for_amount(self, booking_subtotal):
+        """Returns (True, None) or (False, error_message)."""
+        if not self.is_active:
+            return (False, "This promotion is no longer active.")
+        now = timezone.now()
+        if self.valid_from and self.valid_from > now:
+            return (False, "This promotion is not yet active.")
+        if self.valid_to and self.valid_to < now:
+            return (False, "This promotion has expired.")
+        if self.usage_limit is not None and self.usage_count >= self.usage_limit:
+            return (False, "This promotion has reached its usage limit.")
+        if (
+            self.min_purchase_amount is not None
+            and booking_subtotal is not None
+            and booking_subtotal < self.min_purchase_amount
+        ):
+            return (
+                False,
+                f"A minimum purchase of ${self.min_purchase_amount} is required.",
+            )
+        return (True, None)
+
+    def redeem(self):
+        """Atomically increment usage count. Call within a transaction."""
+        if self.usage_limit is not None:
+            GlobalDiscount.objects.filter(pk=self.pk).update(
+                usage_count=F("usage_count") + 1
+            )
+            self.refresh_from_db(fields=["usage_count"])
+
+    class Meta:
+        db_table = "global_discounts"
+        ordering = ["-created_at"]
+
+
+class AppliedGlobalDiscount(models.Model):
+    """
+    Links a Booking to a GlobalDiscount, storing the amount saved.
+    Used for reporting and stats; the cost is absorbed by the platform.
+    """
+
+    booking = models.ForeignKey(
+        Booking, on_delete=models.CASCADE, related_name="applied_global_discounts"
+    )
+    global_discount = models.ForeignKey(
+        GlobalDiscount, on_delete=models.PROTECT, related_name="applied_to_bookings"
+    )
+    amount_saved = models.DecimalField(max_digits=10, decimal_places=2)
+    applied_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "applied_global_discounts"
+        unique_together = ("booking", "global_discount")
 
 
 class Payment(models.Model):

@@ -55,9 +55,25 @@ def run_prewarm_class_search_cache(
             clear_prewarm_cache_version()
 
 
+HOMEPAGE_CONTENT_PATH = "/api/classes/homepage-content/"
+CATEGORIES_PATH = "/api/categories/"
+
+
 def _run_prewarm(locations=True, collections=True, categories=True):
     """Inner prewarm loop (no version wiring)."""
     client = Client()
+
+    # Prewarm categories and collections (explore page header/pills) so first request is instant
+    try:
+        r_cat = client.get(CATEGORIES_PATH)
+        if r_cat.status_code == 200:
+            logger.info("Prewarm categories: OK (cached)")
+        r_coll = client.get(HOMEPAGE_CONTENT_PATH, {"mode": "collections"})
+        if r_coll.status_code == 200:
+            logger.info("Prewarm collections: OK (cached)")
+    except Exception as e:
+        logger.warning("Prewarm categories/collections failed: %s", e, exc_info=True)
+
     if locations:
         for name, (lat, lng) in PRESET_LOCATIONS.items():
             for page_size in PAGE_SIZES:

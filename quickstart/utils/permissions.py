@@ -573,6 +573,18 @@ class CanAccessBlogAdmin(BasePermission):
         )
 
 
+# --- Admin: Global Discount ---
+class CanAccessGlobalDiscountAdmin(BasePermission):
+    message = "You do not have permission to access global discount management."
+
+    def has_permission(self, request, view):
+        return (
+            request.user
+            and request.user.is_authenticated
+            and request.user.has_perm("quickstart.access_global_discount_admin")
+        )
+
+
 # --- Admin: Notifications ---
 class CanAccessNotificationAdmin(BasePermission):
     message = "You do not have permission to access notification management."

@@ -496,6 +496,10 @@ class Command(BaseCommand):
                     "group": content_group,
                     "description": "General access to the Blog Management section in the admin panel.",
                 },
+                "access_global_discount_admin": {
+                    "group": content_group,
+                    "description": "Manage platform-wide global discounts (create, edit, delete, view stats).",
+                },
                 # --- System & Moderation (Platform Admins) ---
                 "access_admin_dashboard": {
                     "group": system_group,

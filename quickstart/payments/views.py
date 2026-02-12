@@ -12,8 +12,8 @@ from django.db import transaction
 from decimal import Decimal
 import stripe
 from django.conf import settings
+from django.db.models import Q, F, Sum
 from django.db.models.functions import Coalesce
-from django.db.models import Sum
 
 # Imported Models
 from quickstart.models import (
@@ -22,14 +22,16 @@ from quickstart.models import (
     Booking,
     Discount,
     AppliedDiscount,
+    GlobalDiscount,
+    AppliedGlobalDiscount,
     PartnerTier,
     Payment,
     ScheduleInstance,
     Schedule,
     Contact,
     BusinessStaff,
-    GiftCard,  # NEW
-    GiftCardTransaction,  # NEW
+    GiftCard,
+    GiftCardTransaction,
 )
 from quickstart.serializers.public.public_booking_serializers import (
     BookingCreateSerializer,
@@ -240,7 +242,7 @@ class CreatePaymentIntentView(APIView):
             discount_to_apply = None
             calculated_discount_amount = Decimal("0.00")
 
-            # 1. APPLY COUPON DISCOUNT
+            # 1. APPLY BUSINESS COUPON DISCOUNT
             if applied_discount_id:
                 try:
                     discount_to_apply = Discount.objects.get(
@@ -271,6 +273,36 @@ class CreatePaymentIntentView(APIView):
                         {"error": {"discount": error_detail}},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
+
+            # Subtotal after business discount = basis for business payout (business never loses from global discount)
+            subtotal_for_payout = final_amount
+
+            # 2. APPLY GLOBAL DISCOUNT (platform absorbs; business payout unchanged)
+            global_discount_to_apply = None
+            global_discount_amount = Decimal("0.00")
+            now = timezone.now()
+            active_global = (
+                GlobalDiscount.objects.filter(is_active=True)
+                .filter(Q(valid_from__isnull=True) | Q(valid_from__lte=now))
+                .filter(Q(valid_to__isnull=True) | Q(valid_to__gte=now))
+                .filter(Q(usage_limit__isnull=True) | Q(usage_count__lt=F("usage_limit")))
+                .order_by("-created_at")
+                .first()
+            )
+            if active_global and subtotal_for_payout > 0:
+                is_valid_global, _ = active_global.is_valid_for_amount(subtotal_for_payout)
+                if is_valid_global:
+                    global_discount_to_apply = active_global
+                    if active_global.discount_type == "percentage":
+                        global_discount_amount = (
+                            subtotal_for_payout
+                            * (active_global.value / Decimal(100))
+                        ).quantize(Decimal("0.01"))
+                    else:
+                        global_discount_amount = min(
+                            active_global.value, subtotal_for_payout
+                        )
+                    final_amount = subtotal_for_payout - global_discount_amount
 
             subtotal_after_discount = final_amount
             tax_amount = (subtotal_after_discount * HST_RATE).quantize(Decimal("0.01"))
@@ -465,6 +497,31 @@ class CreatePaymentIntentView(APIView):
                                     amount_saved=calculated_discount_amount,
                                 )
 
+                        # --- HANDLE GLOBAL DISCOUNT REDEMPTION (FREE FLOW) ---
+                        if global_discount_to_apply and global_discount_amount > 0:
+                            global_discount_to_apply.redeem()
+                            if booking_type == "Full Course":
+                                booking_count = len(created_bookings)
+                                if booking_count > 0:
+                                    share_g = (
+                                        global_discount_amount / booking_count
+                                    ).quantize(Decimal("0.01"))
+                                    total_alloc_g = share_g * booking_count
+                                    remainder_g = global_discount_amount - total_alloc_g
+                                    for index, b in enumerate(created_bookings):
+                                        amt = share_g + (remainder_g if index == 0 else Decimal("0"))
+                                        AppliedGlobalDiscount.objects.create(
+                                            booking=b,
+                                            global_discount=global_discount_to_apply,
+                                            amount_saved=amt,
+                                        )
+                            else:
+                                AppliedGlobalDiscount.objects.create(
+                                    booking=first_booking,
+                                    global_discount=global_discount_to_apply,
+                                    amount_saved=global_discount_amount,
+                                )
+
                         # --- LOG GIFT CARD TRANSACTION ---
                         if amount_covered_by_gc > 0 and gift_card_obj:
                             GiftCardTransaction.objects.create(
@@ -634,6 +691,7 @@ class CreatePaymentIntentView(APIView):
                 )
 
             # --- Create Stripe Intent and Finalize ---
+            # subtotal_for_payout: basis for business payout (before global discount; business never loses)
             metadata = {
                 "participants": str(participants),
                 "booking_type": booking_type,
@@ -642,7 +700,14 @@ class CreatePaymentIntentView(APIView):
                     str(discount_to_apply.id) if discount_to_apply else None
                 ),
                 "discount_amount": str(calculated_discount_amount),
+                "subtotal_for_payout": str(subtotal_for_payout),
                 "subtotal_after_discount": str(subtotal_after_discount),
+                "global_discount_id": (
+                    str(global_discount_to_apply.id)
+                    if global_discount_to_apply
+                    else None
+                ),
+                "global_discount_amount": str(global_discount_amount),
                 "tax_amount": str(tax_amount),
                 "is_guest": str(is_guest),
                 "payment_db_id": str(pending_payment.id),
@@ -1133,13 +1198,15 @@ class ProcessBookingWebhook(APIView):
 
                 # 1. Retrieve Financials from Metadata (calculated in CreatePaymentIntentView)
                 metadata = payment_intent.metadata
-                subtotal_after_discount = Decimal(
-                    metadata.get("subtotal_after_discount", "0.00")
+                # Business payout is based on subtotal_for_payout (before global discount) so business never loses
+                subtotal_for_payout = Decimal(
+                    metadata.get("subtotal_for_payout")
+                    or metadata.get("subtotal_after_discount", "0.00")
                 )
                 total_tax = Decimal(metadata.get("tax_amount", "0.00"))
                 grand_total = Decimal(payment_intent.amount_received) / 100
 
-                # 2. Calculate Business Net Revenue (Total Net Payout)
+                # 2. Calculate Business Net Revenue (Total Net Payout) from subtotal_for_payout
                 business = enrollment.schedule.option.classId.businessId
                 if metadata.get("booking_source") == "widget":
                     fee_percentage = Decimal("6.00")
@@ -1152,7 +1219,7 @@ class ProcessBookingWebhook(APIView):
 
                 service_fee_rate = fee_percentage / Decimal("100.0")
                 platform_fee_amount = (
-                    subtotal_after_discount * service_fee_rate
+                    subtotal_for_payout * service_fee_rate
                 ).quantize(Decimal("0.01"))
                 platform_fee_tax = (platform_fee_amount * HST_RATE).quantize(
                     Decimal("0.01")
@@ -1160,7 +1227,7 @@ class ProcessBookingWebhook(APIView):
 
                 # This is the total bucket of money the business is owed for the whole course
                 business_payout_tax = total_tax - platform_fee_tax
-                business_net_revenue = subtotal_after_discount - platform_fee_amount
+                business_net_revenue = subtotal_for_payout - platform_fee_amount
                 total_net_payout_to_business = (
                     business_net_revenue + business_payout_tax
                 )
@@ -1262,6 +1329,40 @@ class ProcessBookingWebhook(APIView):
                     except Discount.DoesNotExist:
                         logger.warning(
                             f"[{webhook_id}] Discount ID {applied_discount_id} found in metadata but not in DB."
+                        )
+
+                # --- Handle Global Discount Redemption (Course) ---
+                global_discount_id = metadata.get("global_discount_id")
+                global_discount_amount = Decimal(
+                    metadata.get("global_discount_amount", "0.00")
+                )
+                if global_discount_id and global_discount_amount > 0:
+                    try:
+                        g_discount = GlobalDiscount.objects.select_for_update().get(
+                            pk=global_discount_id
+                        )
+                        g_discount.redeem()
+                        if booking_count > 0:
+                            share_g = (
+                                global_discount_amount / booking_count
+                            ).quantize(Decimal("0.01"))
+                            total_alloc_g = share_g * booking_count
+                            remainder_g = global_discount_amount - total_alloc_g
+                            for index, b in enumerate(bookings):
+                                amt = share_g + (
+                                    remainder_g if index == 0 else Decimal("0")
+                                )
+                                AppliedGlobalDiscount.objects.create(
+                                    booking=b,
+                                    global_discount=g_discount,
+                                    amount_saved=amt,
+                                )
+                        logger.info(
+                            f"[{webhook_id}] Redeemed global discount {g_discount.name} for course (Group: {booking_group_id})."
+                        )
+                    except GlobalDiscount.DoesNotExist:
+                        logger.warning(
+                            f"[{webhook_id}] Global discount ID {global_discount_id} not found in DB."
                         )
 
                 # --- Handle Gift Card Deduction (Step D) ---
@@ -1445,11 +1546,12 @@ class ProcessBookingWebhook(APIView):
                     f"Session on {initial_instance.date.strftime('%b %d')} is now full."
                 )
 
-            # --- CALCULATE FEES AND NET PAYOUT (Moved UP to update Booking correctly) ---
+            # --- CALCULATE FEES AND NET PAYOUT (use subtotal_for_payout so business never loses from global discount) ---
             grand_total = Decimal(payment_intent.amount_received) / 100
             total_tax = Decimal(metadata.get("tax_amount", "0.00"))
-            subtotal_after_discount = Decimal(
-                metadata.get("subtotal_after_discount", "0.00")
+            subtotal_for_payout = Decimal(
+                metadata.get("subtotal_for_payout")
+                or metadata.get("subtotal_after_discount", "0.00")
             )
             business = initial_instance.schedule.option.classId.businessId
 
@@ -1469,14 +1571,14 @@ class ProcessBookingWebhook(APIView):
                 )
 
             service_fee_rate = fee_percentage / Decimal("100.0")
-            platform_fee_amount = (subtotal_after_discount * service_fee_rate).quantize(
+            platform_fee_amount = (subtotal_for_payout * service_fee_rate).quantize(
                 Decimal("0.01")
             )
             platform_fee_tax = (platform_fee_amount * HST_RATE).quantize(
                 Decimal("0.01")
             )
             business_payout_tax = total_tax - platform_fee_tax
-            business_net_revenue = subtotal_after_discount - platform_fee_amount
+            business_net_revenue = subtotal_for_payout - platform_fee_amount
             net_payout_to_business = business_net_revenue + business_payout_tax
 
             # --- UPDATE PENDING BOOKING TO CONFIRMED ---
@@ -1523,6 +1625,30 @@ class ProcessBookingWebhook(APIView):
                 except Discount.DoesNotExist:
                     logger.warning(
                         f"[{webhook_id}] Discount {applied_discount_id} not found during webhook processing."
+                    )
+
+            # --- Handle Global Discount Redemption (Single Session) ---
+            global_discount_id = metadata.get("global_discount_id")
+            global_discount_amount = Decimal(
+                metadata.get("global_discount_amount", "0.00")
+            )
+            if global_discount_id and global_discount_amount > 0:
+                try:
+                    g_discount = GlobalDiscount.objects.select_for_update().get(
+                        pk=global_discount_id
+                    )
+                    g_discount.redeem()
+                    AppliedGlobalDiscount.objects.create(
+                        booking=pending_booking,
+                        global_discount=g_discount,
+                        amount_saved=global_discount_amount,
+                    )
+                    logger.info(
+                        f"[{webhook_id}] Redeemed global discount {g_discount.name} for booking {pending_booking.id}"
+                    )
+                except GlobalDiscount.DoesNotExist:
+                    logger.warning(
+                        f"[{webhook_id}] Global discount ID {global_discount_id} not found in DB."
                     )
 
             # --- Handle Gift Card Deduction (Step D - Single Session) ---

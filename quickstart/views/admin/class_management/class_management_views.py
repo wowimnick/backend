@@ -40,7 +40,13 @@ from quickstart.utils.permissions import (
     CanAccessCategoryAdmin,
     CanAccessReviewAdmin,
 )
+from django.core.cache import cache
+
 from quickstart.utils.revalidation import trigger_nextjs_revalidation
+from quickstart.views.public.public_class_views import (
+    invalidate_public_class_search_preset_cache,
+    HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY,
+)
 from quickstart.models import (
     ClassCategory,
     ClassCollection,
@@ -770,7 +776,7 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
 
         response = super().create(request, *args, **kwargs)
 
-        # --- ADDED: Trigger revalidation after category creation ---
+        # --- ADDED: Trigger revalidation and backend cache invalidation + prewarm ---
         if response.status_code == status.HTTP_201_CREATED:
             trigger_nextjs_revalidation(path="/")
             trigger_nextjs_revalidation(tag="classes-search")
@@ -778,7 +784,11 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
             trigger_nextjs_revalidation(tag="categories")
             trigger_nextjs_revalidation(tag="business-categories")
             trigger_nextjs_revalidation(tag="homepage-classes")
-            logger.info(f"Revalidated homepage and class pages after category creation")
+            try:
+                invalidate_public_class_search_preset_cache()
+            except Exception as e:
+                logger.warning("Failed to invalidate search cache after category create: %s", e)
+            logger.info("Revalidated homepage and class pages after category creation + prewarm")
 
         return response
 
@@ -813,7 +823,11 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
             # Revalidate new/current category key
             trigger_nextjs_revalidation(tag=f"category-{instance.key}")
 
-            logger.info(f"Revalidated homepage and class pages after category update")
+            try:
+                invalidate_public_class_search_preset_cache()
+            except Exception as e:
+                logger.warning("Failed to invalidate search cache after category update: %s", e)
+            logger.info("Revalidated homepage and class pages after category update + prewarm")
 
         return response
 
@@ -842,7 +856,7 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
             f"Category '{category_name}' (ID: {instance.pk}) with no classes deleted by Admin {request.user.email}"
         )
 
-        # --- ADDED: Trigger revalidation after category deletion ---
+        # --- ADDED: Trigger revalidation and backend cache invalidation + prewarm ---
         trigger_nextjs_revalidation(path="/")
         trigger_nextjs_revalidation(tag="classes-search")
         trigger_nextjs_revalidation(tag="homepage-categories")
@@ -850,8 +864,11 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
         trigger_nextjs_revalidation(tag="business-categories")
         trigger_nextjs_revalidation(tag="homepage-classes")
         trigger_nextjs_revalidation(tag=f"category-{category_key}")
-
-        logger.info(f"Revalidated homepage and class pages after category deletion")
+        try:
+            invalidate_public_class_search_preset_cache()
+        except Exception as e:
+            logger.warning("Failed to invalidate search cache after category delete: %s", e)
+        logger.info("Revalidated homepage and class pages after category deletion + prewarm")
 
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -1163,7 +1180,11 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
                             sort_order=new_order
                         )
 
-            logger.info(f"Category order updated by Admin {request.user.email}.")
+            try:
+                invalidate_public_class_search_preset_cache()
+            except Exception as e:
+                logger.warning("Failed to invalidate search cache after category order update: %s", e)
+            logger.info("Category order updated by Admin %s.", request.user.email)
             return Response({"status": "success"}, status=status.HTTP_200_OK)
         except Exception as e:
             logger.error(f"Failed to update category order: {e}", exc_info=True)
@@ -1171,7 +1192,8 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
                 {"error": "An internal error occurred while updating the order."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-        
+
+
 class AdminCollectionViewSet(viewsets.ModelViewSet):
     """
     Admin viewset for managing Class Collections (Vibes).
@@ -1188,12 +1210,21 @@ class AdminCollectionViewSet(viewsets.ModelViewSet):
             class_count=Count('classes', distinct=True) 
         ).order_by('sort_order')
 
+    def _invalidate_collection_caches(self):
+        """Invalidate backend caches so collection list and search are updated; trigger prewarm."""
+        cache.delete(HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY)
+        try:
+            invalidate_public_class_search_preset_cache()
+        except Exception as e:
+            logger.warning("Failed to invalidate search cache after collection change: %s", e)
+
     def create(self, request, *args, **kwargs):
         response = super().create(request, *args, **kwargs)
         if response.status_code == status.HTTP_201_CREATED:
             trigger_nextjs_revalidation(path="/")
             trigger_nextjs_revalidation(tag="homepage-content")
-            logger.info(f"Created collection and triggered revalidation")
+            self._invalidate_collection_caches()
+            logger.info("Created collection and triggered revalidation + prewarm")
         return response
 
     def update(self, request, *args, **kwargs):
@@ -1201,7 +1232,8 @@ class AdminCollectionViewSet(viewsets.ModelViewSet):
         if response.status_code == status.HTTP_200_OK:
             trigger_nextjs_revalidation(path="/")
             trigger_nextjs_revalidation(tag="homepage-content")
-            logger.info(f"Updated collection and triggered revalidation")
+            self._invalidate_collection_caches()
+            logger.info("Updated collection and triggered revalidation + prewarm")
         return response
 
     def destroy(self, request, *args, **kwargs):
@@ -1209,7 +1241,8 @@ class AdminCollectionViewSet(viewsets.ModelViewSet):
         if response.status_code == status.HTTP_204_NO_CONTENT:
             trigger_nextjs_revalidation(path="/")
             trigger_nextjs_revalidation(tag="homepage-content")
-            logger.info(f"Deleted collection and triggered revalidation")
+            self._invalidate_collection_caches()
+            logger.info("Deleted collection and triggered revalidation + prewarm")
         return response
 
     @action(detail=False, methods=["post"], url_path="update-order")
@@ -1228,8 +1261,9 @@ class AdminCollectionViewSet(viewsets.ModelViewSet):
                     order = item.get("order")
                     if c_id is not None and order is not None:
                         ClassCollection.objects.filter(pk=c_id).update(sort_order=order)
-            
+
             trigger_nextjs_revalidation(tag="homepage-content")
+            self._invalidate_collection_caches()
             return Response({"status": "success"})
         except Exception as e:
             logger.error(f"Failed to update collection order: {e}")
