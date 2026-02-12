@@ -26,18 +26,10 @@ except ImportError:
     celery_app = None
     CELERY_ENABLED = False
 
-# Attempt to import Silk models safely
-try:
-    from silk.models import Request as SilkRequest, SQLQuery
-
-    SILK_ENABLED = True
-except ImportError:
-    logging.warning(
-        "Django Silk not found or not configured. Profiling metrics will be unavailable."
-    )
-    SilkRequest = None
-    SQLQuery = None
-    SILK_ENABLED = False
+# Silk profiling was removed; metrics use a stub when profiling is disabled.
+SILK_ENABLED = False
+SilkRequest = None
+SQLQuery = None
 
 from quickstart.utils.permissions import IsAuthenticated, BasePermission, CanViewSystemMetrics
 

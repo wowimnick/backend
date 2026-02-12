@@ -106,7 +106,6 @@ class RoleManagementViewSet(viewsets.ModelViewSet):
             "sessions",
             "sites",
             "socialaccount",
-            "silk",
             "theme",
             "token_blacklist",
         ]
@@ -389,7 +388,6 @@ class RoleManagementViewSet(viewsets.ModelViewSet):
             "sessions",
             "sites",
             "theme",
-            "silk",
             "allauth",
             "account",
             "socialaccount",
@@ -430,7 +428,6 @@ class RoleManagementViewSet(viewsets.ModelViewSet):
             "sessions",
             "sites",
             "theme",
-            "silk",
             "allauth",
             "account",
             "socialaccount",

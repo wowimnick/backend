@@ -288,7 +288,6 @@ widget_urlpatterns = [
 urlpatterns = [
     path("", health_check, name="api-root-health"),
     # --- Django Admin & 3rd Party Libs ---
-    path("admin/silk/", include("silk.urls", namespace="admin_silk")),
     path("admin/panel/", admin.site.urls),
     path(
         "admin/end-impersonation/",

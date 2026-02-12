@@ -24,7 +24,6 @@ class Command(BaseCommand):
             "sites",
             "admin_interface",
             "theme",
-            "silk",
             "allauth",
             "account",
             "socialaccount",

@@ -54,7 +54,6 @@ django-celery-beat
 # Admin & Monitoring
 django-admin-interface
 django-colorfield
-django-silk
 psutil
 
 # Other direct dependencies from your list

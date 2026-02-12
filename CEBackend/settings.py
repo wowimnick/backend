@@ -177,7 +177,6 @@ INSTALLED_APPS = [
     "anymail",
     "storages",
     "channels",
-    "silk",
     "django_celery_beat",
     "quickstart.apps.QuickstartConfig",
 ]
@@ -547,21 +546,6 @@ AUTH_PASSWORD_VALIDATORS = [
 # --- Internationalization ---
 LANGUAGE_CODE = "en-us"
 USE_I18N = True
-
-
-# --- Silk (Performance Profiling) ---
-SILKY_PYTHON_PROFILER_RESULT_PATH = os.path.join(
-    BASE_DIR, "quickstart/monitoring/profiler"
-)
-SILKY_PYTHON_PROFILER = False
-SILKY_PYTHON_PROFILER_BINARY = True
-SILKY_AUTHENTICATION = False
-SILKY_AUTHORISATION = False
-SILKY_META = True
-SILKY_INTERCEPT_PERCENT = 100
-SILKY_MAX_RECORDED_REQUESTS = 10000
-SILKY_MAX_RECORDED_REQUESTS_CHECK_PERCENT = 10
-SILKY_IGNORE_PATHS = ["/api/admin/metrics/", "/api/classes/search/"]
 
 
 # --- Custom App Settings ---
