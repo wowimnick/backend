@@ -66,7 +66,7 @@
                         {{ booking.user_facing_reference|default:booking.id }}
                     </div>
                 </div>
-                {% if booking.participant_details %}
+                {% if booking.participants %}
                     <div style="margin-top: 20px;
                                 border-top: 1px dashed #D1D5DB;
                                 padding-top: 16px">
@@ -74,18 +74,27 @@
                                     color: #86868B;
                                     text-transform: uppercase;
                                     margin-bottom: 8px">{% trans "Who's going" %}</div>
-                        {% for p in booking.participant_details %}
-                            {% if p.name %}
-                                <span style="display: inline-block;
-                                             background: #F5F5F7;
-                                             border-radius: 99px;
-                                             padding: 4px 12px;
-                                             font-size: 14px;
-                                             color: #1D1D1F;
-                                             margin-right: 4px;
-                                             margin-bottom: 4px">{{ p.name }}</span>
-                            {% endif %}
-                        {% endfor %}
+                        {% if booking.participant_details %}
+                            {% for p in booking.participant_details %}
+                                {% if p.name %}
+                                    <span style="display: inline-block;
+                                                 background: #F5F5F7;
+                                                 border-radius: 99px;
+                                                 padding: 4px 12px;
+                                                 font-size: 14px;
+                                                 color: #1D1D1F;
+                                                 margin-right: 4px;
+                                                 margin-bottom: 4px">{{ p.name }}</span>
+                                {% endif %}
+                            {% endfor %}
+                        {% else %}
+                            <span style="display: inline-block;
+                                         background: #F5F5F7;
+                                         border-radius: 99px;
+                                         padding: 4px 12px;
+                                         font-size: 14px;
+                                         color: #1D1D1F;">{% trans "Guest" %}{% if booking.participants > 1 %} ({{ booking.participants }}){% endif %}</span>
+                        {% endif %}
                     </div>
                 {% endif %}
             </div>
