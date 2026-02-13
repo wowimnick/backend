@@ -480,4 +480,14 @@ class PublicCollectionSerializer(serializers.ModelSerializer):
         return None
     
     def get_image_medium_url(self, obj):
-        return self._get_resized_url(obj, "medium")
+        url = self._get_resized_url(obj, "medium")
+        if url is not None:
+            return url
+        # Fallback to storage URL when CloudFront resized version isn't available
+        # (e.g. CLOUDFRONT_DOMAIN not set, or resized not yet generated).
+        if obj.image and obj.image.name:
+            try:
+                return obj.image.url
+            except (ValueError, AttributeError):
+                pass
+        return None
