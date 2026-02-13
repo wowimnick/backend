@@ -82,7 +82,7 @@ class UserReviewSerializer(serializers.ModelSerializer):
         base_path, _ = os.path.splitext(original_path)
         resized_path = base_path.replace("originals/", "public/thumb/", 1) + ".webp"
         final_url = build_cloudfront_url(resized_path)
-        logger.info(f"UserReviewSerializer: Returning avatar URL: {final_url}")
+        logger.debug(f"UserReviewSerializer: Returning avatar URL: {final_url}")
         return final_url
 
 
@@ -193,7 +193,7 @@ class ImportedGoogleReviewSerializer(serializers.ModelSerializer):
         Returns the thumbnail WebP URL for the reviewer avatar.
         RENAMED from get_reviewer_avatar_thumb_url to match frontend expectations.
         """
-        logger.info(
+        logger.debug(
             f"ImportedGoogleReviewSerializer: Processing avatar for review {obj.google_review_id}"
         )
 
@@ -204,14 +204,14 @@ class ImportedGoogleReviewSerializer(serializers.ModelSerializer):
             return None
 
         original_path = obj.reviewer_avatar.name
-        logger.info(
+        logger.debug(
             f"ImportedGoogleReviewSerializer: Original avatar path: {original_path}"
         )
 
         # If it's already in public/, return as-is (legacy data)
         if original_path.startswith("public/"):
             final_url = build_cloudfront_url(original_path)
-            logger.info(
+            logger.debug(
                 f"ImportedGoogleReviewSerializer: Legacy avatar, returning: {final_url}"
             )
             return final_url
@@ -221,12 +221,12 @@ class ImportedGoogleReviewSerializer(serializers.ModelSerializer):
             base_path, _ = os.path.splitext(original_path)
             thumb_path = base_path.replace("originals/", "public/thumb/", 1) + ".webp"
             final_url = build_cloudfront_url(thumb_path)
-            logger.info(
+            logger.debug(
                 f"ImportedGoogleReviewSerializer: Converted avatar to: {final_url}"
             )
             return final_url
 
-        logger.warning(
+        logger.debug(
             f"ImportedGoogleReviewSerializer: Avatar path doesn't start with public/ or originals/: {original_path}"
         )
         return None
@@ -235,7 +235,7 @@ class ImportedGoogleReviewSerializer(serializers.ModelSerializer):
         """
         Converts originals/ paths to public/SIZE/ WebP URLs.
         """
-        logger.info(
+        logger.debug(
             f"ImportedGoogleReviewSerializer: Converting {len(image_keys) if image_keys else 0} images to {size_name}"
         )
 
@@ -254,16 +254,16 @@ class ImportedGoogleReviewSerializer(serializers.ModelSerializer):
                     base_path.replace("originals/", f"public/{size_name}/", 1) + ".webp"
                 )
                 final_url = build_cloudfront_url(processed_path)
-                logger.info(
+                logger.debug(
                     f"ImportedGoogleReviewSerializer: Converted image {idx} to: {final_url}"
                 )
                 processed_urls.append(final_url)
             else:
-                logger.warning(
+                logger.debug(
                     f"ImportedGoogleReviewSerializer: Image {idx} doesn't start with originals/: {key}"
                 )
 
-        logger.info(
+        logger.debug(
             f"ImportedGoogleReviewSerializer: Returning {len(processed_urls)} {size_name} URLs"
         )
         return processed_urls
@@ -273,7 +273,7 @@ class ImportedGoogleReviewSerializer(serializers.ModelSerializer):
         Returns medium WebP URLs for review images.
         PRIMARY FIELD - Frontend expects 'image_urls' as the main array.
         """
-        logger.info(
+        logger.debug(
             f"ImportedGoogleReviewSerializer: get_image_urls (PRIMARY) called for review {obj.google_review_id}"
         )
         return self._convert_to_processed_urls(obj.image_urls, "medium")
@@ -282,7 +282,7 @@ class ImportedGoogleReviewSerializer(serializers.ModelSerializer):
         """
         Returns thumbnail WebP URLs for review images.
         """
-        logger.info(
+        logger.debug(
             f"ImportedGoogleReviewSerializer: get_image_thumb_urls called for review {obj.google_review_id}"
         )
         return self._convert_to_processed_urls(obj.image_urls, "thumb")
@@ -291,7 +291,7 @@ class ImportedGoogleReviewSerializer(serializers.ModelSerializer):
         """
         Returns medium WebP URLs for review images.
         """
-        logger.info(
+        logger.debug(
             f"ImportedGoogleReviewSerializer: get_image_medium_urls called for review {obj.google_review_id}"
         )
         return self._convert_to_processed_urls(obj.image_urls, "medium")

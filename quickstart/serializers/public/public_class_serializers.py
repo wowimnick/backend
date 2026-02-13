@@ -186,6 +186,7 @@ class PublicClassSerializer(serializers.ModelSerializer):
     coordinates = serializers.SerializerMethodField(read_only=True)
     location = serializers.SerializerMethodField(read_only=True)
     is_favorited = serializers.SerializerMethodField()
+    soonest_next_week = serializers.SerializerMethodField()
 
     class Meta:
         model = ClassesMain
@@ -217,6 +218,7 @@ class PublicClassSerializer(serializers.ModelSerializer):
             "state",
             "min_session_price",
             "min_course_price",
+            "soonest_next_week",
         ]
         read_only_fields = fields
 
@@ -306,6 +308,24 @@ class PublicClassSerializer(serializers.ModelSerializer):
         combined_avg = total_rating_sum / total_reviews
 
         return round(combined_avg, 1)
+
+    def get_soonest_next_week(self, obj):
+        """
+        Optional label for soonest upcoming date/time (e.g. "Mon 6:00 PM").
+        Only set when context includes soonest_per_class and this class is in it.
+        Used on business detail to show "Upcoming" class cards.
+        """
+        soonest = self.context.get("soonest_per_class") or {}
+        entry = soonest.get(obj.pk)
+        if not entry:
+            return None
+        date_val = entry.get("date")
+        time_val = entry.get("time")
+        if not date_val or time_val is None:
+            return None
+        day_str = date_val.strftime("%a") if hasattr(date_val, "strftime") else str(date_val)[:3]
+        time_str = time_val.strftime("%I:%M %p").lstrip("0") if hasattr(time_val, "strftime") else str(time_val)
+        return f"{day_str} {time_str}"
 
 class HomepageClassImageSerializer(serializers.ModelSerializer):
     """

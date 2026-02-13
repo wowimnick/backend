@@ -22,7 +22,14 @@ from decimal import Decimal
 import logging
 
 # Adjust import paths based on your project structure
-from quickstart.models import Booking, BusinessInfo, ClassesMain, Reviews, Schedule
+from quickstart.models import (
+    Booking,
+    BusinessInfo,
+    ClassesMain,
+    Reviews,
+    Schedule,
+    ScheduleInstance,
+)
 from quickstart.serializers.public.public_business_serializers import (
     PublicBusinessDetailSerializer,
     PublicBusinessInfoSerializer,
@@ -65,7 +72,30 @@ class PublicBusinessInfoViewSet(viewsets.ReadOnlyModelViewSet):
     @method_decorator(vary_on_headers("Authorization"))
     @method_decorator(cache_page(60 * 60 * 24))
     def retrieve(self, request, *args, **kwargs):
-        return super().retrieve(request, *args, **kwargs)
+        instance = self.get_object()
+        # Soonest upcoming instance per class for "Upcoming" cards on business page
+        soonest_per_class = {}
+        class_ids = [c.pk for c in getattr(instance, "active_classes", [])]
+        if class_ids:
+            today = timezone.now().date()
+            soonest_instances = (
+                ScheduleInstance.objects.filter(
+                    schedule__option__classId__in=class_ids,
+                    date__gte=today,
+                    status="scheduled",
+                )
+                .order_by("schedule__option__classId", "date", "time")
+                .distinct("schedule__option__classId")
+                .values("schedule__option__classId", "date", "time")
+            )
+            for row in soonest_instances:
+                soonest_per_class[row["schedule__option__classId"]] = {
+                    "date": row["date"],
+                    "time": row["time"],
+                }
+        context = {**self.get_serializer_context(), "soonest_per_class": soonest_per_class}
+        serializer = self.get_serializer(instance, context=context)
+        return Response(serializer.data)
 
     def get_queryset(self):
         queryset = (
