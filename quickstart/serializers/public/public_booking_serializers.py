@@ -109,39 +109,32 @@ class BookingCreateSerializer(serializers.Serializer):
                 {"selectedSlots": "Valid schedule instance not found."}
             )
 
-        # --- Participant Details Validation ---
-        if participants_count > 0:
+        # --- Participant Details Validation (optional: we only require booker; backend can fill from guest_full_name) ---
+        if participants_count > 0 and participant_details:
             if not isinstance(participant_details, list):
                 raise DRFValidationError({"participant_details": "Must be a list."})
-            if not participant_details and participants_count > 1:
+            if len(participant_details) != participants_count:
                 raise DRFValidationError(
                     {
-                        "participant_details": "Participant details are required for group bookings."
+                        "participant_details": f"Number of participant details ({len(participant_details)}) must match participants count ({participants_count})."
                     }
                 )
-            if participant_details:
-                if len(participant_details) != participants_count:
+            for i, detail in enumerate(participant_details):
+                if not isinstance(detail, dict):
+                    raise DRFValidationError(
+                        {"participant_details": f"Item {i+1} must be a dictionary."}
+                    )
+                name_value = detail.get("name")
+                if (
+                    name_value
+                    and isinstance(name_value, str)
+                    and not name_value.strip()
+                ):
                     raise DRFValidationError(
                         {
-                            "participant_details": f"Number of participant details ({len(participant_details)}) must match participants count ({participants_count})."
+                            "participant_details": f"Participant {i+1} name cannot be blank."
                         }
                     )
-                for i, detail in enumerate(participant_details):
-                    if not isinstance(detail, dict):
-                        raise DRFValidationError(
-                            {"participant_details": f"Item {i+1} must be a dictionary."}
-                        )
-                    name_value = detail.get("name")
-                    if (
-                        not name_value
-                        or not isinstance(name_value, str)
-                        or not name_value.strip()
-                    ):
-                        raise DRFValidationError(
-                            {
-                                "participant_details": f"Participant {i+1} must have a non-empty name."
-                            }
-                        )
 
         # --- FIX: Implement Database Lock for Race Condition Prevention ---
         instances_to_book = []

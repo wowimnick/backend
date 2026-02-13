@@ -223,14 +223,9 @@ class GuestBookingCreateSerializer(serializers.Serializer):
                 }
             )
 
-        # 4. Validate participant_details structure against participants count
+        # 4. Validate participant_details structure when provided (optional; booker-only is allowed)
         participants_count = data["participants"]
         participant_details = data.get("participant_details", [])
-
-        if participants_count > 1 and not participant_details:
-            raise DRFValidationError(
-                {"participant_details": "Please provide the names of all participants."}
-            )
 
         if participant_details:
             if len(participant_details) != participants_count:

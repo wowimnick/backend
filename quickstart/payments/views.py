@@ -92,8 +92,15 @@ class CreatePaymentIntentView(APIView):
         if is_guest:
             logger.info(f"[{request_id}] Guest booking initiated.")
             guest_email = request.data.get("guest_email")
-            guest_full_name = request.data.get("guest_full_name")
+            guest_full_name = (request.data.get("guest_full_name") or "").strip()
             guest_phone = request.data.get("guest_phone")
+            # Fallback: derive booker name from first participant if guest_full_name not provided (e.g. frontend uses "Who's Coming?" only)
+            if not guest_full_name:
+                participant_details = request.data.get("participant_details") or []
+                if isinstance(participant_details, list) and participant_details:
+                    first_detail = participant_details[0]
+                    if isinstance(first_detail, dict) and first_detail.get("name"):
+                        guest_full_name = str(first_detail.get("name", "")).strip()
             if not all([guest_email, guest_full_name, guest_phone]):
                 return Response(
                     {"error": "Guest email, full name, and phone number are required."},
@@ -184,6 +191,19 @@ class CreatePaymentIntentView(APIView):
             participant_details = serializer.validated_data.get(
                 "participant_details", []
             )
+            # When frontend only sends booker name, participant_details may be empty or wrong length.
+            # Normalize to one booker name per participant so emails/dashboards have a consistent shape.
+            if not participant_details or len(participant_details) != participants:
+                if is_guest:
+                    booker_name = (request.data.get("guest_full_name") or "").strip()
+                    if not booker_name and participant_details and isinstance(participant_details[0], dict):
+                        booker_name = (participant_details[0].get("name") or "").strip()
+                    booker_name = booker_name or "Guest"
+                else:
+                    booker_name = (
+                        f"{getattr(request.user, 'first_name', '') or ''} {getattr(request.user, 'last_name', '') or ''}"
+                    ).strip() or "Guest"
+                participant_details = [{"name": booker_name} for _ in range(participants)]
 
             # --- FETCH ALL SIBLING SCHEDULES FOR COURSES ---
             all_instances = []
@@ -810,10 +830,14 @@ class UpdatePaymentIntentView(APIView):
                 business = booking.schedule_instance.schedule.option.classId.businessId
 
                 new_email = request.data.get("guest_email")
-                new_name = request.data.get("guest_full_name")
+                new_name = (request.data.get("guest_full_name") or "").strip()
                 new_phone = request.data.get("guest_phone")
                 new_notes = request.data.get("notes")
                 new_participants = request.data.get("participant_details")
+                if not new_name and new_participants and isinstance(new_participants, list) and new_participants:
+                    first_p = new_participants[0]
+                    if isinstance(first_p, dict) and first_p.get("name"):
+                        new_name = str(first_p.get("name", "")).strip()
 
                 # 2. Handle Contact Collision & Updates
                 updated_contact = booking.contact
@@ -880,6 +904,11 @@ class UpdatePaymentIntentView(APIView):
                 if new_notes is not None:
                     update_fields["notes"] = new_notes
                 if new_participants is not None:
+                    # Normalize: if empty or wrong length, fill from booker name
+                    count = booking.participants or 1
+                    if not new_participants or len(new_participants) != count:
+                        booker_name = new_name.strip() if new_name else "Guest"
+                        new_participants = [{"name": booker_name} for _ in range(count)]
                     update_fields["participant_details"] = new_participants
 
                 # If contact changed (Case A), we must link all bookings to the new contact

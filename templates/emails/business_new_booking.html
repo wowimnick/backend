@@ -63,14 +63,12 @@
                 <div style="font-size: 14px; margin-bottom: 8px; color: #1D1D1F;">
                     <strong>{% trans "Participants:" %}</strong> {{ booking.participants }}
                 </div>
-                {% if booking.participant_details %}
+                {% if booking.participants %}
                     <div style="font-size: 14px; margin-top: 8px; color: #1D1D1F;">
-                        <strong>{% trans "Guest List:" %}</strong>
-                        <ul style="margin-top: 4px; padding-left: 20px; color: #484848;">
-                            {% for p in booking.participant_details %}
-                                {% if p.name %}<li>{{ p.name }}</li>{% endif %}
-                            {% endfor %}
-                        </ul>
+                        <strong>{% trans "Booked by:" %}</strong>
+                        <span style="margin-top: 4px; color: #484848;">
+                            {% if booking.participant_details and booking.participant_details.0.name %}{{ booking.participant_details.0.name }}{% else %}{% if booker.get_full_name %}{{ booker.get_full_name }}{% else %}{{ booker.first_name }} {{ booker.last_name }}{% endif %}{% endif %}
+                        </span>
                     </div>
                 {% endif %}
                 {% if booker.phone_number %}
