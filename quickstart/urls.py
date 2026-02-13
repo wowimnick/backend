@@ -63,6 +63,7 @@ from quickstart.views.admin.user_management.audit_views import AuditLogViewSet
 from quickstart.views.admin.business_management.business_admin_views import (
     AdminGeographicalDataView,
     BusinessAdminViewSet,
+    ImportGoogleReviewsAdminView,
 )
 from quickstart.views.admin.global_discount.admin_global_discount_views import (
     AdminGlobalDiscountViewSet,
@@ -304,6 +305,11 @@ urlpatterns = [
         "admin/end-impersonation/",
         EndImpersonationView.as_view(),
         name="end_impersonation",
+    ),
+    path(
+        "admin/import-google-reviews/",
+        ImportGoogleReviewsAdminView.as_view(),
+        name="admin-import-google-reviews",
     ),
     path("impersonate/", include("impersonate.urls")),
     path("accounts/", include("allauth.urls")),

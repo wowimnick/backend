@@ -1194,3 +1194,143 @@ class AdminGeographicalDataView(generics.ListAPIView):
                 item["centroid"] = None
 
         return Response({"province_data": choropleth_data, "city_data": bubble_data})
+
+
+# ---------------------------------------------------------------------------
+# Import Google Reviews (admin: upload CSV/JSON and run import_google_reviews)
+# ---------------------------------------------------------------------------
+
+import json
+import os
+import tempfile
+from io import StringIO
+
+from django.core.management import call_command
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework.parsers import MultiPartParser, FormParser
+
+
+def _csv_row_to_review(raw):
+    """Map a CSV row (dict with normalized keys) to import_google_reviews JSON shape."""
+    review_image_urls = raw.get("reviewimageurls") or raw.get("review_image_urls") or ""
+    if isinstance(review_image_urls, str) and review_image_urls.strip():
+        review_image_urls = [u.strip() for u in review_image_urls.replace("|", ",").split(",") if u.strip()]
+    else:
+        review_image_urls = []
+    return {
+        "reviewId": (raw.get("reviewid") or raw.get("review_id") or "").strip(),
+        "name": (raw.get("name") or "").strip() or "Anonymous",
+        "stars": int(raw.get("stars") or raw.get("rating") or 0),
+        "text": (raw.get("text") or raw.get("comment") or "").strip(),
+        "publishedAtDate": (raw.get("publishedatdate") or raw.get("published_at_date") or "").strip() or None,
+        "responseFromOwnerText": (raw.get("responsefromownertext") or raw.get("response_from_owner_text") or "").strip() or None,
+        "responseFromOwnerDate": (raw.get("responsefromownerdate") or raw.get("response_from_owner_date") or "").strip() or None,
+        "reviewerPhotoUrl": (raw.get("reviewerphotourl") or raw.get("reviewer_photo_url") or "").strip() or None,
+        "reviewImageUrls": review_image_urls,
+    }
+
+
+def _parse_csv_to_reviews(content):
+    """Parse CSV content (string) into list of review dicts for import_google_reviews."""
+    reader = csv.DictReader(StringIO(content))
+    rows = list(reader)
+    if not rows:
+        return []
+    # Normalize headers to lowercase for flexible matching
+    result = []
+    for row in rows:
+        normalized = {k.strip().lower().replace(" ", ""): (v or "").strip() for k, v in row.items()}
+        result.append(_csv_row_to_review(normalized))
+    return result
+
+
+class ImportGoogleReviewsAdminView(APIView):
+    """
+    Admin-only: upload a CSV or JSON file and run import_google_reviews for a business.
+    POST multipart: business_id (int), file (CSV or JSON).
+    """
+    permission_classes = [IsAuthenticated, CanAccessBusinessAdmin]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        business_id = request.data.get("business_id")
+        if business_id is None:
+            return Response(
+                {"error": "Missing business_id."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            business_id = int(business_id)
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "business_id must be an integer."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        upload = request.FILES.get("file")
+        if not upload:
+            return Response(
+                {"error": "Missing file. Upload a CSV or JSON file."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        name = (upload.name or "").lower()
+        is_csv = name.endswith(".csv")
+        is_json = name.endswith(".json")
+
+        if not is_csv and not is_json:
+            return Response(
+                {"error": "File must be .csv or .json."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            content = upload.read().decode("utf-8")
+        except UnicodeDecodeError:
+            return Response(
+                {"error": "File must be UTF-8 encoded."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        reviews_data = None
+        if is_json:
+            try:
+                reviews_data = json.loads(content)
+            except json.JSONDecodeError as e:
+                return Response(
+                    {"error": f"Invalid JSON: {e}"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        else:
+            reviews_data = _parse_csv_to_reviews(content)
+
+        if not isinstance(reviews_data, list):
+            return Response(
+                {"error": "JSON file must be a list of review objects."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        fd, path = tempfile.mkstemp(suffix=".json")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(reviews_data, f, ensure_ascii=False, indent=0)
+            out = StringIO()
+            call_command("import_google_reviews", business_id, path, skip_images=False, stdout=out)
+            output = out.getvalue()
+            return Response(
+                {"success": True, "message": "Import completed.", "output": output},
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            logger.exception("Import Google reviews failed")
+            return Response(
+                {"error": str(e), "success": False},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
