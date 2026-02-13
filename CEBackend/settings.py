@@ -261,9 +261,8 @@ CHANNEL_LAYERS = {
     },
 }
 
-# Use Redis when we have a cache URL (from CACHE_URL env or default) so prewarm (Celery) and API
-# server share the same cache. Only use LocMem when explicitly no Redis (env unset and no default).
-_use_redis_cache = bool(CACHE_URL)
+# Use LocMem when DJANGO_ENV is local (no Redis required). Otherwise use Redis when CACHE_URL is set.
+_use_redis_cache = DJANGO_ENV != "local" and bool(CACHE_URL)
 if _use_redis_cache:
     CACHES = {
         "default": {
