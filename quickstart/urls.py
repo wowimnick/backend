@@ -316,6 +316,28 @@ urlpatterns = [
     # --- Routers ---
     path("admin/", include(admin_router.urls)),
     path("business/", include(business_management_router.urls)),
+    # Payment and booking-status paths must come before catch-all "" includes
+    path("payments/webhook/", ProcessBookingWebhook.as_view(), name="payment-webhook"),
+    path(
+        "booking-status/by-payment-intent/<str:payment_intent_id>/",
+        BookingStatusByPaymentIntentView.as_view(),
+        name="booking-status-by-payment-intent",
+    ),
+    path(
+        "payments/create-payment-intent/",
+        CreatePaymentIntentView.as_view(),
+        name="create-payment-intent",
+    ),
+    path(
+        "payments/update-payment-intent/",
+        UpdatePaymentIntentView.as_view(),
+        name="update-payment-intent",
+    ),
+    path(
+        "payments/cancel-payment-intent/",
+        CancelPendingBookingView.as_view(),
+        name="cancel-payment-intent",
+    ),
     path("", include(public_router.urls)),
     path("", include(user_self_router.urls)),
     # --- Authentication & User Management ---
@@ -496,27 +518,6 @@ urlpatterns = [
     path("reviews/submit/", ReviewSubmission.as_view(), name="submit-review"),
     path(
         "revenue/analytics/", RevenueAnalyticsView.as_view(), name="revenue-analytics"
-    ),
-    path("payments/webhook/", ProcessBookingWebhook.as_view(), name="payment-webhook"),
-    path(
-        "booking-status/by-payment-intent/<str:payment_intent_id>/",
-        BookingStatusByPaymentIntentView.as_view(),
-        name="booking-status-by-payment-intent",
-    ),
-    path(
-        "payments/create-payment-intent/",
-        CreatePaymentIntentView.as_view(),
-        name="create-payment-intent",
-    ),
-    path(
-        "payments/update-payment-intent/",
-        UpdatePaymentIntentView.as_view(),
-        name="update-payment-intent",
-    ),
-    path(
-        "payments/cancel-payment-intent/",
-        CancelPendingBookingView.as_view(),
-        name="cancel-payment-intent",
     ),
     path(
         "gift-cards/purchase-intent/",
