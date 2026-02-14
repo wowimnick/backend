@@ -24,6 +24,9 @@ def run_prewarm_class_search_cache(
     categories=True,
     skip_env_check=False,
     cache_version=None,
+    location_names=None,
+    collection_slugs=None,
+    category_keys=None,
 ):
     """
     Prewarm cache for preset locations, collections, and/or location+category combos.
@@ -31,6 +34,12 @@ def run_prewarm_class_search_cache(
     If cache_version is set, cache keys use that version (so invalidation can prewarm
     new version before bumping live; users always get cached).
     No-op if not IS_DEPLOYED_ENV unless skip_env_check=True (e.g. for management command --force).
+
+    Selective prewarm (only repopulate what changed):
+    - location_names: if provided, only these preset location names (e.g. ["Toronto", "Ottawa"]).
+      None = prewarm all preset locations when locations=True.
+    - collection_slugs: if provided, only these collection slugs. None = prewarm all when collections=True.
+    - category_keys: if provided, only these category keys. None = prewarm all when categories=True.
     """
     from django.conf import settings
     from quickstart.views.public.public_class_views import (
@@ -49,6 +58,9 @@ def run_prewarm_class_search_cache(
             locations=locations,
             collections=collections,
             categories=categories,
+            location_names=location_names,
+            collection_slugs=collection_slugs,
+            category_keys=category_keys,
         )
     finally:
         if cache_version is not None:
@@ -59,23 +71,43 @@ HOMEPAGE_CONTENT_PATH = "/api/classes/homepage-content/"
 CATEGORIES_PATH = "/api/categories/"
 
 
-def _run_prewarm(locations=True, collections=True, categories=True):
-    """Inner prewarm loop (no version wiring)."""
+def _run_prewarm(
+    locations=True,
+    collections=True,
+    categories=True,
+    location_names=None,
+    collection_slugs=None,
+    category_keys=None,
+):
+    """
+    Inner prewarm loop (no version wiring).
+    location_names / collection_slugs / category_keys: if set, only prewarm those;
+    None means all (when locations/collections/categories is True).
+    """
     client = Client()
 
-    # Prewarm categories and collections (explore page header/pills) so first request is instant
+    # Prewarm categories list and collections list when we're touching those dimensions
+    need_categories_list = categories
+    need_collections_list = collections
     try:
-        r_cat = client.get(CATEGORIES_PATH)
-        if r_cat.status_code == 200:
-            logger.info("Prewarm categories: OK (cached)")
-        r_coll = client.get(HOMEPAGE_CONTENT_PATH, {"mode": "collections"})
-        if r_coll.status_code == 200:
-            logger.info("Prewarm collections: OK (cached)")
+        if need_categories_list:
+            r_cat = client.get(CATEGORIES_PATH)
+            if r_cat.status_code == 200:
+                logger.info("Prewarm categories: OK (cached)")
+        if need_collections_list:
+            r_coll = client.get(HOMEPAGE_CONTENT_PATH, {"mode": "collections"})
+            if r_coll.status_code == 200:
+                logger.info("Prewarm collections: OK (cached)")
     except Exception as e:
         logger.warning("Prewarm categories/collections failed: %s", e, exc_info=True)
 
+    locations_to_prewarm = (
+        list(PRESET_LOCATIONS.items())
+        if location_names is None
+        else [(n, PRESET_LOCATIONS[n]) for n in location_names if n in PRESET_LOCATIONS]
+    )
     if locations:
-        for name, (lat, lng) in PRESET_LOCATIONS.items():
+        for name, (lat, lng) in locations_to_prewarm:
             for page_size in PAGE_SIZES:
                 params = {
                     "lat": lat,
@@ -110,10 +142,13 @@ def _run_prewarm(locations=True, collections=True, categories=True):
                         exc_info=True,
                     )
 
+    collections_qs = ClassCollection.objects.filter(is_active=True).order_by(
+        "sort_order"
+    )
+    if collection_slugs is not None:
+        collections_qs = collections_qs.filter(slug__in=collection_slugs)
     if collections:
-        for coll in ClassCollection.objects.filter(is_active=True).order_by(
-            "sort_order"
-        ):
+        for coll in collections_qs:
             slug = coll.slug
             if not slug:
                 continue
@@ -150,10 +185,13 @@ def _run_prewarm(locations=True, collections=True, categories=True):
                         )
 
     # Category-only and category+subcategory (no location) — explore page instant load
+    categories_qs = ClassCategory.objects.exclude(key="").exclude(key__isnull=True).order_by(
+        "name"
+    )
+    if category_keys is not None:
+        categories_qs = categories_qs.filter(key__in=category_keys)
     if categories:
-        for cat in ClassCategory.objects.exclude(key="").exclude(key__isnull=True).order_by(
-            "name"
-        ):
+        for cat in categories_qs:
             ckey = (cat.key or "").strip()
             if not ckey:
                 continue
@@ -231,10 +269,8 @@ def _run_prewarm(locations=True, collections=True, categories=True):
 
     # Preset location + category (e.g. Toronto + Arts) — explore page category filters with location
     if locations and categories:
-        for name, (lat, lng) in PRESET_LOCATIONS.items():
-            for cat in ClassCategory.objects.exclude(key="").exclude(key__isnull=True).order_by(
-                "name"
-            ):
+        for name, (lat, lng) in locations_to_prewarm:
+            for cat in categories_qs:
                 ckey = (cat.key or "").strip()
                 if not ckey:
                     continue
@@ -326,10 +362,8 @@ def _run_prewarm(locations=True, collections=True, categories=True):
 
     # Preset location + collection (e.g. Toronto + trending) — what the frontend often sends
     if locations and collections:
-        for name, (lat, lng) in PRESET_LOCATIONS.items():
-            for coll in ClassCollection.objects.filter(is_active=True).order_by(
-                "sort_order"
-            ):
+        for name, (lat, lng) in locations_to_prewarm:
+            for coll in collections_qs:
                 slug = coll.slug
                 if not slug:
                     continue
