@@ -42,14 +42,42 @@ from .models import (
     Payout,
 )
 
-def _invalidate_public_class_search_preset_cache():
-    """Invalidate and repopulate public class search cache (class/schedule/booking change).
-    Delegates to view so prewarm runs with new version before bump — users always get cached."""
+def _invalidate_public_class_search_preset_cache(
+    affected_locations=None,
+    affected_collection_slugs=None,
+    affected_category_keys=None,
+    class_main=None,
+):
+    """Invalidate and repopulate public class search cache (class/schedule/instance/category/collection change).
+    Delegates to view so prewarm runs with new version before bump — users always get cached.
+    Pass affected_* to prewarm only what changed; or pass class_main (ClassesMain) to derive category + collections."""
     try:
         from quickstart.views.public.public_class_views import (
             invalidate_public_class_search_preset_cache,
         )
-        invalidate_public_class_search_preset_cache()
+        if class_main is not None:
+            cat_key = getattr(class_main.category, "key", None) if getattr(class_main, "category", None) else None
+            affected_category_keys = [cat_key] if cat_key else affected_category_keys
+            try:
+                slugs = list(class_main.collections.values_list("slug", flat=True))
+                affected_collection_slugs = slugs if slugs else affected_collection_slugs
+            except Exception:
+                pass
+            # If we couldn't derive any scope, fall back to full prewarm
+            if affected_category_keys is None and affected_collection_slugs is None and affected_locations is None:
+                invalidate_public_class_search_preset_cache()
+            else:
+                invalidate_public_class_search_preset_cache(
+                    affected_locations=affected_locations,
+                    affected_collection_slugs=affected_collection_slugs,
+                    affected_category_keys=affected_category_keys,
+                )
+        else:
+            invalidate_public_class_search_preset_cache(
+                affected_locations=affected_locations,
+                affected_collection_slugs=affected_collection_slugs,
+                affected_category_keys=affected_category_keys,
+            )
     except Exception as e:
         logger.warning("Failed to invalidate public class search preset cache: %s", e)
 
@@ -526,18 +554,31 @@ def notify_users_of_new_schedule(sender, instance: Schedule, created, **kwargs):
             f"Error in notify_users_of_new_schedule signal for schedule {instance.id}: {e}",
             exc_info=True,
         )
-    _invalidate_public_class_search_preset_cache()
+    try:
+        class_main = instance.option.classId if getattr(instance, "option", None) else None
+        _invalidate_public_class_search_preset_cache(class_main=class_main)
+    except Exception:
+        _invalidate_public_class_search_preset_cache()
 
 
 @receiver(post_delete, sender=Schedule)
 def schedule_post_delete_invalidate_search_cache(sender, instance, **kwargs):
-    _invalidate_public_class_search_preset_cache()
+    try:
+        class_main = instance.option.classId if getattr(instance, "option", None) else None
+        _invalidate_public_class_search_preset_cache(class_main=class_main)
+    except Exception:
+        _invalidate_public_class_search_preset_cache()
 
 
 @receiver(post_save, sender=ScheduleInstance)
 @receiver(post_delete, sender=ScheduleInstance)
 def schedule_instance_change_invalidate_search_cache(sender, instance, **kwargs):
-    _invalidate_public_class_search_preset_cache()
+    try:
+        s = getattr(instance, "schedule", None)
+        class_main = s.option.classId if s and getattr(s, "option", None) else None
+        _invalidate_public_class_search_preset_cache(class_main=class_main)
+    except Exception:
+        _invalidate_public_class_search_preset_cache()
 
 
 @receiver(post_save, sender=ClassesMain)
@@ -793,12 +834,12 @@ def classesmain_post_save_receiver(sender, instance, created, update_fields, **k
         new_vector = get_classesmain_search_vector(instance)
         if instance.search_vector != new_vector:
             ClassesMain.objects.filter(pk=instance.pk).update(search_vector=new_vector)
-    _invalidate_public_class_search_preset_cache()
+    _invalidate_public_class_search_preset_cache(class_main=instance)
 
 
 @receiver(post_delete, sender=ClassesMain)
 def classesmain_post_delete_invalidate_search_cache(sender, instance, **kwargs):
-    _invalidate_public_class_search_preset_cache()
+    _invalidate_public_class_search_preset_cache(class_main=instance)
 
 
 @receiver(post_save, sender="quickstart.ClassOption")
@@ -811,7 +852,9 @@ def classoption_change_receiver(sender, instance, **kwargs):
             ClassesMain.objects.filter(pk=class_instance.pk).update(
                 search_vector=new_vector
             )
-    _invalidate_public_class_search_preset_cache()
+        _invalidate_public_class_search_preset_cache(class_main=class_instance)
+    else:
+        _invalidate_public_class_search_preset_cache()
 
 
 @receiver(post_save, sender="quickstart.ClassCategory")

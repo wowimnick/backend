@@ -785,7 +785,10 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
             trigger_nextjs_revalidation(tag="business-categories")
             trigger_nextjs_revalidation(tag="homepage-classes")
             try:
-                invalidate_public_class_search_preset_cache()
+                new_key = response.data.get("key") if response.data else None
+                invalidate_public_class_search_preset_cache(
+                    affected_category_keys=[new_key] if new_key else None
+                )
             except Exception as e:
                 logger.warning("Failed to invalidate search cache after category create: %s", e)
             logger.info("Revalidated homepage and class pages after category creation + prewarm")
@@ -824,7 +827,9 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
             trigger_nextjs_revalidation(tag=f"category-{instance.key}")
 
             try:
-                invalidate_public_class_search_preset_cache()
+                invalidate_public_class_search_preset_cache(
+                    affected_category_keys=[instance.key]
+                )
             except Exception as e:
                 logger.warning("Failed to invalidate search cache after category update: %s", e)
             logger.info("Revalidated homepage and class pages after category update + prewarm")
@@ -865,7 +870,9 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
         trigger_nextjs_revalidation(tag="homepage-classes")
         trigger_nextjs_revalidation(tag=f"category-{category_key}")
         try:
-            invalidate_public_class_search_preset_cache()
+            invalidate_public_class_search_preset_cache(
+                affected_category_keys=[category_key]
+            )
         except Exception as e:
             logger.warning("Failed to invalidate search cache after category delete: %s", e)
         logger.info("Revalidated homepage and class pages after category deletion + prewarm")
@@ -1210,11 +1217,14 @@ class AdminCollectionViewSet(viewsets.ModelViewSet):
             class_count=Count('classes', distinct=True) 
         ).order_by('sort_order')
 
-    def _invalidate_collection_caches(self):
-        """Invalidate backend caches so collection list and search are updated; trigger prewarm."""
+    def _invalidate_collection_caches(self, collection_slug=None):
+        """Invalidate backend caches so collection list and search are updated; trigger prewarm.
+        If collection_slug is set, only that collection is prewarmed; otherwise full prewarm."""
         cache.delete(HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY)
         try:
-            invalidate_public_class_search_preset_cache()
+            invalidate_public_class_search_preset_cache(
+                affected_collection_slugs=[collection_slug] if collection_slug else None
+            )
         except Exception as e:
             logger.warning("Failed to invalidate search cache after collection change: %s", e)
 
@@ -1223,25 +1233,29 @@ class AdminCollectionViewSet(viewsets.ModelViewSet):
         if response.status_code == status.HTTP_201_CREATED:
             trigger_nextjs_revalidation(path="/")
             trigger_nextjs_revalidation(tag="homepage-content")
-            self._invalidate_collection_caches()
+            new_slug = response.data.get("slug") if response.data else None
+            self._invalidate_collection_caches(collection_slug=new_slug)
             logger.info("Created collection and triggered revalidation + prewarm")
         return response
 
     def update(self, request, *args, **kwargs):
+        instance = self.get_object()
         response = super().update(request, *args, **kwargs)
         if response.status_code == status.HTTP_200_OK:
             trigger_nextjs_revalidation(path="/")
             trigger_nextjs_revalidation(tag="homepage-content")
-            self._invalidate_collection_caches()
+            self._invalidate_collection_caches(collection_slug=instance.slug)
             logger.info("Updated collection and triggered revalidation + prewarm")
         return response
 
     def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        doomed_slug = instance.slug
         response = super().destroy(request, *args, **kwargs)
         if response.status_code == status.HTTP_204_NO_CONTENT:
             trigger_nextjs_revalidation(path="/")
             trigger_nextjs_revalidation(tag="homepage-content")
-            self._invalidate_collection_caches()
+            self._invalidate_collection_caches(collection_slug=doomed_slug)
             logger.info("Deleted collection and triggered revalidation + prewarm")
         return response
 

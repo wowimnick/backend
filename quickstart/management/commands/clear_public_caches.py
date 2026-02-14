@@ -3,15 +3,35 @@ Clear public caches (homepage + class search) so fresh data is served after depl
 Run on web container startup so each deploy doesn't serve stale cached responses.
 Flushes class search cache keys for current env only (staging/prod share Redis safely),
 then bumps version. Keys are env-scoped so staging and prod do not affect each other.
+
+Use --once-per-build so only the first web container for a given build clears cache
+(avoids clearing cache again when ECS scales out more web tasks with the same image).
+Requires BUILD_ID, IMAGE_TAG, or GIT_SHA in the environment (set in ECS task definition at deploy).
 """
+import os
 from django.core.management.base import BaseCommand
 from django.core.cache import cache
+from django.conf import settings
 
 from quickstart.utils.class_search_cache_flush import flush_all_class_search_cache
 from quickstart.views.public.public_class_views import (
     HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY,
     PRESET_CACHE_VERSION_KEY,
 )
+
+_CACHE_ENV = getattr(settings, "DJANGO_ENV", "local")
+_CACHE_CLEARED_BUILD_KEY_PREFIX = "public_cache_cleared_build"
+_CACHE_CLEARED_BUILD_TTL = 30 * 24 * 3600  # 30 days
+
+
+def _get_build_id():
+    """Build/deploy identifier so we clear cache only once per deploy."""
+    return (
+        os.environ.get("BUILD_ID")
+        or os.environ.get("IMAGE_TAG")
+        or os.environ.get("GIT_SHA")
+        or os.environ.get("CODEBUILD_RESOLVED_SOURCE_VERSION")
+    )
 
 
 class Command(BaseCommand):
@@ -23,12 +43,46 @@ class Command(BaseCommand):
             action="store_true",
             help="Only log what would be done, do not change cache.",
         )
+        parser.add_argument(
+            "--once-per-build",
+            action="store_true",
+            help="Clear only if this build has not cleared yet (uses BUILD_ID/IMAGE_TAG/GIT_SHA). "
+            "Use on web startup so scale-out does not clear cache again.",
+        )
 
     def handle(self, *args, **options):
         dry_run = options["dry_run"]
+        once_per_build = options["once_per_build"]
         if dry_run:
             self.stdout.write("Dry run: no cache changes will be made.")
 
+        if once_per_build:
+            build_id = _get_build_id()
+            if not build_id:
+                self.stdout.write(
+                    self.style.WARNING(
+                        "Once-per-build requested but no BUILD_ID/IMAGE_TAG/GIT_SHA set; skipping clear."
+                    )
+                )
+                return
+            cache_key = f"{_CACHE_CLEARED_BUILD_KEY_PREFIX}:{_CACHE_ENV}:{build_id}"
+            try:
+                if cache.get(cache_key):
+                    self.stdout.write(
+                        self.style.SUCCESS(
+                            "Cache already cleared for this build (key=%s); skipping." % cache_key
+                        )
+                    )
+                    return
+            except Exception as e:
+                self.stdout.write(
+                    self.style.WARNING("Could not check build marker in cache: %s" % e)
+                )
+                return
+
+        self._do_clear(dry_run, once_per_build)
+
+    def _do_clear(self, dry_run, once_per_build):
         successes = []  # track which operations succeeded (when not dry_run)
         try:
             # 1. Delete homepage content cache so next request rebuilds with current env (e.g. CLOUDFRONT_DOMAIN).
@@ -73,6 +127,21 @@ class Command(BaseCommand):
                     )
             else:
                 self.stdout.write(self.style.SUCCESS("  (dry run)"))
+
+            # If once-per-build and all steps succeeded, mark this build as having cleared (so other tasks skip).
+            if once_per_build and not dry_run and len(successes) == 3:
+                build_id = _get_build_id()
+                if build_id:
+                    cache_key = f"{_CACHE_CLEARED_BUILD_KEY_PREFIX}:{_CACHE_ENV}:{build_id}"
+                    try:
+                        cache.set(cache_key, "1", timeout=_CACHE_CLEARED_BUILD_TTL)
+                        self.stdout.write(
+                            self.style.SUCCESS("  Build marker set (key=%s)." % cache_key)
+                        )
+                    except Exception as e:
+                        self.stdout.write(
+                            self.style.WARNING("  Could not set build marker: %s" % e)
+                        )
 
             # Report outcome: success only if all three operations succeeded (or dry run).
             if dry_run:

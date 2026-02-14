@@ -57,8 +57,9 @@ jobs:
       - name: 2. Fill in new WEB Task Definition
         id: task-def-web
         run: |
-          jq --arg IMAGE_URI "${{ steps.build-image.outputs.image }}" '
-          .containerDefinitions[0].image = $IMAGE_URI | 
+          jq --arg IMAGE_URI "${{ steps.build-image.outputs.image }}" --arg BUILD_ID "${{ github.sha }}" '
+          .containerDefinitions[0].image = $IMAGE_URI |
+          (.containerDefinitions[0].environment = ((.containerDefinitions[0].environment // []) | map(select(.name != "BUILD_ID")) + [{"name": "BUILD_ID", "value": $BUILD_ID})) |
           del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)
           ' task-definition-web.json > new-task-definition-web.json
           echo "task_definition_path=new-task-definition-web.json" >> $GITHUB_OUTPUT

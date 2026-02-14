@@ -12,13 +12,21 @@ logger = logging.getLogger(__name__)
 
 @shared_task(name="quickstart.tasks.cache_tasks.prewarm_class_search_cache")
 def prewarm_class_search_cache_task(
-    locations=True, collections=True, categories=True, version=None
+    locations=True,
+    collections=True,
+    categories=True,
+    version=None,
+    location_names=None,
+    collection_slugs=None,
+    category_keys=None,
 ):
     """
     Prewarm class search cache for preset locations, collections, and location+category+subcategory.
     If version is set (e.g. after invalidation), prewarm fills cache for that version
     then bumps the live version and flushes stale keys for the previous version.
     Only runs when IS_DEPLOYED_ENV is True; otherwise no-op.
+
+    Selective prewarm: pass location_names, collection_slugs, and/or category_keys (each a list or None for "all").
     """
     from django.conf import settings
     from django.core.cache import cache
@@ -38,6 +46,9 @@ def prewarm_class_search_cache_task(
         collections=collections,
         categories=categories,
         cache_version=version,
+        location_names=location_names,
+        collection_slugs=collection_slugs,
+        category_keys=category_keys,
     )
 
     if version is not None:

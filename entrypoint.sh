@@ -26,10 +26,11 @@ if [ "$CONTAINER_ROLE" = "web" ]; then
     echo "--- [WEB] Running Django migrations ---"
     python manage.py migrate --no-input
 
-    # Clear public caches on startup: flush all class search cache keys, bump version, clear homepage cache.
-    # Ensures each deploy starts with a clean cache; prewarm/requests repopulate as needed.
-    echo "--- [WEB] Clearing public caches (homepage + class search flush + version bump) ---"
-    python manage.py clear_public_caches || true
+    # Clear public caches once per deploy (not on every scale-out). Uses --once-per-build so the first
+    # web container for this build clears cache and sets a Redis marker; other containers (same image)
+    # skip. Set BUILD_ID, IMAGE_TAG, or GIT_SHA in the ECS task definition so each deploy has a unique id.
+    echo "--- [WEB] Clearing public caches (once per build) ---"
+    python manage.py clear_public_caches --once-per-build || true
 
     echo "--- [WEB] Starting Gunicorn server ---"
     # The 'exec "$@"' will run the CMD from the ECS Task Definition (e.g., gunicorn)

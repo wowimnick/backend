@@ -235,11 +235,20 @@ def _build_preset_search_cache_key(request, search_name):
     return f"{PRESET_CACHE_PREFIX}:{_CACHE_ENV}:v{version}:{location_slug}:p{page}:ps{page_size}:n{participants}:s{sort_by}:{start_date}:{end_date}"
 
 
-def invalidate_public_class_search_preset_cache():
+def invalidate_public_class_search_preset_cache(
+    affected_locations=None,
+    affected_collection_slugs=None,
+    affected_category_keys=None,
+):
     """
-    Call when classes/schedules/instances/bookings change. Does NOT bump version immediately:
-    enqueues prewarm with new version; task fills cache for new version then bumps live version,
-    so users always get cached responses (never a refetch in front of them).
+    Call when classes/schedules/instances/categories/collections change. Does NOT bump version
+    immediately: enqueues prewarm with new version; task fills cache for new version then
+    bumps live version, so users always get cached responses (never a refetch in front of them).
+
+    Selective prewarm: pass only what changed to avoid rewarming everything.
+    - affected_locations: list of preset location names (e.g. ["Toronto"]) or None = prewarm all.
+    - affected_collection_slugs: list of collection slugs or None = prewarm all.
+    - affected_category_keys: list of category keys or None = prewarm all.
     """
     try:
         # Use cache directly so we get live version, not thread-local
@@ -255,11 +264,23 @@ def invalidate_public_class_search_preset_cache():
             try:
                 from quickstart.tasks.cache_tasks import prewarm_class_search_cache_task
 
+                # Full prewarm when no scope passed; otherwise only prewarm the dimensions that are set
+                full_prewarm = (
+                    affected_locations is None
+                    and affected_collection_slugs is None
+                    and affected_category_keys is None
+                )
+                locations = full_prewarm or affected_locations is not None
+                collections = full_prewarm or affected_collection_slugs is not None
+                categories = full_prewarm or affected_category_keys is not None
                 prewarm_class_search_cache_task.delay(
-                    locations=True,
-                    collections=True,
-                    categories=True,
+                    locations=locations,
+                    collections=collections,
+                    categories=categories,
                     version=new_version,
+                    location_names=affected_locations,
+                    collection_slugs=affected_collection_slugs,
+                    category_keys=affected_category_keys,
                 )
             except Exception as e:
                 logger.warning(
