@@ -42,7 +42,7 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
     Handles listing own bookings, retrieving details, creating, and cancelling.
     """
 
-    serializer_class = StudentBookingSerializer  # Default for list
+    serializer_class = StudentBookingSerializer  
     permission_classes = [IsAuthenticated]
     pagination_class = StudentBookingPagination
     filter_backends = [filters.OrderingFilter]
