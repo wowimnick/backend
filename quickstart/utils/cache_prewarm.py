@@ -3,6 +3,7 @@ Shared logic to prewarm class search cache (preset locations, collections, categ
 Used by the management command and the Celery task. Only intended for production.
 """
 import logging
+import time
 
 from django.test import Client
 
@@ -16,6 +17,10 @@ logger = logging.getLogger(__name__)
 
 BASE_PATH = "/api/classes/search/"
 PAGE_SIZES = [24, PRESET_PREWARM_PAGE_SIZE]
+
+# Delay between each search request to avoid hitting DRF anon throttle (e.g. 500/min).
+# Overridable via settings.PREWARM_REQUEST_DELAY_SECONDS.
+PREWARM_REQUEST_DELAY_SECONDS = 0.25
 
 
 def run_prewarm_class_search_cache(
@@ -71,6 +76,14 @@ HOMEPAGE_CONTENT_PATH = "/api/classes/homepage-content/"
 CATEGORIES_PATH = "/api/categories/"
 
 
+def _prewarm_delay():
+    """Sleep between requests to stay under DRF anon rate limit (e.g. 500/min)."""
+    from django.conf import settings
+    delay = getattr(settings, "PREWARM_REQUEST_DELAY_SECONDS", PREWARM_REQUEST_DELAY_SECONDS)
+    if delay and delay > 0:
+        time.sleep(delay)
+
+
 def _run_prewarm(
     locations=True,
     collections=True,
@@ -92,10 +105,12 @@ def _run_prewarm(
     try:
         if need_categories_list:
             r_cat = client.get(CATEGORIES_PATH)
+            _prewarm_delay()
             if r_cat.status_code == 200:
                 logger.info("Prewarm categories: OK (cached)")
         if need_collections_list:
             r_coll = client.get(HOMEPAGE_CONTENT_PATH, {"mode": "collections"})
+            _prewarm_delay()
             if r_coll.status_code == 200:
                 logger.info("Prewarm collections: OK (cached)")
     except Exception as e:
@@ -118,6 +133,7 @@ def _run_prewarm(
                 }
                 try:
                     resp = client.get(BASE_PATH, params)
+                    _prewarm_delay()
                     if resp.status_code == 200:
                         count = len(resp.json().get("results", []))
                         logger.info(
@@ -160,6 +176,7 @@ def _run_prewarm(
                 }
                 try:
                     resp = client.get(BASE_PATH, params)
+                    _prewarm_delay()
                     if resp.status_code == 200:
                         count = len(resp.json().get("results", []))
                         logger.info(
@@ -203,6 +220,7 @@ def _run_prewarm(
                 }
                 try:
                     resp = client.get(BASE_PATH, params)
+                    _prewarm_delay()
                     if resp.status_code == 200:
                         count = len(resp.json().get("results", []))
                         logger.info(
@@ -240,6 +258,7 @@ def _run_prewarm(
                     }
                     try:
                         resp = client.get(BASE_PATH, params)
+                        _prewarm_delay()
                         if resp.status_code == 200:
                             count = len(resp.json().get("results", []))
                             logger.info(
@@ -286,6 +305,7 @@ def _run_prewarm(
                     }
                     try:
                         resp = client.get(BASE_PATH, params)
+                        _prewarm_delay()
                         if resp.status_code == 200:
                             count = len(resp.json().get("results", []))
                             logger.info(
@@ -330,6 +350,7 @@ def _run_prewarm(
                         }
                         try:
                             resp = client.get(BASE_PATH, params)
+                            _prewarm_delay()
                             if resp.status_code == 200:
                                 count = len(resp.json().get("results", []))
                                 logger.info(
@@ -379,6 +400,7 @@ def _run_prewarm(
                     }
                     try:
                         resp = client.get(BASE_PATH, params)
+                        _prewarm_delay()
                         if resp.status_code == 200:
                             count = len(resp.json().get("results", []))
                             logger.info(
