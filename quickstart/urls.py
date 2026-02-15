@@ -395,6 +395,11 @@ urlpatterns = [
     path("user/profile/", MyProfileView.as_view(), name="my-profile"),
     path("my-favorites/", MyFavoritesListView.as_view(), name="my-favorites-list"),
     path(
+        "classes/image-url/",
+        PublicClassViewSet.as_view({"get": "image_url"}),
+        name="public-class-image-url",
+    ),
+    path(
         "classes/search/",
         PublicClassViewSet.as_view({"get": "search"}),
         name="public-class-search",

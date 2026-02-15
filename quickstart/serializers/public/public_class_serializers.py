@@ -37,9 +37,29 @@ def _warn_cloudfront_once():
         _cloudfront_warned = True
 
 
+class PublicClassImageKeySerializer(serializers.ModelSerializer):
+    """
+    Lightweight serializer for list/card views: only imageId and image_key (storage path).
+    Pre-signed URLs are never cached; frontend fetches them via GET /api/classes/image-url/?image_id=...
+    so class cards load instantly and images load with second priority.
+    """
+    image_key = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ClassImage
+        fields = ["imageId", "image_key"]
+        read_only_fields = fields
+
+    def get_image_key(self, obj):
+        if obj.image and obj.image.name:
+            return obj.image.name
+        return None
+
+
 class PublicClassImageSerializer(serializers.ModelSerializer):
     """
-    Serializer for publicly displaying class images, now with optimized versions.
+    Serializer for publicly displaying class images with URLs (detail view only).
+    Not used in cached list/search responses — those use PublicClassImageKeySerializer.
     """
 
     original_url = serializers.ImageField(source="image", read_only=True)
@@ -150,10 +170,12 @@ class PublicClassOptionWithSchedulesSerializer(PublicClassOptionSerializer):
 class PublicClassSerializer(serializers.ModelSerializer):
     """
     Serializer for the PUBLIC LIST VIEW of classes. Lean and performant.
+    Images are returned as imageId + image_key only (no URLs) so cached responses
+    never contain expired pre-signed URLs; frontend fetches image URLs separately.
     """
 
     options = PublicClassOptionSerializer(many=True, read_only=True)
-    images = PublicClassImageSerializer(many=True, read_only=True)
+    images = PublicClassImageKeySerializer(many=True, read_only=True)
     average_rating = serializers.SerializerMethodField()
     review_count = serializers.SerializerMethodField()
     category_name = serializers.CharField(
@@ -327,34 +349,8 @@ class PublicClassSerializer(serializers.ModelSerializer):
         time_str = time_val.strftime("%I:%M %p").lstrip("0") if hasattr(time_val, "strftime") else str(time_val)
         return f"{day_str} {time_str}"
 
-class HomepageClassImageSerializer(serializers.ModelSerializer):
-    """
-    Lightweight image serializer for homepage (cover/first image only).
-    Returns medium_url (CloudFront) with original_url as fallback when CloudFront
-    is not configured or cache was built without it, so cards show the same way as explore.
-    """
-    original_url = serializers.ImageField(source="image", read_only=True)
-    medium_url = serializers.SerializerMethodField()
-
-    class Meta:
-        model = ClassImage
-        fields = ["medium_url", "original_url"]
-
-    def get_medium_url(self, obj):
-        # Re-use logic from PublicClassImageSerializer for consistency
-        if not getattr(settings, "CLOUDFRONT_DOMAIN", None):
-            return None
-        
-        if obj.image and obj.image.name:
-            original_path = obj.image.name
-            if not original_path.startswith("originals/"):
-                return None
-            
-            base_path, _ = os.path.splitext(original_path)
-            resized_base_path = base_path.replace("originals/", "public/medium/", 1)
-            final_path = resized_base_path + ".webp"
-            return build_cloudfront_url(final_path)
-        return None
+# Homepage uses same image shape as list: imageId + image_key only (no URLs).
+# HomepageClassSerializer.get_images() returns PublicClassImageKeySerializer data.
 
 class HomepageClassSerializer(PublicClassSerializer):
     """
@@ -390,29 +386,19 @@ class HomepageClassSerializer(PublicClassSerializer):
 
     def get_images(self, obj):
         """
-        Returns a list containing exactly one image object (the medium url), 
-        maintaining the original list structure: [{'medium_url': '...'}]
+        Returns a list containing exactly one image object: imageId + image_key only.
+        Frontend fetches the actual image URL via GET /api/classes/image-url/?image_id=...
+        so cached homepage payload never contains expired pre-signed URLs.
         """
-        # Note: 'images' is expected to be prefetched in the ViewSet
-        all_images = getattr(obj, 'images', None)
-        
+        all_images = getattr(obj, "images", None)
         target_image = None
-        
         if all_images:
-            # If it's a manager/queryset, filter without hitting DB if prefetched
-            if hasattr(all_images, 'all'):
-                image_list = list(all_images.all())
-            else:
-                image_list = all_images
-
+            image_list = list(all_images.all()) if hasattr(all_images, "all") else all_images
             if image_list:
-                # Try to find the cover image, else first image
                 cover_img = next((img for img in image_list if img.isCover), None)
-                target_image = cover_img if cover_img else image_list[0]
-        
+                target_image = cover_img or image_list[0]
         if target_image:
-            return [HomepageClassImageSerializer(target_image).data]
-        
+            return [PublicClassImageKeySerializer(target_image).data]
         return []
 
     def get_location(self, obj):
