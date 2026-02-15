@@ -171,6 +171,10 @@ PRESET_PREWARM_PAGE_SIZE = 50
 HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY = f"homepage_content_collections:{_CACHE_ENV}"
 HOMEPAGE_CONTENT_COLLECTIONS_CACHE_TIMEOUT = 60 * 60  # 1 hour (only used until next collection change)
 
+# Image URL cache: short TTL (45 min) so cached pre-signed URLs stay valid under typical IAM credential lifetime
+IMAGE_URL_CACHE_PREFIX = f"public_class_image_url:{_CACHE_ENV}"
+IMAGE_URL_CACHE_TTL = 45 * 60  # 45 minutes
+
 
 def _safe_cache_set(key, value, timeout=None):
     """Set cache key; on failure (e.g. Redis OOM) log and continue so the request still returns the response."""
@@ -949,6 +953,72 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 {"error": "An internal error occurred."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+    @action(detail=False, methods=["get"], url_path="image-url", permission_classes=[AllowAny])
+    def image_url(self, request):
+        """
+        Return a pre-signed S3 URL for a class image. Cached in Redis for 45 minutes
+        so URLs stay valid under typical IAM credential lifetime.
+        Query params: image_id (one or more). Response: single {"url": "..."} or
+        multiple {"urls": [{"image_id": 1, "url": "..."}, ...]}.
+        """
+        image_ids = request.query_params.getlist("image_id")
+        if not image_ids:
+            return Response(
+                {"error": "At least one image_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        seen = set()
+        unique_ids = []
+        for iid in image_ids:
+            try:
+                pk = int(iid)
+                if pk not in seen:
+                    seen.add(pk)
+                    unique_ids.append(pk)
+            except (ValueError, TypeError):
+                continue
+        if not unique_ids:
+            return Response(
+                {"error": "Valid image_id(s) required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        results = []
+        uncached_ids = []
+        for iid in unique_ids:
+            cache_key = f"{IMAGE_URL_CACHE_PREFIX}:{iid}"
+            cached_url = cache.get(cache_key)
+            if cached_url is not None:
+                results.append({"image_id": iid, "url": cached_url})
+            else:
+                uncached_ids.append(iid)
+        if uncached_ids:
+            qs = ClassImage.objects.filter(
+                imageId__in=uncached_ids,
+                classId__status="active",
+                classId__businessId__isActive=True,
+                classId__businessId__verificationStatus="verified",
+            )
+            for img in qs:
+                url = ""
+                if img.image and img.image.name:
+                    try:
+                        url = img.image.url
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to generate image URL for image_id=%s: %s",
+                            img.imageId,
+                            e,
+                        )
+                results.append({"image_id": img.imageId, "url": url})
+                cache_key = f"{IMAGE_URL_CACHE_PREFIX}:{img.imageId}"
+                _safe_cache_set(cache_key, url, timeout=IMAGE_URL_CACHE_TTL)
+        # Preserve order by unique_ids; results may be out of order if mixed cache hit/miss
+        result_by_id = {r["image_id"]: r["url"] for r in results}
+        results = [{"image_id": iid, "url": result_by_id.get(iid, "")} for iid in unique_ids]
+        if len(unique_ids) == 1 and results:
+            return Response({"url": results[0]["url"]})
+        return Response({"urls": results})
 
     @action(detail=False, methods=["get"], url_path="search")
     def search(self, request):
