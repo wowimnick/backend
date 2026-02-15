@@ -39,6 +39,7 @@ class UserTicketListSerializer(serializers.ModelSerializer):
             "status_display",
             "category",
             "category_display",
+            "created_at",
             "updated_at",
             "description",
         )
@@ -52,7 +53,9 @@ class UserTicketDetailSerializer(serializers.ModelSerializer):
     category_display = serializers.CharField(
         source="get_category_display", read_only=True
     )
-    assigned_to_details = SimpleUserSerializer(source="assigned_to", read_only=True)
+    assigned_to_details = SimpleUserSerializer(
+        source="assigned_to", read_only=True, allow_null=True
+    )
     user_details = SimpleUserSerializer(source="user", read_only=True)
     conversation = TicketMessageSerializer(many=True, read_only=True)
 
@@ -106,9 +109,11 @@ class UserSupportTicketViewSet(
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return SupportTicket.objects.filter(user=self.request.user).prefetch_related(
-            "conversation__sender__role"
-        )
+        qs = SupportTicket.objects.filter(user=self.request.user)
+        # Prefetch conversation only for detail view to avoid loading messages on list
+        if self.action == "retrieve":
+            qs = qs.prefetch_related("conversation__sender__role")
+        return qs
 
     def get_serializer_class(self):
         if self.action == "create":

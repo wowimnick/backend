@@ -154,8 +154,8 @@ PRESET_LOCATIONS = {
 PRESET_CACHE_PREFIX = "public_class_search_preset"
 # Version key per env so staging/prod can share Redis without clearing each other
 PRESET_CACHE_VERSION_KEY = f"public_class_search_preset_version:{_CACHE_ENV}"
-# TTL so old keys expire and Redis does not grow unbounded (OOM). Version invalidation still avoids stale reads.
-PRESET_CACHE_TTL = 24 * 60 * 60  # 24 hours
+# TTL so old keys expire and Redis does not grow unbounded (OOM). We invalidate selectively on content change.
+PRESET_CACHE_TTL = 7 * 24 * 60 * 60  # 1 week
 _prewarm_version_local = threading.local()
 
 # Collection-only search cache (no location/category/keyword); same version invalidation as preset
@@ -241,54 +241,86 @@ def invalidate_public_class_search_preset_cache(
     affected_category_keys=None,
 ):
     """
-    Call when classes/schedules/instances/categories/collections change. Does NOT bump version
-    immediately: enqueues prewarm with new version; task fills cache for new version then
-    bumps live version, so users always get cached responses (never a refetch in front of them).
+    Call when classes/schedules/instances/categories/collections change.
 
-    Selective prewarm: pass only what changed to avoid rewarming everything.
-    - affected_locations: list of preset location names (e.g. ["Toronto"]) or None = prewarm all.
-    - affected_collection_slugs: list of collection slugs or None = prewarm all.
-    - affected_category_keys: list of category keys or None = prewarm all.
+    Selective (pass affected_*): Delete only the cache keys that involve those
+    categories/collections/locations, then prewarm only those dimensions. No version
+    bump — unaffected keys stay valid so users always get cached responses.
+
+    Full (all None): Bump version, enqueue prewarm for new version; task fills cache
+    then bumps live version and flushes old. Use when you need a full refresh.
     """
     try:
-        # Use cache directly so we get live version, not thread-local
-        version = cache.get(PRESET_CACHE_VERSION_KEY, 0) or 0
-        new_version = version + 1
-        logger.info(
-            "Invalidating public class search preset cache (enqueue prewarm for v%s).",
-            new_version,
-        )
         from django.conf import settings
 
-        if getattr(settings, "IS_DEPLOYED_ENV", False):
-            try:
-                from quickstart.tasks.cache_tasks import prewarm_class_search_cache_task
+        full_invalidate = (
+            affected_locations is None
+            and affected_collection_slugs is None
+            and affected_category_keys is None
+        )
 
-                # Full prewarm when no scope passed; otherwise only prewarm the dimensions that are set
-                full_prewarm = (
-                    affected_locations is None
-                    and affected_collection_slugs is None
-                    and affected_category_keys is None
-                )
-                locations = full_prewarm or affected_locations is not None
-                collections = full_prewarm or affected_collection_slugs is not None
-                categories = full_prewarm or affected_category_keys is not None
-                prewarm_class_search_cache_task.delay(
-                    locations=locations,
-                    collections=collections,
-                    categories=categories,
-                    version=new_version,
-                    location_names=affected_locations,
-                    collection_slugs=affected_collection_slugs,
-                    category_keys=affected_category_keys,
-                )
-            except Exception as e:
-                logger.warning(
-                    "Could not enqueue prewarm after cache invalidation: %s", e
-                )
+        if full_invalidate:
+            # Full: bump version, enqueue prewarm with new version; task will set version and flush old
+            version = cache.get(PRESET_CACHE_VERSION_KEY, 0) or 0
+            new_version = version + 1
+            logger.info(
+                "Invalidating public class search preset cache (full; enqueue prewarm for v%s).",
+                new_version,
+            )
+            if getattr(settings, "IS_DEPLOYED_ENV", False):
+                try:
+                    from quickstart.tasks.cache_tasks import prewarm_class_search_cache_task
+
+                    prewarm_class_search_cache_task.delay(
+                        locations=True,
+                        collections=True,
+                        categories=True,
+                        version=new_version,
+                        location_names=None,
+                        collection_slugs=None,
+                        category_keys=None,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Could not enqueue prewarm after cache invalidation: %s", e
+                    )
+            else:
+                _safe_cache_set(PRESET_CACHE_VERSION_KEY, new_version, timeout=None)
         else:
-            # Local/dev: bump immediately so at least cache keys change
-            _safe_cache_set(PRESET_CACHE_VERSION_KEY, new_version, timeout=None)
+            # Selective: delete only affected keys, prewarm those dimensions at current version (no bump)
+            from quickstart.utils.class_search_cache_flush import (
+                flush_class_search_cache_for_affected,
+            )
+
+            flush_class_search_cache_for_affected(
+                cache,
+                affected_category_keys=affected_category_keys,
+                affected_collection_slugs=affected_collection_slugs,
+                affected_location_names=affected_locations,
+            )
+            logger.info(
+                "Selective cache invalidation (flush affected only); enqueue prewarm for current version."
+            )
+            if getattr(settings, "IS_DEPLOYED_ENV", False):
+                try:
+                    from quickstart.tasks.cache_tasks import prewarm_class_search_cache_task
+
+                    locations = affected_locations is not None
+                    collections = affected_collection_slugs is not None
+                    categories = affected_category_keys is not None
+                    prewarm_class_search_cache_task.delay(
+                        locations=locations,
+                        collections=collections,
+                        categories=categories,
+                        version=None,
+                        location_names=affected_locations,
+                        collection_slugs=affected_collection_slugs,
+                        category_keys=affected_category_keys,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Could not enqueue selective prewarm: %s", e
+                    )
     except Exception as e:
         logger.warning("Failed to invalidate preset search cache: %s", e, exc_info=True)
 

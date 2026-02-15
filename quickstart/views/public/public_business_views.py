@@ -36,6 +36,9 @@ from quickstart.serializers.public.public_business_serializers import (
     BusinessContactDetailSerializer,
     ImportedGoogleReviewSerializer,
 )
+from quickstart.serializers.public.public_review_serializers import (
+    PublicReviewSerializer,
+)
 
 logger = logging.getLogger(__name__)
 

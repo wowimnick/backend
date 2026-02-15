@@ -1,8 +1,8 @@
 """
-Flush class search cache keys (preset, collection, category). Used on backend startup
-and after invalidation to remove stale keys. Scoped by DJANGO_ENV so staging and prod
-can share Redis without clearing each other's cache. Requires a cache backend that
-supports delete_pattern (e.g. django_redis); no-op otherwise.
+Flush class search cache keys (preset, collection, category). Used on backend startup,
+after full invalidation (version bump), and for selective invalidation (content update).
+Scoped by DJANGO_ENV so staging and prod can share Redis without clearing each other's cache.
+Requires a cache backend that supports delete_pattern (e.g. django_redis); no-op otherwise.
 """
 import logging
 
@@ -19,6 +19,13 @@ CLASS_SEARCH_CACHE_PREFIXES = (
     "public_class_search_preset_category",
     "public_class_search_category_only",
 )
+
+# Key segment order (after prefix:env:v*): used for selective flush patterns.
+# PRESET: location_slug, ...
+# COLLECTION: slug, ...
+# PRESET_COLLECTION: location_slug, coll_slug, ...
+# PRESET_CATEGORY: location_slug, cat_slug, sub_slug, ...
+# CATEGORY_ONLY: cat_slug, sub_slug, ...
 
 
 def _get_cache_env():
@@ -74,6 +81,83 @@ def flush_class_search_cache_for_version(cache_backend, version):
             "Failed to flush class search cache for env=%s version %s: %s",
             env,
             version,
+            e,
+            exc_info=True,
+        )
+
+
+def _slug(s):
+    """Normalize for cache key segment (match public_class_views)."""
+    return (s or "").lower().replace(" ", "_")
+
+
+def flush_class_search_cache_for_affected(
+    cache_backend,
+    affected_category_keys=None,
+    affected_collection_slugs=None,
+    affected_location_names=None,
+):
+    """
+    Delete only cache keys that involve the given categories, collections, or preset
+    locations. Used on content update (class/category/collection change) so unaffected
+    keys stay valid. No version bump. No-op if backend does not support delete_pattern.
+    """
+    if not getattr(cache_backend, "delete_pattern", None):
+        logger.debug("Cache backend has no delete_pattern; skipping selective flush.")
+        return
+    env = _get_cache_env()
+    try:
+        # Category-only keys: ...:v*:cat_slug:sub_slug:...
+        if affected_category_keys:
+            for key in affected_category_keys:
+                cat_slug = _slug(key)
+                if not cat_slug:
+                    continue
+                cache_backend.delete_pattern(
+                    f"public_class_search_category_only:{env}:v*:{cat_slug}:*"
+                )
+                cache_backend.delete_pattern(
+                    f"public_class_search_preset_category:{env}:v*:*:{cat_slug}:*"
+                )
+        # Collection-only keys: ...:v*:slug:... or ...:v*:location_slug:coll_slug:...
+        if affected_collection_slugs:
+            for slug in affected_collection_slugs:
+                coll_slug = _slug(slug)
+                if not coll_slug:
+                    continue
+                cache_backend.delete_pattern(
+                    f"public_class_search_collection:{env}:v*:{coll_slug}:*"
+                )
+                cache_backend.delete_pattern(
+                    f"public_class_search_preset_collection:{env}:v*:*:{coll_slug}:*"
+                )
+        # Preset location keys: ...:v*:location_slug:...
+        if affected_location_names:
+            for name in affected_location_names:
+                loc_slug = _slug(name)
+                if not loc_slug:
+                    continue
+                cache_backend.delete_pattern(
+                    f"public_class_search_preset:{env}:v*:{loc_slug}:*"
+                )
+                cache_backend.delete_pattern(
+                    f"public_class_search_preset_collection:{env}:v*:{loc_slug}:*"
+                )
+                cache_backend.delete_pattern(
+                    f"public_class_search_preset_category:{env}:v*:{loc_slug}:*"
+                )
+        if affected_category_keys or affected_collection_slugs or affected_location_names:
+            logger.info(
+                "Flushed affected class search cache keys for env=%s (categories=%s, collections=%s, locations=%s).",
+                env,
+                len(affected_category_keys or ()),
+                len(affected_collection_slugs or ()),
+                len(affected_location_names or ()),
+            )
+    except Exception as e:
+        logger.warning(
+            "Failed to flush affected class search cache for env=%s: %s",
+            env,
             e,
             exc_info=True,
         )

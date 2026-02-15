@@ -172,10 +172,8 @@ class CustomTokenRefreshView(APIView):
         )
 
         if not refresh_token_str:
-            return Response(
-                {"detail": "Refresh token not found in cookies"},
-                status=status.HTTP_401_UNAUTHORIZED,
-            )
+            # Return 401 without a user-facing detail so the frontend does not show a toast
+            return Response(status=status.HTTP_401_UNAUTHORIZED)
 
         User = get_user_model()
 
