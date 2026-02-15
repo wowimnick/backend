@@ -1,3 +1,4 @@
+import logging
 from rest_framework import viewsets, status, serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -7,8 +8,10 @@ from django.contrib.auth import get_user_model
 from quickstart.models import SupportTicket, TicketMessage, TicketHistoryLog
 from rest_framework.pagination import PageNumberPagination
 from quickstart.utils.permissions import IsAuthenticated, BasePermission, CanAccessSupportAdmin
+from quickstart.utils.email_utils import send_agent_reply_email, send_ticket_resolved_email
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 # --- SERIALIZERS ---
@@ -25,7 +28,9 @@ class SimpleUserSerializer(serializers.ModelSerializer):
 
 
 class TicketMessageSerializer(serializers.ModelSerializer):
-    sender_details = SimpleUserSerializer(source="sender", read_only=True)
+    sender_details = SimpleUserSerializer(
+        source="sender", read_only=True, allow_null=True
+    )
 
     class Meta:
         model = TicketMessage
@@ -40,7 +45,9 @@ class TicketHistoryLogSerializer(serializers.ModelSerializer):
 
 class AdminSupportTicketListSerializer(serializers.ModelSerializer):
     user_details = SimpleUserSerializer(source="user", read_only=True)
-    assigned_to_details = SimpleUserSerializer(source="assigned_to", read_only=True)
+    assigned_to_details = SimpleUserSerializer(
+        source="assigned_to", read_only=True, allow_null=True
+    )
     status_display = serializers.CharField(source="get_status_display", read_only=True)
     priority_display = serializers.CharField(
         source="get_priority_display", read_only=True
@@ -199,6 +206,27 @@ class AdminSupportTicketViewSet(viewsets.ReadOnlyModelViewSet):
                 details=f"Status changed from '{original_status.title()}' to 'In Progress' due to reply.",
             )
 
+        # Notify ticket creator only when this reply is a direct response to the user
+        # (previous message was from user), so we don't spam when agent sends multiple messages in a row
+        previous_sender_types = (
+            TicketMessage.objects.filter(ticket=ticket)
+            .order_by("-timestamp")
+            .values_list("sender_type", flat=True)[:2]
+        )
+        if len(previous_sender_types) >= 2 and previous_sender_types[1] == "user":
+            try:
+                send_agent_reply_email(
+                    user=ticket.user,
+                    ticket=ticket,
+                    agent=request.user,
+                )
+            except Exception as e:
+                logger.exception(
+                    "Failed to send agent reply notification for ticket %s: %s",
+                    ticket.ticket_id,
+                    e,
+                )
+
         return Response(AdminSupportTicketDetailSerializer(ticket).data)
 
     @action(detail=True, methods=["post"], serializer_class=AssignTicketSerializer)
@@ -248,6 +276,15 @@ class AdminSupportTicketViewSet(viewsets.ReadOnlyModelViewSet):
             user_email=request.user.email,
             details=f"Resolved ticket.",
         )
+
+        try:
+            send_ticket_resolved_email(user=ticket.user, ticket=ticket)
+        except Exception as e:
+            logger.exception(
+                "Failed to send ticket resolved notification for ticket %s: %s",
+                ticket.ticket_id,
+                e,
+            )
 
         return Response(AdminSupportTicketDetailSerializer(ticket).data)
 

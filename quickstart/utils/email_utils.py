@@ -1368,7 +1368,7 @@ def send_admin_user_reply_notification(recipients: List[str], ticket: SupportTic
     )
 
     ticket_url = (
-        f"{settings.FRONTEND_BASE_URL}/admin/support-tickets/{ticket.ticket_id}"
+        f"{settings.FRONTEND_BASE_URL}/admin/support?ticket={ticket.ticket_id}"
     )
     context = {
         "ticket": ticket,
