@@ -39,21 +39,41 @@ def _warn_cloudfront_once():
 
 class PublicClassImageKeySerializer(serializers.ModelSerializer):
     """
-    Lightweight serializer for list/card views: only imageId and image_key (storage path).
-    Pre-signed URLs are never cached; frontend fetches them via GET /api/classes/image-url/?image_id=...
-    so class cards load instantly and images load with second priority.
+    Lightweight serializer for list/card views: imageId, image_key, and medium_url (CloudFront).
+    Class list/search/homepage responses include stable CloudFront URLs so the frontend
+    can use them directly; no separate image-url endpoint needed. CloudFront caches at the edge.
     """
     image_key = serializers.SerializerMethodField()
+    medium_url = serializers.SerializerMethodField()
 
     class Meta:
         model = ClassImage
-        fields = ["imageId", "image_key"]
+        fields = ["imageId", "image_key", "medium_url"]
         read_only_fields = fields
 
     def get_image_key(self, obj):
         if obj.image and obj.image.name:
             return obj.image.name
         return None
+
+    def _get_resized_url(self, obj, size_name):
+        """CloudFront URL for resized WebP (same convention as PublicClassImageSerializer)."""
+        if not getattr(settings, "CLOUDFRONT_DOMAIN", None):
+            return None
+        if obj.image and obj.image.name:
+            original_path = obj.image.name
+            if not original_path.startswith("originals/"):
+                return None
+            base_path, _ = os.path.splitext(original_path)
+            resized_base_path = base_path.replace(
+                "originals/", f"public/{size_name}/", 1
+            )
+            final_path = resized_base_path + ".webp"
+            return build_cloudfront_url(final_path)
+        return None
+
+    def get_medium_url(self, obj):
+        return self._get_resized_url(obj, "medium")
 
 
 class PublicClassImageSerializer(serializers.ModelSerializer):
@@ -386,9 +406,8 @@ class HomepageClassSerializer(PublicClassSerializer):
 
     def get_images(self, obj):
         """
-        Returns a list containing exactly one image object: imageId + image_key only.
-        Frontend fetches the actual image URL via GET /api/classes/image-url/?image_id=...
-        so cached homepage payload never contains expired pre-signed URLs.
+        Returns a list containing exactly one image object: imageId, image_key, and medium_url (CloudFront).
+        Cached homepage payload can include these URLs; they are stable and do not expire.
         """
         all_images = getattr(obj, "images", None)
         target_image = None
