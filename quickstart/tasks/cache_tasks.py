@@ -51,6 +51,8 @@ def prewarm_class_search_cache_task(
         category_keys=category_keys,
     )
 
+    # Only bump version and flush old when this was a full invalidation (version set).
+    # Selective invalidation passes version=None: we only refilled deleted keys at current version.
     if version is not None:
         current = cache.get(PRESET_CACHE_VERSION_KEY, 0) or 0
         if version >= current:
@@ -59,7 +61,6 @@ def prewarm_class_search_cache_task(
                 "Prewarm complete; cache version set to %s.",
                 version,
             )
-            # Remove stale keys for the previous version so cache is properly cleaned
             old_version = version - 1
             if old_version >= 0:
                 flush_class_search_cache_for_version(cache, old_version)
