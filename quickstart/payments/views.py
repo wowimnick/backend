@@ -49,6 +49,7 @@ from quickstart.utils.revalidation import (
     trigger_nextjs_revalidation,
     trigger_multiple_revalidations,
 )
+from quickstart.utils.meta_capi import send_purchase_event_for_booking
 
 logger = logging.getLogger(__name__)
 
@@ -613,6 +614,30 @@ class CreatePaymentIntentView(APIView):
                         "status": "confirmed",
                         "message": "Booking confirmed successfully.",
                     }
+                    # Meta CAPI: server-side Purchase with deduplication (event_id = booking_id)
+                    try:
+                        class_obj = option.classId if option else None
+                        send_purchase_event_for_booking(
+                            first_booking,
+                            value=float(grand_total),
+                            currency="CAD",
+                            content_ids=(
+                                [str(class_obj.classId)]
+                                if class_obj and getattr(class_obj, "classId", None)
+                                else None
+                            ),
+                            content_name=(
+                                getattr(class_obj, "title", None) if class_obj else None
+                            ),
+                            num_items=participants,
+                            request=request,
+                        )
+                    except Exception as capi_err:
+                        logger.warning(
+                            "[%s] Meta CAPI send failed (non-fatal): %s",
+                            request_id,
+                            capi_err,
+                        )
                     _revalidate_for_booking(first_booking)
                     return Response(response_data)
 
@@ -1495,6 +1520,20 @@ class ProcessBookingWebhook(APIView):
                 logger.info(
                     f"[{webhook_id}] 1/N Payout processed. Total Net: {total_net_payout_to_business}, Per Booking: {share_per_booking}"
                 )
+                # Meta CAPI: server-side Purchase with deduplication (event_id = first booking id)
+                try:
+                    send_purchase_event_for_booking(
+                        first_booking,
+                        value=float(enrollment.total_amount_paid),
+                        currency="CAD",
+                        num_items=first_booking.participants or 1,
+                    )
+                except Exception as capi_err:
+                    logger.warning(
+                        "[%s] Meta CAPI send failed (non-fatal): %s",
+                        webhook_id,
+                        capi_err,
+                    )
                 _revalidate_for_booking(first_booking)
                 return {"message": "Course payment processed successfully"}
 
@@ -1792,6 +1831,20 @@ class ProcessBookingWebhook(APIView):
                 if recipient and recipient.email:
                     send_business_new_booking_email(recipient, pending_booking)
 
+        # Meta CAPI: server-side Purchase with deduplication (event_id = booking_id)
+        try:
+            send_purchase_event_for_booking(
+                pending_booking,
+                value=float(grand_total),
+                currency="CAD",
+                num_items=pending_booking.participants or 1,
+            )
+        except Exception as capi_err:
+            logger.warning(
+                "[%s] Meta CAPI send failed (non-fatal): %s",
+                webhook_id,
+                capi_err,
+            )
         _revalidate_for_booking(pending_booking)
         return {
             "booking_id": pending_booking.id,

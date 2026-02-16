@@ -66,6 +66,10 @@ jobs:
             VERCEL_AUTOMATION_BYPASS_SECRET=${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
             SENTRY_DSN=${{ secrets.SENTRY_DSN }}
             GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+            META_CAPI_ENABLED=${{ secrets.META_CAPI_ENABLED }}
+            META_CAPI_TEST_EVENT_CODE=${{ secrets.META_CAPI_TEST_EVENT_CODE }}
+            META_PIXEL_ID=${{ secrets.META_PIXEL_ID }}
+            META_CAPI_ACCESS_TOKEN=${{ secrets.META_CAPI_ACCESS_TOKEN }}
 
             # --- Database, Cache, S3, etc. ---
             DB_ENGINE=${{ secrets.DB_ENGINE }}

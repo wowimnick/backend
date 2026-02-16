@@ -292,7 +292,17 @@ class PublicClassSerializer(serializers.ModelSerializer):
         return False
 
     def _get_google_review_stats(self, obj):
-        """Get Google review stats for combined counts"""
+        """
+        Get Google review stats for combined counts.
+        Uses annotated g_count_raw / g_rating_raw when present (e.g. from class search queryset)
+        to avoid N+1 queries; otherwise falls back to per-business aggregate.
+        """
+        # Use annotated fields from get_queryset() when available (class search, homepage, etc.)
+        g_count = getattr(obj, "g_count_raw", None)
+        g_rating = getattr(obj, "g_rating_raw", None)
+        if g_count is not None and g_rating is not None:
+            return {"google_count": int(g_count), "google_avg_rating": float(g_rating)}
+
         if not hasattr(self, "_google_review_stats_cache"):
             self._google_review_stats_cache = {}
 

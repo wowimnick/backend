@@ -137,11 +137,11 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
         # Start with the user's base permissions (from their global role)
         base_permissions = set(user.get_all_permissions())
 
-        # Now, check for a business staff role
+        # Now, check for a business staff role (prefetch content_type to avoid N+1 on permissions)
         business_staff_entry = (
             BusinessStaff.objects.filter(user=user, status="accepted")
             .select_related("role")
-            .prefetch_related("role__permissions")
+            .prefetch_related("role__permissions__content_type")
             .first()
         )
 

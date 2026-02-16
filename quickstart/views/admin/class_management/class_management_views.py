@@ -25,6 +25,7 @@ from django.db.models import (
     ExpressionWrapper,
     fields,
     Sum,
+    DateField,
 )
 from decimal import Decimal
 from django.db.models.functions import Coalesce
@@ -515,26 +516,30 @@ class AdminClassViewSet(viewsets.ModelViewSet):
 
             # --- NEW: Schedule Warning Stats (show when < 2 weeks of schedules left) ---
             two_weeks_from_now = timezone.now() + timedelta(days=14)
+            today = timezone.now().date()
 
-            classes_with_low_schedules = []
-            active_classes = base_qs.filter(
-                status="active", businessId__isActive=True
-            ).select_related("businessId", "businessId__owner")
-
-            for cls in active_classes:
-                # Get latest schedule instance
-                latest_instance = (
-                    ScheduleInstance.objects.filter(
-                        schedule__option__classId=cls, date__gte=timezone.now().date()
-                    )
-                    .order_by("-date")
-                    .first()
+            # Single-query: annotate each active class with its latest instance date (no N+1)
+            latest_instance_date_subquery = Subquery(
+                ScheduleInstance.objects.filter(
+                    schedule__option__classId=OuterRef("pk"),
+                    date__gte=today,
+                    status="scheduled",
                 )
-
-                if (
-                    latest_instance is None
-                    or latest_instance.date < two_weeks_from_now.date()
-                ):
+                .order_by("-date")
+                .values("date")[:1],
+                output_field=DateField(),
+            )
+            active_classes_with_latest = (
+                base_qs.filter(
+                    status="active", businessId__isActive=True
+                )
+                .select_related("businessId", "businessId__owner")
+                .annotate(latest_instance_date=latest_instance_date_subquery)
+            )
+            classes_with_low_schedules = []
+            for cls in active_classes_with_latest:
+                latest_date = cls.latest_instance_date
+                if latest_date is None or latest_date < two_weeks_from_now.date():
                     classes_with_low_schedules.append(
                         {
                             "classId": cls.classId,
@@ -553,14 +558,10 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                                 else None
                             ),
                             "lastScheduleDate": (
-                                latest_instance.date.isoformat()
-                                if latest_instance
-                                else None
+                                latest_date.isoformat() if latest_date else None
                             ),
                             "daysRemaining": (
-                                (latest_instance.date - timezone.now().date()).days
-                                if latest_instance
-                                else 0
+                                (latest_date - today).days if latest_date else 0
                             ),
                         }
                     )

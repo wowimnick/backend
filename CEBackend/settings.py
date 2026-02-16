@@ -417,6 +417,20 @@ SIMPLE_JWT = {
 
 FRONTEND_BASE_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 
+# Meta Conversions API (CAPI) - server-side events with Pixel deduplication
+# Only sends in production (DJANGO_ENV=prod). Set META_CAPI_ENABLED=true to override.
+META_CAPI_ENABLED = os.environ.get("META_CAPI_ENABLED", "").lower() in ("1", "true") or (
+    os.environ.get("DJANGO_ENV") == "prod"
+)
+META_PIXEL_ID = os.environ.get("META_PIXEL_ID", "")
+META_CAPI_ACCESS_TOKEN = os.environ.get("META_CAPI_ACCESS_TOKEN", "")
+# Optional: URL where the conversion happened (defaults to FRONTEND_BASE_URL or classeasily.com)
+META_CAPI_EVENT_SOURCE_URL = os.environ.get(
+    "META_CAPI_EVENT_SOURCE_URL", "https://www.classeasily.com"
+)
+# Optional: when set, events are sent as test events (visible in Events Manager > Test Events, do not affect reporting)
+META_CAPI_TEST_EVENT_CODE = os.environ.get("META_CAPI_TEST_EVENT_CODE", "")
+
 FRONTEND_EMAIL_VERIFICATION_PATH = "/verify-email/{key}/"
 FRONTEND_PASSWORD_RESET_CONFIRM_PATH = "/reset-password/{uid}/{token}"
 REST_AUTH = {

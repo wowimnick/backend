@@ -7,7 +7,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-@shared_task
+@shared_task(name="quickstart.tasks.giftcard_tasks.process_scheduled_gift_cards")
 def process_scheduled_gift_cards():
     """
     Checks for gift cards that are scheduled for today (or past dates)
