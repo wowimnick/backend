@@ -28,6 +28,13 @@ class QuickstartConfig(AppConfig):
                 exc_info=True,
             )
 
+        try:
+            from quickstart.utils.meta_capi import log_capi_config_at_boot
+
+            log_capi_config_at_boot()
+        except Exception as e:
+            logger.warning("Meta CAPI boot log skipped: %s", e)
+
         # Cache version is bumped only by clear_public_caches in the web entrypoint (once per build).
         # Do not bump here: ready() runs in every process (every Gunicorn worker, every scaled ECS task).
         # Bumping here would invalidate the cache on scale-out with no prewarm.

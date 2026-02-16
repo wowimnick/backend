@@ -17,6 +17,7 @@ Testing (no impact on production dataset):
 
 import hashlib
 import logging
+import os
 import re
 import time
 from typing import Any, Optional
@@ -29,6 +30,35 @@ logger = logging.getLogger(__name__)
 # Graph API version for CAPI
 META_GRAPH_API_VERSION = "v21.0"
 META_CAPI_EVENTS_URL = f"https://graph.facebook.com/{META_GRAPH_API_VERSION}/{{pixel_id}}/events"
+
+
+def log_capi_config_at_boot() -> None:
+    """Log CAPI config status at Django boot. Safe: sensitive values show as Present/Not Present."""
+    django_env = os.environ.get("DJANGO_ENV", "") or "Not set"
+    enabled = getattr(settings, "META_CAPI_ENABLED", False)
+    pixel_id = "Present" if (getattr(settings, "META_PIXEL_ID", "") or "").strip() else "Not Present"
+    access_token = "Present" if (getattr(settings, "META_CAPI_ACCESS_TOKEN", "") or "").strip() else "Not Present"
+    source_url = (getattr(settings, "META_CAPI_EVENT_SOURCE_URL", "") or "").strip() or "Not Present"
+    test_code = (getattr(settings, "META_CAPI_TEST_EVENT_CODE", "") or "").strip() or "Not Present"
+
+    if enabled and test_code != "Not Present":
+        mode = "test"
+    elif enabled:
+        mode = "prod"
+    else:
+        mode = "disabled"
+
+    logger.info(
+        "Meta CAPI boot: DJANGO_ENV=%s, META_CAPI_ENABLED=%s, META_PIXEL_ID=%s, "
+        "META_CAPI_ACCESS_TOKEN=%s, META_CAPI_EVENT_SOURCE_URL=%s, META_CAPI_TEST_EVENT_CODE=%s, mode=%s",
+        django_env,
+        enabled,
+        pixel_id,
+        access_token,
+        source_url,
+        test_code,
+        mode,
+    )
 
 
 def _normalize_email(value: Optional[str]) -> Optional[str]:
