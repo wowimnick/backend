@@ -55,6 +55,22 @@
                 <div style="font-size: 14px; margin-bottom: 8px; color: #1D1D1F;">
                     <strong>{% trans "Date:" %}</strong> {{ booking.schedule_instance.date|date:"l, F j" }}
                 </div>
+                <div style="font-size: 14px; margin-bottom: 8px; color: #1D1D1F;">
+                    <strong>{% trans "Time:" %}</strong> {{ formatted_time_range }}
+                </div>
+                {% if formatted_duration_minutes %}
+                    <div style="font-size: 14px; margin-bottom: 8px; color: #1D1D1F;">
+                        <strong>{% trans "Duration:" %}</strong> {{ formatted_duration_minutes }}
+                    </div>
+                {% endif %}
+                <div style="font-size: 14px; margin-bottom: 8px; color: #1D1D1F;">
+                    <strong>{% trans "Reference:" %}</strong> <span style="font-family: monospace;">{{ booking_reference }}</span>
+                </div>
+                {% if amount_paid is not None %}
+                    <div style="font-size: 14px; margin-bottom: 8px; color: #1D1D1F;">
+                        <strong>{% trans "Total paid:" %}</strong> ${{ amount_paid|floatformat:2 }}
+                    </div>
+                {% endif %}
                 {% if related_data.option_title and related_data.option_title != related_data.class_title %}
                     <div style="font-size: 14px; margin-bottom: 8px; color: #1D1D1F;">
                         <strong>{% trans "Option:" %}</strong> {{ related_data.option_title }}

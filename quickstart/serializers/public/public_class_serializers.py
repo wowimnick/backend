@@ -229,6 +229,8 @@ class PublicClassSerializer(serializers.ModelSerializer):
     location = serializers.SerializerMethodField(read_only=True)
     is_favorited = serializers.SerializerMethodField()
     soonest_next_week = serializers.SerializerMethodField()
+    student_contact_email = serializers.SerializerMethodField(read_only=True)
+    student_contact_phone = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = ClassesMain
@@ -261,8 +263,24 @@ class PublicClassSerializer(serializers.ModelSerializer):
             "min_session_price",
             "min_course_price",
             "soonest_next_week",
+            "student_contact_email",
+            "student_contact_phone",
         ]
         read_only_fields = fields
+
+    def _get_business_contact_if_public(self, obj, attr):
+        """Expose business contact when contact_privacy is public or public_with_chat (always visible)."""
+        business = getattr(obj, "businessId", None)
+        privacy = getattr(business, "contact_privacy", None)
+        if not business or privacy not in ("public", "public_with_chat"):
+            return None
+        return getattr(business, attr, None) or None
+
+    def get_student_contact_email(self, obj):
+        return self._get_business_contact_if_public(obj, "studentContactEmail")
+
+    def get_student_contact_phone(self, obj):
+        return self._get_business_contact_if_public(obj, "studentContactPhone")
 
     def get_coordinates(self, obj):
         if obj.point is None:

@@ -44,12 +44,18 @@
                             color: #F81E3E;
                             font-weight: 600;
                             margin-top: 8px">{{ formatted_time_range }}</div>
+                {% if formatted_duration_minutes %}
+                    <div style="font-size: 13px; color: #6B7280; margin-top: 4px;">{% trans "Duration:" %} {{ formatted_duration_minutes }}</div>
+                {% endif %}
                 {% if related_data.business_timezone %}
                     <div style="font-size: 12px; color: #86868B; margin-top: 4px;">{{ formatted_timezone_display }} time</div>
                 {% endif %}
             </div>
             <!-- Details List -->
             <div style="padding: 24px; text-align: left;">
+                <p style="margin: 0 0 16px 0; font-size: 14px; color: #4B5563; line-height: 1.5;">
+                    {% trans "Please arrive a few minutes early and check in at the venue. If you have any questions, contact the provider using the details below." %}
+                </p>
                 <div style="margin-bottom: 16px;">
                     <div style="font-size: 12px; color: #86868B; text-transform: uppercase;">{% trans "Location" %}</div>
                     <div style="font-size: 16px; color: #1D1D1F; font-weight: 500;">
@@ -60,12 +66,34 @@
                     <div style="font-size: 12px; color: #86868B; text-transform: uppercase;">{% trans "Provider" %}</div>
                     <div style="font-size: 16px; color: #1D1D1F; font-weight: 500;">{{ related_data.business_name|default:"N/A" }}</div>
                 </div>
-                <div style="margin-bottom: 0;">
+                <div style="margin-bottom: 16px;">
                     <div style="font-size: 12px; color: #86868B; text-transform: uppercase;">{% trans "Reference" %}</div>
                     <div style="font-size: 16px; color: #1D1D1F; font-family: monospace;">
                         {{ booking.user_facing_reference|default:booking.id }}
                     </div>
                 </div>
+                {% if related_data.business_contact_email or related_data.business_contact_phone %}
+                    <div style="margin-bottom: 16px;">
+                        <div style="font-size: 12px; color: #86868B; text-transform: uppercase;">{% trans "Contact" %} {{ related_data.business_name }}</div>
+                        <div style="font-size: 14px; color: #1D1D1F;">
+                            {% if related_data.business_contact_email %}<a href="mailto:{{ related_data.business_contact_email }}" style="color: #0ea5e9; text-decoration: none;">{{ related_data.business_contact_email }}</a>{% endif %}
+                            {% if related_data.business_contact_email and related_data.business_contact_phone %} · {% endif %}
+                            {% if related_data.business_contact_phone %}<a href="tel:{{ related_data.business_contact_phone }}" style="color: #0ea5e9; text-decoration: none;">{{ related_data.business_contact_phone }}</a>{% endif %}
+                        </div>
+                    </div>
+                {% endif %}
+                {% if related_data.cancellation_policy_display %}
+                    <div style="margin-bottom: 16px; padding: 12px; background: #F9FAFB; border-radius: 8px; border: 1px solid #E5E7EB;">
+                        <div style="font-size: 11px; color: #6B7280; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; font-weight: 600;">{% trans "Cancellation policy" %}</div>
+                        <div style="font-size: 13px; color: #374151; line-height: 1.5;">{{ related_data.cancellation_policy_display }}</div>
+                    </div>
+                {% endif %}
+                {% if related_data.equipment %}
+                    <div style="margin-bottom: 16px;">
+                        <div style="font-size: 12px; color: #86868B; text-transform: uppercase;">{% trans "What to bring" %}</div>
+                        <div style="font-size: 14px; color: #1D1D1F;">{{ related_data.equipment|join:", " }}</div>
+                    </div>
+                {% endif %}
                 {% if booking.participants %}
                     <div style="margin-top: 20px;
                                 border-top: 1px dashed #D1D5DB;

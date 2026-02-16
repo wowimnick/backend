@@ -39,7 +39,10 @@ class BookingStatusByPaymentIntentView(APIView):
 
         try:
             payment = (
-                Payment.objects.select_related("booking")
+                Payment.objects.select_related(
+                    "booking",
+                    "booking__schedule_instance__schedule__option__classId__businessId",
+                )
                 .filter(stripe_payment_intent_id=payment_intent_id)
                 .first()
             )
@@ -91,21 +94,34 @@ class BookingStatusByPaymentIntentView(APIView):
                 logger.info(
                     f"Booking status check for PI {payment_intent_id}: Found successful payment and booking {booking.id} (Ref: {booking.user_facing_reference})."
                 )
-                return Response(
-                    {
-                        "status": "confirmed",
-                        "booking_id": booking.id,
-                        "user_facing_reference": booking.user_facing_reference,
-                        "booking_group_id": (
-                            str(booking.booking_group_id)
-                            if booking.booking_group_id
-                            else None
-                        ),
-                        "participant_details": booking.participant_details,
-                        "message": "Booking confirmed.",
-                    },
-                    status=status.HTTP_200_OK,
-                )
+                payload = {
+                    "status": "confirmed",
+                    "booking_id": booking.id,
+                    "user_facing_reference": booking.user_facing_reference,
+                    "booking_group_id": (
+                        str(booking.booking_group_id)
+                        if booking.booking_group_id
+                        else None
+                    ),
+                    "participant_details": booking.participant_details,
+                    "message": "Booking confirmed.",
+                }
+                # Expose business contact for confirmation page when business allows (on_booking, public, or public_with_chat).
+                si = getattr(booking, "schedule_instance", None)
+                s = getattr(si, "schedule", None) if si else None
+                opt = getattr(s, "option", None) if s else None
+                klass = getattr(opt, "classId", None) if opt else None
+                business = getattr(klass, "businessId", None) if klass else None
+                if business:
+                    privacy = getattr(business, "contact_privacy", None)
+                    if privacy in ("on_booking", "public", "public_with_chat"):
+                        payload["business_contact_email"] = getattr(
+                            business, "studentContactEmail", None
+                        ) or None
+                        payload["business_contact_phone"] = getattr(
+                            business, "studentContactPhone", None
+                        ) or None
+                return Response(payload, status=status.HTTP_200_OK)
             elif payment.status == "failed":
                 logger.warning(
                     f"Booking status check for PI {payment_intent_id}: Payment failed."

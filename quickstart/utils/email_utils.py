@@ -36,6 +36,27 @@ TASK_NAME = "quickstart.tasks.email_tasks.send_email_task"
 TRANSACTIONAL_TASK_NAME = "quickstart.tasks.email_tasks.send_transactional_email_task"
 
 
+def _cancellation_policy_display(policy_key, refund_pct=None, custom_hours=None):
+    """Short human-readable cancellation policy for emails."""
+    if not policy_key:
+        return None
+    key = (policy_key or "").lower()
+    refund = "full refund" if (refund_pct or 0) == 100 else f"{refund_pct or 0}% refund"
+    if key == "flexible":
+        return f"Flexible: {refund} if you cancel at least 1 hour before."
+    if key == "24h":
+        return f"24-hour policy: {refund} if you cancel at least 24 hours before."
+    if key == "48h":
+        return f"48-hour policy: {refund} if you cancel at least 48 hours before."
+    if key == "72h":
+        return f"72-hour policy: {refund} if you cancel at least 72 hours before."
+    if key == "custom" and custom_hours:
+        return f"Cancellation: {refund} if you cancel at least {custom_hours} hours before."
+    if key == "strict":
+        return "Strict: non-refundable once purchased."
+    return "See cancellation policy in your booking details."
+
+
 def _get_booking_related_data(booking: Booking) -> dict:
     data = {
         "class_title": "N/A",
@@ -46,7 +67,11 @@ def _get_booking_related_data(booking: Booking) -> dict:
         "class_location": "N/A",
         "business_timezone": "UTC",
         "business_contact_email": settings.DEFAULT_FROM_EMAIL,
+        "business_contact_phone": None,
         "schedule_summary": "N/A",
+        "duration_minutes": None,
+        "cancellation_policy_display": None,
+        "equipment": [],
     }
     try:
         schedule_instance = getattr(booking, "schedule_instance", None)
@@ -74,6 +99,22 @@ def _get_booking_related_data(booking: Booking) -> dict:
         data["business_timezone"] = getattr(business, "business_timezone", "UTC")
         data["business_contact_email"] = getattr(
             business, "studentContactEmail", settings.DEFAULT_FROM_EMAIL
+        )
+        data["business_contact_phone"] = getattr(
+            business, "studentContactPhone", None
+        ) or None
+        data["duration_minutes"] = getattr(
+            schedule_instance, "duration", None
+        )
+        equipment = getattr(option, "equipment", None)
+        data["equipment"] = list(equipment) if isinstance(equipment, list) else []
+        policy_key = getattr(booking, "cancellation_policy", None) or getattr(
+            option, "cancellationPolicy", None
+        )
+        refund_pct = getattr(option, "cancellationRefundPercentage", None)
+        custom_hours = getattr(option, "cancellationCustomHours", None)
+        data["cancellation_policy_display"] = _cancellation_policy_display(
+            policy_key, refund_pct, custom_hours
         )
 
         # Basic schedule summary for courses
@@ -360,6 +401,11 @@ def send_booking_confirmation_email(user, booking: Booking):
             logger.error(f"Error formatting dates for email: {e}")
             formatted_time_range = str(booking.schedule_instance.time)
 
+    formatted_duration_minutes = None
+    if booking.schedule_instance and getattr(booking.schedule_instance, "duration", None):
+        d = booking.schedule_instance.duration
+        formatted_duration_minutes = f"{d} min" if d else None
+
     context = {
         "user": recipient,
         "booking": booking,
@@ -369,9 +415,9 @@ def send_booking_confirmation_email(user, booking: Booking):
         "related_data": related_data,
         "payment": payment,
         "is_guest": is_guest_flag,
-        # Add new variables to context
         "formatted_time_range": formatted_time_range,
         "formatted_timezone_display": formatted_timezone_display,
+        "formatted_duration_minutes": formatted_duration_minutes,
     }
 
     if context["is_guest"] and booking.cancellation_token:
@@ -889,10 +935,15 @@ def _get_booker_display(booking: Booking) -> dict:
     return out
 
 
+def _is_placeholder_booker_email(email: str) -> bool:
+    """True if the email is a known placeholder (e.g. guest checkout before real email is set)."""
+    if not email or email == "N/A":
+        return True
+    return "pending@example" in (email or "").lower()
+
+
 def send_super_admin_booking_created_email(booking: Booking):
-    """Email all Super Admins when a new booking is made. Includes booking and booker info.
-    Sends one email per Super Admin so each gets a separate Celery task and Resend API call for reliable delivery.
-    """
+    """Email all Super Admins when a new booking is made. Includes booking and booker info."""
     recipient_list = get_super_admin_emails()
     if not recipient_list:
         logger.debug("No Super Admin recipients for new booking notification; skipping email.")
@@ -902,31 +953,34 @@ def send_super_admin_booking_created_email(booking: Booking):
         return
     related_data = _get_booking_related_data(booking)
     booker = _get_booker_display(booking)
-    admin_url = f"{settings.FRONTEND_BASE_URL}/admin"
-    subject = f"[ClassEasily] New Booking: {related_data.get('class_title', 'N/A')} by {booker['name']}"
-    for email in recipient_list:
-        context = {
-            "booking": booking,
-            "related_data": related_data,
-            "booker": booker,
-            "admin_url": admin_url,
-            "recipient_email": email,
-        }
-        send_templated_email(
-            recipient_list=[email],
-            template_name="emails/super_admin_booking_created.html",
-            context=context,
-            subject=subject,
+    # Skip placeholder contacts so we don't send a duplicate/broken email for pending guest bookings.
+    if _is_placeholder_booker_email(booker.get("email") or ""):
+        logger.debug(
+            "Skipping Super Admin new-booking email for booking %s (placeholder booker email).",
+            booking.id,
         )
+        return
+    admin_url = f"{settings.FRONTEND_BASE_URL}/admin"
+    context = {
+        "booking": booking,
+        "related_data": related_data,
+        "booker": booker,
+        "admin_url": admin_url,
+        "recipient_email": ", ".join(recipient_list),
+    }
+    send_templated_email(
+        recipient_list=recipient_list,
+        template_name="emails/super_admin_booking_created.html",
+        context=context,
+        subject=f"[ClassEasily] New Booking: {related_data.get('class_title', 'N/A')} by {booker['name']}",
+    )
     logger.info(
         f"Super Admin new-booking email prepared/queued for booking {booking.id} to {len(recipient_list)} Super Admin(s)."
     )
 
 
 def send_super_admin_booking_cancelled_email(booking: Booking):
-    """Email all Super Admins when a booking is cancelled. Includes booking and booker info.
-    Sends one email per Super Admin so each gets a separate Celery task and Resend API call for reliable delivery.
-    """
+    """Email all Super Admins when a booking is cancelled. Includes booking and booker info."""
     recipient_list = get_super_admin_emails()
     if not recipient_list:
         logger.debug("No Super Admin recipients for booking cancellation notification; skipping email.")
@@ -937,21 +991,19 @@ def send_super_admin_booking_cancelled_email(booking: Booking):
     related_data = _get_booking_related_data(booking)
     booker = _get_booker_display(booking)
     admin_url = f"{settings.FRONTEND_BASE_URL}/admin"
-    subject = f"[ClassEasily] Booking Cancelled: {related_data.get('class_title', 'N/A')} – {booker['name']}"
-    for email in recipient_list:
-        context = {
-            "booking": booking,
-            "related_data": related_data,
-            "booker": booker,
-            "admin_url": admin_url,
-            "recipient_email": email,
-        }
-        send_templated_email(
-            recipient_list=[email],
-            template_name="emails/super_admin_booking_cancelled.html",
-            context=context,
-            subject=subject,
-        )
+    context = {
+        "booking": booking,
+        "related_data": related_data,
+        "booker": booker,
+        "admin_url": admin_url,
+        "recipient_email": ", ".join(recipient_list),
+    }
+    send_templated_email(
+        recipient_list=recipient_list,
+        template_name="emails/super_admin_booking_cancelled.html",
+        context=context,
+        subject=f"[ClassEasily] Booking Cancelled: {related_data.get('class_title', 'N/A')} – {booker['name']}",
+    )
     logger.info(
         f"Super Admin booking-cancelled email prepared/queued for booking {booking.id} to {len(recipient_list)} Super Admin(s)."
     )
@@ -1244,12 +1296,34 @@ def send_business_new_booking_email(business_user: CustomUser, booking: Booking)
         f"{settings.FRONTEND_BASE_URL}/business/dashboard/bookings/active"
     )
 
+    formatted_time_range = "N/A"
+    formatted_duration_minutes = None
+    if booking.schedule_instance:
+        try:
+            start_time = booking.schedule_instance.time
+            duration_minutes = getattr(booking.schedule_instance, "duration", 0) or 0
+            dummy_date = datetime.now().date()
+            start_dt = datetime.combine(dummy_date, start_time)
+            end_dt = start_dt + timedelta(minutes=duration_minutes)
+            time_str_start = start_dt.strftime("%-I:%M %p")
+            time_str_end = end_dt.strftime("%-I:%M %p")
+            formatted_time_range = f"{time_str_start} – {time_str_end}"
+            formatted_duration_minutes = f"{duration_minutes} min" if duration_minutes else None
+        except Exception as e:
+            logger.warning(
+                f"Error formatting time for business new-booking email {booking.id}: {e}"
+            )
+
     context = {
         "business_user": business_user,
         "booking": booking,
         "dashboard_booking_url": dashboard_booking_url,
         "recipient_email": business_user.email,
         "related_data": related_data,
+        "formatted_time_range": formatted_time_range,
+        "formatted_duration_minutes": formatted_duration_minutes,
+        "booking_reference": getattr(booking, "user_facing_reference", None) or booking.id,
+        "amount_paid": getattr(booking, "amount_paid", None),
     }
     send_templated_email(
         recipient_list=[business_user.email],

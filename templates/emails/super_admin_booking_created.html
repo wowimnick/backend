@@ -11,46 +11,82 @@
         <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
             {% trans "A new booking was made on the platform." %}
         </p>
+
+        <!-- Who: Booker -->
+        <div style="background: linear-gradient(135deg, #FEF2F2 0%, #FFF7ED 100%);
+                    border: 1px solid #FECACA;
+                    border-radius: 16px;
+                    margin-bottom: 20px;
+                    padding: 20px 24px;
+                    text-align: left;">
+            <div style="font-size: 11px; color: #B91C1C; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; font-weight: 600;">{% trans "Booked by" %}</div>
+            <div style="font-size: 20px; font-weight: 700; color: #1D1D1F; margin-bottom: 4px;">{{ booker.name }}</div>
+            <div style="font-size: 14px; color: #6B7280;">{{ booker.email }}{% if booker.is_guest %} <span style="color: #9CA3AF;">(Guest)</span>{% endif %}</div>
+        </div>
+
+        <!-- What & Where: Class, Business, Session -->
         <div style="background-color: #ffffff;
                     border: 1px solid #E5E7EB;
-                    border-radius: 20px;
+                    border-radius: 16px;
+                    margin-bottom: 20px;
                     overflow: hidden;
-                    margin-bottom: 32px;
-                    text-align: left;
-                    padding: 24px">
-            <div style="margin-bottom: 16px;">
-                <div style="font-size: 12px; color: #86868B; text-transform: uppercase;">{% trans "Booked by" %}</div>
-                <div style="font-size: 18px; font-weight: 700; color: #1D1D1F;">{{ booker.name }}</div>
-                <div style="font-size: 12px; color: #86868B;">{{ booker.email }}{% if booker.is_guest %} (Guest){% endif %}</div>
-            </div>
-            <div style="margin-bottom: 16px;">
-                <div style="font-size: 12px; color: #86868B; text-transform: uppercase;">{% trans "Class" %}</div>
-                <div style="font-size: 16px; color: #1D1D1F;">{{ related_data.class_title|default:"N/A" }}</div>
-                {% if related_data.option_title and related_data.option_title != related_data.class_title %}
-                    <div style="font-size: 12px; color: #86868B;">{{ related_data.option_title }}</div>
-                {% endif %}
-            </div>
-            <div style="margin-bottom: 16px;">
-                <div style="font-size: 12px; color: #86868B; text-transform: uppercase;">{% trans "Business" %}</div>
-                <div style="font-size: 16px; color: #1D1D1F;">{{ related_data.business_name|default:"N/A" }}</div>
-            </div>
-            <div style="margin-bottom: 16px;">
-                <div style="font-size: 12px; color: #86868B; text-transform: uppercase;">{% trans "Session" %}</div>
-                <div style="font-size: 16px; color: #1D1D1F;">
-                    {% if booking.schedule_instance %}
-                        {{ booking.schedule_instance.date|date:"F j, Y" }} at {{ booking.schedule_instance.time|time:"P" }}
-                    {% else %}
-                        N/A
+                    text-align: left;">
+            <div style="font-size: 11px; color: #6B7280; text-transform: uppercase; letter-spacing: 0.06em; padding: 14px 24px; background: #F9FAFB; border-bottom: 1px solid #E5E7EB; font-weight: 600;">{% trans "Class & session" %}</div>
+            <div style="padding: 20px 24px;">
+                <div style="margin-bottom: 14px;">
+                    <div style="font-size: 13px; color: #9CA3AF; margin-bottom: 2px;">{% trans "Class" %}</div>
+                    <div style="font-size: 17px; font-weight: 600; color: #1D1D1F;">{{ related_data.class_title|default:"N/A" }}</div>
+                    {% if related_data.option_title and related_data.option_title != related_data.class_title %}
+                        <div style="font-size: 13px; color: #6B7280; margin-top: 2px;">{{ related_data.option_title }}</div>
                     {% endif %}
                 </div>
-            </div>
-            <div style="margin-bottom: 8px;">
-                <div style="font-size: 12px; color: #86868B; text-transform: uppercase;">{% trans "Booking details" %}</div>
-                <div style="font-size: 14px; color: #1D1D1F;">{% trans "Reference:" %} {{ booking.user_facing_reference|default:booking.id }}</div>
-                <div style="font-size: 14px; color: #1D1D1F;">{% trans "Status:" %} {{ booking.status }}</div>
-                <div style="font-size: 14px; color: #1D1D1F;">{% trans "Participants:" %} {{ booking.participants }}</div>
+                <div style="margin-bottom: 14px;">
+                    <div style="font-size: 13px; color: #9CA3AF; margin-bottom: 2px;">{% trans "Business" %}</div>
+                    <div style="font-size: 15px; color: #1D1D1F;">{{ related_data.business_name|default:"N/A" }}</div>
+                </div>
+                <div style="margin-bottom: 0;">
+                    <div style="font-size: 13px; color: #9CA3AF; margin-bottom: 2px;">{% trans "Session" %}</div>
+                    <div style="font-size: 15px; color: #1D1D1F;">
+                        {% if booking.schedule_instance %}
+                            {{ booking.schedule_instance.date|date:"l, F j, Y" }} at {{ booking.schedule_instance.time|time:"P" }}
+                        {% else %}
+                            N/A
+                        {% endif %}
+                    </div>
+                </div>
             </div>
         </div>
+
+        <!-- Booking details + Payment: two-column feel with rows -->
+        <div style="background-color: #ffffff;
+                    border: 1px solid #E5E7EB;
+                    border-radius: 16px;
+                    margin-bottom: 28px;
+                    overflow: hidden;
+                    text-align: left;">
+            <div style="font-size: 11px; color: #6B7280; text-transform: uppercase; letter-spacing: 0.06em; padding: 14px 24px; background: #F9FAFB; border-bottom: 1px solid #E5E7EB; font-weight: 600;">{% trans "Booking & payment" %}</div>
+            <div style="padding: 20px 24px;">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="font-size: 14px;">
+                    <tr>
+                        <td style="padding: 8px 0; color: #9CA3AF; width: 42%;">{% trans "Reference" %}</td>
+                        <td style="padding: 8px 0; color: #1D1D1F; font-weight: 600;">{{ booking.user_facing_reference|default:booking.id }}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 8px 0; color: #9CA3AF;">{% trans "Status" %}</td>
+                        <td style="padding: 8px 0; color: #1D1D1F;"><span style="text-transform: capitalize;">{{ booking.status }}</span></td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 8px 0; color: #9CA3AF;">{% trans "Participants" %}</td>
+                        <td style="padding: 8px 0; color: #1D1D1F;">{{ booking.participants }}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 12px 0 8px 0; color: #9CA3AF;">{% trans "Total paid" %}</td>
+                        <td style="padding: 12px 0 8px 0; color: #1D1D1F; font-size: 18px; font-weight: 700;">${{ booking.amount_paid|floatformat:2 }}</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+
         <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
             <tr>
                 <td align="center">
