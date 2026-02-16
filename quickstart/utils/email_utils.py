@@ -890,7 +890,9 @@ def _get_booker_display(booking: Booking) -> dict:
 
 
 def send_super_admin_booking_created_email(booking: Booking):
-    """Email all Super Admins when a new booking is made. Includes booking and booker info."""
+    """Email all Super Admins when a new booking is made. Includes booking and booker info.
+    Sends one email per Super Admin so each gets a separate Celery task and Resend API call for reliable delivery.
+    """
     recipient_list = get_super_admin_emails()
     if not recipient_list:
         logger.debug("No Super Admin recipients for new booking notification; skipping email.")
@@ -901,26 +903,30 @@ def send_super_admin_booking_created_email(booking: Booking):
     related_data = _get_booking_related_data(booking)
     booker = _get_booker_display(booking)
     admin_url = f"{settings.FRONTEND_BASE_URL}/admin"
-    context = {
-        "booking": booking,
-        "related_data": related_data,
-        "booker": booker,
-        "admin_url": admin_url,
-        "recipient_email": ", ".join(recipient_list),
-    }
-    send_templated_email(
-        recipient_list=recipient_list,
-        template_name="emails/super_admin_booking_created.html",
-        context=context,
-        subject=f"[ClassEasily] New Booking: {related_data.get('class_title', 'N/A')} by {booker['name']}",
-    )
+    subject = f"[ClassEasily] New Booking: {related_data.get('class_title', 'N/A')} by {booker['name']}"
+    for email in recipient_list:
+        context = {
+            "booking": booking,
+            "related_data": related_data,
+            "booker": booker,
+            "admin_url": admin_url,
+            "recipient_email": email,
+        }
+        send_templated_email(
+            recipient_list=[email],
+            template_name="emails/super_admin_booking_created.html",
+            context=context,
+            subject=subject,
+        )
     logger.info(
         f"Super Admin new-booking email prepared/queued for booking {booking.id} to {len(recipient_list)} Super Admin(s)."
     )
 
 
 def send_super_admin_booking_cancelled_email(booking: Booking):
-    """Email all Super Admins when a booking is cancelled. Includes booking and booker info."""
+    """Email all Super Admins when a booking is cancelled. Includes booking and booker info.
+    Sends one email per Super Admin so each gets a separate Celery task and Resend API call for reliable delivery.
+    """
     recipient_list = get_super_admin_emails()
     if not recipient_list:
         logger.debug("No Super Admin recipients for booking cancellation notification; skipping email.")
@@ -931,19 +937,21 @@ def send_super_admin_booking_cancelled_email(booking: Booking):
     related_data = _get_booking_related_data(booking)
     booker = _get_booker_display(booking)
     admin_url = f"{settings.FRONTEND_BASE_URL}/admin"
-    context = {
-        "booking": booking,
-        "related_data": related_data,
-        "booker": booker,
-        "admin_url": admin_url,
-        "recipient_email": ", ".join(recipient_list),
-    }
-    send_templated_email(
-        recipient_list=recipient_list,
-        template_name="emails/super_admin_booking_cancelled.html",
-        context=context,
-        subject=f"[ClassEasily] Booking Cancelled: {related_data.get('class_title', 'N/A')} – {booker['name']}",
-    )
+    subject = f"[ClassEasily] Booking Cancelled: {related_data.get('class_title', 'N/A')} – {booker['name']}"
+    for email in recipient_list:
+        context = {
+            "booking": booking,
+            "related_data": related_data,
+            "booker": booker,
+            "admin_url": admin_url,
+            "recipient_email": email,
+        }
+        send_templated_email(
+            recipient_list=[email],
+            template_name="emails/super_admin_booking_cancelled.html",
+            context=context,
+            subject=subject,
+        )
     logger.info(
         f"Super Admin booking-cancelled email prepared/queued for booking {booking.id} to {len(recipient_list)} Super Admin(s)."
     )
