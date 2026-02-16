@@ -858,6 +858,97 @@ def send_admin_new_verification_request_email(
     )
 
 
+def get_super_admin_emails() -> List[str]:
+    """Return list of email addresses for all active users with the Super Admin role."""
+    return list(
+        CustomUser.objects.filter(
+            role__name="Super Admin",
+            is_active=True,
+        )
+        .exclude(email__isnull=True)
+        .exclude(email="")
+        .values_list("email", flat=True)
+        .distinct()
+    )
+
+
+def _get_booker_display(booking: Booking) -> dict:
+    """Return display info for the user/guest who made the booking."""
+    out = {"name": "Unknown", "email": "N/A", "is_guest": False}
+    if booking.user:
+        out["name"] = booking.user.get_full_name() or booking.user.email or "N/A"
+        out["email"] = getattr(booking.user, "email", "N/A") or "N/A"
+    elif booking.contact:
+        name_parts = [
+            n for n in [getattr(booking.contact, "first_name", ""), getattr(booking.contact, "last_name", "")]
+            if n
+        ]
+        out["name"] = " ".join(name_parts) if name_parts else getattr(booking.contact, "email", "N/A")
+        out["email"] = getattr(booking.contact, "email", "N/A") or "N/A"
+        out["is_guest"] = True
+    return out
+
+
+def send_super_admin_booking_created_email(booking: Booking):
+    """Email all Super Admins when a new booking is made. Includes booking and booker info."""
+    recipient_list = get_super_admin_emails()
+    if not recipient_list:
+        logger.debug("No Super Admin recipients for new booking notification; skipping email.")
+        return
+    if not booking:
+        logger.warning("send_super_admin_booking_created_email called with no booking.")
+        return
+    related_data = _get_booking_related_data(booking)
+    booker = _get_booker_display(booking)
+    admin_url = f"{settings.FRONTEND_BASE_URL}/admin"
+    context = {
+        "booking": booking,
+        "related_data": related_data,
+        "booker": booker,
+        "admin_url": admin_url,
+        "recipient_email": ", ".join(recipient_list),
+    }
+    send_templated_email(
+        recipient_list=recipient_list,
+        template_name="emails/super_admin_booking_created.html",
+        context=context,
+        subject=f"[ClassEasily] New Booking: {related_data.get('class_title', 'N/A')} by {booker['name']}",
+    )
+    logger.info(
+        f"Super Admin new-booking email prepared/queued for booking {booking.id} to {len(recipient_list)} Super Admin(s)."
+    )
+
+
+def send_super_admin_booking_cancelled_email(booking: Booking):
+    """Email all Super Admins when a booking is cancelled. Includes booking and booker info."""
+    recipient_list = get_super_admin_emails()
+    if not recipient_list:
+        logger.debug("No Super Admin recipients for booking cancellation notification; skipping email.")
+        return
+    if not booking:
+        logger.warning("send_super_admin_booking_cancelled_email called with no booking.")
+        return
+    related_data = _get_booking_related_data(booking)
+    booker = _get_booker_display(booking)
+    admin_url = f"{settings.FRONTEND_BASE_URL}/admin"
+    context = {
+        "booking": booking,
+        "related_data": related_data,
+        "booker": booker,
+        "admin_url": admin_url,
+        "recipient_email": ", ".join(recipient_list),
+    }
+    send_templated_email(
+        recipient_list=recipient_list,
+        template_name="emails/super_admin_booking_cancelled.html",
+        context=context,
+        subject=f"[ClassEasily] Booking Cancelled: {related_data.get('class_title', 'N/A')} – {booker['name']}",
+    )
+    logger.info(
+        f"Super Admin booking-cancelled email prepared/queued for booking {booking.id} to {len(recipient_list)} Super Admin(s)."
+    )
+
+
 def send_review_submission_confirmation_email(user: CustomUser, review: Reviews):
     """Sends confirmation after a user submits a review."""
     if not user or not user.email or not review:

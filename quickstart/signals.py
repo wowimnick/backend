@@ -221,6 +221,17 @@ def create_booking_notification(sender, instance, created, **kwargs):
                     f"New Booking notification created for manager {manager.email} for booking {instance.id}"
                 )
 
+    # Super Admin email: new booking (any new booking, pending or confirmed)
+    if created:
+        try:
+            from .utils.email_utils import send_super_admin_booking_created_email
+            send_super_admin_booking_created_email(instance)
+        except Exception as e:
+            logger.error(
+                f"Failed to send Super Admin new-booking email for booking {instance.id}: {e}",
+                exc_info=True,
+            )
+
     # CASE 2: Booking Cancelled Notification for Business (if cancelled by student)
     # Use update_fields to be more precise if available, check status changed to 'cancelled'
     status_changed_to_cancelled = (
@@ -298,6 +309,16 @@ def create_booking_notification(sender, instance, created, **kwargs):
                     logger.info(
                         f"In-app student cancellation notification created for manager {manager.email} for booking {instance.id}"
                     )
+
+        # Super Admin email: booking cancelled (any cancellation)
+        try:
+            from .utils.email_utils import send_super_admin_booking_cancelled_email
+            send_super_admin_booking_cancelled_email(instance)
+        except Exception as e:
+            logger.error(
+                f"Failed to send Super Admin booking-cancelled email for booking {instance.id}: {e}",
+                exc_info=True,
+            )
 
 @receiver(post_save, sender=Reviews)
 def create_review_notification(sender, instance, created, **kwargs):
