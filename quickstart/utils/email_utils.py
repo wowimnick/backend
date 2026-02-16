@@ -95,6 +95,10 @@ def _get_booking_related_data(booking: Booking) -> dict:
         data["class_slug"] = getattr(class_main, "slug", None)
         data["business_name"] = getattr(business, "businessName", "N/A")
         data["option_title"] = getattr(option, "title", "N/A")
+        options_qs = getattr(class_main, "options", None)
+        data["has_multiple_options"] = (
+            options_qs.count() > 1 if options_qs is not None else False
+        )
         data["class_location"] = getattr(class_main, "location", "N/A")
         data["business_timezone"] = getattr(business, "business_timezone", "UTC")
         data["business_contact_email"] = getattr(

@@ -13,7 +13,7 @@
             {% blocktrans with first_name=business_user.first_name|default:"Partner" %}Hi {{ first_name }},{% endblocktrans %}
             <br>
             Someone new is joining the fun for <strong>{{ related_data.class_title }}</strong>
-            {% if related_data.option_title and related_data.option_title != related_data.class_title %}
+            {% if related_data.has_multiple_options and related_data.option_title and related_data.option_title != related_data.class_title %}
                 <span style="color: #6B7280;">({{ related_data.option_title }})</span>
             {% endif %}
             .
@@ -38,7 +38,6 @@
                 <div style="font-size: 22px;
                             font-weight: 700;
                             color: #1D1D1F;
-                            font-family: monospace;
                             letter-spacing: 0.02em;">{{ booking_reference }}</div>
                 <div style="font-size: 14px;
                             color: #6B7280;
@@ -101,7 +100,7 @@
                             <div style="font-size: 16px; font-weight: 600; color: #1D1D1F;">${{ amount_paid|floatformat:2 }}</div>
                         </div>
                     {% endif %}
-                    {% if related_data.option_title and related_data.option_title != related_data.class_title %}
+                    {% if related_data.has_multiple_options and related_data.option_title and related_data.option_title != related_data.class_title %}
                         <div style="margin-bottom: 16px;">
                             <div style="font-size: 11px;
                                         color: #86868B;
