@@ -18,96 +18,141 @@
             {% endif %}
             .
         </p>
-        <!-- Details Card -->
-        <div style="background-color: #F9FAFB;
+        <!-- Booking card (similar structure to user confirmation) -->
+        <div style="background-color: #ffffff;
                     border: 1px solid #E5E7EB;
-                    border-radius: 16px;
-                    padding: 24px;
-                    text-align: left;
-                    margin-bottom: 32px">
-            {% with booker=booking.user|default:booking.contact %}
-                <div style="display: flex;
-                            align-items: center;
-                            margin-bottom: 20px;
-                            padding-bottom: 20px;
-                            border-bottom: 1px dashed #D1D5DB">
-                    <div style="background: #34D399;
-                                width: 40px;
-                                height: 40px;
-                                border-radius: 20px;
-                                display: flex;
-                                align-items: center;
-                                justify-content: center;
-                                font-size: 20px;
-                                color: white;
-                                margin-right: 16px">✓</div>
-                    <div>
-                        <div style="font-size: 16px; font-weight: 700; color: #1D1D1F;">
-                            {% if booker.get_full_name %}
-                                {{ booker.get_full_name }}
-                            {% else %}
-                                {{ booker.first_name }} {{ booker.last_name }}
-                            {% endif %}
-                        </div>
-                        <div style="font-size: 14px; color: #86868B;">{{ booker.email }}</div>
-                    </div>
+                    border-radius: 20px;
+                    overflow: hidden;
+                    box-shadow: 0 4px 6px rgba(0,0,0,0.02);
+                    margin-bottom: 32px;
+                    text-align: left;">
+            <!-- Hero: reference + session -->
+            <div style="background-color: #F5F5F7;
+                        padding: 20px 24px;
+                        border-bottom: 1px solid #E5E7EB;">
+                <div style="font-size: 11px;
+                            color: #86868B;
+                            text-transform: uppercase;
+                            letter-spacing: 0.05em;
+                            margin-bottom: 6px;">{% trans "Reference" %}</div>
+                <div style="font-size: 22px;
+                            font-weight: 700;
+                            color: #1D1D1F;
+                            font-family: monospace;
+                            letter-spacing: 0.02em;">{{ booking_reference }}</div>
+                <div style="font-size: 14px;
+                            color: #6B7280;
+                            margin-top: 12px;">
+                    {{ booking.schedule_instance.date|date:"l, F j" }} · {{ formatted_time_range }}
+                    {% if formatted_duration_minutes %} · {{ formatted_duration_minutes }}{% endif %}
                 </div>
-                <div style="font-size: 14px; margin-bottom: 8px; color: #1D1D1F;">
-                    <strong>{% trans "Date:" %}</strong> {{ booking.schedule_instance.date|date:"l, F j" }}
-                </div>
-                <div style="font-size: 14px; margin-bottom: 8px; color: #1D1D1F;">
-                    <strong>{% trans "Time:" %}</strong> {{ formatted_time_range }}
-                </div>
-                {% if formatted_duration_minutes %}
-                    <div style="font-size: 14px; margin-bottom: 8px; color: #1D1D1F;">
-                        <strong>{% trans "Duration:" %}</strong> {{ formatted_duration_minutes }}
-                    </div>
-                {% endif %}
-                <div style="font-size: 14px; margin-bottom: 8px; color: #1D1D1F;">
-                    <strong>{% trans "Reference:" %}</strong> <span style="font-family: monospace;">{{ booking_reference }}</span>
-                </div>
-                {% if amount_paid is not None %}
-                    <div style="font-size: 14px; margin-bottom: 8px; color: #1D1D1F;">
-                        <strong>{% trans "Total paid:" %}</strong> ${{ amount_paid|floatformat:2 }}
-                    </div>
-                {% endif %}
-                {% if related_data.option_title and related_data.option_title != related_data.class_title %}
-                    <div style="font-size: 14px; margin-bottom: 8px; color: #1D1D1F;">
-                        <strong>{% trans "Option:" %}</strong> {{ related_data.option_title }}
-                    </div>
-                {% endif %}
-                <div style="font-size: 14px; margin-bottom: 8px; color: #1D1D1F;">
-                    <strong>{% trans "Participants:" %}</strong> {{ booking.participants }}
-                </div>
-                {% if booking.participants %}
-                    <div style="font-size: 14px; margin-top: 8px; color: #1D1D1F;">
-                        <strong>{% trans "Booked by:" %}</strong>
-                        <span style="margin-top: 4px; color: #484848;">
-                            {% if booking.participant_details and booking.participant_details.0.name %}{{ booking.participant_details.0.name }}{% else %}{% if booker.get_full_name %}{{ booker.get_full_name }}{% else %}{{ booker.first_name }} {{ booker.last_name }}{% endif %}{% endif %}
-                        </span>
-                    </div>
-                {% endif %}
-                {% if booker.phone_number %}
-                    <div style="font-size: 14px; margin-bottom: 8px; color: #1D1D1F;">
-                        <strong>{% trans "Phone:" %}</strong> <a href="tel:{{ booker.phone_number }}"
-    style="color:#1D1D1F;
-           text-decoration:none">{{ booker.phone_number }}</a>
-                    </div>
-                {% endif %}
-                {% if booking.notes %}
-                    <div style="margin-top: 16px;
-                                background: #ffffff;
-                                padding: 12px;
-                                border-radius: 8px;
-                                border: 1px solid #E5E7EB">
+            </div>
+            <!-- Body: guest, details, booking row -->
+            <div style="padding: 20px 24px;">
+                {% with booker=booking.user|default:booking.contact %}
+                    <!-- Guest -->
+                    <div style="margin-bottom: 18px;">
                         <div style="font-size: 11px;
-                                    text-transform: uppercase;
                                     color: #86868B;
-                                    margin-bottom: 4px">{% trans "Customer Notes" %}</div>
-                        <div style="font-size: 14px; color: #1D1D1F; font-style: italic;">"{{ booking.notes }}"</div>
+                                    text-transform: uppercase;
+                                    letter-spacing: 0.02em;
+                                    margin-bottom: 6px;">{% trans "Guest" %}</div>
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <div style="background: #34D399;
+                                        width: 36px;
+                                        height: 36px;
+                                        border-radius: 18px;
+                                        display: flex;
+                                        align-items: center;
+                                        justify-content: center;
+                                        font-size: 18px;
+                                        color: white;
+                                        flex-shrink: 0;">✓</div>
+                            <div>
+                                <div style="font-size: 15px; font-weight: 600; color: #1D1D1F;">
+                                    {% if booker.get_full_name %}{{ booker.get_full_name }}{% else %}{{ booker.first_name }} {{ booker.last_name }}{% endif %}
+                                </div>
+                                <div style="font-size: 13px; color: #6B7280;"><a href="mailto:{{ booker.email }}" style="color: #0ea5e9; text-decoration: none;">{{ booker.email }}</a></div>
+                                {% if booker.phone_number %}
+                                    <div style="font-size: 13px; color: #6B7280; margin-top: 2px;"><a href="tel:{{ booker.phone_number }}" style="color: #0ea5e9; text-decoration: none;">{{ booker.phone_number }}</a></div>
+                                {% endif %}
+                            </div>
+                        </div>
                     </div>
-                {% endif %}
-            {% endwith %}
+                    <!-- Session & payment -->
+                    <div style="margin-bottom: 16px;">
+                        <div style="font-size: 11px;
+                                    color: #86868B;
+                                    text-transform: uppercase;
+                                    letter-spacing: 0.02em;
+                                    margin-bottom: 6px;">{% trans "Session" %}</div>
+                        <div style="font-size: 14px; color: #1D1D1F;">
+                            {{ booking.schedule_instance.date|date:"l, F j" }} · {{ formatted_time_range }}
+                            {% if formatted_duration_minutes %}({{ formatted_duration_minutes }}){% endif %}
+                        </div>
+                    </div>
+                    {% if amount_paid is not None %}
+                        <div style="margin-bottom: 16px;">
+                            <div style="font-size: 11px;
+                                        color: #86868B;
+                                        text-transform: uppercase;
+                                        letter-spacing: 0.02em;
+                                        margin-bottom: 4px;">{% trans "Amount paid" %}</div>
+                            <div style="font-size: 16px; font-weight: 600; color: #1D1D1F;">${{ amount_paid|floatformat:2 }}</div>
+                        </div>
+                    {% endif %}
+                    {% if related_data.option_title and related_data.option_title != related_data.class_title %}
+                        <div style="margin-bottom: 16px;">
+                            <div style="font-size: 11px;
+                                        color: #86868B;
+                                        text-transform: uppercase;
+                                        letter-spacing: 0.02em;
+                                        margin-bottom: 4px;">{% trans "Option" %}</div>
+                            <div style="font-size: 14px; color: #1D1D1F;">{{ related_data.option_title }}</div>
+                        </div>
+                    {% endif %}
+                    <!-- Booking pills -->
+                    {% if booking.participants %}
+                        <div style="margin-top: 18px;
+                                    padding-top: 16px;
+                                    border-top: 1px dashed #D1D5DB;">
+                            <div style="font-size: 11px;
+                                        color: #86868B;
+                                        text-transform: uppercase;
+                                        letter-spacing: 0.02em;
+                                        margin-bottom: 8px;">{% trans "Booking" %}</div>
+                            <span style="display: inline-block;
+                                           background: #F5F5F7;
+                                           border-radius: 99px;
+                                           padding: 4px 12px;
+                                           font-size: 13px;
+                                           color: #1D1D1F;
+                                           margin-right: 6px;
+                                           margin-bottom: 4px;">{% trans "Booked by" %} {% if booking.participant_details and booking.participant_details.0.name %}{{ booking.participant_details.0.name }}{% else %}{% if booker.get_full_name %}{{ booker.get_full_name }}{% else %}{{ booker.first_name }} {{ booker.last_name }}{% endif %}{% endif %}</span>
+                            <span style="display: inline-block;
+                                           background: #F5F5F7;
+                                           border-radius: 99px;
+                                           padding: 4px 12px;
+                                           font-size: 13px;
+                                           color: #1D1D1F;">{{ booking.participants }} {% if booking.participants == 1 %}{% trans "participant" %}{% else %}{% trans "participants" %}{% endif %}</span>
+                        </div>
+                    {% endif %}
+                    {% if booking.notes %}
+                        <div style="margin-top: 16px;
+                                    padding: 12px 14px;
+                                    background: #F9FAFB;
+                                    border-radius: 10px;
+                                    border: 1px solid #E5E7EB;">
+                            <div style="font-size: 11px;
+                                        text-transform: uppercase;
+                                        color: #86868B;
+                                        letter-spacing: 0.02em;
+                                        margin-bottom: 6px;">{% trans "Customer notes" %}</div>
+                            <div style="font-size: 14px; color: #374151; line-height: 1.5; font-style: italic;">"{{ booking.notes }}"</div>
+                        </div>
+                    {% endif %}
+                {% endwith %}
+            </div>
         </div>
         <table role="presentation"
                border="0"
