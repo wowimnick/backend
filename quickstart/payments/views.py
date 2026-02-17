@@ -41,6 +41,7 @@ from quickstart.utils.email_utils import (
     send_booking_confirmation_email,
     send_business_new_booking_email,
     send_gift_card_email,
+    send_super_admin_booking_created_email,
 )
 
 import logging
@@ -603,6 +604,8 @@ class CreatePaymentIntentView(APIView):
                         for r in recipients:
                             if r and r.email:
                                 send_business_new_booking_email(r, first_booking)
+
+                        send_super_admin_booking_created_email(first_booking)
 
                     response_data = {
                         "booking_id": first_booking.id,
@@ -1523,6 +1526,8 @@ class ProcessBookingWebhook(APIView):
                         if recipient and recipient.email:
                             send_business_new_booking_email(recipient, first_booking)
 
+                    send_super_admin_booking_created_email(first_booking)
+
                 logger.info(
                     f"[{webhook_id}] 1/N Payout processed. Total Net: {total_net_payout_to_business}, Per Booking: {share_per_booking}"
                 )
@@ -1839,6 +1844,8 @@ class ProcessBookingWebhook(APIView):
             for recipient in recipients:
                 if recipient and recipient.email:
                     send_business_new_booking_email(recipient, pending_booking)
+
+            send_super_admin_booking_created_email(pending_booking)
 
         # Meta CAPI: server-side Purchase with deduplication (event_id = booking_id)
         # Use fbc/fbp from PaymentIntent metadata (stored at create-payment-intent) for paid conversions

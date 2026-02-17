@@ -221,16 +221,9 @@ def create_booking_notification(sender, instance, created, **kwargs):
                     f"New Booking notification created for manager {manager.email} for booking {instance.id}"
                 )
 
-    # Super Admin email: new booking (any new booking, pending or confirmed)
-    if created:
-        try:
-            from .utils.email_utils import send_super_admin_booking_created_email
-            send_super_admin_booking_created_email(instance)
-        except Exception as e:
-            logger.error(
-                f"Failed to send Super Admin new-booking email for booking {instance.id}: {e}",
-                exc_info=True,
-            )
+    # Super Admin new-booking email is NOT sent here.
+    # It is sent only when payment is completed (or booking confirmed for free/GC),
+    # from the payment flow, at the same time the business receives its email.
 
     # CASE 2: Booking Cancelled Notification for Business (if cancelled by student)
     # Use update_fields to be more precise if available, check status changed to 'cancelled'
