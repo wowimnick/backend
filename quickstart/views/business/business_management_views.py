@@ -400,6 +400,7 @@ class MyBusinessOverviewView(APIView):
             total_students = {"value": 0, "change": 0}
 
         # --- PERFORMANCE FIX: Combined Snapshot & Upcoming Classes Query ---
+        # Use business timezone for "today" and "upcoming" so dashboard matches business's calendar
         today_snapshot_data = {
             "today_total_bookings": 0,
             "today_total_participants": 0,
@@ -407,12 +408,19 @@ class MyBusinessOverviewView(APIView):
         }
         upcoming_classes_data = []
         try:
-            upcoming_seven_days_end_date = today_utc_date + timedelta(days=6)
+            business_tz_str = getattr(business, "business_timezone", None) or "UTC"
+            try:
+                business_tz = pytz.timezone(business_tz_str)
+            except (pytz.UnknownTimeZoneError, Exception):
+                business_tz = pytz.utc
+            now_in_business = timezone.now().astimezone(business_tz)
+            today_business_date = now_in_business.date()
+            upcoming_seven_days_end_date = today_business_date + timedelta(days=6)
 
             upcoming_instances_qs = (
                 ScheduleInstance.objects.filter(
                     schedule__option__classId__businessId=business,
-                    date__range=[today_utc_date, upcoming_seven_days_end_date],
+                    date__range=[today_business_date, upcoming_seven_days_end_date],
                     status="scheduled",
                     schedule__option__classId__status="active",
                 )
@@ -437,7 +445,7 @@ class MyBusinessOverviewView(APIView):
                 .order_by("date", "time")
             )
 
-            today_instances = upcoming_instances_qs.filter(date=today_utc_date)
+            today_instances = upcoming_instances_qs.filter(date=today_business_date)
             today_snapshot_data["today_classes_running"] = (
                 today_instances.values("schedule__option__classId").distinct().count()
             )

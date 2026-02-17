@@ -338,6 +338,22 @@ def _user_data_from_booking(booking, request=None) -> Optional[dict[str, Any]]:
         if ua:
             user_data["client_user_agent"] = ua
 
+        # Meta Parameter Builder: fbc and fbp improve matching (do not normalize; _fbc is case-sensitive).
+        # Prefer cookies (same-origin); fallback to body when frontend sends meta_fbc/meta_fbp (e.g. cross-origin).
+        fbc = None
+        fbp = None
+        if hasattr(request, "COOKIES"):
+            fbc = request.COOKIES.get("_fbc")
+            fbp = request.COOKIES.get("_fbp")
+        if not fbc and getattr(request, "data", None) and isinstance(request.data, dict):
+            fbc = request.data.get("meta_fbc") or None
+        if not fbp and getattr(request, "data", None) and isinstance(request.data, dict):
+            fbp = request.data.get("meta_fbp") or None
+        if fbc:
+            user_data["fbc"] = fbc
+        if fbp:
+            user_data["fbp"] = fbp
+
     return user_data
 
 
@@ -374,6 +390,8 @@ def send_purchase_event_for_booking(
     num_items: int = 1,
     event_source_url: Optional[str] = None,
     request=None,
+    meta_fbc: Optional[str] = None,
+    meta_fbp: Optional[str] = None,
 ) -> bool:
     """
     Send a CAPI Purchase event for a confirmed booking, with deduplication.
@@ -381,6 +399,9 @@ def send_purchase_event_for_booking(
     Uses booking.id as event_id so the frontend Pixel can send the same eventID
     (booking_id) for deduplication. Builds user_data from booking.user or booking.contact.
     If content_ids/content_name are not provided, tries to derive from booking's class.
+
+    When request is None (e.g. Stripe webhook), pass meta_fbc/meta_fbp from
+    PaymentIntent metadata so CAPI still gets fbc/fbp for paid conversions.
     """
     user_data = _user_data_from_booking(booking, request=request)
     if not user_data:
@@ -389,6 +410,12 @@ def send_purchase_event_for_booking(
             booking.id,
         )
         return False
+
+    # Paid conversions (webhook): merge fbc/fbp from PaymentIntent metadata when no request
+    if meta_fbc:
+        user_data["fbc"] = meta_fbc
+    if meta_fbp:
+        user_data["fbp"] = meta_fbp
 
     if content_ids is None and content_name is None:
         content_ids, content_name = _class_info_from_booking(booking)

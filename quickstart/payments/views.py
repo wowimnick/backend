@@ -767,6 +767,12 @@ class CreatePaymentIntentView(APIView):
             else:
                 metadata["user_id"] = str(request.user.userId)
 
+            # Meta CAPI: store fbc/fbp in PaymentIntent metadata for webhook (paid conversions)
+            if request.data.get("meta_fbc"):
+                metadata["meta_fbc"] = request.data.get("meta_fbc")
+            if request.data.get("meta_fbp"):
+                metadata["meta_fbp"] = request.data.get("meta_fbp")
+
             try:
                 intent = stripe.PaymentIntent.create(
                     amount=total_amount_for_stripe_cents,
@@ -1521,12 +1527,15 @@ class ProcessBookingWebhook(APIView):
                     f"[{webhook_id}] 1/N Payout processed. Total Net: {total_net_payout_to_business}, Per Booking: {share_per_booking}"
                 )
                 # Meta CAPI: server-side Purchase with deduplication (event_id = first booking id)
+                # Use fbc/fbp from PaymentIntent metadata (stored at create-payment-intent) for paid conversions
                 try:
                     send_purchase_event_for_booking(
                         first_booking,
                         value=float(enrollment.total_amount_paid),
                         currency="CAD",
                         num_items=first_booking.participants or 1,
+                        meta_fbc=payment_intent.metadata.get("meta_fbc") or None,
+                        meta_fbp=payment_intent.metadata.get("meta_fbp") or None,
                     )
                 except Exception as capi_err:
                     logger.warning(
@@ -1832,12 +1841,15 @@ class ProcessBookingWebhook(APIView):
                     send_business_new_booking_email(recipient, pending_booking)
 
         # Meta CAPI: server-side Purchase with deduplication (event_id = booking_id)
+        # Use fbc/fbp from PaymentIntent metadata (stored at create-payment-intent) for paid conversions
         try:
             send_purchase_event_for_booking(
                 pending_booking,
                 value=float(grand_total),
                 currency="CAD",
                 num_items=pending_booking.participants or 1,
+                meta_fbc=metadata.get("meta_fbc") or None,
+                meta_fbp=metadata.get("meta_fbp") or None,
             )
         except Exception as capi_err:
             logger.warning(
