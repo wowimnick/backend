@@ -234,6 +234,11 @@ def send_purchase_event(
     }
     if content_ids is not None:
         custom_data["content_ids"] = [str(x) for x in content_ids]
+        # contents array for Advantage+ catalog (id + quantity per item)
+        if len(content_ids) == 1:
+            custom_data["contents"] = [{"id": str(content_ids[0]), "quantity": num_items}]
+        else:
+            custom_data["contents"] = [{"id": str(cid), "quantity": 1} for cid in content_ids]
     if content_name:
         custom_data["content_name"] = content_name
     if order_id:
