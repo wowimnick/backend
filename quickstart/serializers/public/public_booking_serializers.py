@@ -369,6 +369,10 @@ class StudentBookingSerializer(serializers.ModelSerializer):
         source="schedule_instance.schedule.option.classId.businessId.business_timezone",
         read_only=True,
     )
+    business_id = serializers.IntegerField(
+        source="schedule_instance.schedule.option.classId.businessId.businessId",
+        read_only=True,
+    )
     cancellation_policy = serializers.CharField(
         source="schedule_instance.schedule.option.cancellationPolicy", read_only=True
     )
@@ -399,6 +403,7 @@ class StudentBookingSerializer(serializers.ModelSerializer):
             "payment_status",
             "cancellation_reason",
             "business_timezone",
+            "business_id",
             "cancellation_policy",
         ]
         read_only_fields = fields

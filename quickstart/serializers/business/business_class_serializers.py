@@ -578,6 +578,26 @@ class ManagedClassOptionSerializer(serializers.ModelSerializer):
 
         return data
 
+    def validate_equipment(self, value):
+        """Normalize equipment to string (packing list is free-form text for the booker)."""
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value.strip()
+        if isinstance(value, list):
+            return "\n".join(str(item).strip() for item in value if item).strip()
+        return ""
+
+    def to_representation(self, instance):
+        """Ensure equipment is always returned as string for API consumers."""
+        ret = super().to_representation(instance)
+        equipment = ret.get("equipment")
+        if isinstance(equipment, list):
+            ret["equipment"] = "\n".join(str(item) for item in equipment).strip()
+        elif equipment is None:
+            ret["equipment"] = ""
+        return ret
+
 
 class ManagedClassSerializer(serializers.ModelSerializer):
     """Serializer for business users managing their classes."""
@@ -588,13 +608,13 @@ class ManagedClassSerializer(serializers.ModelSerializer):
         source="businessId.businessName", read_only=True
     )
     category_key = serializers.CharField(
-        source="category.key", read_only=True, allow_null=True
+        required=False, allow_blank=True, write_only=True
+    )
+    subcategory_key = serializers.CharField(
+        required=False, allow_blank=True, write_only=True
     )
     category_name = serializers.CharField(
         source="category.name", read_only=True, allow_null=True
-    )
-    subcategory_key = serializers.CharField(
-        source="subcategory.key", read_only=True, allow_null=True
     )
     subcategory_name = serializers.CharField(
         source="subcategory.name", read_only=True, allow_null=True
@@ -645,16 +665,72 @@ class ManagedClassSerializer(serializers.ModelSerializer):
             "options",
             "images",
             "business_name",
-            "category_key",
             "category_name",
-            "subcategory_key",
             "subcategory_name",
             "average_rating",
             "review_count",
             "last_schedule_date",
         ]
 
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        ret["category_key"] = instance.category.key if instance.category else None
+        ret["subcategory_key"] = (
+            instance.subcategory.key if instance.subcategory else None
+        )
+        return ret
+
+    def validate_category_key(self, value):
+        if not value or not value.strip():
+            return value
+        if not ClassCategory.objects.filter(key=value.strip()).exists():
+            raise serializers.ValidationError(
+                f"Category with key '{value}' not found."
+            )
+        return value.strip()
+
+    def validate(self, data):
+        category_key = data.get("category_key")
+        subcategory_key = data.get("subcategory_key")
+        if subcategory_key and category_key:
+            category = ClassCategory.objects.filter(key=category_key).first()
+            if category and not ClassSubcategory.objects.filter(
+                category=category, key=subcategory_key
+            ).exists():
+                raise serializers.ValidationError(
+                    {
+                        "subcategory_key": f"Subcategory '{subcategory_key}' not found in category '{category.name}'."
+                    }
+                )
+        return data
+
     def update(self, instance, validated_data):
+        category_key = validated_data.pop("category_key", None)
+        subcategory_key = validated_data.pop("subcategory_key", None)
+
+        if category_key and category_key.strip():
+            try:
+                category = ClassCategory.objects.get(key=category_key.strip())
+                validated_data["category"] = category
+            except ClassCategory.DoesNotExist:
+                raise serializers.ValidationError(
+                    {"category_key": f"Invalid category key: {category_key}"}
+                )
+        if subcategory_key and subcategory_key.strip():
+            category = validated_data.get("category") or instance.category
+            if category:
+                try:
+                    subcategory = ClassSubcategory.objects.get(
+                        category=category, key=subcategory_key.strip()
+                    )
+                    validated_data["subcategory"] = subcategory
+                except ClassSubcategory.DoesNotExist:
+                    raise serializers.ValidationError(
+                        {
+                            "subcategory_key": f"Invalid subcategory key '{subcategory_key}' for the selected category."
+                        }
+                    )
+
         if "features" in validated_data and isinstance(validated_data["features"], str):
             try:
                 validated_data["features"] = json.loads(validated_data["features"])

@@ -121,6 +121,8 @@ from quickstart.views import (
     BusinessCourseManagementViewSet,
     CreateGiftCardPaymentIntentView,
     ValidateGiftCardView,
+    GuestConversationViewSet,
+    BusinessConversationViewSet,
 )
 
 from quickstart.views.widget.widget_views import (
@@ -204,12 +206,18 @@ business_management_router.register(
 business_management_router.register(
     r"notifications", NotificationViewSet, basename="notification"
 )
+business_management_router.register(
+    r"conversations", BusinessConversationViewSet, basename="business-conversation"
+)
 
 # --- User Self-Service Router ---
 user_self_router = DefaultRouter()
 user_self_router.register(r"my-bookings", StudentBookingViewSet, basename="my-booking")
 user_self_router.register(
     r"support-tickets", UserSupportTicketViewSet, basename="support-ticket"
+)
+user_self_router.register(
+    r"conversations", GuestConversationViewSet, basename="conversation"
 )
 
 # --- Admin Router ---

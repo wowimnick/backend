@@ -27,6 +27,9 @@ from ..models import (
     Schedule,
     Contact,
     CourseEnrollment,
+    Conversation,
+    ConversationMessage,
+    ConversationEmailLog,
 )
 
 logger = logging.getLogger(__name__)
@@ -71,7 +74,7 @@ def _get_booking_related_data(booking: Booking) -> dict:
         "schedule_summary": "N/A",
         "duration_minutes": None,
         "cancellation_policy_display": None,
-        "equipment": [],
+        "equipment": "",
     }
     try:
         schedule_instance = getattr(booking, "schedule_instance", None)
@@ -111,7 +114,12 @@ def _get_booking_related_data(booking: Booking) -> dict:
             schedule_instance, "duration", None
         )
         equipment = getattr(option, "equipment", None)
-        data["equipment"] = list(equipment) if isinstance(equipment, list) else []
+        if isinstance(equipment, list):
+            data["equipment"] = "\n".join(str(item) for item in equipment).strip()
+        elif isinstance(equipment, str):
+            data["equipment"] = equipment.strip()
+        else:
+            data["equipment"] = ""
         policy_key = getattr(booking, "cancellation_policy", None) or getattr(
             option, "cancellationPolicy", None
         )
@@ -1624,3 +1632,130 @@ def send_booking_rescheduled_by_business_email(
         subject=f"Update: Your Booking for {related_data.get('class_title', '[Class Title]')} Has Been Rescheduled",
     )
     logger.info(f"Booking reschedule email prepared/queued for booking {booking.id}")
+
+
+# --- Guest–Business messaging notification emails (with cooldown) ---
+MESSAGE_EMAIL_COOLDOWN_MINUTES = 15
+
+
+def _conversation_should_send_email(conversation, recipient_side):
+    """
+    Check if we should send a new-reply email (first message to this side, or past cooldown).
+    If we send, caller must call _conversation_record_email_sent after sending.
+    """
+    log = ConversationEmailLog.objects.filter(
+        conversation=conversation, recipient_side=recipient_side
+    ).first()
+    if not log:
+        return True  # First time → send
+    threshold = timezone.now() - timedelta(minutes=MESSAGE_EMAIL_COOLDOWN_MINUTES)
+    return log.last_email_sent_at < threshold
+
+
+def _conversation_record_email_sent(conversation, recipient_side):
+    """Update or create ConversationEmailLog after sending."""
+    now = timezone.now()
+    ConversationEmailLog.objects.update_or_create(
+        conversation=conversation,
+        recipient_side=recipient_side,
+        defaults={"last_email_sent_at": now},
+    )
+
+
+def send_guest_message_notification_email(conversation: Conversation, message: ConversationMessage):
+    """
+    Notify business (owner + staff with receive_booking_notifications) when a booker sends a message.
+    Respects cooldown per conversation for business side.
+    """
+    if not conversation or not message or message.sender_type != ConversationMessage.SENDER_BOOKER:
+        return
+    if not _conversation_should_send_email(conversation, ConversationEmailLog.RECIPIENT_BUSINESS):
+        logger.info(
+            f"Skipping guest-message notification for conversation {conversation.id} (cooldown)."
+        )
+        return
+    business = conversation.business
+    recipients = {business.owner}
+    staff_with_notifications = BusinessStaff.objects.filter(
+        business=business,
+        status="accepted",
+        role__permissions__codename="receive_booking_notifications",
+    ).select_related("user")
+    for staff in staff_with_notifications:
+        if staff.user and staff.user.email:
+            recipients.add(staff.user)
+    messages_url = f"{settings.FRONTEND_BASE_URL}/business/dashboard/messages"
+    context = {
+        "conversation": conversation,
+        "message": message,
+        "business": business,
+        "messages_url": messages_url,
+        "booker_display": None,
+    }
+    if conversation.booker_user:
+        context["booker_display"] = (
+            conversation.booker_user.get_full_name() or conversation.booker_user.email
+        )
+    elif conversation.booker_contact:
+        c = conversation.booker_contact
+        context["booker_display"] = f"{c.first_name} {c.last_name}".strip() or (c.email or "Guest")
+    sent_any = False
+    for recipient in recipients:
+        if not recipient or not recipient.email:
+            continue
+        context["recipient_email"] = recipient.email
+        send_templated_email(
+            recipient_list=[recipient.email],
+            template_name="emails/guest_new_message_business.html",
+            context=context,
+            subject=f"New message from a guest – {business.businessName}",
+        )
+        sent_any = True
+    if sent_any:
+        _conversation_record_email_sent(conversation, ConversationEmailLog.RECIPIENT_BUSINESS)
+        logger.info(f"Guest message notification sent for conversation {conversation.id}")
+
+
+def send_business_reply_notification_email(conversation: Conversation, message: ConversationMessage):
+    """
+    Notify booker (user or contact email) when business sends a reply.
+    Respects cooldown per conversation for booker side.
+    """
+    if not conversation or not message or message.sender_type != ConversationMessage.SENDER_BUSINESS:
+        return
+    if not _conversation_should_send_email(conversation, ConversationEmailLog.RECIPIENT_BOOKER):
+        logger.info(
+            f"Skipping business-reply notification for conversation {conversation.id} (cooldown)."
+        )
+        return
+    to_email = None
+    booker_display = "there"
+    if conversation.booker_user:
+        to_email = conversation.booker_user.email
+        booker_display = (
+            conversation.booker_user.get_full_name() or conversation.booker_user.email or "there"
+        )
+    elif conversation.booker_contact:
+        to_email = conversation.booker_contact.email
+        c = conversation.booker_contact
+        booker_display = f"{c.first_name} {c.last_name}".strip() or (c.email or "there")
+    if not to_email:
+        logger.warning(f"Cannot send business-reply notification: no booker email for conversation {conversation.id}")
+        return
+    messages_url = f"{settings.FRONTEND_BASE_URL}/my-messages"
+    context = {
+        "conversation": conversation,
+        "message": message,
+        "business": conversation.business,
+        "messages_url": messages_url,
+        "booker_display": booker_display,
+        "recipient_email": to_email,
+    }
+    send_templated_email(
+        recipient_list=[to_email],
+        template_name="emails/business_reply_to_guest.html",
+        context=context,
+        subject=f"New reply from {conversation.business.businessName}",
+    )
+    _conversation_record_email_sent(conversation, ConversationEmailLog.RECIPIENT_BOOKER)
+    logger.info(f"Business reply notification sent for conversation {conversation.id}")

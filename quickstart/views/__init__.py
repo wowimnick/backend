@@ -59,6 +59,8 @@ from .business.business_student_views import BusinessStudentViewSet
 
 from .public.public_booking_views import StudentBookingViewSet
 from .business.business_booking_views import BusinessBookingViewSet
+from .public.conversation_views import GuestConversationViewSet
+from .business.business_conversation_views import BusinessConversationViewSet
 
 from .public.favorite_views import MyFavoritesListView
 
@@ -158,6 +160,8 @@ __all__ = [
     "GuestBookingCancellationView",
     # Booking Views
     "BusinessBookingViewSet",
+    "GuestConversationViewSet",
+    "BusinessConversationViewSet",
     "StudentBookingViewSet",
     # Revenue Analytics
     "RevenueAnalyticsView",

@@ -3526,3 +3526,167 @@ class Notification(models.Model):
             models.Index(fields=["notification_type"]),
         ]
         db_table = "notifications"
+
+
+class Conversation(models.Model):
+    """
+    One thread per (booker, business) pair. Booker is either a CustomUser or a Contact.
+    Optionally linked to a Booking for context.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        BusinessInfo,
+        on_delete=models.CASCADE,
+        related_name="conversations",
+    )
+    booking = models.ForeignKey(
+        "Booking",
+        on_delete=models.SET_NULL,
+        related_name="conversations",
+        null=True,
+        blank=True,
+        help_text="Optional booking context for this conversation.",
+    )
+    booker_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="guest_conversations",
+        null=True,
+        blank=True,
+    )
+    booker_contact = models.ForeignKey(
+        Contact,
+        on_delete=models.CASCADE,
+        related_name="conversations",
+        null=True,
+        blank=True,
+    )
+    last_message_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Updated when a message is added; used for sorting.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "conversations"
+        ordering = ["-last_message_at", "-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["business", "booker_user"],
+                condition=models.Q(booker_user__isnull=False),
+                name="unique_conversation_business_booker_user",
+            ),
+            models.UniqueConstraint(
+                fields=["business", "booker_contact"],
+                condition=models.Q(booker_contact__isnull=False),
+                name="unique_conversation_business_booker_contact",
+            ),
+        ]
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+
+        if bool(self.booker_user) == bool(self.booker_contact):
+            raise ValidationError(
+                "Exactly one of booker_user or booker_contact must be set."
+            )
+        if self.booking:
+            if self.booker_user and self.booking.user_id != self.booker_user_id:
+                raise ValidationError(
+                    "When booking is set, booker_user must match booking.user."
+                )
+            if self.booker_contact and self.booking.contact_id != self.booker_contact_id:
+                raise ValidationError(
+                    "When booking is set, booker_contact must match booking.contact."
+                )
+
+
+class ConversationMessage(models.Model):
+    """A single message in a guest–business conversation."""
+
+    SENDER_BOOKER = "booker"
+    SENDER_BUSINESS = "business"
+    SENDER_TYPE_CHOICES = [
+        (SENDER_BOOKER, "Booker"),
+        (SENDER_BUSINESS, "Business"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    conversation = models.ForeignKey(
+        Conversation,
+        on_delete=models.CASCADE,
+        related_name="messages",
+    )
+    sender_type = models.CharField(
+        max_length=10,
+        choices=SENDER_TYPE_CHOICES,
+        db_index=True,
+    )
+    sender_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="conversation_messages_sent",
+        null=True,
+        blank=True,
+    )
+    sender_contact = models.ForeignKey(
+        Contact,
+        on_delete=models.SET_NULL,
+        related_name="conversation_messages_sent",
+        null=True,
+        blank=True,
+    )
+    text = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        db_table = "conversation_messages"
+        ordering = ["created_at"]
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+
+        if self.sender_type == self.SENDER_BUSINESS:
+            if not self.sender_user:
+                raise ValidationError("Business messages must have sender_user set.")
+            if self.sender_contact:
+                raise ValidationError("Business messages must not have sender_contact.")
+        else:
+            if bool(self.sender_user) == bool(self.sender_contact):
+                raise ValidationError(
+                    "Booker messages must have exactly one of sender_user or sender_contact."
+                )
+
+
+class ConversationEmailLog(models.Model):
+    """Tracks last email sent per conversation per recipient side for anti-spam cooldown."""
+
+    RECIPIENT_BOOKER = "booker"
+    RECIPIENT_BUSINESS = "business"
+    RECIPIENT_SIDE_CHOICES = [
+        (RECIPIENT_BOOKER, "Booker"),
+        (RECIPIENT_BUSINESS, "Business"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    conversation = models.ForeignKey(
+        Conversation,
+        on_delete=models.CASCADE,
+        related_name="email_logs",
+    )
+    recipient_side = models.CharField(
+        max_length=10,
+        choices=RECIPIENT_SIDE_CHOICES,
+        db_index=True,
+    )
+    last_email_sent_at = models.DateTimeField(db_index=True)
+
+    class Meta:
+        db_table = "conversation_email_logs"
+        unique_together = [("conversation", "recipient_side")]
+        indexes = [
+            models.Index(fields=["conversation", "recipient_side"]),
+        ]

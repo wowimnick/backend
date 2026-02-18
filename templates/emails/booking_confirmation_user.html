@@ -85,7 +85,7 @@
                 {% if related_data.equipment %}
                     <div style="margin-bottom: 16px;">
                         <div style="font-size: 12px; color: #86868B; text-transform: uppercase;">{% trans "What to bring" %}</div>
-                        <div style="font-size: 14px; color: #1D1D1F;">{{ related_data.equipment|join:", " }}</div>
+                        <div style="font-size: 14px; color: #1D1D1F; white-space: pre-line;">{{ related_data.equipment }}</div>
                     </div>
                 {% endif %}
                 {% if booking.participants %}

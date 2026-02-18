@@ -157,6 +157,16 @@ class PublicClassOptionSerializer(serializers.ModelSerializer):
     This serializer is now lean and does NOT include schedules, for use in LIST views.
     """
 
+    def to_representation(self, instance):
+        """Ensure equipment is always returned as string (packing list)."""
+        ret = super().to_representation(instance)
+        equipment = ret.get("equipment")
+        if isinstance(equipment, list):
+            ret["equipment"] = "\n".join(str(item) for item in equipment).strip()
+        elif equipment is None:
+            ret["equipment"] = ""
+        return ret
+
     class Meta:
         model = ClassOption
         fields = [
