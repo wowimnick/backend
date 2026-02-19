@@ -305,11 +305,12 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
         # 3. Revalidate the homepage to update the "Find a Class" section
         trigger_nextjs_revalidation(path="/")
 
-        # 4. NEW: Revalidate the business page
+        # 4. Revalidate the business page (tag + path) so profile and upcoming classes/cover images refresh
         if class_instance.businessId and hasattr(class_instance.businessId, "slug"):
             business_slug = class_instance.businessId.slug
             trigger_nextjs_revalidation(tag=f"business-{business_slug}")
-            logger.info(f"Revalidated business page: business-{business_slug}")
+            trigger_nextjs_revalidation(path=f"/business/{business_slug}")
+            logger.info("Revalidated business page: business-%s and path /business/%s", business_slug, business_slug)
 
         # 5. Revalidate cache tags to update explore/search pages
         tags_to_revalidate = ["classes-search", "homepage-classes", "classes"]

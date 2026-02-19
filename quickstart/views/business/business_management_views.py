@@ -964,20 +964,32 @@ class MyBusinessProfileView(generics.RetrieveUpdateDestroyAPIView):
         """
         Helper to trigger all necessary revalidations for a business.
         Called after business profile updates or deletion.
-        Uses tag-based revalidation to match the caching strategy.
+        Uses tag-based and path-based revalidation so the public business page,
+        profile image, and upcoming classes (with correct cover images) refresh.
         """
         if not business_instance:
             return
 
-        # 1. Revalidate the business page by TAG (this is what actually works for cached pages)
-        if hasattr(business_instance, "slug") and business_instance.slug:
-            trigger_nextjs_revalidation(tag=f"business-{business_instance.slug}")
+        business_slug = getattr(business_instance, "slug", None)
+        business_id = getattr(business_instance, "businessId", None)
 
-        # 2. Also revalidate by business ID tag (if your fetcher uses it)
-        trigger_nextjs_revalidation(tag=f"business-{business_instance.businessId}")
+        # 1. Revalidate the business page by TAG (matches fetchBusinessDetail cache tags)
+        if business_slug:
+            trigger_nextjs_revalidation(tag=f"business-{business_slug}")
 
-        # 3. Revalidate all class pages belonging to this business
-        # (since class pages display business info like name, description, etc.)
+        # 2. Revalidate the business page by PATH so the /business/[slug] page refreshes
+        if business_slug:
+            trigger_nextjs_revalidation(path=f"/business/{business_slug}")
+            logger.info("Revalidated business page path: /business/%s", business_slug)
+
+        # 3. Also revalidate by business ID tag (if any fetcher uses it)
+        if business_id is not None:
+            trigger_nextjs_revalidation(tag=f"business-{business_id}")
+
+        # 4. Revalidate all class pages belonging to this business
+        # (class pages show business info; also ensures class cover changes propagate
+        # when class is updated elsewhere and business page shows upcoming classes)
+        class_count = 0
         try:
             business_classes = ClassesMain.objects.filter(
                 businessId=business_instance,
@@ -985,28 +997,29 @@ class MyBusinessProfileView(generics.RetrieveUpdateDestroyAPIView):
             ).only("slug", "classId")
 
             for class_obj in business_classes:
-                if hasattr(class_obj, "slug") and class_obj.slug:
-                    # Revalidate by tag (matches the pattern used in class updates)
+                if getattr(class_obj, "slug", None):
                     trigger_nextjs_revalidation(tag=f"class-{class_obj.slug}")
                     trigger_nextjs_revalidation(tag=f"class-{class_obj.classId}")
+                    class_count += 1
 
         except Exception as e:
             logger.error(
-                f"Error revalidating class pages for business {business_instance.businessId}: {e}",
+                "Error revalidating class pages for business %s: %s",
+                business_id,
+                e,
                 exc_info=True,
             )
 
-        # 4. Revalidate the businesses list/explore pages
+        # 5. Revalidate the businesses list/explore pages
         trigger_nextjs_revalidation(tag="businesses-list")
         trigger_nextjs_revalidation(tag="businesses")
         trigger_nextjs_revalidation(tag="public-businesses")
 
-        # 5. Let homepage and explore pages invalidate naturally with their 1-hour cache
-        # No need to revalidate them immediately for business updates
-
         logger.info(
-            f"Triggered revalidation for business {business_instance.businessId} "
-            f"(slug: {business_instance.slug}) and its {business_classes.count() if 'business_classes' in locals() else 0} associated class pages."
+            "Triggered revalidation for business %s (slug: %s) and %d associated class pages.",
+            business_id,
+            business_slug,
+            class_count,
         )
 
     def perform_update(self, serializer):
