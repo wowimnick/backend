@@ -123,6 +123,8 @@ class ConversationDetailSerializer(serializers.ModelSerializer):
             "booking_reference",
             "class_title",
             "last_message_at",
+            "last_read_by_booker_at",
+            "last_read_by_business_at",
             "created_at",
             "messages",
         ]

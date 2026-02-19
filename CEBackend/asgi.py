@@ -1,11 +1,25 @@
 # CEBackend/asgi.py
 import os
 from django.core.asgi import get_asgi_application
+from channels.routing import ProtocolTypeRouter, URLRouter
+from channels.security.websocket import AllowedHostsOriginValidator
 
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "CEBackend.settings")
 
 _django_app = get_asgi_application()
+
+# Import routing after Django setup
+from quickstart.routing import websocket_urlpatterns
+
+_asgi_app = ProtocolTypeRouter(
+    {
+        "http": _django_app,
+        "websocket": AllowedHostsOriginValidator(
+            URLRouter(websocket_urlpatterns)
+        ),
+    }
+)
 
 
 async def application(scope, receive, send):
@@ -23,4 +37,4 @@ async def application(scope, receive, send):
                 await send({"type": "lifespan.shutdown.complete"})
                 return
         return
-    await _django_app(scope, receive, send)
+    await _asgi_app(scope, receive, send)

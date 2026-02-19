@@ -131,6 +131,7 @@ from quickstart.views.public.guest_conversation_views import (
     GuestMessageCreateView,
     GuestInboxView,
     GuestInboxSendView,
+    GuestInboxMarkReadView,
 )
 
 from quickstart.views.widget.widget_views import (
@@ -384,6 +385,11 @@ urlpatterns = [
         "guest-inbox/send/",
         GuestInboxSendView.as_view(),
         name="guest-inbox-send",
+    ),
+    path(
+        "guest-inbox/mark-read/",
+        GuestInboxMarkReadView.as_view(),
+        name="guest-inbox-mark-read",
     ),
     # Registration and Email Verification
     path(

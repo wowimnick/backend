@@ -117,8 +117,23 @@ class BusinessConversationViewSet(viewsets.GenericViewSet):
         from quickstart.utils.conversation_emails import (
             notify_booker_new_reply,
         )
+        from quickstart.utils.conversation_ws_broadcast import broadcast_new_message
         notify_booker_new_reply(conv, msg)
+        broadcast_new_message(msg)
         return Response(
             BusinessConversationMessageSerializer(msg).data,
             status=status.HTTP_201_CREATED,
         )
+
+    @action(detail=True, methods=["post"])
+    def mark_read(self, request, pk=None):
+        """Mark conversation as read by the business (updates last_read_by_business_at)."""
+        business = _get_business_for_user(request.user)
+        if not business:
+            raise PermissionDenied("You are not associated with any business.")
+        conv = _get_conversation_for_business(
+            self.get_queryset(), pk, business
+        )
+        conv.last_read_by_business_at = timezone.now()
+        conv.save(update_fields=["last_read_by_business_at"])
+        return Response({"last_read_by_business_at": conv.last_read_by_business_at})

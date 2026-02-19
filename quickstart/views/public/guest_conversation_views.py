@@ -94,7 +94,7 @@ class GuestMessageCreateView(APIView):
         from quickstart.utils.email_utils import send_templated_email
 
         token = create_guest_inbox_token(str(conv.id), str(contact.id))
-        guest_inbox_url = f"{settings.FRONTEND_BASE_URL}/guest-inbox?token={token}"
+        guest_inbox_url = f"{settings.FRONTEND_BASE_URL}/?guest_inbox_token={token}"
         class_title = None
         if data.get("class_id"):
             cls = ClassesMain.objects.filter(classId=data["class_id"]).first()
@@ -187,8 +187,37 @@ class GuestInboxSendView(APIView):
         conv.last_message_at = timezone.now()
         conv.save(update_fields=["last_message_at"])
         notify_business_new_message(conv, msg)
+        from quickstart.utils.conversation_ws_broadcast import broadcast_new_message
+        broadcast_new_message(msg)
 
         return Response(
             ConversationMessageSerializer(msg).data,
             status=status.HTTP_201_CREATED,
         )
+
+
+class GuestInboxMarkReadView(APIView):
+    """
+    POST: Guest (via token) marks the conversation as read. Body: token (or query param).
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        token = request.data.get("token") or request.query_params.get("token")
+        if not token:
+            raise ValidationError({"token": "Missing token."})
+        parsed = parse_guest_inbox_token(token)
+        if not parsed:
+            raise ValidationError({"token": "Invalid or expired link. Request a new link from the business."})
+        conversation_id, contact_id = parsed
+
+        conv = Conversation.objects.filter(
+            id=conversation_id, booker_contact_id=contact_id
+        ).first()
+        if not conv:
+            raise NotFound("Conversation not found.")
+
+        conv.last_read_by_booker_at = timezone.now()
+        conv.save(update_fields=["last_read_by_booker_at"])
+        return Response({"last_read_by_booker_at": conv.last_read_by_booker_at})

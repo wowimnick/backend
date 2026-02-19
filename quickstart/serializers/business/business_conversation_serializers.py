@@ -131,6 +131,8 @@ class BusinessConversationDetailSerializer(serializers.ModelSerializer):
             "booker_display",
             "booker_email",
             "last_message_at",
+            "last_read_by_booker_at",
+            "last_read_by_business_at",
             "created_at",
             "messages",
         ]

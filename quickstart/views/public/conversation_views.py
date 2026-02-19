@@ -156,7 +156,19 @@ class GuestConversationViewSet(viewsets.GenericViewSet):
             notify_business_new_message,
         )
         notify_business_new_message(conv, msg)
+        from quickstart.utils.conversation_ws_broadcast import broadcast_new_message
+        broadcast_new_message(msg)
         return Response(
             ConversationMessageSerializer(msg).data,
             status=status.HTTP_201_CREATED,
         )
+
+    @action(detail=True, methods=["post"])
+    def mark_read(self, request, pk=None):
+        """Mark conversation as read by the booker (updates last_read_by_booker_at)."""
+        conv = _get_conversation_for_booker(
+            self.get_queryset(), pk, request.user
+        )
+        conv.last_read_by_booker_at = timezone.now()
+        conv.save(update_fields=["last_read_by_booker_at"])
+        return Response({"last_read_by_booker_at": conv.last_read_by_booker_at})

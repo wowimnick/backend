@@ -3568,6 +3568,16 @@ class Conversation(models.Model):
         db_index=True,
         help_text="Updated when a message is added; used for sorting.",
     )
+    last_read_by_booker_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Last time booker (guest) read the conversation.",
+    )
+    last_read_by_business_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Last time business side read the conversation.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
