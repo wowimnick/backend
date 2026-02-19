@@ -22,6 +22,9 @@ from quickstart.models import ClassesMain, BusinessInfo
 from quickstart.views.admin.support_management.support_ticket_views import (
     AdminSupportTicketViewSet,
 )
+from quickstart.views.admin.conversation_management.admin_conversation_views import (
+    AdminConversationViewSet,
+)
 from quickstart.views.public.user_support_views import UserSupportTicketViewSet
 from quickstart.views.business.business_management_views import (
     generate_presigned_upload_url,
@@ -123,6 +126,11 @@ from quickstart.views import (
     ValidateGiftCardView,
     GuestConversationViewSet,
     BusinessConversationViewSet,
+)
+from quickstart.views.public.guest_conversation_views import (
+    GuestMessageCreateView,
+    GuestInboxView,
+    GuestInboxSendView,
 )
 
 from quickstart.views.widget.widget_views import (
@@ -230,6 +238,9 @@ admin_router.register(
 admin_router.register(r"audit-logs", AuditLogViewSet, basename="admin-audit-logs")
 admin_router.register(
     r"support-tickets", AdminSupportTicketViewSet, basename="admin-support-tickets"
+)
+admin_router.register(
+    r"conversations", AdminConversationViewSet, basename="admin-conversations"
 )
 admin_router.register(r"businesses", BusinessAdminViewSet, basename="admin-businesses")
 admin_router.register(r"classes", AdminClassViewSet, basename="admin-classes")
@@ -357,6 +368,22 @@ urlpatterns = [
         "bookings/guest-cancel/<uuid:token>/",
         GuestBookingCancellationView.as_view(),
         name="guest-booking-cancel",
+    ),
+    # Guest (no-account) messaging: submit from class page, view/reply via token
+    path(
+        "guest-message/",
+        GuestMessageCreateView.as_view(),
+        name="guest-message-create",
+    ),
+    path(
+        "guest-inbox/",
+        GuestInboxView.as_view(),
+        name="guest-inbox",
+    ),
+    path(
+        "guest-inbox/send/",
+        GuestInboxSendView.as_view(),
+        name="guest-inbox-send",
     ),
     # Registration and Email Verification
     path(

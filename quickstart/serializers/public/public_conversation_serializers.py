@@ -155,3 +155,32 @@ class ConversationCreateSerializer(serializers.Serializer):
         if not BusinessInfo.objects.filter(businessId=value).exists():
             raise serializers.ValidationError("Business not found.")
         return value
+
+
+class GuestMessageCreateSerializer(serializers.Serializer):
+    """
+    Public (unauthenticated) guest message to a business.
+    Body: business_id, first_name, last_name, email, message; optional class_id for context.
+    """
+
+    business_id = serializers.IntegerField()
+    first_name = serializers.CharField(max_length=150, trim_whitespace=True)
+    last_name = serializers.CharField(max_length=150, required=False, allow_blank=True, default="")
+    email = serializers.EmailField()
+    message = serializers.CharField(max_length=5000, trim_whitespace=True)
+    class_id = serializers.IntegerField(required=False, allow_null=True)
+
+    def validate_business_id(self, value):
+        if not BusinessInfo.objects.filter(businessId=value).exists():
+            raise serializers.ValidationError("Business not found.")
+        return value
+
+    def validate_message(self, value):
+        if not value or not value.strip():
+            raise serializers.ValidationError("Message is required.")
+        return value.strip()
+
+    def validate_first_name(self, value):
+        if not value or not value.strip():
+            raise serializers.ValidationError("First name is required.")
+        return value.strip()

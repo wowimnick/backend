@@ -1742,7 +1742,13 @@ def send_business_reply_notification_email(conversation: Conversation, message: 
     if not to_email:
         logger.warning(f"Cannot send business-reply notification: no booker email for conversation {conversation.id}")
         return
-    messages_url = f"{settings.FRONTEND_BASE_URL}/my-messages"
+    # Guest (no account) gets a magic link; logged-in bookers go to my-messages
+    if conversation.booker_contact:
+        from quickstart.utils.guest_inbox_token import create_guest_inbox_token
+        token = create_guest_inbox_token(str(conversation.id), str(conversation.booker_contact_id))
+        messages_url = f"{settings.FRONTEND_BASE_URL}/guest-inbox?token={token}"
+    else:
+        messages_url = f"{settings.FRONTEND_BASE_URL}/my-messages"
     context = {
         "conversation": conversation,
         "message": message,

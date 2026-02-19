@@ -1,0 +1,42 @@
+{# Sent to guest after they submit a message from the class page (no account) #}
+{% extends "emails/base_email.html" %}
+{% load i18n %}
+{% block title %}
+    {% trans "Your message was sent" %}
+{% endblock title %}
+{% block content %}
+    <div style="text-align: center;">
+        <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">✉️</div>
+        <h1>{% trans "Your message was sent" %}</h1>
+        <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 8px;">
+            {% blocktrans with name=guest_name %}Hi {{ name }},{% endblocktrans %}
+        </p>
+        <p style="color: #484848; margin-bottom: 32px;">
+            {% blocktrans with business_name=business_name %}We've delivered your message to {{ business_name }}. They'll get back to you by email or you can check the conversation using the link below.{% endblocktrans %}
+        </p>
+        {% if class_title %}
+        <div style="background-color: #F5F5F7;
+                    border: 1px solid #E5E7EB;
+                    border-radius: 20px;
+                    overflow: hidden;
+                    margin-bottom: 32px;
+                    text-align: left;
+                    box-shadow: 0 4px 6px rgba(0,0,0,0.02);">
+            <div style="padding: 20px 24px;">
+                <div style="font-size: 11px; color: #86868B; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">{% trans "Re" %}</div>
+                <div style="font-size: 18px; font-weight: 600; color: #1D1D1F;">{{ class_title }}</div>
+            </div>
+        </div>
+        {% endif %}
+        <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+            <tr>
+                <td align="center">
+                    <a href="{{ guest_inbox_url }}" target="_blank" class="button">{% trans "View conversation & reply" %}</a>
+                </td>
+            </tr>
+        </table>
+        <p style="color: #86868B; font-size: 14px; margin-top: 32px; margin-bottom: 0;">
+            {% trans "Save this link to return to the conversation later. If you didn't send a message, you can ignore this email." %}
+        </p>
+    </div>
+{% endblock content %}
