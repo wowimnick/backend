@@ -1,5 +1,5 @@
 """
-WebSocket URL routing for conversation consumer.
+WebSocket URL routing for conversation and notification consumers.
 """
 
 from django.urls import re_path
@@ -9,5 +9,9 @@ websocket_urlpatterns = [
     re_path(
         r"api/ws/conversations/(?P<conversation_id>[0-9a-f-]+)/$",
         consumers.ConversationConsumer.as_asgi(),
+    ),
+    re_path(
+        r"api/ws/notifications/$",
+        consumers.NotificationConsumer.as_asgi(),
     ),
 ]

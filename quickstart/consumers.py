@@ -316,6 +316,8 @@ def _create_message_sync(conversation_id, side, user_pk, contact_id, display_nam
         notify_booker_new_reply(conv, msg)
     else:
         notify_business_new_message(conv, msg)
+        from quickstart.utils.notification_utils import create_notifications_for_new_chat_message
+        create_notifications_for_new_chat_message(conv, msg)
     return {
         "id": str(msg.id),
         "conversation": str(msg.conversation_id),
@@ -344,3 +346,49 @@ def _mark_read_sync(conversation_id, side):
         conv.save(update_fields=["last_read_by_business_at"])
         return now.isoformat()
     return None
+
+
+# ---------------------------------------------------------------------------
+# Notifications WebSocket (real-time bell updates)
+# ---------------------------------------------------------------------------
+
+
+class NotificationConsumer(AsyncJsonWebsocketConsumer):
+    """
+    WebSocket at api/ws/notifications/. Auth: JWT cookie only.
+    User joins group notifications_user_<user_id> and receives new_notification events.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.user_id = None
+        self.room_group_name = None
+
+    async def connect(self):
+        cookie_name = settings.SIMPLE_JWT.get("AUTH_COOKIE", "my-app-auth")
+        token = _get_cookie_from_scope(self.scope, cookie_name)
+        if not token:
+            await self.close(code=4401)
+            return
+        user = await database_sync_to_async(_get_user_from_jwt_token)(token)
+        if not user:
+            await self.close(code=4401)
+            return
+        self.user_id = user.pk
+        self.room_group_name = f"notifications_user_{self.user_id}"
+        await self.channel_layer.group_add(self.room_group_name, self.channel_name)
+        await self.accept()
+        await self.send_json({"type": "joined", "user_id": self.user_id})
+
+    async def disconnect(self, close_code):
+        if self.room_group_name:
+            await self.channel_layer.group_discard(
+                self.room_group_name, self.channel_name
+            )
+
+    async def notification_new(self, event):
+        await self.send_json({
+            "type": "new_notification",
+            "notification": event.get("notification"),
+            "unread_delta": event.get("unread_delta", 1),
+        })

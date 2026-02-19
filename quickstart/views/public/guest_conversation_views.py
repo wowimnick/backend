@@ -88,6 +88,8 @@ class GuestMessageCreateView(APIView):
         conv.save(update_fields=["last_message_at"])
 
         notify_business_new_message(conv, msg)
+        from quickstart.utils.notification_utils import create_notifications_for_new_chat_message
+        create_notifications_for_new_chat_message(conv, msg)
 
         # Send email to guest with magic link to inbox
         from django.conf import settings
@@ -188,7 +190,9 @@ class GuestInboxSendView(APIView):
         conv.save(update_fields=["last_message_at"])
         notify_business_new_message(conv, msg)
         from quickstart.utils.conversation_ws_broadcast import broadcast_new_message
+        from quickstart.utils.notification_utils import create_notifications_for_new_chat_message
         broadcast_new_message(msg)
+        create_notifications_for_new_chat_message(conv, msg)
 
         return Response(
             ConversationMessageSerializer(msg).data,

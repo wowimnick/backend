@@ -3484,6 +3484,7 @@ class Notification(models.Model):
         ("profile_incomplete", "Profile Incomplete"),
         ("system_announcement", "System Announcement"),
         ("new_message_support", "New Message in Support Ticket"),
+        ("new_message_chat", "New Message in Conversation"),
         # Add more types as needed
     ]
     notification_type = models.CharField(

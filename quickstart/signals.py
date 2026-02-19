@@ -967,3 +967,14 @@ def create_contact_on_first_booking(sender, instance, created, **kwargs):
             f"Could not create Contact on booking for user {instance.user.userId}: {e}",
             exc_info=True,
         )
+
+
+@receiver(post_save, sender=Notification)
+def broadcast_notification_on_create(sender, instance, created, **kwargs):
+    """Push new notification to user's WebSocket channel for real-time bell updates."""
+    if created and instance.user_id:
+        try:
+            from quickstart.utils.notification_utils import broadcast_notification_to_user
+            broadcast_notification_to_user(instance)
+        except Exception as e:
+            logger.warning("Failed to broadcast notification to WS: %s", e)
