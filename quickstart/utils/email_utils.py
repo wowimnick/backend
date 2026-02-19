@@ -1748,7 +1748,7 @@ def send_business_reply_notification_email(conversation: Conversation, message: 
         token = create_guest_inbox_token(str(conversation.id), str(conversation.booker_contact_id))
         messages_url = f"{settings.FRONTEND_BASE_URL}/guest-inbox?token={token}"
     else:
-        messages_url = f"{settings.FRONTEND_BASE_URL}/my-messages/{conversation.id}"
+        messages_url = f"{settings.FRONTEND_BASE_URL}/?conversation_id={conversation.id}"
     context = {
         "conversation": conversation,
         "message": message,
