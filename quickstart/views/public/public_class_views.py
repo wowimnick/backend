@@ -55,9 +55,11 @@ import logging
 from urllib.parse import quote
 from datetime import (
     datetime,
+    date,
     time,
     timedelta,
 )
+import copy
 
 from quickstart.models import (
     ClassCategory,
@@ -434,6 +436,52 @@ def _build_category_only_cache_key(request, category_key, subcategory_key=None):
     cat_slug = (category_key or "").lower().replace(" ", "_")
     sub_slug = (subcategory_key or "").lower().replace(" ", "_") if subcategory_key else ""
     return f"{CATEGORY_ONLY_CACHE_PREFIX}:{_CACHE_ENV}:v{version}:{cat_slug}:{sub_slug}:p{page}:ps{page_size}:n{participants}:s{sort_by}:{start_date}:{end_date}"
+
+
+# Tier sizes for tiered shuffle: first N items = tier 1, next M = tier 2, etc. Rest = last tier.
+# Matches search logic: results are already ordered by relevance/rating/sort_by, so top tiers
+# get the "best" results; we only shuffle within each tier so order looks unique per collection/location.
+_SHUFFLE_TIER_SIZES = [6, 12, 18]  # tier 1 = 6, tier 2 = 12, tier 3 = 18, tier 4 = rest
+
+
+def _shuffle_preset_results(response_data, search_name, collection_slug, category_key, subcategory_key=None):
+    """
+    Shuffle the 'results' list within tiers. Results are already ordered by the search
+    (relevance/rating/sort_by), so we split by position into tiers, then shuffle within
+    each tier with a deterministic seed. High-quality results stay in the top tier(s);
+    order within each tier varies by (location, collection, category, date) so switching
+    tabs doesn't show identical ordering.
+    """
+    if not response_data or "results" not in response_data or not response_data["results"]:
+        return response_data
+    seed_str = "|".join([
+        (search_name or "").lower().replace(" ", "_"),
+        (collection_slug or "").lower().replace(" ", "_"),
+        (category_key or "").lower().replace(" ", "_"),
+        (subcategory_key or "").lower().replace(" ", "_"),
+        date.today().isoformat(),
+    ])
+    out = copy.deepcopy(response_data)
+    results = list(out["results"])
+    start = 0
+    for tier_index, tier_size in enumerate(_SHUFFLE_TIER_SIZES):
+        end = min(start + tier_size, len(results))
+        if end <= start:
+            break
+        tier = results[start:end]
+        tier_seed = hash(seed_str + "|" + str(tier_index))
+        rng = random.Random(tier_seed)
+        rng.shuffle(tier)
+        results[start:end] = tier
+        start = end
+    if start < len(results):
+        tier = results[start:]
+        tier_seed = hash(seed_str + "|" + str(len(_SHUFFLE_TIER_SIZES)))
+        rng = random.Random(tier_seed)
+        rng.shuffle(tier)
+        results[start:] = tier
+    out["results"] = results
+    return out
 
 
 def normalize_province_name(location_text):
@@ -992,7 +1040,10 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                             search_name,
                             collection_slug,
                         )
-                        return Response(cached)
+                        shuffled = _shuffle_preset_results(
+                            cached, search_name, collection_slug, None, None
+                        )
+                        return Response(shuffled)
 
             # Preset (banner) location cache only (no collection): return cached if available
             preset_cache_key = None
@@ -1002,7 +1053,10 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     cached = cache.get(preset_cache_key)
                     if cached is not None:
                         logger.info("Returning cached preset search result for %s", search_name)
-                        return Response(cached)
+                        shuffled = _shuffle_preset_results(
+                            cached, search_name, None, None, None
+                        )
+                        return Response(shuffled)
 
             # Preset location + category (and optional subcategory) cache: return cached if available
             _cat_key = request.query_params.get("category_key")
@@ -1026,7 +1080,10 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                             search_name,
                             _cat_key or _sub_key,
                         )
-                        return Response(cached)
+                        shuffled = _shuffle_preset_results(
+                            cached, search_name, None, _cat_key or "", _sub_key
+                        )
+                        return Response(shuffled)
 
             logger.info(f"--- PUBLIC CLASS SEARCH INITIATED ---")
             logger.info(f"Params: {request.query_params}")
@@ -1058,7 +1115,10 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                             "Returning cached collection search result for %s",
                             collection_slug,
                         )
-                        return Response(cached)
+                        shuffled = _shuffle_preset_results(
+                            cached, None, collection_slug, None, None
+                        )
+                        return Response(shuffled)
 
             # Category-only (and category+subcategory) cache: no location, explore page instant load
             category_only_cache_key = None
@@ -1076,7 +1136,10 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                             _cat_key,
                             f"+{_sub_key}" if _sub_key else "",
                         )
-                        return Response(cached)
+                        shuffled = _shuffle_preset_results(
+                            cached, None, None, _cat_key or "", _sub_key
+                        )
+                        return Response(shuffled)
 
             # Get Base Queryset
             queryset = self.get_queryset()
@@ -1384,6 +1447,17 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                         response.data,
                         timeout=PRESET_CACHE_TTL,
                     )
+                if any([
+                    preset_collection_cache_key, preset_cache_key,
+                    preset_category_cache_key, collection_cache_key,
+                    category_only_cache_key,
+                ]):
+                    shuffled = _shuffle_preset_results(
+                        response.data, search_name, collection_slug,
+                        request.query_params.get("category_key") or "",
+                        request.query_params.get("subcategory_key"),
+                    )
+                    return Response(shuffled)
                 return response
 
             serializer = self.get_serializer(
@@ -1412,6 +1486,17 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 _safe_cache_set(
                     category_only_cache_key, response.data, timeout=PRESET_CACHE_TTL
                 )
+            if any([
+                preset_collection_cache_key, preset_cache_key,
+                preset_category_cache_key, collection_cache_key,
+                category_only_cache_key,
+            ]):
+                shuffled = _shuffle_preset_results(
+                    response.data, search_name, collection_slug,
+                    request.query_params.get("category_key") or "",
+                    request.query_params.get("subcategory_key"),
+                )
+                return Response(shuffled)
             return response
 
         except Exception as e:
