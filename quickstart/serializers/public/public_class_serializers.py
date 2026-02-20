@@ -39,16 +39,17 @@ def _warn_cloudfront_once():
 
 class PublicClassImageKeySerializer(serializers.ModelSerializer):
     """
-    Lightweight serializer for list/card views: imageId, image_key, and medium_url (CloudFront).
+    Lightweight serializer for list/card views: imageId, image_key, medium_url (CloudFront), isCover.
     Class list/search/homepage responses include stable CloudFront URLs so the frontend
     can use them directly; no separate image-url endpoint needed. CloudFront caches at the edge.
+    isCover lets the frontend show the correct cover image first (e.g. on business page upcoming classes).
     """
     image_key = serializers.SerializerMethodField()
     medium_url = serializers.SerializerMethodField()
 
     class Meta:
         model = ClassImage
-        fields = ["imageId", "image_key", "medium_url"]
+        fields = ["imageId", "image_key", "medium_url", "isCover"]
         read_only_fields = fields
 
     def get_image_key(self, obj):
