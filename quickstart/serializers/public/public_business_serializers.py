@@ -4,7 +4,7 @@ from rest_framework import serializers
 
 from quickstart.utils.url_utils import build_cloudfront_url
 from quickstart.models import BusinessInfo, Reviews, ImportedGoogleReview
-from .public_class_serializers import PublicClassSerializer
+from .public_class_serializers import HomepageClassSerializer
 from .public_review_serializers import (
     PublicReviewSerializer,
     ImportedGoogleReviewSerializer,
@@ -113,7 +113,7 @@ class PublicBusinessDetailSerializer(PublicBusinessInfoSerializer):
     all *active* classes and now combining platform and Google reviews.
     """
 
-    classes = PublicClassSerializer(many=True, read_only=True, source="active_classes")
+    classes = HomepageClassSerializer(many=True, read_only=True, source="active_classes")
 
     # Overwrite fields from parent to use combined metrics
     totalReviews = serializers.SerializerMethodField(

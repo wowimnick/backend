@@ -416,12 +416,14 @@ class HomepageClassSerializer(PublicClassSerializer):
             "business_name",
             "title",
             "location",
+            "city",
+            "state",
             "coordinates",
             "average_rating",
             "review_count",
             "min_session_price",
             "min_course_price",
-            "images", # Maintained strictly as a list
+            "images",  # Single cover image for card
             "is_favorited",
             "soonest_next_week",
         ]
