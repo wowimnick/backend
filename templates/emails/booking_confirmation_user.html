@@ -7,7 +7,7 @@
 {% block content %}
     <div style="text-align: center;">
         <div style="font-size: 48px; margin-bottom: 16px; line-height: 1;">🎉</div>
-        <h1 style="margin-bottom: 8px;">{% trans "You're confirmed" %}</h1>
+        <h1 style="margin-bottom: 8px;">{% trans "Get ready for something great." %}</h1>
         <p style="font-size: 16px; color: #484848; margin-bottom: 24px;">
             {% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}
             {% trans "your spot is secured for" %} <strong>{{ related_data.class_title }}</strong>
