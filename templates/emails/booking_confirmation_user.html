@@ -6,140 +6,83 @@
 {% endblock title %}
 {% block content %}
     <div style="text-align: center;">
-        <!-- Icon -->
-        <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">🎉</div>
-        <h1>{% trans "Get ready for something great." %}</h1>
-        <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 8px;">
+        <div style="font-size: 48px; margin-bottom: 16px; line-height: 1;">🎉</div>
+        <h1 style="margin-bottom: 8px;">{% trans "You're confirmed" %}</h1>
+        <p style="font-size: 16px; color: #484848; margin-bottom: 24px;">
             {% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}
-        </p>
-        <p style="color: #484848; margin-bottom: 32px;">
-            {% trans "Your spot is secured for" %} <strong>{{ related_data.class_title }}</strong>
+            {% trans "your spot is secured for" %} <strong>{{ related_data.class_title }}</strong>
             {% if related_data.option_title and related_data.option_title != related_data.class_title %}
-                <br>
-                <span style="font-size: 16px; color: #86868B;">({{ related_data.option_title }})</span>
-            {% endif %}
-            .
+                <span style="color: #86868B;">({{ related_data.option_title }})</span>
+            {% endif %}.
         </p>
-        <!-- Main Ticket/Card -->
-        <div style="background-color: #ffffff;
-                    border: 1px solid #E5E7EB;
-                    border-radius: 20px;
-                    overflow: hidden;
-                    box-shadow: 0 4px 6px rgba(0,0,0,0.02);
-                    margin-bottom: 32px">
-            <!-- Hero Date Section -->
-            <div style="background-color: #F5F5F7;
-                        padding: 24px;
-                        border-bottom: 1px solid #E5E7EB">
-                <div style="font-size: 13px;
-                            color: #86868B;
-                            text-transform: uppercase;
-                            letter-spacing: 0.05em;
-                            margin-bottom: 8px">{% trans "Mark your calendar" %}</div>
-                <div style="font-size: 28px;
-                            font-weight: 700;
-                            color: #1D1D1F;
-                            line-height: 1.1">{{ booking.schedule_instance.date|date:"l, F j" }}</div>
-                <div style="font-size: 18px;
-                            color: #F81E3E;
-                            font-weight: 600;
-                            margin-top: 8px">{{ formatted_time_range }}</div>
-                {% if formatted_duration_minutes %}
-                    <div style="font-size: 13px; color: #6B7280; margin-top: 4px;">{% trans "Duration:" %} {{ formatted_duration_minutes }}</div>
-                {% endif %}
-                {% if related_data.business_timezone %}
-                    <div style="font-size: 12px; color: #86868B; margin-top: 4px;">{{ formatted_timezone_display }} time</div>
-                {% endif %}
+        <!-- Main card -->
+        <div style="background: #fff; border: 1px solid #E5E7EB; border-radius: 16px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.04); margin-bottom: 24px; max-width: 480px; margin-left: auto; margin-right: auto;">
+            <div style="background: #F5F5F7; padding: 20px 24px; border-bottom: 1px solid #E5E7EB;">
+                <div style="font-size: 11px; color: #86868B; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">{% trans "Date & time" %}</div>
+                <div style="font-size: 22px; font-weight: 700; color: #1D1D1F;">{{ booking.schedule_instance.date|date:"l, F j" }}</div>
+                <div style="font-size: 16px; color: #F81E3E; font-weight: 600; margin-top: 4px;">{{ formatted_time_range }}</div>
+                {% if formatted_duration_minutes %}<div style="font-size: 12px; color: #6B7280; margin-top: 2px;">{{ formatted_duration_minutes }}</div>{% endif %}
+                {% if related_data.business_timezone %}<div style="font-size: 11px; color: #86868B; margin-top: 2px;">{{ formatted_timezone_display }} time</div>{% endif %}
             </div>
-            <!-- Details List -->
-            <div style="padding: 24px; text-align: left;">
-                <p style="margin: 0 0 16px 0; font-size: 14px; color: #4B5563; line-height: 1.5;">
-                    {% trans "Please arrive a few minutes early and check in at the venue. If you have any questions, contact the provider using the details below." %}
-                </p>
-                <div style="margin-bottom: 16px;">
-                    <div style="font-size: 12px; color: #86868B; text-transform: uppercase;">{% trans "Location" %}</div>
-                    <div style="font-size: 16px; color: #1D1D1F; font-weight: 500;">
-                        {{ related_data.class_location|default:"Online / TBD" }}
+            <div style="padding: 20px 24px; text-align: left;">
+                <div style="display: table; width: 100%; border-collapse: collapse;">
+                    <div style="display: table-row;">
+                        <div style="display: table-cell; font-size: 11px; color: #86868B; text-transform: uppercase; padding: 6px 12px 6px 0; width: 1%; white-space: nowrap;">{% trans "Location" %}</div>
+                        <div style="display: table-cell; font-size: 14px; color: #1D1D1F;">{{ related_data.class_location|default:"Online / TBD" }}</div>
                     </div>
-                </div>
-                <div style="margin-bottom: 16px;">
-                    <div style="font-size: 12px; color: #86868B; text-transform: uppercase;">{% trans "Provider" %}</div>
-                    <div style="font-size: 16px; color: #1D1D1F; font-weight: 500;">{{ related_data.business_name|default:"N/A" }}</div>
-                </div>
-                <div style="margin-bottom: 16px;">
-                    <div style="font-size: 12px; color: #86868B; text-transform: uppercase;">{% trans "Reference" %}</div>
-                    <div style="font-size: 16px; color: #1D1D1F; font-family: monospace;">
-                        {{ booking.user_facing_reference|default:booking.id }}
+                    <div style="display: table-row;">
+                        <div style="display: table-cell; font-size: 11px; color: #86868B; text-transform: uppercase; padding: 6px 12px 6px 0;">{% trans "Provider" %}</div>
+                        <div style="display: table-cell; font-size: 14px; color: #1D1D1F;">{{ related_data.business_name|default:"—" }}</div>
                     </div>
-                </div>
-                {% if related_data.business_contact_email or related_data.business_contact_phone %}
-                    <div style="margin-bottom: 16px;">
-                        <div style="font-size: 12px; color: #86868B; text-transform: uppercase;">{% trans "Contact" %} {{ related_data.business_name }}</div>
-                        <div style="font-size: 14px; color: #1D1D1F;">
+                    <div style="display: table-row;">
+                        <div style="display: table-cell; font-size: 11px; color: #86868B; text-transform: uppercase; padding: 6px 12px 6px 0;">{% trans "Reference" %}</div>
+                        <div style="display: table-cell; font-size: 14px; font-family: monospace; color: #1D1D1F;">{{ booking.user_facing_reference|default:booking.id }}</div>
+                    </div>
+                    {% if related_data.business_contact_email or related_data.business_contact_phone %}
+                    <div style="display: table-row;">
+                        <div style="display: table-cell; font-size: 11px; color: #86868B; text-transform: uppercase; padding: 6px 12px 6px 0;">{% trans "Contact" %}</div>
+                        <div style="display: table-cell; font-size: 14px;">
                             {% if related_data.business_contact_email %}<a href="mailto:{{ related_data.business_contact_email }}" style="color: #0ea5e9; text-decoration: none;">{{ related_data.business_contact_email }}</a>{% endif %}
                             {% if related_data.business_contact_email and related_data.business_contact_phone %} · {% endif %}
                             {% if related_data.business_contact_phone %}<a href="tel:{{ related_data.business_contact_phone }}" style="color: #0ea5e9; text-decoration: none;">{{ related_data.business_contact_phone }}</a>{% endif %}
                         </div>
                     </div>
-                {% endif %}
-                {% if related_data.equipment %}
-                    <div style="margin-bottom: 16px;">
-                        <div style="font-size: 12px; color: #86868B; text-transform: uppercase;">{% trans "What to bring" %}</div>
-                        <div style="font-size: 14px; color: #1D1D1F; white-space: pre-line;">{{ related_data.equipment }}</div>
+                    {% endif %}
+                    {% if related_data.equipment %}
+                    <div style="display: table-row;">
+                        <div style="display: table-cell; font-size: 11px; color: #86868B; text-transform: uppercase; padding: 6px 12px 6px 0; vertical-align: top;">{% trans "Note from host" %}</div>
+                        <div style="display: table-cell; font-size: 14px; color: #1D1D1F; white-space: pre-line; padding: 6px 0;">{{ related_data.equipment }}</div>
                     </div>
-                {% endif %}
+                    {% endif %}
+                </div>
                 {% if booking.participants %}
-                    <div style="margin-top: 20px;
-                                border-top: 1px dashed #D1D5DB;
-                                padding-top: 16px">
-                        <div style="font-size: 12px;
-                                    color: #86868B;
-                                    text-transform: uppercase;
-                                    margin-bottom: 8px">{% trans "Booking" %}</div>
-                        <span style="display: inline-block;
-                                     background: #F5F5F7;
-                                     border-radius: 99px;
-                                     padding: 4px 12px;
-                                     font-size: 14px;
-                                     color: #1D1D1F;
-                                     margin-right: 4px;
-                                     margin-bottom: 4px">{% trans "Booked by" %} {% if booking.participant_details and booking.participant_details.0.name %}{{ booking.participant_details.0.name }}{% else %}{% with booker=booking.user|default:booking.contact %}{{ booker.first_name }} {{ booker.last_name }}{% endwith %}{% endif %}</span>
-                        <span style="display: inline-block;
-                                     background: #F5F5F7;
-                                     border-radius: 99px;
-                                     padding: 4px 12px;
-                                     font-size: 14px;
-                                     color: #1D1D1F;">{{ booking.participants }} {% if booking.participants == 1 %}{% trans "participant" %}{% else %}{% trans "participants" %}{% endif %}</span>
-                    </div>
+                <div style="margin-top: 16px; padding-top: 16px; border-top: 1px dashed #E5E7EB;">
+                    <span style="display: inline-block; background: #F5F5F7; border-radius: 99px; padding: 4px 10px; font-size: 13px; color: #1D1D1F; margin-right: 6px;">{% trans "Booked by" %} {% if booking.participant_details and booking.participant_details.0.name %}{{ booking.participant_details.0.name }}{% else %}{% with booker=booking.user|default:booking.contact %}{{ booker.first_name }} {{ booker.last_name }}{% endwith %}{% endif %}</span>
+                    <span style="display: inline-block; background: #F5F5F7; border-radius: 99px; padding: 4px 10px; font-size: 13px; color: #1D1D1F;">{{ booking.participants }} {% if booking.participants == 1 %}{% trans "participant" %}{% else %}{% trans "participants" %}{% endif %}</span>
+                </div>
                 {% endif %}
             </div>
         </div>
         {% if related_data.cancellation_policy_display %}
-            <div style="margin-bottom: 24px; padding: 14px 18px; background: #F9FAFB; border-radius: 12px; border: 1px solid #E5E7EB; text-align: left; max-width: 480px; margin-left: auto; margin-right: auto;">
-                <div style="font-size: 11px; color: #6B7280; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; font-weight: 600;">{% trans "Cancellation policy" %}</div>
-                <div style="font-size: 13px; color: #374151; line-height: 1.5;">{{ related_data.cancellation_policy_display }}</div>
-            </div>
+        <div style="margin-bottom: 24px; padding: 12px 16px; background: #F9FAFB; border-radius: 12px; border: 1px solid #E5E7EB; text-align: left; max-width: 480px; margin-left: auto; margin-right: auto;">
+            <div style="font-size: 11px; color: #6B7280; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; font-weight: 600;">{% trans "Cancellation policy" %}</div>
+            <div style="font-size: 13px; color: #374151; line-height: 1.45;">{{ related_data.cancellation_policy_display }}</div>
+        </div>
         {% endif %}
-        <table role="presentation"
-               border="0"
-               cellpadding="0"
-               cellspacing="0"
-               width="100%">
-            <tr>
-                <td align="center">
-                    {% if is_guest and guest_cancellation_url %}
-                        <a href="{{ guest_cancellation_url }}" target="_blank" class="button">{% trans 'Manage Booking' %}</a>
-                    {% else %}
-                        <a href="{{ manage_bookings_url }}" target="_blank" class="button">{% trans 'View Ticket & Details' %}</a>
-                    {% endif %}
-                </td>
-            </tr>
+        <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+            <tr><td align="center">
+                {% if is_guest and guest_cancellation_url %}
+                    <a href="{{ guest_cancellation_url }}" target="_blank" class="button">{% trans 'Manage Booking' %}</a>
+                {% else %}
+                    <a href="{{ manage_bookings_url }}" target="_blank" class="button">{% trans 'View Ticket & Details' %}</a>
+                {% endif %}
+            </td></tr>
         </table>
-        <p style="margin-top: 32px; font-size: 14px; color: #86868B;">
+        <p style="margin-top: 24px; font-size: 13px; color: #86868B;">
             {% if is_guest and guest_cancellation_url %}
-                {% blocktrans %}Plans changed? You can manage your booking via the button above.{% endblocktrans %}
+                {% blocktrans %}Manage or cancel your booking with the button above.{% endblocktrans %}
             {% else %}
-                {% blocktrans %}Directions, requirements, and management options are available in your account.{% endblocktrans %}
+                {% blocktrans %}View directions and manage your booking in your account.{% endblocktrans %}
             {% endif %}
         </p>
     </div>

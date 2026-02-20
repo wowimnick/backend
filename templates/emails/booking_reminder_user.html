@@ -10,80 +10,40 @@
 {% endblock title %}
 {% block content %}
     <div style="text-align: center;">
-        <!-- Icon -->
-        <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">⏰</div>
-        <h1>{% trans "The countdown begins." %}</h1>
-        <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+        <div style="font-size: 48px; margin-bottom: 16px; line-height: 1;">⏰</div>
+        <h1 style="margin-bottom: 8px;">{% trans "Your class is coming up" %}</h1>
+        <p style="font-size: 16px; color: #484848; margin-bottom: 24px;">
             {% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}
-            <br>
             {% if is_course_session %}
-                Session {{ booking.course_session_number }} of <strong>{{ related_data.class_title|default:"your course" }}</strong> is almost here.
+                {% trans "Session" %} {{ booking.course_session_number }} {% trans "of" %} <strong>{{ related_data.class_title|default:"your course" }}</strong> {% trans "is soon." %}
             {% else %}
-                You're just about ready to dive into <strong>{{ related_data.class_title|default:"your experience" }}</strong>.
+                <strong>{{ related_data.class_title|default:"your experience" }}</strong> {% trans "is coming up." %}
             {% endif %}
         </p>
-        <!-- Details Card -->
-        <div style="background-color: #F9FAFB;
-                    border: 1px solid #E5E7EB;
-                    border-radius: 20px;
-                    overflow: hidden;
-                    margin-bottom: 32px">
-            <div style="padding: 24px;">
-                <div style="font-size: 13px;
-                            color: #86868B;
-                            text-transform: uppercase;
-                            letter-spacing: 0.05em;
-                            margin-bottom: 8px">
-                    {% if is_course_session %}
-                        {% trans "Next Session" %}
-                    {% else %}
-                        {% trans "Happening On" %}
-                    {% endif %}
+        <div style="background: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 16px; overflow: hidden; margin-bottom: 24px; max-width: 480px; margin-left: auto; margin-right: auto;">
+            <div style="padding: 20px 24px; border-bottom: 1px solid #E5E7EB;">
+                <div style="font-size: 11px; color: #86868B; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">
+                    {% if is_course_session %}{% trans "Next session" %}{% else %}{% trans "Date & time" %}{% endif %}
                 </div>
-                <div style="font-size: 24px;
-                            font-weight: 700;
-                            color: #1D1D1F;
-                            margin-bottom: 4px">{{ booking.schedule_instance.date|date:"l, F j" }}</div>
-                <div style="font-size: 18px; color: #484848;">
-                    {{ booking.schedule_instance.time|time:"g:i A" }} - {{ calculated_end_time|time:"g:i A" }}
-                </div>
-                {% if formatted_timezone %}
-                    <div style="font-size: 12px; color: #86868B; margin-top: 4px;">{{ formatted_timezone }}</div>
+                <div style="font-size: 20px; font-weight: 700; color: #1D1D1F;">{{ booking.schedule_instance.date|date:"l, F j" }}</div>
+                <div style="font-size: 15px; color: #484848;">{{ booking.schedule_instance.time|time:"g:i A" }} – {{ calculated_end_time|time:"g:i A" }}</div>
+                {% if formatted_timezone %}<div style="font-size: 11px; color: #86868B; margin-top: 2px;">{{ formatted_timezone }}</div>{% endif %}
+            </div>
+            <div style="padding: 16px 24px; background: #fff; text-align: left;">
+                <div style="font-size: 11px; color: #86868B; text-transform: uppercase; margin-bottom: 4px;">{% trans "Location" %}</div>
+                <div style="font-size: 14px; color: #1D1D1F;">{{ related_data.class_location|default:"Check details for location" }}</div>
+                <div style="font-size: 11px; color: #86868B; text-transform: uppercase; margin: 12px 0 4px;">{% trans "Attendees" %}</div>
+                <div style="font-size: 14px; color: #1D1D1F;">{{ booking.participants }} {% if booking.participants == 1 %}{% trans "person" %}{% else %}{% trans "people" %}{% endif %}</div>
+                {% if related_data.equipment %}
+                <div style="font-size: 11px; color: #86868B; text-transform: uppercase; margin: 12px 0 4px;">{% trans "Note from host" %}</div>
+                <div style="font-size: 14px; color: #1D1D1F; white-space: pre-line;">{{ related_data.equipment }}</div>
                 {% endif %}
             </div>
-            <div style="background-color: #ffffff;
-                        padding: 20px;
-                        border-top: 1px solid #E5E7EB;
-                        text-align: left">
-                <div style="margin-bottom: 12px;">
-                    <span style="font-size: 18px; vertical-align: middle; margin-right: 8px;">📍</span>
-                    <span style="font-size: 16px; color: #1D1D1F; vertical-align: middle;">{{ related_data.class_location|default:"Check details for location" }}</span>
-                </div>
-                <div style="margin-bottom: 0;">
-                    <span style="font-size: 18px; vertical-align: middle; margin-right: 8px;">👥</span>
-                    <span style="font-size: 16px; color: #1D1D1F; vertical-align: middle;">{{ booking.participants }}
-                        {% if booking.participants > 1 %}
-                            people attending
-                        {% else %}
-                            person attending
-                        {% endif %}
-                    </span>
-                </div>
-            </div>
         </div>
-        <p style="color: #484848; margin-bottom: 32px;">
-            {% trans "Be sure to double-check any preparation notes or materials needed before you arrive." %}
-        </p>
-        <table role="presentation"
-               border="0"
-               cellpadding="0"
-               cellspacing="0"
-               width="100%">
-            <tr>
-                <td align="center">
-                    <a href="{{ class_details_url }}" target="_blank" class="button">{% trans 'View Experience Details' %}</a>
-                </td>
-            </tr>
+        <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+            <tr><td align="center">
+                <a href="{{ class_details_url }}" target="_blank" class="button">{% trans 'View details' %}</a>
+            </td></tr>
         </table>
     </div>
 {% endblock content %}
