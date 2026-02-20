@@ -10,7 +10,7 @@ from quickstart.utils.cache_prewarm import run_prewarm_class_search_cache
 
 class Command(BaseCommand):
     help = (
-        "Prewarm class search cache for preset locations, collections, and location+category (24 and 50 results each). "
+        "Prewarm class search cache for preset locations and collections (24 and 50 results each). "
         "In production, this also runs automatically in the background via Celery."
     )
 
@@ -24,11 +24,6 @@ class Command(BaseCommand):
             "--collections-only",
             action="store_true",
             help="Only prewarm collection caches",
-        )
-        parser.add_argument(
-            "--categories-only",
-            action="store_true",
-            help="Only prewarm preset location + category caches",
         )
         parser.add_argument(
             "--force",
@@ -47,11 +42,9 @@ class Command(BaseCommand):
             )
             return
 
-        only_categories = options["categories_only"]
         run_prewarm_class_search_cache(
-            locations=not (options["collections_only"] or only_categories),
-            collections=not (options["locations_only"] or only_categories),
-            categories=not (options["locations_only"] or options["collections_only"]) or only_categories,
+            locations=not options["collections_only"],
+            collections=not options["locations_only"],
             skip_env_check=options["force"],
         )
 

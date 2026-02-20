@@ -103,22 +103,8 @@ class PublicCategoryViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = PublicCategorySerializer
 
     def get_queryset(self):
-        """
-        Returns ALL ClassCategory objects, ordered by the default 'sort_order'.
-        It then attaches a filtered list of subcategories (only those with classes)
-        to each category object.
-        """
-        subcategories_with_classes = ClassSubcategory.objects.annotate(
-            class_count=Count("classes_in_subcategory")
-        ).filter(class_count__gt=0)
-
-        return (
-            ClassCategory.objects.all()
-            .order_by("sort_order", "name")
-            .prefetch_related(
-                Prefetch("subcategories", queryset=subcategories_with_classes)
-            )
-        )
+        """Categories removed from platform; return empty so clients don't break."""
+        return ClassCategory.objects.none()
 
     # Cache for 30 days so explore page categories load instantly; admin revalidates when needed
     @method_decorator(cache_page(60 * 60 * 24 * 30))  # 30 days
@@ -140,16 +126,8 @@ class AllCategoriesForBusinessViewSet(viewsets.ReadOnlyModelViewSet):
     pagination_class = None
 
     def get_queryset(self):
-        subcat_queryset = ClassSubcategory.objects.annotate(
-            class_count=Count("classes_in_subcategory", distinct=True)
-        )
-        return (
-            ClassCategory.objects.annotate(
-                class_count=Count("classes_in_category", distinct=True)
-            )
-            .prefetch_related(Prefetch("subcategories", queryset=subcat_queryset))
-            .order_by("name")
-        )
+        """Categories removed from platform; return empty for business forms."""
+        return ClassCategory.objects.none()
 
     # --- ADDED: Caching decorator for the list view ---
     @method_decorator(cache_page(60 * 15))  # Cache for 15 minutes

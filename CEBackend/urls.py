@@ -10,14 +10,19 @@ from quickstart.sitemaps import (
     StaticViewSitemap,
     ClassSitemap,
     BusinessSitemap,
+    BlogSitemap,
+    BlogCategorySitemap,
 )
 
-# Define the sitemaps dictionary here, at the project level
+# Define the sitemaps dictionary here, at the project level.
+# Classes and businesses sitemaps include only active/verified entities.
 sitemaps = {
     "static": StaticViewSitemap,
     "classes": ClassSitemap,
     "businesses": BusinessSitemap,
     "explore": ExplorePagesSitemap,
+    "blog": BlogSitemap,
+    "blog-categories": BlogCategorySitemap,
 }
 
 urlpatterns = [
@@ -57,4 +62,5 @@ urlpatterns = [
         TemplateView.as_view(template_name="index.html"),
         name="privacy-policy",
     ),
+    path("blog", TemplateView.as_view(template_name="index.html"), name="blog"),
 ]

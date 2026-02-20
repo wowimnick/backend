@@ -16,8 +16,6 @@ CLASS_SEARCH_CACHE_PREFIXES = (
     "public_class_search_preset",
     "public_class_search_collection",
     "public_class_search_preset_collection",
-    "public_class_search_preset_category",
-    "public_class_search_category_only",
 )
 
 # Key segment order (after prefix:env:v*): used for selective flush patterns.
@@ -93,13 +91,12 @@ def _slug(s):
 
 def flush_class_search_cache_for_affected(
     cache_backend,
-    affected_category_keys=None,
     affected_collection_slugs=None,
     affected_location_names=None,
 ):
     """
-    Delete only cache keys that involve the given categories, collections, or preset
-    locations. Used on content update (class/category/collection change) so unaffected
+    Delete only cache keys that involve the given collections or preset
+    locations. Used on content update (class/collection change) so unaffected
     keys stay valid. No version bump. No-op if backend does not support delete_pattern.
     """
     if not getattr(cache_backend, "delete_pattern", None):
@@ -107,19 +104,6 @@ def flush_class_search_cache_for_affected(
         return
     env = _get_cache_env()
     try:
-        # Category-only keys: ...:v*:cat_slug:sub_slug:...
-        if affected_category_keys:
-            for key in affected_category_keys:
-                cat_slug = _slug(key)
-                if not cat_slug:
-                    continue
-                cache_backend.delete_pattern(
-                    f"public_class_search_category_only:{env}:v*:{cat_slug}:*"
-                )
-                cache_backend.delete_pattern(
-                    f"public_class_search_preset_category:{env}:v*:*:{cat_slug}:*"
-                )
-        # Collection-only keys: ...:v*:slug:... or ...:v*:location_slug:coll_slug:...
         if affected_collection_slugs:
             for slug in affected_collection_slugs:
                 coll_slug = _slug(slug)
@@ -131,7 +115,6 @@ def flush_class_search_cache_for_affected(
                 cache_backend.delete_pattern(
                     f"public_class_search_preset_collection:{env}:v*:*:{coll_slug}:*"
                 )
-        # Preset location keys: ...:v*:location_slug:...
         if affected_location_names:
             for name in affected_location_names:
                 loc_slug = _slug(name)
@@ -143,14 +126,10 @@ def flush_class_search_cache_for_affected(
                 cache_backend.delete_pattern(
                     f"public_class_search_preset_collection:{env}:v*:{loc_slug}:*"
                 )
-                cache_backend.delete_pattern(
-                    f"public_class_search_preset_category:{env}:v*:{loc_slug}:*"
-                )
-        if affected_category_keys or affected_collection_slugs or affected_location_names:
+        if affected_collection_slugs or affected_location_names:
             logger.info(
-                "Flushed affected class search cache keys for env=%s (categories=%s, collections=%s, locations=%s).",
+                "Flushed affected class search cache keys for env=%s (collections=%s, locations=%s).",
                 env,
-                len(affected_category_keys or ()),
                 len(affected_collection_slugs or ()),
                 len(affected_location_names or ()),
             )

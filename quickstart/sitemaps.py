@@ -6,7 +6,7 @@ from django.utils.text import slugify
 from django.utils import timezone
 from django.db.models import Count, Max, Q
 from urllib.parse import quote
-from .models import ClassesMain, ClassCategory, ClassSubcategory, BusinessInfo
+from .models import ClassesMain, ClassCollection, BusinessInfo, BlogPost, BlogCategory
 
 
 class StaticViewSitemap(Sitemap):
@@ -25,6 +25,7 @@ class StaticViewSitemap(Sitemap):
             "about-us",
             "terms-of-service",
             "privacy-policy",
+            "blog",
         ]
 
     def location(self, item):
@@ -39,7 +40,7 @@ class StaticViewSitemap(Sitemap):
 
 class ClassSitemap(Sitemap):
     """
-    Sitemap for all individual, publicly accessible class pages.
+    Sitemap for class pages. Only active classes with active, verified businesses.
     """
 
     changefreq = "weekly"
@@ -65,7 +66,7 @@ class ClassSitemap(Sitemap):
 
 class BusinessSitemap(Sitemap):
     """
-    Sitemap for all individual, publicly accessible business pages.
+    Sitemap for business pages. Only active, verified businesses.
     """
 
     changefreq = "weekly"
@@ -114,37 +115,15 @@ class ExplorePagesSitemap(Sitemap):
         main_lastmod = main_agg["latest"] or timezone.now()
         urls.append({"url": "/explore", "lastmod": main_lastmod})
 
-        # 2. Category Pages
-        # Group by category key and get the max updatedAt for each
-        cat_items = base_qs.values("category__key").annotate(
-            last_updated=Max("updatedAt")
-        )
+        # 2. Collection Pages (SEO: /explore?collection=slug)
+        for coll in ClassCollection.objects.filter(is_active=True).order_by("sort_order"):
+            coll_agg = base_qs.filter(collections=coll).aggregate(latest=Max("updatedAt"))
+            urls.append({
+                "url": f"/explore?collection={quote(coll.slug)}",
+                "lastmod": coll_agg["latest"] or main_lastmod,
+            })
 
-        for item in cat_items:
-            urls.append(
-                {
-                    "url": f"/explore?category={item['category__key']}",
-                    "lastmod": item["last_updated"],
-                }
-            )
-
-        # 3. Category + Subcategory Pages
-        # Group by category AND subcategory
-        subcat_items = (
-            base_qs.exclude(subcategory__isnull=True)
-            .values("category__key", "subcategory__key")
-            .annotate(last_updated=Max("updatedAt"))
-        )
-
-        for item in subcat_items:
-            urls.append(
-                {
-                    "url": f"/explore?category={item['category__key']}&subcategory={item['subcategory__key']}",
-                    "lastmod": item["last_updated"],
-                }
-            )
-
-        # 4. Location Pages
+        # 3. Location Pages
         # Group by City and State. We assume one lat/lng pair per city is sufficient for the sitemap.
         # We fetch the Max latitude/longitude to ensure we get a valid coordinate pair for the city.
         loc_qs = (
@@ -178,82 +157,32 @@ class ExplorePagesSitemap(Sitemap):
                 }
             )
 
-        # 5. Location + Category Pages
-        # Group by City, State, AND Category
-        loc_cat_qs = (
-            base_qs.exclude(businessId__businessCity__isnull=True)
-            .exclude(businessId__businessCity="")
-            .values(
-                "businessId__businessCity",
-                "businessId__businessState",
-                "category__key",
+        # 5. Location + Collection Pages (SEO: location + collection)
+        for coll in ClassCollection.objects.filter(is_active=True).order_by("sort_order"):
+            loc_coll_qs = (
+                base_qs.filter(collections=coll)
+                .exclude(businessId__businessCity__isnull=True)
+                .exclude(businessId__businessCity="")
+                .values("businessId__businessCity", "businessId__businessState")
+                .annotate(
+                    last_updated=Max("updatedAt"),
+                    lat=Max("businessId__latitude"),
+                    lng=Max("businessId__longitude"),
+                )
             )
-            .annotate(
-                last_updated=Max("updatedAt"),
-                lat=Max("businessId__latitude"),
-                lng=Max("businessId__longitude"),
-            )
-        )
-
-        for item in loc_cat_qs:
-            city = item["businessId__businessCity"]
-            state = item["businessId__businessState"] or ""
-            lat = item["lat"]
-            lng = item["lng"]
-            cat_key = item["category__key"]
-
-            if not city or not lat or not lng:
-                continue
-
-            location_str = f"{city}, {state}" if state else city
-            encoded_location = quote(location_str)
-
-            urls.append(
-                {
-                    "url": f"/explore?category={cat_key}&location={encoded_location}&lat={lat}&lng={lng}",
+            for item in loc_coll_qs:
+                city = item["businessId__businessCity"]
+                state = item["businessId__businessState"] or ""
+                lat = item["lat"]
+                lng = item["lng"]
+                if not city or not lat or not lng:
+                    continue
+                location_str = f"{city}, {state}" if state else city
+                encoded_location = quote(location_str)
+                urls.append({
+                    "url": f"/explore?collection={quote(coll.slug)}&location={encoded_location}&lat={lat}&lng={lng}",
                     "lastmod": item["last_updated"],
-                }
-            )
-
-        # 6. Location + Category + Subcategory Pages
-        # Group by City, State, Category AND Subcategory
-        loc_subcat_qs = (
-            base_qs.exclude(businessId__businessCity__isnull=True)
-            .exclude(businessId__businessCity="")
-            .exclude(subcategory__isnull=True)
-            .values(
-                "businessId__businessCity",
-                "businessId__businessState",
-                "category__key",
-                "subcategory__key",
-            )
-            .annotate(
-                last_updated=Max("updatedAt"),
-                lat=Max("businessId__latitude"),
-                lng=Max("businessId__longitude"),
-            )
-        )
-
-        for item in loc_subcat_qs:
-            city = item["businessId__businessCity"]
-            state = item["businessId__businessState"] or ""
-            lat = item["lat"]
-            lng = item["lng"]
-            cat_key = item["category__key"]
-            subcat_key = item["subcategory__key"]
-
-            if not city or not lat or not lng:
-                continue
-
-            location_str = f"{city}, {state}" if state else city
-            encoded_location = quote(location_str)
-
-            urls.append(
-                {
-                    "url": f"/explore?category={cat_key}&subcategory={subcat_key}&location={encoded_location}&lat={lat}&lng={lng}",
-                    "lastmod": item["last_updated"],
-                }
-            )
+                })
 
         return urls
 
@@ -264,3 +193,49 @@ class ExplorePagesSitemap(Sitemap):
     def lastmod(self, item):
         """Extract lastmod from item dict"""
         return item["lastmod"]
+
+
+class BlogSitemap(Sitemap):
+    """
+    Sitemap for published blog posts only. Respects status=published.
+    """
+
+    changefreq = "weekly"
+    priority = 0.8
+
+    def items(self):
+        return (
+            BlogPost.objects.filter(status="published")
+            .select_related("category")
+            .order_by("-updated_at")
+        )
+
+    def lastmod(self, obj):
+        return obj.updated_at
+
+    def location(self, obj):
+        return f"/blog/{obj.slug}"
+
+
+class BlogCategorySitemap(Sitemap):
+    """
+    Sitemap for blog category archive pages (only categories that have published posts).
+    """
+
+    changefreq = "weekly"
+    priority = 0.7
+
+    def items(self):
+        return (
+            BlogCategory.objects.annotate(
+                post_count=Count("posts", filter=Q(posts__status="published"))
+            )
+            .filter(post_count__gt=0)
+            .order_by("name")
+        )
+
+    def lastmod(self, obj):
+        return timezone.now()
+
+    def location(self, obj):
+        return f"/blog/category/{obj.slug}"

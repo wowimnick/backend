@@ -41,6 +41,13 @@ class PublicBlogPostViewSet(viewsets.ReadOnlyModelViewSet):
         if category_slug:
             queryset = queryset.filter(category__slug=category_slug)
 
+        # Handle tag filtering e.g. /api/blog/posts/?tag=education (slug) or ?tag=Education (exact)
+        tag_param = self.request.query_params.get("tag")
+        if tag_param:
+            # Support slug (e.g. "education") -> match tag "Education"; "some-tag" -> "Some Tag"
+            tag_value = tag_param.replace("-", " ").title()
+            queryset = queryset.filter(tags__contains=[tag_value])
+
         return queryset
 
 

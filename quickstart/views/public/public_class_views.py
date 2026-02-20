@@ -62,7 +62,6 @@ from datetime import (
 import copy
 
 from quickstart.models import (
-    ClassCategory,
     ClassCollection,
     ClassImage,
     ClassesMain,
@@ -81,7 +80,6 @@ from quickstart.serializers import (
     PublicReviewSerializer,
     ImportedGoogleReviewSerializer,
     PublicCollectionSerializer,
-    PublicCategorySerializer,
     HomepageClassSerializer
 )
 from django.contrib.gis.geos import Point
@@ -164,10 +162,6 @@ _prewarm_version_local = threading.local()
 COLLECTION_CACHE_PREFIX = "public_class_search_collection"
 # Preset location + collection (e.g. Toronto + trending); same version invalidation
 PRESET_COLLECTION_CACHE_PREFIX = "public_class_search_preset_collection"
-# Preset location + category (and optional subcategory); same version invalidation
-PRESET_CATEGORY_CACHE_PREFIX = "public_class_search_preset_category"
-# Category-only or category+subcategory (no location); same version invalidation for explore page
-CATEGORY_ONLY_CACHE_PREFIX = "public_class_search_category_only"
 PRESET_PREWARM_PAGE_SIZE = 50
 # Collections list (homepage_content mode=collections); per-env so staging/prod don't overwrite
 HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY = f"homepage_content_collections:{_CACHE_ENV}"
@@ -221,8 +215,6 @@ def _build_preset_search_cache_key(request, search_name):
     # searches hit the same key and we don't explode key space.
     if request.query_params.get("keyword") or request.query_params.get("tag"):
         return None
-    if request.query_params.get("category_key") or request.query_params.get("subcategory_key"):
-        return None
     if request.query_params.get("price_max") or request.query_params.get("collection"):
         return None
     page = request.query_params.get("page", "1")
@@ -240,13 +232,12 @@ def _build_preset_search_cache_key(request, search_name):
 def invalidate_public_class_search_preset_cache(
     affected_locations=None,
     affected_collection_slugs=None,
-    affected_category_keys=None,
 ):
     """
-    Call when classes/schedules/instances/categories/collections change.
+    Call when classes/schedules/instances/collections change.
 
     Selective (pass affected_*): Delete only the cache keys that involve those
-    categories/collections/locations, then prewarm only those dimensions. No version
+    collections/locations, then prewarm only those dimensions. No version
     bump — unaffected keys stay valid so users always get cached responses.
 
     Full (all None): Bump version, enqueue prewarm for new version; task fills cache
@@ -258,7 +249,6 @@ def invalidate_public_class_search_preset_cache(
         full_invalidate = (
             affected_locations is None
             and affected_collection_slugs is None
-            and affected_category_keys is None
         )
 
         if full_invalidate:
@@ -276,11 +266,9 @@ def invalidate_public_class_search_preset_cache(
                     prewarm_class_search_cache_task.delay(
                         locations=True,
                         collections=True,
-                        categories=True,
                         version=new_version,
                         location_names=None,
                         collection_slugs=None,
-                        category_keys=None,
                     )
                 except Exception as e:
                     logger.warning(
@@ -296,7 +284,6 @@ def invalidate_public_class_search_preset_cache(
 
             flush_class_search_cache_for_affected(
                 cache,
-                affected_category_keys=affected_category_keys,
                 affected_collection_slugs=affected_collection_slugs,
                 affected_location_names=affected_locations,
             )
@@ -309,15 +296,12 @@ def invalidate_public_class_search_preset_cache(
 
                     locations = affected_locations is not None
                     collections = affected_collection_slugs is not None
-                    categories = affected_category_keys is not None
                     prewarm_class_search_cache_task.delay(
                         locations=locations,
                         collections=collections,
-                        categories=categories,
                         version=None,
                         location_names=affected_locations,
                         collection_slugs=affected_collection_slugs,
-                        category_keys=affected_category_keys,
                     )
                 except Exception as e:
                     logger.warning(
@@ -336,8 +320,6 @@ def _is_collection_only_request(request):
     if request.query_params.get("lat") or request.query_params.get("lng"):
         return False
     if request.query_params.get("keyword") or request.query_params.get("tag"):
-        return False
-    if request.query_params.get("category_key") or request.query_params.get("subcategory_key"):
         return False
     if request.query_params.get("price_max"):
         return False
@@ -361,8 +343,6 @@ def _build_preset_location_collection_cache_key(request, search_name, collection
     """Build cache key for preset location + collection (e.g. Toronto + trending)."""
     if request.query_params.get("keyword") or request.query_params.get("tag"):
         return None
-    if request.query_params.get("category_key") or request.query_params.get("subcategory_key"):
-        return None
     if request.query_params.get("price_max"):
         return None
     page = request.query_params.get("page", "1")
@@ -377,79 +357,18 @@ def _build_preset_location_collection_cache_key(request, search_name, collection
     return f"{PRESET_COLLECTION_CACHE_PREFIX}:{_CACHE_ENV}:v{version}:{location_slug}:{coll_slug}:p{page}:ps{page_size}:n{participants}:s{sort_by}:{start_date}:{end_date}"
 
 
-def _build_preset_location_category_cache_key(
-    request, search_name, category_key, subcategory_key=None
-):
-    """Build cache key for preset location + category (and optional subcategory)."""
-    if request.query_params.get("keyword") or request.query_params.get("tag"):
-        return None
-    if request.query_params.get("collection") or request.query_params.get("price_max"):
-        return None
-    if not category_key or (category_key or "").lower() == "all":
-        return None
-    page = request.query_params.get("page", "1")
-    page_size = request.query_params.get("page_size", "24")
-    participants = request.query_params.get("participants", "1")
-    sort_by = request.query_params.get("sort_by", "relevance")
-    start_date = request.query_params.get("start_date") or ""
-    end_date = request.query_params.get("end_date") or ""
-    version = _get_preset_search_cache_version()
-    location_slug = (search_name or "").lower().replace(" ", "_")
-    cat_slug = (category_key or "").lower().replace(" ", "_")
-    sub_slug = (subcategory_key or "").lower().replace(" ", "_") if subcategory_key else ""
-    return f"{PRESET_CATEGORY_CACHE_PREFIX}:{_CACHE_ENV}:v{version}:{location_slug}:{cat_slug}:{sub_slug}:p{page}:ps{page_size}:n{participants}:s{sort_by}:{start_date}:{end_date}"
-
-
-def _is_category_only_request(request):
-    """Return True if request has only category (and optional subcategory), no location/collection."""
-    if request.query_params.get("location") or request.query_params.get("location_search"):
-        return False
-    if request.query_params.get("lat") or request.query_params.get("lng"):
-        return False
-    if request.query_params.get("collection"):
-        return False
-    if request.query_params.get("keyword") or request.query_params.get("tag"):
-        return False
-    if request.query_params.get("price_max"):
-        return False
-    category_key = request.query_params.get("category_key")
-    if not category_key or (category_key or "").lower() == "all":
-        return False
-    return True
-
-
-def _build_category_only_cache_key(request, category_key, subcategory_key=None):
-    """Build cache key for category-only or category+subcategory (no location). Explore page instant load."""
-    if request.query_params.get("keyword") or request.query_params.get("tag"):
-        return None
-    if request.query_params.get("collection") or request.query_params.get("price_max"):
-        return None
-    if not category_key or (category_key or "").lower() == "all":
-        return None
-    page = request.query_params.get("page", "1")
-    page_size = request.query_params.get("page_size", "24")
-    participants = request.query_params.get("participants", "1")
-    sort_by = request.query_params.get("sort_by", "relevance")
-    start_date = request.query_params.get("start_date") or ""
-    end_date = request.query_params.get("end_date") or ""
-    version = _get_preset_search_cache_version()
-    cat_slug = (category_key or "").lower().replace(" ", "_")
-    sub_slug = (subcategory_key or "").lower().replace(" ", "_") if subcategory_key else ""
-    return f"{CATEGORY_ONLY_CACHE_PREFIX}:{_CACHE_ENV}:v{version}:{cat_slug}:{sub_slug}:p{page}:ps{page_size}:n{participants}:s{sort_by}:{start_date}:{end_date}"
-
-
 # Tier sizes for tiered shuffle: first N items = tier 1, next M = tier 2, etc. Rest = last tier.
 # Matches search logic: results are already ordered by relevance/rating/sort_by, so top tiers
 # get the "best" results; we only shuffle within each tier so order looks unique per collection/location.
 _SHUFFLE_TIER_SIZES = [6, 12, 18]  # tier 1 = 6, tier 2 = 12, tier 3 = 18, tier 4 = rest
 
 
-def _shuffle_preset_results(response_data, search_name, collection_slug, category_key, subcategory_key=None):
+def _shuffle_preset_results(response_data, search_name, collection_slug):
     """
     Shuffle the 'results' list within tiers. Results are already ordered by the search
     (relevance/rating/sort_by), so we split by position into tiers, then shuffle within
     each tier with a deterministic seed. High-quality results stay in the top tier(s);
-    order within each tier varies by (location, collection, category, date) so switching
+    order within each tier varies by (location, collection, date) so switching
     tabs doesn't show identical ordering.
     """
     if not response_data or "results" not in response_data or not response_data["results"]:
@@ -457,8 +376,6 @@ def _shuffle_preset_results(response_data, search_name, collection_slug, categor
     seed_str = "|".join([
         (search_name or "").lower().replace(" ", "_"),
         (collection_slug or "").lower().replace(" ", "_"),
-        (category_key or "").lower().replace(" ", "_"),
-        (subcategory_key or "").lower().replace(" ", "_"),
         date.today().isoformat(),
     ])
     out = copy.deepcopy(response_data)
@@ -525,8 +442,6 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
     search_fields = [
         "title",
         "description",
-        "category__name",
-        "subcategory__name",
         "businessId__businessName",
     ]
     ordering_fields = [
@@ -665,7 +580,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         )
 
         queryset = (
-            ClassesMain.objects.select_related("businessId", "category", "subcategory")
+            ClassesMain.objects.select_related("businessId")
             .prefetch_related(
                 Prefetch(
                     "images",
@@ -830,7 +745,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             next_week_qs, many=True, context=next_week_context
         ).data
 
-        # 4. Mode Selection (Categories vs Collections pills)
+        # 4. Mode Selection: only collections are used (categories removed from platform)
         if mode == "collections":
             collections_qs = ClassCollection.objects.filter(is_active=True).order_by("sort_order")
             data["collections"] = PublicCollectionSerializer(
@@ -842,10 +757,8 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 timeout=HOMEPAGE_CONTENT_COLLECTIONS_CACHE_TIMEOUT,
             )
         else:
-            categories_qs = ClassCategory.objects.all().order_by("sort_order")
-            data["categories"] = PublicCategorySerializer(
-                categories_qs, many=True, context=context
-            ).data
+            # Legacy mode=categories: return empty list so clients don't break
+            data["categories"] = []
 
         return Response(data)
 
@@ -1019,14 +932,11 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
 
             # Preset location + collection cache (e.g. Toronto + trending): return cached if available
             preset_collection_cache_key = None
-            preset_category_cache_key = None
             if (
                 _is_preset_location_request(search_name, req_lat_str, req_lng_str)
                 and collection_slug
                 and not request.query_params.get("keyword")
                 and not request.query_params.get("tag")
-                and not request.query_params.get("category_key")
-                and not request.query_params.get("subcategory_key")
                 and not request.query_params.get("price_max")
             ):
                 preset_collection_cache_key = _build_preset_location_collection_cache_key(
@@ -1041,7 +951,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                             collection_slug,
                         )
                         shuffled = _shuffle_preset_results(
-                            cached, search_name, collection_slug, None, None
+                            cached, search_name, collection_slug
                         )
                         return Response(shuffled)
 
@@ -1054,34 +964,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     if cached is not None:
                         logger.info("Returning cached preset search result for %s", search_name)
                         shuffled = _shuffle_preset_results(
-                            cached, search_name, None, None, None
-                        )
-                        return Response(shuffled)
-
-            # Preset location + category (and optional subcategory) cache: return cached if available
-            _cat_key = request.query_params.get("category_key")
-            _sub_key = request.query_params.get("subcategory_key")
-            if (
-                _is_preset_location_request(search_name, req_lat_str, req_lng_str)
-                and (_cat_key or _sub_key)
-                and not collection_slug
-                and not request.query_params.get("keyword")
-                and not request.query_params.get("tag")
-                and not request.query_params.get("price_max")
-            ):
-                preset_category_cache_key = _build_preset_location_category_cache_key(
-                    request, search_name, _cat_key or "", _sub_key
-                )
-                if preset_category_cache_key:
-                    cached = cache.get(preset_category_cache_key)
-                    if cached is not None:
-                        logger.info(
-                            "Returning cached preset+category result for %s + %s",
-                            search_name,
-                            _cat_key or _sub_key,
-                        )
-                        shuffled = _shuffle_preset_results(
-                            cached, search_name, None, _cat_key or "", _sub_key
+                            cached, search_name, None
                         )
                         return Response(shuffled)
 
@@ -1091,8 +974,6 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             req_radius_km_str = request.query_params.get("radius")
             keyword_query_text = request.query_params.get("keyword")
             tag_filter = request.query_params.get("tag")
-            category_key = request.query_params.get("category_key")
-            subcategory_key = request.query_params.get("subcategory_key")
             price_max_str = request.query_params.get("price_max")
             
             # --- DATE PARAMETERS ---
@@ -1116,28 +997,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                             collection_slug,
                         )
                         shuffled = _shuffle_preset_results(
-                            cached, None, collection_slug, None, None
-                        )
-                        return Response(shuffled)
-
-            # Category-only (and category+subcategory) cache: no location, explore page instant load
-            category_only_cache_key = None
-            _cat_key = request.query_params.get("category_key")
-            _sub_key = request.query_params.get("subcategory_key")
-            if _is_category_only_request(request) and _cat_key:
-                category_only_cache_key = _build_category_only_cache_key(
-                    request, _cat_key, _sub_key
-                )
-                if category_only_cache_key:
-                    cached = cache.get(category_only_cache_key)
-                    if cached is not None:
-                        logger.info(
-                            "Returning cached category-only search result for %s%s",
-                            _cat_key,
-                            f"+{_sub_key}" if _sub_key else "",
-                        )
-                        shuffled = _shuffle_preset_results(
-                            cached, None, None, _cat_key or "", _sub_key
+                            cached, None, collection_slug
                         )
                         return Response(shuffled)
 
@@ -1290,11 +1150,6 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             if tag_filter:
                 queryset = queryset.filter(options__tags__contains=tag_filter.lower())
 
-            if category_key and category_key.lower() != "all":
-                queryset = queryset.filter(category__key=category_key)
-                if subcategory_key:
-                    queryset = queryset.filter(subcategory__key=subcategory_key)
-
             if price_max_str:
                 try:
                     price_max_decimal = Decimal(price_max_str)
@@ -1431,31 +1286,16 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     )
                 if preset_cache_key:
                     _safe_cache_set(preset_cache_key, response.data, timeout=PRESET_CACHE_TTL)
-                if preset_category_cache_key:
-                    _safe_cache_set(
-                        preset_category_cache_key,
-                        response.data,
-                        timeout=PRESET_CACHE_TTL,
-                    )
                 if collection_cache_key:
                     _safe_cache_set(
                         collection_cache_key, response.data, timeout=PRESET_CACHE_TTL
                     )
-                if category_only_cache_key:
-                    _safe_cache_set(
-                        category_only_cache_key,
-                        response.data,
-                        timeout=PRESET_CACHE_TTL,
-                    )
                 if any([
                     preset_collection_cache_key, preset_cache_key,
-                    preset_category_cache_key, collection_cache_key,
-                    category_only_cache_key,
+                    collection_cache_key,
                 ]):
                     shuffled = _shuffle_preset_results(
-                        response.data, search_name, collection_slug,
-                        request.query_params.get("category_key") or "",
-                        request.query_params.get("subcategory_key"),
+                        response.data, search_name, collection_slug
                     )
                     return Response(shuffled)
                 return response
@@ -1472,29 +1312,16 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 )
             if preset_cache_key:
                 _safe_cache_set(preset_cache_key, response.data, timeout=PRESET_CACHE_TTL)
-            if preset_category_cache_key:
-                _safe_cache_set(
-                    preset_category_cache_key,
-                    response.data,
-                    timeout=PRESET_CACHE_TTL,
-                )
             if collection_cache_key:
                 _safe_cache_set(
                     collection_cache_key, response.data, timeout=PRESET_CACHE_TTL
                 )
-            if category_only_cache_key:
-                _safe_cache_set(
-                    category_only_cache_key, response.data, timeout=PRESET_CACHE_TTL
-                )
             if any([
                 preset_collection_cache_key, preset_cache_key,
-                preset_category_cache_key, collection_cache_key,
-                category_only_cache_key,
+                collection_cache_key,
             ]):
                 shuffled = _shuffle_preset_results(
-                    response.data, search_name, collection_slug,
-                    request.query_params.get("category_key") or "",
-                    request.query_params.get("subcategory_key"),
+                    response.data, search_name, collection_slug
                 )
                 return Response(shuffled)
             return response

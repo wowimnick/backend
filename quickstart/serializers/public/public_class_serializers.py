@@ -208,18 +208,6 @@ class PublicClassSerializer(serializers.ModelSerializer):
     images = PublicClassImageKeySerializer(many=True, read_only=True)
     average_rating = serializers.SerializerMethodField()
     review_count = serializers.SerializerMethodField()
-    category_name = serializers.CharField(
-        source="category.name", read_only=True, allow_null=True
-    )
-    subcategory_name = serializers.CharField(
-        source="subcategory.name", read_only=True, allow_null=True
-    )
-    category_key = serializers.CharField(
-        source="category.key", read_only=True, allow_null=True
-    )
-    subcategory_key = serializers.CharField(
-        source="subcategory.key", read_only=True, allow_null=True
-    )
     business_timezone = serializers.CharField(
         source="businessId.business_timezone", read_only=True
     )
@@ -253,10 +241,6 @@ class PublicClassSerializer(serializers.ModelSerializer):
             "title",
             "description",
             "features",
-            "category_name",
-            "subcategory_name",
-            "category_key",
-            "subcategory_key",
             "location",
             "unit_number",
             "coordinates",
@@ -430,7 +414,6 @@ class HomepageClassSerializer(PublicClassSerializer):
             "slug",
             "business_name",
             "title",
-            "category_name",
             "location",
             "coordinates",
             "average_rating",

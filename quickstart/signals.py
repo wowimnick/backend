@@ -45,38 +45,32 @@ from .models import (
 def _invalidate_public_class_search_preset_cache(
     affected_locations=None,
     affected_collection_slugs=None,
-    affected_category_keys=None,
     class_main=None,
 ):
-    """Invalidate and repopulate public class search cache (class/schedule/instance/category/collection change).
+    """Invalidate and repopulate public class search cache (class/schedule/instance/collection change).
     Delegates to view so prewarm runs with new version before bump — users always get cached.
-    Pass affected_* to prewarm only what changed; or pass class_main (ClassesMain) to derive category + collections."""
+    Pass affected_* to prewarm only what changed; or pass class_main (ClassesMain) to derive collections."""
     try:
         from quickstart.views.public.public_class_views import (
             invalidate_public_class_search_preset_cache,
         )
         if class_main is not None:
-            cat_key = getattr(class_main.category, "key", None) if getattr(class_main, "category", None) else None
-            affected_category_keys = [cat_key] if cat_key else affected_category_keys
             try:
                 slugs = list(class_main.collections.values_list("slug", flat=True))
                 affected_collection_slugs = slugs if slugs else affected_collection_slugs
             except Exception:
                 pass
-            # If we couldn't derive any scope, fall back to full prewarm
-            if affected_category_keys is None and affected_collection_slugs is None and affected_locations is None:
+            if affected_collection_slugs is None and affected_locations is None:
                 invalidate_public_class_search_preset_cache()
             else:
                 invalidate_public_class_search_preset_cache(
                     affected_locations=affected_locations,
                     affected_collection_slugs=affected_collection_slugs,
-                    affected_category_keys=affected_category_keys,
                 )
         else:
             invalidate_public_class_search_preset_cache(
                 affected_locations=affected_locations,
                 affected_collection_slugs=affected_collection_slugs,
-                affected_category_keys=affected_category_keys,
             )
     except Exception as e:
         logger.warning("Failed to invalidate public class search preset cache: %s", e)
@@ -606,7 +600,7 @@ def trigger_classification(sender, instance, created, update_fields, **kwargs):
         should_run = True
     elif update_fields:
         # Only run if fields relevant to rules have changed
-        relevant_fields = {'title', 'description', 'status', 'category'}
+        relevant_fields = {'title', 'description', 'status'}
         if any(field in update_fields for field in relevant_fields):
             should_run = True
     else:

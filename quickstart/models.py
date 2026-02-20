@@ -1257,7 +1257,8 @@ class ClassesMain(models.Model):
     category = models.ForeignKey(
         ClassCategory,
         on_delete=models.PROTECT,
-        null=False,
+        null=True,
+        blank=True,
         related_name="classes_in_category",
     )
     subcategory = models.ForeignKey(

@@ -346,6 +346,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "quickstart.tasks.giftcard_tasks.process_scheduled_gift_cards",
         "schedule": crontab(hour=8, minute=0),
     },
+    "generate-weekly-blog-draft": {
+        "task": "quickstart.tasks.business_tasks.generate_weekly_blog_draft_task",
+        "schedule": crontab(day_of_week=1, hour=10, minute=0),  # Monday 10:00 AM
+    },
 }
 
 # Celery Worker Settings - Prevent prefetch issues
@@ -354,6 +358,12 @@ CELERY_ACKS_LATE = True  # Don't acknowledge task until it's actually completed
 
 # Use Django's LOGGING config in worker so task logs (e.g. prewarm) show at INFO
 CELERY_WORKER_HIJACK_ROOT_LOGGER = False
+
+# --- Blog AI (weekly draft generation) ---
+BLOG_AI_ENABLED = True
+BLOG_AI_DEFAULT_IMAGE_URL = "https://classeasily.com/images/blog-placeholder.jpg"
+BLOG_AI_DEFAULT_CATEGORY_SLUG = "tips-and-guides"
+BLOG_AI_DEFAULT_CATEGORY_NAME = "Tips & Guides"
 
 # Email-specific settings
 EMAIL_RATE_LIMIT_SETTINGS = {

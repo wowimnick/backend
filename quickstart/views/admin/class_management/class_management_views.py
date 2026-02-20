@@ -787,9 +787,7 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
             trigger_nextjs_revalidation(tag="homepage-classes")
             try:
                 new_key = response.data.get("key") if response.data else None
-                invalidate_public_class_search_preset_cache(
-                    affected_category_keys=[new_key] if new_key else None
-                )
+                invalidate_public_class_search_preset_cache()
             except Exception as e:
                 logger.warning("Failed to invalidate search cache after category create: %s", e)
             logger.info("Revalidated homepage and class pages after category creation + prewarm")
@@ -828,9 +826,7 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
             trigger_nextjs_revalidation(tag=f"category-{instance.key}")
 
             try:
-                invalidate_public_class_search_preset_cache(
-                    affected_category_keys=[instance.key]
-                )
+                invalidate_public_class_search_preset_cache()
             except Exception as e:
                 logger.warning("Failed to invalidate search cache after category update: %s", e)
             logger.info("Revalidated homepage and class pages after category update + prewarm")
@@ -871,9 +867,7 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
         trigger_nextjs_revalidation(tag="homepage-classes")
         trigger_nextjs_revalidation(tag=f"category-{category_key}")
         try:
-            invalidate_public_class_search_preset_cache(
-                affected_category_keys=[category_key]
-            )
+            invalidate_public_class_search_preset_cache()
         except Exception as e:
             logger.warning("Failed to invalidate search cache after category delete: %s", e)
         logger.info("Revalidated homepage and class pages after category deletion + prewarm")

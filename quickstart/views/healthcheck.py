@@ -92,6 +92,7 @@ def robots_txt_view(request):
             "# Disallow all other business paths",
             "Disallow: /business/*/",
             "",
+            "# Sitemap includes only active/verified businesses and classes, and published blog posts",
             "Sitemap: https://classeasily.com/sitemap.xml",
         ]
 

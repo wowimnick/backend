@@ -705,31 +705,9 @@ class ManagedClassSerializer(serializers.ModelSerializer):
         return data
 
     def update(self, instance, validated_data):
-        category_key = validated_data.pop("category_key", None)
-        subcategory_key = validated_data.pop("subcategory_key", None)
-
-        if category_key and category_key.strip():
-            try:
-                category = ClassCategory.objects.get(key=category_key.strip())
-                validated_data["category"] = category
-            except ClassCategory.DoesNotExist:
-                raise serializers.ValidationError(
-                    {"category_key": f"Invalid category key: {category_key}"}
-                )
-        if subcategory_key and subcategory_key.strip():
-            category = validated_data.get("category") or instance.category
-            if category:
-                try:
-                    subcategory = ClassSubcategory.objects.get(
-                        category=category, key=subcategory_key.strip()
-                    )
-                    validated_data["subcategory"] = subcategory
-                except ClassSubcategory.DoesNotExist:
-                    raise serializers.ValidationError(
-                        {
-                            "subcategory_key": f"Invalid subcategory key '{subcategory_key}' for the selected category."
-                        }
-                    )
+        validated_data.pop("category_key", None)
+        validated_data.pop("subcategory_key", None)
+        # Categories removed from platform; do not write category/subcategory from payload
 
         if "features" in validated_data and isinstance(validated_data["features"], str):
             try:
@@ -760,11 +738,11 @@ class ManagedClassSerializer(serializers.ModelSerializer):
 
 
 class ClassCreateSerializer(serializers.ModelSerializer):
-    """Serializer specifically for creating new classes."""
+    """Serializer specifically for creating new classes. Category/subcategory removed; use collections."""
 
-    category_key = serializers.CharField(write_only=True, required=True)
+    category_key = serializers.CharField(write_only=True, required=False, allow_blank=True)
     subcategory_key = serializers.CharField(
-        write_only=True, required=True, allow_blank=False
+        write_only=True, required=False, allow_blank=True
     )
     city = serializers.CharField(required=False, allow_blank=True, max_length=100)
     state = serializers.CharField(required=False, allow_blank=True, max_length=100)
@@ -789,37 +767,18 @@ class ClassCreateSerializer(serializers.ModelSerializer):
             "adminContactPhone",
         ]
 
-    def validate_category_key(self, value):
-        if not ClassCategory.objects.filter(key=value).exists():
-            raise serializers.ValidationError(f"Category with key '{value}' not found.")
-        return value
-
     def validate(self, data):
-        category_key = data.get("category_key")
-        subcategory_key = data.get("subcategory_key")
-
-        if subcategory_key and category_key:
-            category = ClassCategory.objects.filter(key=category_key).first()
-            if (
-                category
-                and not ClassSubcategory.objects.filter(
-                    category=category, key=subcategory_key
-                ).exists()
-            ):
-                raise serializers.ValidationError(
-                    {
-                        "subcategory_key": f"Subcategory '{subcategory_key}' not found in category '{category.name}'."
-                    }
-                )
+        # Category/subcategory deprecated; ignore if sent
         return data
 
     def create(self, validated_data):
-        category_key = validated_data.pop("category_key")
-        subcategory_key = validated_data.pop("subcategory_key", None)
+        validated_data.pop("category_key", None)
+        validated_data.pop("subcategory_key", None)
+        validated_data["category"] = None
+        validated_data["subcategory"] = None
 
         coordinates_str = validated_data.get("coordinates")
         point = None
-
         if coordinates_str:
             try:
                 lng_str, lat_str = map(str.strip, coordinates_str.split(","))
@@ -828,29 +787,6 @@ class ClassCreateSerializer(serializers.ModelSerializer):
                 logger.warning(
                     f"Could not parse coordinates on create: '{coordinates_str}'. Point will not be set."
                 )
-
-        try:
-            category = ClassCategory.objects.get(key=category_key)
-        except ClassCategory.DoesNotExist:
-            raise serializers.ValidationError(
-                {"category_key": f"Invalid category key: {category_key}"}
-            )
-
-        subcategory = None
-        if subcategory_key:
-            try:
-                subcategory = ClassSubcategory.objects.get(
-                    category=category, key=subcategory_key
-                )
-            except ClassSubcategory.DoesNotExist:
-                raise serializers.ValidationError(
-                    {
-                        "subcategory_key": f"Invalid subcategory key '{subcategory_key}' for the selected category."
-                    }
-                )
-
-        validated_data["category"] = category
-        validated_data["subcategory"] = subcategory
         validated_data["point"] = point
 
         instance = ClassesMain.objects.create(**validated_data)

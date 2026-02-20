@@ -81,7 +81,7 @@ class CollectionAutoAssigner:
             
             --- CLASS PROFILE ---
             Title: {cls.title}
-            Category: {cls.category.name}
+            Category: {getattr(cls.category, 'name', None) or 'Not set'}
             Description: {cls.description}
 
             --- CANDIDATE COLLECTIONS ---
