@@ -7,18 +7,17 @@ from quickstart.models import Payout, Booking  # Import Booking
 class PayoutBookingSerializer(serializers.ModelSerializer):
     """
     Serializer for displaying booking details within an expanded payout row.
+    Handles null schedule_instance, user, and contact for robustness.
     """
 
-    user_name = serializers.CharField(source="user.get_full_name", read_only=True)
-    class_name = serializers.CharField(
-        source="schedule_instance.schedule.option.classId.title", read_only=True
-    )
-    session_date = serializers.DateField(
-        source="schedule_instance.date", read_only=True
-    )
+    user_name = serializers.SerializerMethodField()
+    class_name = serializers.SerializerMethodField()
+    session_date = serializers.SerializerMethodField()
     net_amount_for_payout = serializers.SerializerMethodField()
     enrollment_type = serializers.CharField(source="enrollment_type", read_only=True)
-    course_session_number = serializers.IntegerField(source="course_session_number", read_only=True)
+    course_session_number = serializers.IntegerField(
+        source="course_session_number", read_only=True, allow_null=True
+    )
     total_sessions = serializers.SerializerMethodField()
 
     class Meta:
@@ -31,12 +30,39 @@ class PayoutBookingSerializer(serializers.ModelSerializer):
             "net_amount_for_payout",
             "enrollment_type",
             "course_session_number",
-            "total_sessions"
+            "total_sessions",
         ]
+
+    def get_user_name(self, obj):
+        if obj.user:
+            return obj.user.get_full_name() or getattr(obj.user, "email", "") or ""
+        if obj.contact:
+            return (
+                f"{getattr(obj.contact, 'first_name', '')} {getattr(obj.contact, 'last_name', '')}".strip()
+                or getattr(obj.contact, "email", "")
+                or "Guest"
+            )
+        return "Guest"
+
+    def get_class_name(self, obj):
+        try:
+            if (
+                obj.schedule_instance
+                and obj.schedule_instance.schedule
+                and obj.schedule_instance.schedule.option
+            ):
+                return obj.schedule_instance.schedule.option.classId.title
+        except Exception:
+            pass
+        return "—"
+
+    def get_session_date(self, obj):
+        if obj.schedule_instance and obj.schedule_instance.date:
+            return obj.schedule_instance.date
+        return None
 
     def get_total_sessions(self, obj):
         if obj.enrollment_type == "Full Course" and obj.booking_group_id:
-            # Optimization: This could be pre-fetched, but for now:
             return obj.sibling_bookings.count() + 1
         return 1
 
@@ -48,7 +74,6 @@ class PayoutBookingSerializer(serializers.ModelSerializer):
         payment = obj.payments.filter(status="succeeded").first()
         if payment:
             return payment.net_payout_amount
-
         return Decimal("0.00")
 
 
