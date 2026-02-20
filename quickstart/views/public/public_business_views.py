@@ -25,6 +25,7 @@ import logging
 from quickstart.models import (
     Booking,
     BusinessInfo,
+    ClassImage,
     ClassesMain,
     Reviews,
     Schedule,
@@ -144,7 +145,13 @@ class PublicBusinessInfoViewSet(viewsets.ReadOnlyModelViewSet):
 
             classes_queryset = (
                 ClassesMain.objects.filter(status="active")
-                .prefetch_related("images", "options")
+                .prefetch_related(
+                    Prefetch(
+                        "images",
+                        queryset=ClassImage.objects.order_by("-isCover", "createdAt"),
+                    ),
+                    "options",
+                )
                 .annotate(
                     min_session_price=Coalesce(min_session_price_subquery, None),
                     min_course_price=Coalesce(min_course_price_subquery, None),
