@@ -213,8 +213,6 @@ class AdminClassSerializer(serializers.ModelSerializer):
     max_price = serializers.DecimalField(
         max_digits=10, decimal_places=2, read_only=True, allow_null=True
     )
-    category = serializers.SerializerMethodField()
-    subcategory = serializers.SerializerMethodField()
     price_range = serializers.SerializerMethodField()
     platform_revenue = serializers.DecimalField(
         max_digits=10, decimal_places=2, read_only=True, default=Decimal("0.00")
@@ -226,8 +224,6 @@ class AdminClassSerializer(serializers.ModelSerializer):
             "classId",
             "title",
             "description",
-            "category",
-            "subcategory",
             "location",
             "min_price",
             "max_price", 
@@ -285,30 +281,7 @@ class AdminClassSerializer(serializers.ModelSerializer):
         else:
             return {"min": min_price_dec, "max": max_price_dec, "single_price": False}
 
-    def get_category(self, obj):
-        if obj.category:
-            return {
-                "id": obj.category.id,
-                "name": obj.category.name,
-                "key": obj.category.key,
-                "color": obj.category.color,
-            }
-            # The original code had a 'return None' here, which makes this 'if' block always return None.
-            # Assuming you meant to return the dictionary if a category exists.
-        return None
-
-    def get_subcategory(self, obj):
-        if obj.subcategory:
-            return {
-                "id": obj.subcategory.id,
-                "name": obj.subcategory.name,
-                "key": obj.subcategory.key,
-            }
-            # Same as above, assuming you meant to return the dictionary.
-        return None
-
-
-# --- AdminReviewSerializer ---
+    # --- AdminReviewSerializer ---
 class AdminReviewSerializer(serializers.ModelSerializer):
     user = serializers.SerializerMethodField()
     className = serializers.CharField(source="classId.title", read_only=True)
@@ -412,8 +385,6 @@ class AdminClassCreateSerializer(serializers.ModelSerializer):
         fields = [
             "title",
             "description",
-            "category",
-            "subcategory",
             "location",
             "coordinates",
             "status",

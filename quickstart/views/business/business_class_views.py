@@ -155,7 +155,6 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
         "title",
         "description",
         "options__title",
-        "category__name",
         "status",
     ]
     ordering_fields = [
@@ -221,7 +220,7 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
         return (
             ClassesMain.objects.filter(businessId=business)
             .exclude(status="suspended")
-            .select_related("businessId", "category", "subcategory")
+            .select_related("businessId")
             .prefetch_related(
                 Prefetch(
                     "images",
@@ -292,10 +291,6 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
 
         # 5. Revalidate cache tags to update explore/search pages
         tags_to_revalidate = ["classes-search", "homepage-classes", "classes"]
-        if class_instance.category and hasattr(class_instance.category, "key"):
-            tags_to_revalidate.append(f"category-{class_instance.category.key}")
-        if class_instance.subcategory and hasattr(class_instance.subcategory, "key"):
-            tags_to_revalidate.append(f"subcategory-{class_instance.subcategory.key}")
 
         for tag in tags_to_revalidate:
             trigger_nextjs_revalidation(tag=tag)
@@ -438,10 +433,6 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
         user = self.request.user
         request_data = self.request.data
 
-        # --- Get old category/subcategory keys BEFORE update for comparison ---
-        old_category_key = instance.category.key if instance.category else None
-        old_subcategory_key = instance.subcategory.key if instance.subcategory else None
-
         with transaction.atomic():
             updated_instance = serializer.save()
             logger.info(
@@ -568,19 +559,6 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
 
         # --- Trigger revalidation for the updated class ---
         self._trigger_class_revalidation(updated_instance)
-
-        # --- Revalidate old category tags if they have changed ---
-        new_category_key = (
-            updated_instance.category.key if updated_instance.category else None
-        )
-        new_subcategory_key = (
-            updated_instance.subcategory.key if updated_instance.subcategory else None
-        )
-
-        if old_category_key and old_category_key != new_category_key:
-            trigger_nextjs_revalidation(tag=f"category-{old_category_key}")
-        if old_subcategory_key and old_subcategory_key != new_subcategory_key:
-            trigger_nextjs_revalidation(tag=f"subcategory-{old_subcategory_key}")
 
     def perform_destroy(self, instance):
         # --- Capture instance data before modification ---

@@ -44,7 +44,6 @@ from quickstart.utils.permissions import (
 from quickstart.models import (
     AuditLog,
     BusinessInfo,
-    ClassCategory,
     ClassOption,
     Booking,
     ClassesMain,
@@ -192,13 +191,9 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
             ),
         )
 
-        category = self.request.query_params.get("category", None)
         status_param = self.request.query_params.get("status", None)
         featured = self.request.query_params.get("featured", None)
 
-        if category:
-            # FIX: Filter by the category of the business's classes, and get distinct businesses.
-            queryset = queryset.filter(classes__category__key=category).distinct()
         if status_param:
             queryset = queryset.filter(status=status_param)
         if featured is not None:
@@ -282,9 +277,7 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
 
                 # 2. Collect tags for all classes belonging to this business
                 #    (Since the business status affects the visibility of ALL its classes)
-                business_classes = ClassesMain.objects.filter(
-                    businessId=instance
-                ).select_related("category", "subcategory")
+                business_classes = ClassesMain.objects.filter(businessId=instance)
 
                 tags_to_revalidate = [
                     "classes-search",
@@ -298,14 +291,6 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
                     # Tag for the class detail page
                     if class_obj.slug:
                         tags_to_revalidate.append(f"class-{class_obj.slug}")
-                    
-                    # Tag for the category listing (listing count/content might change)
-                    if class_obj.category and hasattr(class_obj.category, "key"):
-                        tags_to_revalidate.append(f"category-{class_obj.category.key}")
-                    
-                    # Tag for the subcategory listing
-                    if class_obj.subcategory and hasattr(class_obj.subcategory, "key"):
-                        tags_to_revalidate.append(f"subcategory-{class_obj.subcategory.key}")
 
                 # 3. Trigger Bulk Revalidation
                 if tags_to_revalidate:
@@ -456,9 +441,7 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
             logger.info(f"Revalidated business page: business-{business.slug}")
 
         # 2. Revalidate all classes belonging to this business
-        business_classes = ClassesMain.objects.filter(
-            businessId=business
-        ).select_related("category", "subcategory")
+        business_classes = ClassesMain.objects.filter(businessId=business)
 
         class_paths = []
         class_tags = []
@@ -469,12 +452,6 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
                 class_tags.append(f"class-{class_obj.slug}")
 
                 # Also collect categories for bulk revalidation
-                if class_obj.category and hasattr(class_obj.category, "key"):
-                    categories_to_revalidate.add(f"category-{class_obj.category.key}")
-                if class_obj.subcategory and hasattr(class_obj.subcategory, "key"):
-                    categories_to_revalidate.add(
-                        f"subcategory-{class_obj.subcategory.key}"
-                    )
 
         # Bulk revalidate all class tags
         if class_tags:
@@ -553,20 +530,9 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
         )
         total_platform_revenue = total_platform_revenue_agg["total"]
 
-        # FIX: Rewrote the query to correctly count distinct businesses per category.
-        category_distribution_qs = (
-            ClassCategory.objects.annotate(
-                count=Count("classes_in_category__businessId", distinct=True)
-            )
-            .filter(count__gt=0)
-            .values("name", "count", "color")
-            .order_by("-count")
-        )
-
-        category_distribution = [
-            {"name": item["name"], "value": item["count"], "color": item["color"]}
-            for item in category_distribution_qs
-        ]
+        # Category distribution deprecated (ClassesMain no longer has category FK).
+        # Use empty list; consider collection_distribution if needed.
+        category_distribution = []
 
         monthly_growth_data = self._get_growth_data("month", 6)
 

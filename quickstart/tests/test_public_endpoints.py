@@ -261,8 +261,7 @@ class TestGuestBookingCancellation:
     def test_guest_cancel_get_returns_booking_info(self, api_client):
         """GET guest-cancel/<token> returns booking details when valid and confirmed."""
         business = BusinessFactory(isActive=True, verificationStatus="verified")
-        category = ClassCategoryFactory()
-        klass = ClassMainFactory(businessId=business, category=category, status="active")
+        klass = ClassMainFactory(businessId=business, status="active")
         option = ClassOptionFactory(classId=klass, cancellationPolicy="flexible")
         schedule = ScheduleFactory(option=option)
         instance = ScheduleInstanceFactory(
@@ -298,8 +297,7 @@ class TestGuestBookingCancellation:
     def test_guest_cancel_get_400_when_booking_not_active(self, api_client):
         """GET guest-cancel/<token> returns 400 when booking is already cancelled."""
         business = BusinessFactory(isActive=True, verificationStatus="verified")
-        category = ClassCategoryFactory()
-        klass = ClassMainFactory(businessId=business, category=category, status="active")
+        klass = ClassMainFactory(businessId=business, status="active")
         option = ClassOptionFactory(classId=klass, cancellationPolicy="flexible")
         schedule = ScheduleFactory(option=option)
         instance = ScheduleInstanceFactory(
@@ -336,8 +334,7 @@ class TestGuestBookingCancellation:
             verificationStatus="verified",
             cancellationNotification=False,
         )
-        category = ClassCategoryFactory()
-        klass = ClassMainFactory(businessId=business, category=category, status="active")
+        klass = ClassMainFactory(businessId=business, status="active")
         option = ClassOptionFactory(classId=klass, cancellationPolicy="flexible")
         schedule = ScheduleFactory(option=option)
         instance = ScheduleInstanceFactory(

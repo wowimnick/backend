@@ -1254,20 +1254,6 @@ class ClassesMain(models.Model):
     title = models.CharField(max_length=100)
     description = models.TextField(max_length=4000)
     features = models.JSONField(default=list)
-    category = models.ForeignKey(
-        ClassCategory,
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        related_name="classes_in_category",
-    )
-    subcategory = models.ForeignKey(
-        ClassSubcategory,
-        on_delete=models.PROTECT,
-        related_name="classes_in_subcategory",
-        null=True,
-        blank=True,
-    )
     STATUS_CHOICES = [
         ("active", "Active"),
         ("inactive", "Inactive"),

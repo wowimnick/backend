@@ -93,7 +93,7 @@ class MyFavoritesListView(generics.ListAPIView):
         # The 'related_name' from Favorites -> ClassesMain is 'favorited_by_records'.
         queryset = (
             ClassesMain.objects.filter(favorited_by_records__userId=user)
-            .select_related("businessId", "category", "subcategory")
+            .select_related("businessId")
             .prefetch_related("images", "options__schedules")
             .filter(  # Ensure only active/verified classes/businesses appear even in favorites
                 status="active",

@@ -500,7 +500,7 @@ class PublicCollectionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ClassCollection
-        fields = ['id', 'name', 'slug', 'key', 'description', 'image_medium_url'] 
+        fields = ['id', 'name', 'slug', 'key', 'description', 'image_medium_url', 'sort_order'] 
 
     def _get_resized_url(self, obj, size_name):
         """

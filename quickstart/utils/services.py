@@ -1,5 +1,6 @@
 import logging
 import json
+import re
 from django.conf import settings
 from quickstart.models import ClassCollection
 
@@ -18,11 +19,11 @@ class CollectionAutoAssigner:
         if class_instance.status != 'active':
             return
 
-        # Fetch Automated Collections
+        # Fetch Automated Collections (order by sort_order for consistency)
         automated_collections = ClassCollection.objects.filter(
-            type="automated", 
-            is_active=True
-        ).exclude(automation_rules__exact={})
+            type="automated",
+            is_active=True,
+        ).exclude(automation_rules__exact={}).order_by("sort_order")
 
         if not automated_collections.exists():
             return
@@ -81,7 +82,6 @@ class CollectionAutoAssigner:
             
             --- CLASS PROFILE ---
             Title: {cls.title}
-            Category: {getattr(cls.category, 'name', None) or 'Not set'}
             Description: {cls.description}
 
             --- CANDIDATE COLLECTIONS ---
@@ -114,12 +114,62 @@ class CollectionAutoAssigner:
             # --- LOG OUTPUT ---
             if response.text:
                 logger.info(f"🤖 LLM RAW RESPONSE: {response.text}")
-                data = json.loads(response.text)
-                return data.get("matched_ids", [])
-            
+                matched_ids = self._parse_llm_json_response(response.text)
+                return matched_ids
+
             logger.warning(f"LLM returned empty response for '{cls.title}'")
             return []
 
         except Exception as e:
             logger.error(f"LLM API failed for class {cls.classId}: {e}")
             return []
+
+    def _parse_llm_json_response(self, raw_text):
+        """
+        Parse LLM JSON response robustly. Handles invalid JSON such as
+        single-quoted keys, trailing commas, or markdown code fences.
+        """
+        if not raw_text or not raw_text.strip():
+            return []
+
+        text = raw_text.strip()
+
+        # Remove markdown code block if present
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text)
+            text = re.sub(r"\s*```\s*$", "", text)
+
+        # 1) Try standard json.loads first
+        try:
+            data = json.loads(text)
+            ids = data.get("matched_ids", [])
+            return [int(x) for x in ids if isinstance(x, (int, float)) or str(x).isdigit()]
+        except json.JSONDecodeError:
+            pass
+
+        # 2) Try removing trailing commas (invalid in JSON but sometimes emitted by LLMs)
+        try:
+            fixed = re.sub(r",\s*([}\]])", r"\1", text)
+            data = json.loads(fixed)
+            ids = data.get("matched_ids", [])
+            return [int(x) for x in ids if isinstance(x, (int, float)) or str(x).isdigit()]
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+        # 3) Fallback: extract matched_ids array with regex (handles single/double quotes, markdown)
+        try:
+            for pattern in [
+                r'"matched_ids"\s*:\s*\[([^\]]*)\]',
+                r"'matched_ids'\s*:\s*\[([^\]]*)\]",
+                r"matched_ids\s*:\s*\[([^\]]*)\]",
+            ]:
+                match = re.search(pattern, text)
+                if match:
+                    inner = match.group(1)
+                    ids = [int(part) for part in re.findall(r"\d+", inner)]
+                    return ids
+        except (TypeError, ValueError) as e:
+            logger.warning(f"Regex fallback failed for LLM response: {e}")
+
+        logger.warning("Could not parse matched_ids from LLM response; returning empty list.")
+        return []

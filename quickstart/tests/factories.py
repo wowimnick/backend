@@ -122,8 +122,6 @@ class ClassMainFactory(DjangoModelFactory):
     slug = factory.Sequence(lambda n: f"test-class-{n}")
     description = "A test class description."
     features = []
-    category = factory.SubFactory(ClassCategoryFactory)
-    subcategory = None
     status = "active"
     location = "123 Studio St"
     city = "Toronto"

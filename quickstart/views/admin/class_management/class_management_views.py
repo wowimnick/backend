@@ -110,7 +110,7 @@ class AdminClassViewSet(viewsets.ModelViewSet):
         "trace",
     ]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ["title", "businessId__businessName", "category__name", "location"]
+    search_fields = ["title", "businessId__businessName", "location"]
     ordering_fields = [
         "title",
         "createdAt",
@@ -138,7 +138,7 @@ class AdminClassViewSet(viewsets.ModelViewSet):
         try:
             queryset = (
                 ClassesMain.objects.select_related(
-                    "businessId", "category", "subcategory", "businessId__owner"
+                    "businessId", "businessId__owner"
                 )
                 .prefetch_related(
                     Prefetch(
@@ -269,9 +269,6 @@ class AdminClassViewSet(viewsets.ModelViewSet):
             )
 
             # --- Filtering Logic ---
-            category_id = self.request.query_params.get("category_id")
-            if category_id and category_id.isdigit():
-                queryset = queryset.filter(category_id=category_id)
 
             status_filter = self.request.query_params.get("status")
             if status_filter and status_filter != "all":
@@ -417,17 +414,6 @@ class AdminClassViewSet(viewsets.ModelViewSet):
             if instance.businessId and hasattr(instance.businessId, "slug")
             else None
         )
-        category_key = (
-            instance.category.key
-            if instance.category and hasattr(instance.category, "key")
-            else None
-        )
-        subcategory_key = (
-            instance.subcategory.key
-            if instance.subcategory and hasattr(instance.subcategory, "key")
-            else None
-        )
-
         logger.warning(
             f"Class '{class_title}' (ID: {instance.pk}) deleted by Admin {request.user.email}"
         )
@@ -444,11 +430,6 @@ class AdminClassViewSet(viewsets.ModelViewSet):
         trigger_nextjs_revalidation(tag="classes-search")
         trigger_nextjs_revalidation(tag="homepage-classes")
         trigger_nextjs_revalidation(tag="classes")
-
-        if category_key:
-            trigger_nextjs_revalidation(tag=f"category-{category_key}")
-        if subcategory_key:
-            trigger_nextjs_revalidation(tag=f"subcategory-{subcategory_key}")
 
         logger.info(f"Revalidated pages after deletion of class '{class_title}'")
 
@@ -591,53 +572,6 @@ class AdminClassViewSet(viewsets.ModelViewSet):
             else:
                 combined_avg_rating = 0.0
 
-            # Define the filter to be reused
-            active_class_filter = Q(
-                classes_in_category__status="active",
-                classes_in_category__businessId__isActive=True,
-            )
-
-            # --- Category Stats ---
-            category_counts_qs = (
-                ClassCategory.objects.annotate(
-                    class_count=Count(
-                        "classes_in_category", filter=active_class_filter, distinct=True
-                    )
-                )
-                .values("id", "name", "key", "color", "class_count")
-                .order_by("-class_count")
-            )
-            total_categories = ClassCategory.objects.count()
-            total_subcategories = ClassSubcategory.objects.count()
-
-            # Define the filter for subcategories to be reused
-            active_subclass_filter = Q(
-                classes_in_subcategory__status="active",
-                classes_in_subcategory__businessId__isActive=True,
-            )
-
-            # --- Subcategory Stats ---
-            subcategory_counts_qs = (
-                ClassSubcategory.objects.select_related("category")
-                .annotate(
-                    class_count=Count(
-                        "classes_in_subcategory",
-                        filter=active_subclass_filter,
-                        distinct=True,
-                    )
-                )
-                .filter(class_count__gt=0)
-                .values(
-                    "id",
-                    "name",
-                    "key",
-                    "category_id",
-                    "category__color",
-                    "class_count",
-                )
-                .order_by("-class_count")
-            )
-
             # --- Top 5 Performers (Bookings & Ratings) ---
             popular_classes_qs = (
                 ClassesMain.objects.annotate(
@@ -684,10 +618,6 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                     "googleReviews": google_review_count,
                     "scheduleWarningsCount": schedule_warnings_count,
                     "classesWithLowSchedules": classes_with_low_schedules[:10],
-                    "totalCategories": total_categories,
-                    "totalSubcategories": total_subcategories,
-                    "categoryClassCounts": list(category_counts_qs),
-                    "subcategoryClassCounts": list(subcategory_counts_qs),
                     "featuredClasses": featured_classes_count,
                     "statusCounts": status_counts,
                     "popularClasses": popular_classes_data,
@@ -722,10 +652,6 @@ class AdminClassViewSet(viewsets.ModelViewSet):
         trigger_nextjs_revalidation(path="/")
 
         tags_to_revalidate = ["classes-search", "homepage-classes", "classes"]
-        if class_instance.category and hasattr(class_instance.category, "key"):
-            tags_to_revalidate.append(f"category-{class_instance.category.key}")
-        if class_instance.subcategory and hasattr(class_instance.subcategory, "key"):
-            tags_to_revalidate.append(f"subcategory-{class_instance.subcategory.key}")
 
         for tag in tags_to_revalidate:
             trigger_nextjs_revalidation(tag=tag)
@@ -751,25 +677,8 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
     parser_classes = [JSONParser, FormParser]
 
     def get_queryset(self):
-        # Using get_queryset to handle annotations centrally
-        queryset = super().get_queryset()
-
-        # Prefetch subcategories with their own class counts
-        subcat_queryset = ClassSubcategory.objects.annotate(
-            class_count=Count("classes_in_subcategory", distinct=True)
-        )
-
-        # Annotate categories with their class counts
-        annotated_queryset = queryset.annotate(
-            active_classes=Count(
-                "classes_in_category",
-                filter=Q(classes_in_category__status="active"),
-                distinct=True,
-            ),
-            class_count=Count("classes_in_category", distinct=True),
-        ).prefetch_related(Prefetch("subcategories", queryset=subcat_queryset))
-
-        return annotated_queryset
+        # ClassesMain no longer has category/subcategory FK; no class counts to annotate.
+        return super().get_queryset()
 
     def create(self, request, *args, **kwargs):
         if not request.user.has_perm("quickstart.add_classcategory"):
@@ -839,16 +748,7 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
 
         instance = self.get_object()
 
-        if instance.classes_in_category.exists():
-            return Response(
-                {
-                    "error": "This category is in use. Please use the reassignment workflow.",
-                    "code": "reassignment_required",
-                    "class_count": instance.classes_in_category.count(),
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
+        # ClassesMain no longer has category FK; no classes reference categories.
         category_name = instance.name
         category_key = instance.key  # Capture before deletion
 
@@ -928,27 +828,18 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # MODIFIED: When reassigning a category, the subcategory MUST be cleared.
-        updated_count = ClassesMain.objects.filter(category=category_to_delete).update(
-            category=new_category, subcategory=None
-        )
-
-        logger.info(
-            f"{updated_count} classes reassigned from Category '{category_to_delete.name}' to '{new_category.name}' and subcategories cleared."
-        )
-
-        # Now, delete the old category (this will cascade to its subcategories)
+        # ClassesMain no longer has category/subcategory FK; no reassignment to perform.
+        updated_count = 0
         category_name = category_to_delete.name
-        category_key = category_to_delete.key  # Capture before deletion
+        category_key = category_to_delete.key
         new_category_key = new_category.key
 
         category_to_delete.delete()
 
         logger.warning(
-            f"Category '{category_name}' (ID: {pk}) deleted after reassigning classes by Admin {request.user.email}."
+            f"Category '{category_name}' (ID: {pk}) deleted (reassignment no-op; classes no longer use category) by Admin {request.user.email}."
         )
 
-        # --- ADDED: Trigger revalidation after category deletion with reassignment ---
         trigger_nextjs_revalidation(path="/")
         trigger_nextjs_revalidation(tag="classes-search")
         trigger_nextjs_revalidation(tag="homepage-classes")
@@ -956,12 +847,12 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
         trigger_nextjs_revalidation(tag=f"category-{new_category_key}")
 
         logger.info(
-            f"Revalidated homepage and class pages after category reassignment and deletion"
+            "Revalidated homepage and class pages after category deletion"
         )
 
         return Response(
             {
-                "detail": f"Successfully reassigned {updated_count} classes and deleted category '{category_name}'."
+                "detail": f"Successfully deleted category '{category_name}'."
             },
             status=status.HTTP_200_OK,
         )
@@ -1067,16 +958,7 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
                     request, message="You cannot delete subcategories."
                 )
 
-            if subcategory.classes_in_subcategory.exists():
-                return Response(
-                    {
-                        "error": "This subcategory is in use. Please use the reassignment workflow.",
-                        "code": "reassignment_required",
-                        "class_count": subcategory.classes_in_subcategory.count(),
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
+            # ClassesMain no longer has subcategory FK; no classes reference subcategories.
             subcategory_name = subcategory.name
             subcategory.delete()
             logger.warning(
@@ -1118,19 +1000,8 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # MODIFIED: Update BOTH subcategory and category to match the new subcategory's parent.
-        updated_count = ClassesMain.objects.filter(
-            subcategory=subcategory_to_delete
-        ).update(
-            subcategory=new_subcategory,
-            category=new_subcategory.category # Ensure the parent category changes too
-        )
-
-        logger.info(
-            f"{updated_count} classes reassigned from Subcategory '{subcategory_to_delete.name}' "
-            f"(Cat: {category.name}) to '{new_subcategory.name}' (Cat: {new_subcategory.category.name})."
-        )
-
+        # ClassesMain no longer has subcategory/category FK; no reassignment to perform.
+        updated_count = 0
         subcategory_name = subcategory_to_delete.name
         old_category_key = category.key
         new_category_key = new_subcategory.category.key
@@ -1138,10 +1009,9 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
         subcategory_to_delete.delete()
 
         logger.warning(
-            f"Subcategory '{subcategory_name}' deleted after reassigning classes by Admin {request.user.email}."
+            f"Subcategory '{subcategory_name}' deleted (reassignment no-op; classes no longer use subcategory) by Admin {request.user.email}."
         )
 
-        # --- ADDED: Trigger revalidation for homepage, search, old category, and new category ---
         trigger_nextjs_revalidation(path="/")
         trigger_nextjs_revalidation(tag="classes-search")
         trigger_nextjs_revalidation(tag="homepage-classes")
@@ -1151,7 +1021,7 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
 
         return Response(
             {
-                "detail": f"Successfully reassigned {updated_count} classes and deleted subcategory '{subcategory_name}'."
+                "detail": f"Successfully deleted subcategory '{subcategory_name}'."
             },
             status=status.HTTP_200_OK,
         )

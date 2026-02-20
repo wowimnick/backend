@@ -16,7 +16,6 @@ from quickstart.tests.factories import (
     UserFactory,
     BusinessFactory,
     ContactFactory,
-    ClassCategoryFactory,
     ClassMainFactory,
     ClassOptionFactory,
     ScheduleFactory,
@@ -60,10 +59,8 @@ def business():
 @pytest.fixture
 def public_class(business):
     """A class belonging to the given business, for public class endpoints."""
-    category = ClassCategoryFactory()
     return ClassMainFactory(
         businessId=business,
-        category=category,
         status="active",
         slug="test-class-slug",
     )

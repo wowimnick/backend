@@ -607,18 +607,6 @@ class ManagedClassSerializer(serializers.ModelSerializer):
     business_name = serializers.CharField(
         source="businessId.businessName", read_only=True
     )
-    category_key = serializers.CharField(
-        required=False, allow_blank=True, write_only=True
-    )
-    subcategory_key = serializers.CharField(
-        required=False, allow_blank=True, write_only=True
-    )
-    category_name = serializers.CharField(
-        source="category.name", read_only=True, allow_null=True
-    )
-    subcategory_name = serializers.CharField(
-        source="subcategory.name", read_only=True, allow_null=True
-    )
     average_rating = serializers.FloatField(read_only=True)
     review_count = serializers.IntegerField(read_only=True)
     last_schedule_date = serializers.DateField(read_only=True, allow_null=True)
@@ -631,8 +619,6 @@ class ManagedClassSerializer(serializers.ModelSerializer):
             "title",
             "description",
             "features",
-            "category",
-            "subcategory",
             "status",
             "unit_number",
             "location",
@@ -649,10 +635,6 @@ class ManagedClassSerializer(serializers.ModelSerializer):
             "options",
             "images",
             "business_name",
-            "category_key",
-            "category_name",
-            "subcategory_key",
-            "subcategory_name",
             "average_rating",
             "review_count",
             "last_schedule_date",
@@ -665,50 +647,12 @@ class ManagedClassSerializer(serializers.ModelSerializer):
             "options",
             "images",
             "business_name",
-            "category_name",
-            "subcategory_name",
             "average_rating",
             "review_count",
             "last_schedule_date",
         ]
 
-    def to_representation(self, instance):
-        ret = super().to_representation(instance)
-        ret["category_key"] = instance.category.key if instance.category else None
-        ret["subcategory_key"] = (
-            instance.subcategory.key if instance.subcategory else None
-        )
-        return ret
-
-    def validate_category_key(self, value):
-        if not value or not value.strip():
-            return value
-        if not ClassCategory.objects.filter(key=value.strip()).exists():
-            raise serializers.ValidationError(
-                f"Category with key '{value}' not found."
-            )
-        return value.strip()
-
-    def validate(self, data):
-        category_key = data.get("category_key")
-        subcategory_key = data.get("subcategory_key")
-        if subcategory_key and category_key:
-            category = ClassCategory.objects.filter(key=category_key).first()
-            if category and not ClassSubcategory.objects.filter(
-                category=category, key=subcategory_key
-            ).exists():
-                raise serializers.ValidationError(
-                    {
-                        "subcategory_key": f"Subcategory '{subcategory_key}' not found in category '{category.name}'."
-                    }
-                )
-        return data
-
     def update(self, instance, validated_data):
-        validated_data.pop("category_key", None)
-        validated_data.pop("subcategory_key", None)
-        # Categories removed from platform; do not write category/subcategory from payload
-
         if "features" in validated_data and isinstance(validated_data["features"], str):
             try:
                 validated_data["features"] = json.loads(validated_data["features"])
@@ -738,12 +682,8 @@ class ManagedClassSerializer(serializers.ModelSerializer):
 
 
 class ClassCreateSerializer(serializers.ModelSerializer):
-    """Serializer specifically for creating new classes. Category/subcategory removed; use collections."""
+    """Serializer for creating new classes. Use collections for grouping."""
 
-    category_key = serializers.CharField(write_only=True, required=False, allow_blank=True)
-    subcategory_key = serializers.CharField(
-        write_only=True, required=False, allow_blank=True
-    )
     city = serializers.CharField(required=False, allow_blank=True, max_length=100)
     state = serializers.CharField(required=False, allow_blank=True, max_length=100)
 
@@ -753,8 +693,6 @@ class ClassCreateSerializer(serializers.ModelSerializer):
             "title",
             "description",
             "features",
-            "category_key",
-            "subcategory_key",
             "location",
             "unit_number",
             "coordinates",
@@ -772,11 +710,6 @@ class ClassCreateSerializer(serializers.ModelSerializer):
         return data
 
     def create(self, validated_data):
-        validated_data.pop("category_key", None)
-        validated_data.pop("subcategory_key", None)
-        validated_data["category"] = None
-        validated_data["subcategory"] = None
-
         coordinates_str = validated_data.get("coordinates")
         point = None
         if coordinates_str:

@@ -805,20 +805,6 @@ def get_classesmain_search_vector(instance):
                 Value(instance.businessId.businessName), weight="B", config="english"
             )
         )
-    if instance.category:
-        vector_components.append(
-            SearchVector(
-                Value(instance.category.name), weight="C", config="pg_catalog.english"
-            )
-        )
-    if instance.subcategory:
-        vector_components.append(
-            SearchVector(
-                Value(instance.subcategory.name),
-                weight="D",
-                config="pg_catalog.english",
-            )
-        )
     if not vector_components:
         return SearchVector(Value(""))
     final_vector = vector_components[0]
@@ -867,30 +853,14 @@ def classoption_change_receiver(sender, instance, **kwargs):
 
 @receiver(post_save, sender="quickstart.ClassCategory")
 def classcategory_change_receiver(sender, instance, update_fields, **kwargs):
-    if kwargs.get("raw", False):
-        return
-    if update_fields is None or "name" in update_fields:
-        with transaction.atomic():
-            for class_instance in instance.classes_in_category.iterator():
-                new_vector = get_classesmain_search_vector(class_instance)
-                if class_instance.search_vector != new_vector:
-                    ClassesMain.objects.filter(pk=class_instance.pk).update(
-                        search_vector=new_vector
-                    )
+    # ClassesMain no longer has category FK; no classes to reindex.
+    pass
 
 
 @receiver(post_save, sender="quickstart.ClassSubcategory")
 def classsubcategory_change_receiver(sender, instance, update_fields, **kwargs):
-    if kwargs.get("raw", False):
-        return
-    if update_fields is None or "name" in update_fields:
-        with transaction.atomic():
-            for class_instance in instance.classes_in_subcategory.iterator():
-                new_vector = get_classesmain_search_vector(class_instance)
-                if class_instance.search_vector != new_vector:
-                    ClassesMain.objects.filter(pk=class_instance.pk).update(
-                        search_vector=new_vector
-                    )
+    # ClassesMain no longer has subcategory FK; no classes to reindex.
+    pass
 
 
 @receiver(post_save, sender=CustomUser)
