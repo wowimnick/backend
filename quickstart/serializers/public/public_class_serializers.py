@@ -469,6 +469,14 @@ class HomepageClassSerializer(PublicClassSerializer):
         return f"{day_str} {time_str}"
 
 
+class PublicCollectionMinimalSerializer(serializers.ModelSerializer):
+    """Minimal collection info for class detail (name + slug for display and explore link)."""
+
+    class Meta:
+        model = ClassCollection
+        fields = ["name", "slug"]
+
+
 class PublicClassDetailSerializer(PublicClassSerializer):
     """
     The serializer for the class DETAIL VIEW (`/api/classes/<id>/`).
@@ -483,16 +491,19 @@ class PublicClassDetailSerializer(PublicClassSerializer):
         source="review_count", read_only=True
     )
     google_review_count = serializers.SerializerMethodField()
+    collections = PublicCollectionMinimalSerializer(many=True, read_only=True)
 
     class Meta(PublicClassSerializer.Meta):
         fields = PublicClassSerializer.Meta.fields + [
             "platform_review_count",
             "google_review_count",
+            "collections",
         ]
 
     def get_google_review_count(self, obj):
         google_stats = self._get_google_review_stats(obj)
         return google_stats.get("google_count") or 0
+
 
 class PublicCollectionSerializer(serializers.ModelSerializer):
     image_medium_url = serializers.SerializerMethodField()

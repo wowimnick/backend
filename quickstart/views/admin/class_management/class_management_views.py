@@ -1098,6 +1098,7 @@ class AdminCollectionViewSet(viewsets.ModelViewSet):
         if response.status_code == status.HTTP_201_CREATED:
             trigger_nextjs_revalidation(path="/")
             trigger_nextjs_revalidation(tag="homepage-content")
+            trigger_nextjs_revalidation(tag="collections")
             new_slug = response.data.get("slug") if response.data else None
             self._invalidate_collection_caches(collection_slug=new_slug)
             logger.info("Created collection and triggered revalidation + prewarm")
@@ -1109,6 +1110,7 @@ class AdminCollectionViewSet(viewsets.ModelViewSet):
         if response.status_code == status.HTTP_200_OK:
             trigger_nextjs_revalidation(path="/")
             trigger_nextjs_revalidation(tag="homepage-content")
+            trigger_nextjs_revalidation(tag="collections")
             self._invalidate_collection_caches(collection_slug=instance.slug)
             logger.info("Updated collection and triggered revalidation + prewarm")
         return response
@@ -1120,6 +1122,7 @@ class AdminCollectionViewSet(viewsets.ModelViewSet):
         if response.status_code == status.HTTP_204_NO_CONTENT:
             trigger_nextjs_revalidation(path="/")
             trigger_nextjs_revalidation(tag="homepage-content")
+            trigger_nextjs_revalidation(tag="collections")
             self._invalidate_collection_caches(collection_slug=doomed_slug)
             logger.info("Deleted collection and triggered revalidation + prewarm")
         return response
@@ -1142,6 +1145,7 @@ class AdminCollectionViewSet(viewsets.ModelViewSet):
                         ClassCollection.objects.filter(pk=c_id).update(sort_order=order)
 
             trigger_nextjs_revalidation(tag="homepage-content")
+            trigger_nextjs_revalidation(tag="collections")
             self._invalidate_collection_caches()
             return Response({"status": "success"})
         except Exception as e:

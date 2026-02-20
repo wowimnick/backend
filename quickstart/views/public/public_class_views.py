@@ -642,7 +642,8 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                         Q(date__gte=timezone.now().date())
                         | Q(end_date__gte=timezone.now().date())
                     ).order_by("date", "time"),
-                )
+                ),
+                "collections",
             )
             
         return queryset.distinct()
