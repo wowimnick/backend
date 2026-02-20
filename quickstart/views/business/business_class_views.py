@@ -45,6 +45,7 @@ from quickstart.serializers.admin.class_management.class_management_serializers 
     AdminClassCategorySerializer,
 )
 from quickstart.utils.revalidation import trigger_nextjs_revalidation
+from quickstart.views.public.public_business_views import invalidate_business_detail_cache
 from quickstart.utils.email_utils import send_booking_cancelled_by_other_email
 
 from quickstart.models import (
@@ -282,9 +283,10 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
         # 3. Revalidate the homepage to update the "Find a Class" section
         trigger_nextjs_revalidation(path="/")
 
-        # 4. Revalidate the business page (tag + path) so profile and upcoming classes/cover images refresh
+        # 4. Revalidate the business page (tag + path) and invalidate Django API cache so cover/classes refresh
         if class_instance.businessId and hasattr(class_instance.businessId, "slug"):
             business_slug = class_instance.businessId.slug
+            invalidate_business_detail_cache(business_slug)
             trigger_nextjs_revalidation(tag=f"business-{business_slug}")
             trigger_nextjs_revalidation(path=f"/business/{business_slug}")
             logger.info("Revalidated business page: business-%s and path /business/%s", business_slug, business_slug)

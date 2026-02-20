@@ -4,9 +4,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
-from django.utils.decorators import method_decorator
-from django.views.decorators.cache import cache_page
-from django.views.decorators.vary import vary_on_headers
+from django.core.cache import cache
 from django.db.models import (
     Prefetch,
     Subquery,
@@ -43,6 +41,26 @@ from quickstart.serializers.public.public_review_serializers import (
 
 logger = logging.getLogger(__name__)
 
+BUSINESS_DETAIL_CACHE_PREFIX = "business_detail"
+BUSINESS_DETAIL_CACHE_VERSION_PREFIX = "business_detail_version"
+BUSINESS_DETAIL_CACHE_TTL = 60 * 60 * 24  # 24 hours
+
+
+def invalidate_business_detail_cache(slug):
+    """
+    Invalidate cached business detail API response for this slug.
+    Call when the business or any of its classes (e.g. cover image) change,
+    so Next.js revalidation gets fresh data from the API.
+    """
+    if not slug:
+        return
+    try:
+        version = cache.get(f"{BUSINESS_DETAIL_CACHE_VERSION_PREFIX}:{slug}", 0) or 0
+        cache.set(f"{BUSINESS_DETAIL_CACHE_VERSION_PREFIX}:{slug}", version + 1, timeout=None)
+        logger.info("Invalidated business detail cache for slug=%s (version -> %s)", slug, version + 1)
+    except Exception as e:
+        logger.warning("Failed to invalidate business detail cache for slug=%s: %s", slug, e)
+
 
 class BusinessPagination(PageNumberPagination):
     page_size = 10
@@ -70,14 +88,30 @@ class PublicBusinessInfoViewSet(viewsets.ReadOnlyModelViewSet):
             return PublicBusinessDetailSerializer
         return PublicBusinessInfoSerializer
 
-    # --- CACHING IMPLEMENTED ---
-    # Cache for 24 hours. Vary on Authorization header because the serializer's
-    # 'is_favorited' field for classes depends on the logged-in user.
-    @method_decorator(vary_on_headers("Authorization"))
-    @method_decorator(cache_page(60 * 60 * 24))
+    # --- CACHING: versioned so we can invalidate when class/business changes ---
+    # Authenticated users get fresh data (is_favorited). Anonymous use cache; invalidate on update.
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
-        # Soonest upcoming instance per class for "Upcoming" cards on business page
+        slug = instance.slug
+
+        if request.user.is_authenticated:
+            # No cache for logged-in users so is_favorited is always correct
+            return self._build_business_detail_response(instance, request)
+
+        version = cache.get(f"{BUSINESS_DETAIL_CACHE_VERSION_PREFIX}:{slug}", 0) or 0
+        cache_key = f"{BUSINESS_DETAIL_CACHE_PREFIX}:{slug}:v{version}:anon"
+        data = cache.get(cache_key)
+        if data is not None:
+            return Response(data)
+
+        response = self._build_business_detail_response(instance, request)
+        try:
+            cache.set(cache_key, response.data, timeout=BUSINESS_DETAIL_CACHE_TTL)
+        except Exception as e:
+            logger.warning("Failed to set business detail cache for slug=%s: %s", slug, e)
+        return response
+
+    def _build_business_detail_response(self, instance, request):
         soonest_per_class = {}
         class_ids = [c.pk for c in getattr(instance, "active_classes", [])]
         if class_ids:

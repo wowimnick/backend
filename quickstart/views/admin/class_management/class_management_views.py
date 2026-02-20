@@ -48,6 +48,7 @@ from quickstart.views.public.public_class_views import (
     invalidate_public_class_search_preset_cache,
     HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY,
 )
+from quickstart.views.public.public_business_views import invalidate_business_detail_cache
 from quickstart.models import (
     ClassCategory,
     ClassCollection,
@@ -642,11 +643,13 @@ class AdminClassViewSet(viewsets.ModelViewSet):
 
         trigger_nextjs_revalidation(tag=f"class-{class_instance.classId}")
 
-        # 2. Revalidate the business page if the class belongs to a business
+        # 2. Revalidate the business page and invalidate Django API cache if the class belongs to a business
         if class_instance.businessId and hasattr(class_instance.businessId, "slug"):
             business_slug = class_instance.businessId.slug
+            invalidate_business_detail_cache(business_slug)
             trigger_nextjs_revalidation(tag=f"business-{business_slug}")
-            logger.info(f"Revalidated business page: business-{business_slug}")
+            trigger_nextjs_revalidation(path=f"/business/{business_slug}")
+            logger.info("Revalidated business page: business-%s and path /business/%s", business_slug, business_slug)
 
         # 3. Revalidate homepage and search/explore pages
         trigger_nextjs_revalidation(path="/")

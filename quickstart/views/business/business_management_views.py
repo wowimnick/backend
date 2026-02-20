@@ -44,6 +44,7 @@ import pytz
 import logging
 
 from quickstart.utils.revalidation import trigger_nextjs_revalidation
+from quickstart.views.public.public_business_views import invalidate_business_detail_cache
 from quickstart.utils.url_utils import sanitize_filename_for_s3
 from quickstart.models import (
     BusinessInfo,
@@ -972,6 +973,10 @@ class MyBusinessProfileView(generics.RetrieveUpdateDestroyAPIView):
 
         business_slug = getattr(business_instance, "slug", None)
         business_id = getattr(business_instance, "businessId", None)
+
+        # 0. Invalidate Django API cache so next fetch gets fresh data (e.g. cover images)
+        if business_slug:
+            invalidate_business_detail_cache(business_slug)
 
         # 1. Revalidate the business page by TAG (matches fetchBusinessDetail cache tags)
         if business_slug:
