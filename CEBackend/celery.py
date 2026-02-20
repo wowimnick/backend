@@ -27,7 +27,7 @@ def on_worker_ready(sender, **kwargs):
     try:
         from quickstart.utils.cache_prewarm import run_prewarm_class_search_cache
         logger.info("Starting class search cache prewarm...")
-        run_prewarm_class_search_cache(locations=True, collections=True, categories=True)
+        run_prewarm_class_search_cache(locations=True, collections=True)
         logger.info("Class search cache prewarm finished.")
     except Exception as e:
         logger.warning("Class search cache prewarm failed: %s", e, exc_info=True)

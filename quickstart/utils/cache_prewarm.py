@@ -1,5 +1,5 @@
 """
-Shared logic to prewarm class search cache (preset locations, collections, categories).
+Shared logic to prewarm class search cache (preset locations and collections).
 Used by the management command and the Celery task. Only intended for production.
 """
 import logging
