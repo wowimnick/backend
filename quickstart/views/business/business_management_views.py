@@ -108,7 +108,8 @@ def generate_presigned_upload_url(request):
         "business_image": "business_images/",
         "class_image": "class_images/",
         "review_image": "review_images/",
-        "category_image": "category_images/",  # Example for future use
+        "category_image": "category_images/",
+        "collection_image": "collection_images/",
     }
 
     subfolder = allowed_upload_types.get(upload_type)
