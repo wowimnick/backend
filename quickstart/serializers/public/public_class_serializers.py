@@ -430,19 +430,23 @@ class HomepageClassSerializer(PublicClassSerializer):
 
     def get_images(self, obj):
         """
-        Returns a list containing exactly one image object: imageId, image_key, and medium_url (CloudFront).
-        Cached homepage payload can include these URLs; they are stable and do not expire.
+        Returns a list containing exactly one image object: imageId, image_key, medium_url (CloudFront), isCover.
+        Used on business detail for upcoming class cards — always pick the cover image.
+        Sort explicitly by isCover so the choice is correct regardless of prefetch/query order.
         """
         all_images = getattr(obj, "images", None)
-        target_image = None
-        if all_images:
-            image_list = list(all_images.all()) if hasattr(all_images, "all") else all_images
-            if image_list:
-                cover_img = next((img for img in image_list if img.isCover), None)
-                target_image = cover_img or image_list[0]
-        if target_image:
-            return [PublicClassImageKeySerializer(target_image).data]
-        return []
+        if not all_images:
+            return []
+        image_list = list(all_images.all()) if hasattr(all_images, "all") else list(all_images)
+        if not image_list:
+            return []
+        # Ensure cover is always first: sort by isCover desc, then createdAt (stable order)
+        image_list = sorted(
+            image_list,
+            key=lambda img: (not getattr(img, "isCover", False), getattr(img, "createdAt", None) or ""),
+        )
+        target_image = image_list[0]
+        return [PublicClassImageKeySerializer(target_image).data]
 
     def get_location(self, obj):
         """
