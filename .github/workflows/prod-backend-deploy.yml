@@ -93,11 +93,3 @@ jobs:
           NEW_TASK_INFO=$(aws ecs register-task-definition --cli-input-json file://${{ steps.task-def-worker.outputs.task_definition_path }})
           NEW_REVISION_ARN=$(echo $NEW_TASK_INFO | jq -r .taskDefinition.taskDefinitionArn)
           aws ecs update-service --cluster ${{ env.ECS_CLUSTER }} --service ${{ env.ECS_SERVICE_WORKER }} --task-definition "${NEW_REVISION_ARN}" --force-new-deployment
-
-      - name: Wait for services to stabilize
-        run: |
-          echo "Waiting for web service to stabilize..."
-          aws ecs wait services-stable --cluster ${{ env.ECS_CLUSTER }} --services ${{ env.ECS_SERVICE_WEB }}
-          echo "Waiting for worker service to stabilize..."
-          aws ecs wait services-stable --cluster ${{ env.ECS_CLUSTER }} --services ${{ env.ECS_SERVICE_WORKER }}
-          echo "All services are stable."
