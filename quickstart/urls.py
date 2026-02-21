@@ -56,6 +56,7 @@ from quickstart.payments.views import (
     ProcessBookingWebhook,
     UpdatePaymentIntentView,
     CancelPendingBookingView,
+    CheckSlotAvailabilityView,
 )
 from quickstart.views.admin.user_management.user_admin_views import UserAdminViewSet
 from quickstart.views.admin.user_management.role_views import RoleManagementViewSet
@@ -357,6 +358,11 @@ urlpatterns = [
         "payments/cancel-payment-intent/",
         CancelPendingBookingView.as_view(),
         name="cancel-payment-intent",
+    ),
+    path(
+        "payments/check-slot-availability/",
+        CheckSlotAvailabilityView.as_view(),
+        name="check-slot-availability",
     ),
     path("", include(public_router.urls)),
     path("", include(user_self_router.urls)),

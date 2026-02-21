@@ -655,15 +655,50 @@ class CreatePaymentIntentView(APIView):
                     )
 
             # ==========================================
-            #  PAID BOOKING FLOW (Partially covered or Full Stripe)
+            #  PAID BOOKING FLOW
+            #  - Single Session: No spot holding; create Stripe intent only; booking created in webhook.
+            #  - Full Course: Keep pending enrollment/bookings (course webhook expects them).
             # ==========================================
-            # --- Create Pending Database Records ---
+            currency_code = getattr(settings, "STRIPE_CURRENCY", "cad")
+
+            # Common metadata for webhook
+            metadata = {
+                "participants": str(participants),
+                "booking_type": booking_type,
+                "notes": notes or "",
+                "applied_discount_id": (
+                    str(discount_to_apply.id) if discount_to_apply else None
+                ),
+                "discount_amount": str(calculated_discount_amount),
+                "subtotal_for_payout": str(subtotal_for_payout),
+                "subtotal_after_discount": str(subtotal_after_discount),
+                "global_discount_id": (
+                    str(global_discount_to_apply.id)
+                    if global_discount_to_apply
+                    else None
+                ),
+                "global_discount_amount": str(global_discount_amount),
+                "tax_amount": str(tax_amount),
+                "is_guest": str(is_guest),
+                "gift_card_code": gift_card_code if gift_card_code else "",
+                "gift_card_amount_to_deduct": str(amount_covered_by_gc),
+            }
+            if is_guest:
+                metadata["guest_contact_id"] = str(guest_contact.id)
+            else:
+                metadata["user_id"] = str(request.user.userId)
+            if request.data.get("meta_fbc"):
+                metadata["meta_fbc"] = request.data.get("meta_fbc")
+            if request.data.get("meta_fbp"):
+                metadata["meta_fbp"] = request.data.get("meta_fbp")
+
             first_booking = None
             booking_group_id = None
             pending_payment = None
 
-            with transaction.atomic():
-                if booking_type == "Full Course":
+            if booking_type == "Full Course":
+                # Course: create pending enrollment + bookings so course webhook can confirm them
+                with transaction.atomic():
                     booking_group_id = uuid.uuid4()
                     enrollment = CourseEnrollment.objects.create(
                         schedule=instance.schedule,
@@ -678,7 +713,6 @@ class CreatePaymentIntentView(APIView):
                         cancellation_custom_hours=option.cancellationCustomHours,
                         cancellation_refund_percentage=option.cancellationRefundPercentage,
                     )
-
                     bookings_to_create = [
                         Booking(
                             user=request.user if not is_guest else None,
@@ -701,80 +735,21 @@ class CreatePaymentIntentView(APIView):
                     ]
                     created_bookings = Booking.objects.bulk_create(bookings_to_create)
                     first_booking = created_bookings[0]
-                    logger.info(
-                        f"[{request_id}] Bulk-created {len(created_bookings)} pending Bookings."
-                    )
-                else:  # Single Session
-                    first_booking = Booking.objects.create(
-                        schedule_instance=instance,
-                        user=request.user if not is_guest else None,
-                        contact=guest_contact if is_guest else None,
-                        participants=participants,
-                        participant_details=participant_details,
-                        notes=notes,
-                        amount_paid=grand_total,
+                    pending_payment = Payment.objects.create(
+                        booking=first_booking,
+                        stripe_payment_intent_id=f"temp_{uuid.uuid4()}",
+                        amount=grand_total,
+                        tax_amount=tax_amount,
+                        currency=currency_code.upper(),
                         status="pending",
-                        payment_status="pending",
-                        enrollment_type="Single Session",
-                        cancellation_policy=option.cancellationPolicy,
-                        cancellation_refund_percentage=option.cancellationRefundPercentage,
-                        cancellation_custom_hours=option.cancellationCustomHours,
                     )
-                    logger.info(
-                        f"[{request_id}] Created single pending Booking: {first_booking.id}"
-                    )
-
-                currency_code = getattr(settings, "STRIPE_CURRENCY", "cad")
-
-                pending_payment = Payment.objects.create(
-                    booking=first_booking,
-                    stripe_payment_intent_id=f"temp_{uuid.uuid4()}",
-                    amount=grand_total,
-                    tax_amount=tax_amount,
-                    currency=currency_code.upper(),
-                    status="pending",
-                )
-                logger.info(
-                    f"[{request_id}] Created pending Payment record: {pending_payment.id}"
-                )
-
-            # --- Create Stripe Intent and Finalize ---
-            # subtotal_for_payout: basis for business payout (before global discount; business never loses)
-            metadata = {
-                "participants": str(participants),
-                "booking_type": booking_type,
-                "notes": notes,
-                "applied_discount_id": (
-                    str(discount_to_apply.id) if discount_to_apply else None
-                ),
-                "discount_amount": str(calculated_discount_amount),
-                "subtotal_for_payout": str(subtotal_for_payout),
-                "subtotal_after_discount": str(subtotal_after_discount),
-                "global_discount_id": (
-                    str(global_discount_to_apply.id)
-                    if global_discount_to_apply
-                    else None
-                ),
-                "global_discount_amount": str(global_discount_amount),
-                "tax_amount": str(tax_amount),
-                "is_guest": str(is_guest),
-                "payment_db_id": str(pending_payment.id),
-                "first_booking_db_id": str(first_booking.id),
-                "booking_group_id": str(booking_group_id) if booking_group_id else None,
-                # GIFT CARD METADATA FOR WEBHOOK
-                "gift_card_code": gift_card_code if gift_card_code else "",
-                "gift_card_amount_to_deduct": str(amount_covered_by_gc),
-            }
-            if is_guest:
-                metadata["guest_contact_id"] = str(guest_contact.id)
+                    metadata["booking_group_id"] = str(booking_group_id)
+                    metadata["payment_db_id"] = str(pending_payment.id)
+                    metadata["first_booking_db_id"] = str(first_booking.id)
             else:
-                metadata["user_id"] = str(request.user.userId)
-
-            # Meta CAPI: store fbc/fbp in PaymentIntent metadata for webhook (paid conversions)
-            if request.data.get("meta_fbc"):
-                metadata["meta_fbc"] = request.data.get("meta_fbc")
-            if request.data.get("meta_fbp"):
-                metadata["meta_fbp"] = request.data.get("meta_fbp")
+                # Single Session: no pending records; webhook will create booking from metadata
+                metadata["schedule_instance_id"] = str(instance.id)
+                metadata["participant_details_json"] = json.dumps(participant_details)
 
             try:
                 intent = stripe.PaymentIntent.create(
@@ -783,12 +758,16 @@ class CreatePaymentIntentView(APIView):
                     automatic_payment_methods={"enabled": True},
                     metadata={k: v for k, v in metadata.items() if v is not None},
                 )
-
-                pending_payment.stripe_payment_intent_id = intent.id
-                pending_payment.save(update_fields=["stripe_payment_intent_id"])
-                logger.info(
-                    f"[{request_id}] Created Stripe PaymentIntent: {intent.id} and updated Payment record."
-                )
+                if pending_payment:
+                    pending_payment.stripe_payment_intent_id = intent.id
+                    pending_payment.save(update_fields=["stripe_payment_intent_id"])
+                    logger.info(
+                        f"[{request_id}] Created Stripe PaymentIntent (course): {intent.id}"
+                    )
+                else:
+                    logger.info(
+                        f"[{request_id}] Created Stripe PaymentIntent (single, no hold): {intent.id}"
+                    )
 
                 response_data = {
                     "clientSecret": intent.client_secret,
@@ -800,26 +779,22 @@ class CreatePaymentIntentView(APIView):
                     f"[{request_id}] ===== CreatePaymentIntentView SUCCESS ====="
                 )
                 return Response(response_data)
-            except Exception as e:
+            except stripe.error.StripeError as e:
                 logger.error(
-                    f"[{request_id}] Stripe or DB update error: {e}", exc_info=True
+                    f"[{request_id}] Stripe error: {e}", exc_info=True
                 )
-                # Rollback: Delete the pending records we just created
-                with transaction.atomic():
-                    if booking_group_id:
-                        CourseEnrollment.objects.filter(
-                            booking_group_id=booking_group_id
-                        ).delete()
-                        Booking.objects.filter(
-                            booking_group_id=booking_group_id
-                        ).delete()
-                    elif first_booking:
-                        first_booking.delete()
-                    if pending_payment:
+                if pending_payment and first_booking:
+                    with transaction.atomic():
+                        if booking_group_id:
+                            CourseEnrollment.objects.filter(
+                                booking_group_id=booking_group_id
+                            ).delete()
+                            Booking.objects.filter(
+                                booking_group_id=booking_group_id
+                            ).delete()
+                        else:
+                            first_booking.delete()
                         pending_payment.delete()
-                logger.info(
-                    f"[{request_id}] Rolled back pending DB records due to Stripe error."
-                )
                 return Response(
                     {
                         "error": "An error occurred while contacting the payment provider."
@@ -840,6 +815,42 @@ class CreatePaymentIntentView(APIView):
                 {"error": "An unexpected error occurred while preparing payment."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+class CheckSlotAvailabilityView(APIView):
+    """
+    Check if a slot still has enough capacity for the requested participants.
+    Used for polling (e.g. every minute) on checkout to show "no longer available" without holding.
+    """
+    permission_classes = []
+
+    def get(self, request):
+        instance_id = request.query_params.get("instance_id")
+        participants_str = request.query_params.get("participants", "1")
+        if not instance_id:
+            return Response(
+                {"error": "instance_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            participants = int(participants_str)
+            if participants < 1:
+                participants = 1
+        except (ValueError, TypeError):
+            participants = 1
+        try:
+            instance = ScheduleInstance.objects.get(pk=instance_id)
+        except (ValueError, ScheduleInstance.DoesNotExist):
+            return Response(
+                {"available": False, "available_spots": 0},
+                status=status.HTTP_200_OK,
+            )
+        available_spots = instance.available_spots
+        available = available_spots >= participants
+        return Response(
+            {"available": available, "available_spots": available_spots},
+            status=status.HTTP_200_OK,
+        )
 
 
 class UpdatePaymentIntentView(APIView):
@@ -1558,6 +1569,226 @@ class ProcessBookingWebhook(APIView):
             )
             raise
 
+    def _create_single_booking_from_metadata(self, payment_intent, webhook_id):
+        """
+        Instant flow (no hold): create confirmed booking + payment from PaymentIntent metadata.
+        Raises DRFValidationError if slot no longer has capacity (caller will refund).
+        """
+        metadata = payment_intent.metadata
+        instance_id = metadata.get("schedule_instance_id")
+        if not instance_id:
+            raise DRFValidationError(
+                "Missing schedule_instance_id in metadata. Initiating refund."
+            )
+        try:
+            instance = ScheduleInstance.objects.select_related(
+                "schedule__option__classId__businessId"
+            ).get(pk=int(instance_id))
+        except (ValueError, ScheduleInstance.DoesNotExist):
+            raise DRFValidationError(
+                "Invalid or missing schedule instance. Initiating refund."
+            )
+
+        participants = int(metadata.get("participants", 1))
+        if not instance.can_accommodate(participants):
+            raise DRFValidationError(
+                f"Session on {instance.date.strftime('%b %d')} is now full. Initiating refund."
+            )
+
+        option = instance.schedule.option
+        business = option.classId.businessId
+        is_guest = metadata.get("is_guest") == "True"
+
+        try:
+            participant_details = json.loads(
+                metadata.get("participant_details_json", "[]")
+            )
+        except (TypeError, ValueError):
+            participant_details = []
+        if not isinstance(participant_details, list):
+            participant_details = []
+        # Pad or trim to participants length
+        participant_details = [
+            (participant_details[i] if i < len(participant_details) else {})
+            for i in range(participants)
+        ]
+        participant_details = [
+            {"name": (p.get("name") or "Guest") if isinstance(p, dict) else "Guest"}
+            for p in participant_details
+        ]
+
+        user = None
+        contact = None
+        if is_guest:
+            try:
+                contact = Contact.objects.get(pk=metadata.get("guest_contact_id"))
+            except (ValueError, TypeError, Contact.DoesNotExist):
+                raise DRFValidationError(
+                    "Guest contact missing. Initiating refund."
+                )
+        else:
+            try:
+                user = CustomUser.objects.get(
+                    userId=metadata.get("user_id")
+                )
+            except (ValueError, TypeError, CustomUser.DoesNotExist):
+                raise DRFValidationError(
+                    "User missing. Initiating refund."
+                )
+
+        notes = metadata.get("notes", "") or ""
+        grand_total = Decimal(payment_intent.amount_received) / 100
+        total_tax = Decimal(metadata.get("tax_amount", "0.00"))
+        subtotal_for_payout = Decimal(
+            metadata.get("subtotal_for_payout")
+            or metadata.get("subtotal_after_discount", "0.00")
+        )
+
+        with transaction.atomic():
+            booking = Booking.objects.create(
+                schedule_instance=instance,
+                user=user,
+                contact=contact,
+                participants=participants,
+                participant_details=participant_details,
+                notes=notes,
+                amount_paid=grand_total,
+                status="confirmed",
+                payment_status="paid",
+                enrollment_type="Single Session",
+                cancellation_policy=option.cancellationPolicy,
+                cancellation_refund_percentage=option.cancellationRefundPercentage,
+                cancellation_custom_hours=option.cancellationCustomHours,
+            )
+            booking.user_facing_reference = booking._generate_user_facing_reference()
+            booking.save(update_fields=["user_facing_reference"])
+
+            if contact and not user:
+                booking.cancellation_token = uuid.uuid4()
+                booking.save(update_fields=["cancellation_token"])
+
+            fee_percentage = (
+                business.partner_tier.fee_percentage
+                if business.partner_tier
+                else PartnerTier.objects.get(is_default=True).fee_percentage
+            )
+            service_fee_rate = fee_percentage / Decimal("100.0")
+            platform_fee_amount = (
+                subtotal_for_payout * service_fee_rate
+            ).quantize(Decimal("0.01"))
+            platform_fee_tax = (platform_fee_amount * HST_RATE).quantize(
+                Decimal("0.01")
+            )
+            business_payout_tax = total_tax - platform_fee_tax
+            business_net_revenue = subtotal_for_payout - platform_fee_amount
+            net_payout_to_business = business_net_revenue + business_payout_tax
+            booking.allocated_net_payout = net_payout_to_business
+            booking.save(update_fields=["allocated_net_payout"])
+
+            Payment.objects.create(
+                booking=booking,
+                stripe_payment_intent_id=payment_intent.id,
+                stripe_charge_id=payment_intent.latest_charge,
+                amount=grand_total,
+                tax_amount=total_tax,
+                currency="CAD",
+                status="succeeded",
+                platform_fee_amount=platform_fee_amount,
+                platform_fee_tax=platform_fee_tax,
+                net_payout_amount=net_payout_to_business,
+                metadata={"original_stripe_metadata": dict(metadata)},
+            )
+
+            applied_discount_id = metadata.get("applied_discount_id")
+            discount_amount = Decimal(metadata.get("discount_amount", "0.00"))
+            if applied_discount_id:
+                try:
+                    discount = Discount.objects.get(pk=applied_discount_id)
+                    discount.redeem()
+                    AppliedDiscount.objects.create(
+                        booking=booking,
+                        discount=discount,
+                        amount_saved=discount_amount,
+                    )
+                except Discount.DoesNotExist:
+                    pass
+
+            global_discount_id = metadata.get("global_discount_id")
+            global_discount_amount = Decimal(
+                metadata.get("global_discount_amount", "0.00")
+            )
+            if global_discount_id and global_discount_amount > 0:
+                try:
+                    g_discount = GlobalDiscount.objects.get(pk=global_discount_id)
+                    g_discount.redeem()
+                    AppliedGlobalDiscount.objects.create(
+                        booking=booking,
+                        global_discount=g_discount,
+                        amount_saved=global_discount_amount,
+                    )
+                except GlobalDiscount.DoesNotExist:
+                    pass
+
+            gc_code = metadata.get("gift_card_code")
+            gc_amount_str = metadata.get("gift_card_amount_to_deduct")
+            if gc_code and gc_amount_str:
+                try:
+                    gc_amount = Decimal(gc_amount_str)
+                    if gc_amount > 0:
+                        gc = GiftCard.objects.get(code=gc_code)
+                        if gc.current_balance >= gc_amount:
+                            gc.current_balance -= gc_amount
+                            gc.save()
+                            GiftCardTransaction.objects.create(
+                                gift_card=gc,
+                                booking=booking,
+                                amount=-gc_amount,
+                                balance_after=gc.current_balance,
+                                transaction_type="redemption",
+                            )
+                except (GiftCard.DoesNotExist, Exception):
+                    pass
+
+            if user:
+                send_booking_confirmation_email(user, booking)
+            elif contact:
+                send_booking_confirmation_email(contact, booking)
+
+            if business.newBookingNotification:
+                recipients = {business.owner}
+                for staff in BusinessStaff.objects.filter(
+                    business=business,
+                    status="accepted",
+                    role__permissions__codename="receive_booking_notifications",
+                ).select_related("user"):
+                    if staff.user:
+                        recipients.add(staff.user)
+                for r in recipients:
+                    if r and r.email:
+                        send_business_new_booking_email(r, booking)
+                send_super_admin_booking_created_email(booking)
+
+            try:
+                send_purchase_event_for_booking(
+                    booking,
+                    value=float(grand_total),
+                    currency="CAD",
+                    num_items=booking.participants or 1,
+                    meta_fbc=metadata.get("meta_fbc") or None,
+                    meta_fbp=metadata.get("meta_fbp") or None,
+                )
+            except Exception:
+                pass
+            _revalidate_for_booking(booking)
+
+        logger.info(
+            f"[{webhook_id}] Created single booking from metadata: {booking.id}"
+        )
+        return {
+            "booking_id": booking.id,
+            "user_facing_reference": booking.user_facing_reference,
+        }
+
     def handle_successful_payment(self, payment_intent, webhook_id):
         # Check if we have ANY record for this Stripe ID that isn't 'pending'.
         # This catches 'refunded', 'failed', and 'succeeded' statuses safely.
@@ -1585,23 +1816,44 @@ class ProcessBookingWebhook(APIView):
             return self.handle_course_payment_success(payment_intent, webhook_id)
 
         # 3. Process Single Session Booking
+        payment_record = (
+            Payment.objects.filter(
+                stripe_payment_intent_id=payment_intent.id, status="pending"
+            )
+            .first()
+        )
+
+        if not payment_record:
+            # Instant flow (no hold): create booking from metadata; availability check then create
+            try:
+                return self._create_single_booking_from_metadata(
+                    payment_intent, webhook_id
+                )
+            except DRFValidationError:
+                raise
+
         with transaction.atomic():
-            # Robust Lookup: Try to find the payment record.
-            # We use filter().first() instead of get() to handle the race condition gracefully.
+            # Lock the payment row by PI id (do not filter by status) so we can safely
+            # distinguish "already processed" from "missing". Otherwise a concurrent
+            # delivery could mark the payment succeeded between our earlier query and
+            # here, we'd get no row (status filter), and we'd incorrectly trigger a refund.
             payment_record = (
                 Payment.objects.select_for_update()
-                .filter(stripe_payment_intent_id=payment_intent.id, status="pending")
+                .filter(stripe_payment_intent_id=payment_intent.id)
                 .first()
             )
 
             if not payment_record:
-                # If we received money but have no pending record, it means the 15-min timer
-                # deleted it just as the user paid. We MUST raise error to trigger the refund logic.
                 raise DRFValidationError(
-                    "Payment record missing or already processed. Initiating refund to prevent lost funds."
+                    "Payment record missing. Initiating refund to prevent lost funds."
                 )
+            if payment_record.status != "pending":
+                logger.warning(
+                    f"[{webhook_id}] IDEMPOTENCY: PI {payment_intent.id} already processed "
+                    f"(status={payment_record.status}). Skipping without refund."
+                )
+                return {"message": "Already processed"}
 
-            # Get the booking
             pending_booking = (
                 Booking.objects.select_for_update()
                 .filter(pk=payment_record.booking.pk, status="pending")
@@ -1617,7 +1869,7 @@ class ProcessBookingWebhook(APIView):
             participants = pending_booking.participants
             initial_instance = pending_booking.schedule_instance
 
-            # Capacity Check
+            # Capacity Check (legacy pending booking)
             other_participants = (
                 initial_instance.bookings.filter(status__in=["confirmed", "pending"])
                 .exclude(pk=pending_booking.pk)
