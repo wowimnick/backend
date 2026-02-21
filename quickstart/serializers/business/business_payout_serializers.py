@@ -14,11 +14,6 @@ class PayoutBookingSerializer(serializers.ModelSerializer):
     class_name = serializers.SerializerMethodField()
     session_date = serializers.SerializerMethodField()
     net_amount_for_payout = serializers.SerializerMethodField()
-    enrollment_type = serializers.CharField(source="enrollment_type", read_only=True)
-    course_session_number = serializers.IntegerField(
-        source="course_session_number", read_only=True, allow_null=True
-    )
-    total_sessions = serializers.SerializerMethodField()
 
     class Meta:
         model = Booking
@@ -28,9 +23,6 @@ class PayoutBookingSerializer(serializers.ModelSerializer):
             "class_name",
             "session_date",
             "net_amount_for_payout",
-            "enrollment_type",
-            "course_session_number",
-            "total_sessions",
         ]
 
     def get_user_name(self, obj):
@@ -60,11 +52,6 @@ class PayoutBookingSerializer(serializers.ModelSerializer):
         if obj.schedule_instance and obj.schedule_instance.date:
             return obj.schedule_instance.date
         return None
-
-    def get_total_sessions(self, obj):
-        if obj.enrollment_type == "Full Course" and obj.booking_group_id:
-            return obj.sibling_bookings.count() + 1
-        return 1
 
     def get_net_amount_for_payout(self, obj):
         """
@@ -101,6 +88,23 @@ class BusinessPayoutSerializer(serializers.ModelSerializer):
 
     def get_amount_display(self, obj):
         return f"${obj.amount:,.2f} {obj.currency.upper()}"
+
+
+class ScheduledPayoutSerializer(serializers.Serializer):
+    """
+    Read-only serializer for scheduled (projected) payouts shown in the business dashboard.
+    Scheduled payouts are computed from confirmed future bookings; payout is due the day after the experience date.
+    """
+
+    id = serializers.CharField()
+    stripe_transfer_id = serializers.CharField(allow_null=True)
+    amount = serializers.DecimalField(max_digits=10, decimal_places=2)
+    currency = serializers.CharField(max_length=3)
+    status = serializers.CharField(default="scheduled")
+    arrival_date = serializers.DateField(allow_null=True)
+    created_at = serializers.DateTimeField(allow_null=True)
+    booking_count = serializers.IntegerField()
+    amount_display = serializers.CharField()
 
 
 class PayoutSummarySerializer(serializers.Serializer):

@@ -1,3 +1,5 @@
+from collections import defaultdict
+from datetime import date, timedelta
 from decimal import Decimal
 from django.db.models import Q, Sum, Value, Count
 from django.db.models.functions import Coalesce
@@ -6,7 +8,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, NotFound
 from django.http import HttpResponse
 import csv
 
@@ -15,6 +17,7 @@ from quickstart.serializers.business.business_payout_serializers import (
     BusinessPayoutSerializer,
     PayoutSummarySerializer,
     PayoutBookingSerializer,
+    ScheduledPayoutSerializer,
 )
 from quickstart.utils.permissions import IsBusinessOwnerOrManager
 from quickstart.views.business.business_booking_views import BusinessBookingPagination
@@ -22,6 +25,49 @@ from quickstart.views.business.business_booking_views import BusinessBookingPagi
 import logging
 
 logger = logging.getLogger(__name__)
+
+SCHEDULED_PAYOUT_PREFIX = "scheduled-"
+
+
+def get_scheduled_payouts_for_business(business):
+    """
+    Compute scheduled (projected) payouts: confirmed, paid, future-dated bookings
+    grouped by payout date (session date + 1 day). Payout is due the day after the experience.
+    """
+    today = timezone.now().date()
+    qs = (
+        Booking.objects.filter(
+            schedule_instance__schedule__option__classId__businessId=business,
+            status="confirmed",
+            payment_status="paid",
+            payout_status="pending",
+            schedule_instance__date__gte=today,
+        )
+        .select_related("schedule_instance")
+        .order_by("schedule_instance__date")
+    )
+    groups = defaultdict(lambda: {"amount": Decimal("0.00"), "count": 0, "arrival_date": None})
+    for b in qs:
+        if b.schedule_instance and b.schedule_instance.date:
+            arr = b.schedule_instance.date + timedelta(days=1)
+            groups[arr]["arrival_date"] = arr
+            groups[arr]["amount"] += b.allocated_net_payout or Decimal("0.00")
+            groups[arr]["count"] += 1
+    return [
+        {
+            "id": f"{SCHEDULED_PAYOUT_PREFIX}{arr.isoformat()}",
+            "stripe_transfer_id": None,
+            "amount": data["amount"],
+            "currency": business.currency.upper(),
+            "status": "scheduled",
+            "arrival_date": data["arrival_date"],
+            "created_at": None,
+            "booking_count": data["count"],
+            "amount_display": f"${data['amount']:,.2f} {business.currency.upper()}",
+        }
+        for arr, data in sorted(groups.items())
+        if data["count"] > 0 and data["amount"] > 0
+    ]
 
 
 class BusinessPayoutViewSet(viewsets.ReadOnlyModelViewSet):
@@ -56,24 +102,61 @@ class BusinessPayoutViewSet(viewsets.ReadOnlyModelViewSet):
             .order_by("-created_at")
         )
 
+    def list(self, request, *args, **kwargs):
+        response = super().list(request, *args, **kwargs)
+        business = self.get_business_context()
+        scheduled = get_scheduled_payouts_for_business(business)
+        response.data["scheduled_payouts"] = ScheduledPayoutSerializer(
+            scheduled, many=True
+        ).data
+        return response
+
     @action(detail=True, methods=["get"], url_path="bookings")
     def bookings(self, request, pk=None):
         """
         Retrieves a paginated list of all bookings associated with a specific payout.
+        For scheduled payouts (pk like 'scheduled-YYYY-MM-DD'), returns bookings
+        whose session date + 1 day equals that date.
         """
-        payout = self.get_object()
-
         business = self.get_business_context()
-        if payout.business != business:
-            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        bookings_queryset = (
-            payout.bookings.select_related(
-                "user", "schedule_instance__schedule__option__classId"
+        if pk and str(pk).startswith(SCHEDULED_PAYOUT_PREFIX):
+            try:
+                date_str = str(pk).replace(SCHEDULED_PAYOUT_PREFIX, "")
+                arrival_date = date.fromisoformat(date_str)
+            except (ValueError, TypeError):
+                return Response(
+                    {"detail": "Invalid scheduled payout id."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            session_date = arrival_date - timedelta(days=1)
+            bookings_queryset = (
+                Booking.objects.filter(
+                    schedule_instance__schedule__option__classId__businessId=business,
+                    status="confirmed",
+                    payment_status="paid",
+                    payout_status="pending",
+                    schedule_instance__date=session_date,
+                )
+                .select_related(
+                    "user", "schedule_instance__schedule__option__classId"
+                )
+                .prefetch_related("payments")
+                .order_by("-booking_date")
             )
-            .prefetch_related("payments")
-            .order_by("-booking_date")
-        )
+        else:
+            payout = self.get_object()
+            if payout.business != business:
+                return Response(
+                    {"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND
+                )
+            bookings_queryset = (
+                payout.bookings.select_related(
+                    "user", "schedule_instance__schedule__option__classId"
+                )
+                .prefetch_related("payments")
+                .order_by("-booking_date")
+            )
 
         page = self.paginate_queryset(bookings_queryset)
         if page is not None:
@@ -91,7 +174,7 @@ class BusinessPayoutViewSet(viewsets.ReadOnlyModelViewSet):
     def summary(self, request, *args, **kwargs):
         """
         Provides a summary of the business's current payout status using
-        booking-based calculations for accuracy with courses.
+        booking-based calculations.
         """
         business = self.get_business_context()
 
@@ -133,7 +216,15 @@ class BusinessPayoutViewSet(viewsets.ReadOnlyModelViewSet):
     def export_payout_details(self, request, pk=None):
         """
         Exports a CSV file detailing all transactions included in a specific payout.
+        Scheduled payouts cannot be exported until the payout has been processed.
         """
+        if pk and str(pk).startswith(SCHEDULED_PAYOUT_PREFIX):
+            return Response(
+                {
+                    "detail": "Export is available after the payout has been processed. Scheduled payouts cannot be exported yet."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         payout = self.get_object()
         business = self.get_business_context()
 
