@@ -865,29 +865,62 @@ class UpdatePaymentIntentView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        new_email = request.data.get("guest_email")
+        new_name = (request.data.get("guest_full_name") or "").strip()
+        new_phone = request.data.get("guest_phone")
+        new_notes = request.data.get("notes")
+        new_participants = request.data.get("participant_details")
+        if not new_name and new_participants and isinstance(new_participants, list) and new_participants:
+            first_p = new_participants[0]
+            if isinstance(first_p, dict) and first_p.get("name"):
+                new_name = str(first_p.get("name", "")).strip()
+
+        # Stripe replaces entire metadata on modify; merge guest fields into existing.
+        guest_updates = {
+            "guest_email": new_email,
+            "guest_full_name": new_name,
+            "guest_phone": new_phone,
+            "notes": new_notes,
+        }
+
+        def merge_and_modify_metadata():
+            intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+            merged = dict(intent.metadata or {})
+            for k, v in guest_updates.items():
+                merged[k] = v if v is not None else ""
+            stripe.PaymentIntent.modify(
+                payment_intent_id,
+                metadata=merged,
+            )
+
+        try:
+            payment = Payment.objects.select_related(
+                "booking", "booking__contact"
+            ).get(stripe_payment_intent_id=payment_intent_id, status="pending")
+        except Payment.DoesNotExist:
+            # No pending Payment = single-session flow. Just update Stripe metadata and return success.
+            try:
+                merge_and_modify_metadata()
+                return Response(
+                    {"status": "updated", "metadata_only": True},
+                    status=status.HTTP_200_OK,
+                )
+            except stripe.error.StripeError as e:
+                logger.warning(f"UpdatePaymentIntent: Stripe modify failed for {payment_intent_id}: {e}")
+                return Response(
+                    {"error": "Could not update payment intent."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        # Pending Payment exists (course or single with hold): update DB and Stripe.
         try:
             with transaction.atomic():
-                # 1. Get the pending booking
-                payment = Payment.objects.select_related(
-                    "booking", "booking__contact"
-                ).get(stripe_payment_intent_id=payment_intent_id, status="pending")
                 booking = payment.booking
                 business = booking.schedule_instance.schedule.option.classId.businessId
-
-                new_email = request.data.get("guest_email")
-                new_name = (request.data.get("guest_full_name") or "").strip()
-                new_phone = request.data.get("guest_phone")
-                new_notes = request.data.get("notes")
-                new_participants = request.data.get("participant_details")
-                if not new_name and new_participants and isinstance(new_participants, list) and new_participants:
-                    first_p = new_participants[0]
-                    if isinstance(first_p, dict) and first_p.get("name"):
-                        new_name = str(first_p.get("name", "")).strip()
 
                 # 2. Handle Contact Collision & Updates
                 updated_contact = booking.contact
                 if booking.contact and new_email:
-                    # Check if the "Real" email already exists as a contact for this business
                     existing_contact = (
                         Contact.objects.filter(
                             business=business, email__iexact=new_email
@@ -897,11 +930,8 @@ class UpdatePaymentIntentView(APIView):
                     )
 
                     if existing_contact:
-                        # CASE A: Contact exists. Switch booking to point to the EXISTING contact.
                         old_temp_contact = booking.contact
                         updated_contact = existing_contact
-
-                        # Update the existing contact with latest name/phone
                         if new_name:
                             parts = new_name.split(" ", 1)
                             existing_contact.first_name = parts[0]
@@ -911,15 +941,12 @@ class UpdatePaymentIntentView(APIView):
                         if new_phone:
                             existing_contact.phone_number = new_phone
                         existing_contact.save()
-
-                        # Clean up the placeholder contact if it was just a temp one
                         if (
                             "pending@example" in old_temp_contact.email
                             or "pending" in old_temp_contact.email
                         ):
                             old_temp_contact.delete()
                     else:
-                        # CASE B: Contact does not exist. Update the current placeholder contact.
                         if new_email:
                             booking.contact.email = new_email
                         if new_name:
@@ -933,67 +960,45 @@ class UpdatePaymentIntentView(APIView):
                         booking.contact.save()
                         updated_contact = booking.contact
 
-                # 3. Update Booking(s) - Handle Single vs. Course Batch
+                # 3. Update Booking(s)
                 bookings_to_update = []
                 if booking.booking_group_id:
-                    # If this is a course, we must update ALL bookings in the group
                     bookings_to_update = Booking.objects.filter(
                         booking_group_id=booking.booking_group_id
                     )
                 else:
-                    # Single session
                     bookings_to_update = [booking]
 
-                # Prepare common update fields
                 update_fields = {}
                 if new_notes is not None:
                     update_fields["notes"] = new_notes
                 if new_participants is not None:
-                    # Normalize: if empty or wrong length, fill from booker name
                     count = booking.participants or 1
                     if not new_participants or len(new_participants) != count:
                         booker_name = new_name.strip() if new_name else "Guest"
                         new_participants = [{"name": booker_name} for _ in range(count)]
                     update_fields["participant_details"] = new_participants
-
-                # If contact changed (Case A), we must link all bookings to the new contact
                 if updated_contact and updated_contact.id != booking.contact_id:
                     update_fields["contact"] = updated_contact
 
-                # Perform the update
                 if update_fields:
                     if booking.booking_group_id:
-                        # For QuerySet
                         Booking.objects.filter(
                             booking_group_id=booking.booking_group_id
                         ).update(**update_fields)
                     else:
-                        # For single instance
                         for field, value in update_fields.items():
                             setattr(booking, field, value)
                         booking.save()
 
-                # 4. Update Stripe Metadata (So webhook has backup data)
-                stripe.PaymentIntent.modify(
-                    payment_intent_id,
-                    metadata={
-                        "guest_email": new_email,
-                        "guest_full_name": new_name,
-                        "guest_phone": new_phone,
-                        "notes": new_notes,
-                    },
-                )
+                # 4. Update Stripe metadata (merge so we don't wipe schedule_instance_id, etc.)
+                merge_and_modify_metadata()
 
             return Response(
                 {"status": "updated", "booking_id": booking.id},
                 status=status.HTTP_200_OK,
             )
 
-        except Payment.DoesNotExist:
-            return Response(
-                {"error": "Payment intent not found or not pending"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
         except Exception as e:
             logger.error(f"Error updating payment intent: {e}", exc_info=True)
             return Response(
@@ -1622,6 +1627,20 @@ class ProcessBookingWebhook(APIView):
         if is_guest:
             try:
                 contact = Contact.objects.get(pk=metadata.get("guest_contact_id"))
+                # Apply guest details from metadata (updated by update_intent before pay)
+                guest_email = metadata.get("guest_email")
+                guest_full_name = (metadata.get("guest_full_name") or "").strip()
+                guest_phone = metadata.get("guest_phone")
+                if guest_email:
+                    contact.email = guest_email
+                if guest_full_name:
+                    parts = guest_full_name.split(" ", 1)
+                    contact.first_name = parts[0]
+                    contact.last_name = parts[1] if len(parts) > 1 else ""
+                if guest_phone:
+                    contact.phone_number = guest_phone
+                if guest_email or guest_full_name or guest_phone:
+                    contact.save()
             except (ValueError, TypeError, Contact.DoesNotExist):
                 raise DRFValidationError(
                     "Guest contact missing. Initiating refund."

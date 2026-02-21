@@ -355,6 +355,11 @@ urlpatterns = [
         name="update-payment-intent",
     ),
     path(
+        "payments/update_intent/",
+        UpdatePaymentIntentView.as_view(),
+        name="update-payment-intent-alt",
+    ),
+    path(
         "payments/cancel-payment-intent/",
         CancelPendingBookingView.as_view(),
         name="cancel-payment-intent",
