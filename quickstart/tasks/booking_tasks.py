@@ -8,6 +8,8 @@ from quickstart.models import Booking, CourseEnrollment, Payment
 from django.db import transaction
 from django.conf import settings
 from quickstart.utils.email_utils import send_booking_reminder_email
+from quickstart.utils.sms_utils import normalize_phone_for_sns
+from quickstart.tasks.notification_tasks import send_sms_task
 import logging
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
@@ -143,6 +145,30 @@ def send_upcoming_booking_reminders():
             send_booking_reminder_email(user=recipient, booking=booking)
             sent_count += 1
             logger.info(f"Queued reminder email for booking {booking.id}.")
+
+            business = booking.schedule_instance.schedule.option.classId.businessId
+            if (
+                getattr(settings, "AWS_SMS_ENABLED", False)
+                and getattr(business, "smsNotifications", False)
+                and getattr(business, "reminderNotification", True)
+            ):
+                phone = getattr(recipient, "phone_number", None) or (booking.metadata or {}).get("guest_phone") or ""
+                normalized = normalize_phone_for_sns(phone)
+                if normalized:
+                    class_title = getattr(
+                        booking.schedule_instance.schedule.option.classId,
+                        "title",
+                        "Your class",
+                    )
+                    t = booking.schedule_instance.time
+                    time_str = t.strftime("%I:%M %p").lstrip("0") if hasattr(t, "strftime") else str(t)
+                    date_str = booking.schedule_instance.date.strftime("%b %d") if hasattr(booking.schedule_instance.date, "strftime") else str(booking.schedule_instance.date)
+                    sms_msg = f"Reminder: {class_title} tomorrow at {time_str} ({date_str}). ClassEasily"
+                    try:
+                        send_sms_task.delay(normalized, sms_msg)
+                        logger.info(f"Queued reminder SMS for booking {booking.id}.")
+                    except Exception as sms_e:
+                        logger.warning(f"Failed to queue reminder SMS for booking {booking.id}: {sms_e}")
 
         except Exception as e:
             # If sending fails, we do NOT release the lock. 

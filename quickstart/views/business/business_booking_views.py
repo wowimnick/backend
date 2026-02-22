@@ -66,6 +66,8 @@ from quickstart.utils.email_utils import (
     send_booking_cancelled_by_other_email,
     send_booking_rescheduled_by_business_email,
 )
+from quickstart.utils.sms_utils import normalize_phone_for_sns
+from quickstart.tasks.notification_tasks import send_sms_task
 import logging
 
 logger = logging.getLogger(__name__)
@@ -561,6 +563,17 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                         f"Failed to send cancellation email for booking {booking.id}: {email_error}",
                         exc_info=True,
                     )
+                business = booking.schedule_instance.schedule.option.classId.businessId
+                if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False) and user_to_notify:
+                    phone = getattr(user_to_notify, "phone_number", None) or (booking.metadata or {}).get("guest_phone") or ""
+                    normalized = normalize_phone_for_sns(phone)
+                    if normalized:
+                        class_title = getattr(booking.schedule_instance.schedule.option.classId, "title", "Class")
+                        date_str = booking.schedule_instance.date.strftime("%b %d") if booking.schedule_instance and booking.schedule_instance.date else ""
+                        try:
+                            send_sms_task.delay(normalized, f"Your booking for {class_title} on {date_str} was cancelled. ClassEasily")
+                        except Exception as sms_e:
+                            logger.warning("Cancellation SMS failed for booking %s: %s", booking.id, sms_e)
             serializer = BusinessBookingDetailSerializer(
                 booking, context={"request": request}
             )

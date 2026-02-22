@@ -47,6 +47,8 @@ from quickstart.serializers.admin.class_management.class_management_serializers 
 from quickstart.utils.revalidation import trigger_nextjs_revalidation
 from quickstart.views.public.public_business_views import invalidate_business_detail_cache
 from quickstart.utils.email_utils import send_booking_cancelled_by_other_email
+from quickstart.utils.sms_utils import normalize_phone_for_sns
+from quickstart.tasks.notification_tasks import send_sms_task
 
 from quickstart.models import (
     BusinessInfo,
@@ -592,6 +594,7 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                         "reply_to", "support@classeasily.com"
                     )
 
+                    business = class_to_revalidate.businessId
                     for booking in bookings_to_cancel:
                         try:
                             send_booking_cancelled_by_other_email(
@@ -606,6 +609,17 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                                 f"Failed to send class suspension cancellation email for booking {booking.id}: {email_error}",
                                 exc_info=True,
                             )
+                        if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False):
+                            user_to_notify = booking.user or booking.contact
+                            if user_to_notify:
+                                phone = getattr(user_to_notify, "phone_number", None) or (booking.metadata or {}).get("guest_phone") or ""
+                                normalized = normalize_phone_for_sns(phone)
+                                if normalized:
+                                    date_str = booking.schedule_instance.date.strftime("%b %d") if booking.schedule_instance and booking.schedule_instance.date else ""
+                                    try:
+                                        send_sms_task.delay(normalized, f"Your booking for {class_to_revalidate.title} on {date_str} was cancelled. ClassEasily")
+                                    except Exception as sms_e:
+                                        logger.warning("Cancellation SMS failed for booking %s: %s", booking.id, sms_e)
 
                     deleted_count = 0
                     for instance_to_delete in future_instances_to_delete:

@@ -512,6 +512,12 @@ STORAGES = {
 }
 STATIC_URL = f"https://{AWS_S3_CUSTOM_DOMAIN}/static/"
 
+# --- AWS SNS (SMS) ---
+AWS_SNS_REGION = os.environ.get(
+    "AWS_SNS_REGION",
+    os.environ.get("AWS_S3_REGION_NAME", "us-east-2"),
+)
+AWS_SMS_ENABLED = os.environ.get("AWS_SMS_ENABLED", "false").lower() in ("true", "1")
 
 # --- Templates ---
 TEMPLATES = [

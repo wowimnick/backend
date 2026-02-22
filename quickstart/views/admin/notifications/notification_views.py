@@ -30,10 +30,16 @@ from quickstart.serializers.admin.notifications.notification_serializers import 
     NotificationAttachmentSerializer,
     UserSegmentSerializer,
 )
+from quickstart.tasks.notification_tasks import send_campaign_task
+from quickstart.utils.sms_utils import normalize_phone_for_sns
 import resend  # Ensure resend is imported
 from django.conf import settings
+from django.core.cache import cache
 import logging
 from datetime import timedelta
+
+def get_progress_cache_key(campaign_id):
+    return f"notification_campaign_progress_{campaign_id}"
 
 # Configure Resend
 resend.api_key = settings.RESEND_API_KEY
@@ -436,19 +442,34 @@ class AdminNotificationCampaignViewSet(viewsets.ModelViewSet):
 
     # Internal helper - No permission check needed
     def _send_sms_notifications(self, campaign, recipients_info):
-        """Send SMS notifications (Placeholder)"""
+        """Send SMS notifications via AWS SNS (send_sms_task)."""
+        from quickstart.tasks.notification_tasks import send_sms_task
+
+        content = (campaign.content or "").strip() or "ClassEasily notification."
+        if len(content) > 1600:
+            content = content[:1597] + "..."
+        delivered_count = 0
+        for r in recipients_info:
+            phone = r.get("phone_number") or ""
+            normalized = normalize_phone_for_sns(phone)
+            if not normalized:
+                continue
+            try:
+                send_sms_task.delay(normalized, content)
+                delivered_count += 1
+            except Exception as e:
+                logger.exception("Campaign %s SMS to %s failed: %s", campaign.id, normalized, e)
         total_recipients = len(recipients_info)
-        logger.info(
-            f"Simulating SMS send for campaign {campaign.id} to {total_recipients} recipients."
-        )
-        # --- Placeholder Logic ---
-        delivered_count = int(total_recipients * 0.95)  # Simulate 95% success
         campaign.delivered_count = delivered_count
         campaign.success_rate = (
             (delivered_count / total_recipients * 100) if total_recipients > 0 else 0.0
         )
+        campaign.save(update_fields=["delivered_count", "success_rate"])
         logger.info(
-            f"SMS simulation complete. Delivered: {delivered_count}/{total_recipients}"
+            "SMS campaign %s complete. Delivered: %s/%s",
+            campaign.id,
+            delivered_count,
+            total_recipients,
         )
 
     @action(detail=True, methods=["post"])

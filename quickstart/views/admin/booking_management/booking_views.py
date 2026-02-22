@@ -40,6 +40,9 @@ except ImportError:
         logging.warning("Dummy send_booking_cancelled_by_other_email called.")
         pass
 
+from quickstart.utils.sms_utils import normalize_phone_for_sns
+from quickstart.tasks.notification_tasks import send_sms_task
+
 
 logger = logging.getLogger(__name__)
 
@@ -219,6 +222,19 @@ class AdminBookingViewSet(viewsets.ModelViewSet):
                         f"Failed to send cancellation email for booking {booking.id}: {email_error}",
                         exc_info=True,
                     )
+                try:
+                    business = booking.schedule_instance.schedule.option.classId.businessId
+                    if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False):
+                        user_to_notify = booking.user or booking.contact
+                        if user_to_notify:
+                            phone = getattr(user_to_notify, "phone_number", None) or (booking.metadata or {}).get("guest_phone") or ""
+                            normalized = normalize_phone_for_sns(phone)
+                            if normalized:
+                                class_title = getattr(booking.schedule_instance.schedule.option.classId, "title", "Class")
+                                date_str = booking.schedule_instance.date.strftime("%b %d") if booking.schedule_instance and booking.schedule_instance.date else ""
+                                send_sms_task.delay(normalized, f"Your booking for {class_title} on {date_str} was cancelled. ClassEasily")
+                except Exception as sms_e:
+                    logger.warning("Cancellation SMS failed for booking %s: %s", booking.id, sms_e)
 
             log_details = f"Booking cancelled by admin {request.user.email}. Reason: {reason}. Refund must be processed separately if applicable."
             self._log_booking_action(

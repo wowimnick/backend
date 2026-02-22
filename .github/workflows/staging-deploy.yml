@@ -84,6 +84,8 @@ jobs:
             AWS_STORAGE_BUCKET_NAME=${{ secrets.AWS_STORAGE_BUCKET_NAME }}
             AWS_S3_REGION_NAME=${{ secrets.AWS_S3_REGION_NAME }}
             CLOUDFRONT_DOMAIN=${{ secrets.CLOUDFRONT_DOMAIN }}
+            AWS_SNS_REGION=${{ secrets.AWS_SNS_REGION }}
+            AWS_SMS_ENABLED=${{ secrets.AWS_SMS_ENABLED }}
 
             # --- API & Service Keys (Including Stripe) ---
             RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}

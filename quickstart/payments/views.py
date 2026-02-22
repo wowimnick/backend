@@ -43,6 +43,8 @@ from quickstart.utils.email_utils import (
     send_gift_card_email,
     send_super_admin_booking_created_email,
 )
+from quickstart.utils.sms_utils import normalize_phone_for_sns
+from quickstart.tasks.notification_tasks import send_sms_task
 
 import logging
 
@@ -589,6 +591,20 @@ class CreatePaymentIntentView(APIView):
                             recipient_contact, first_booking
                         )
 
+                    if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False):
+                        booker = recipient_user or recipient_contact
+                        phone = getattr(booker, "phone_number", None) if booker else None
+                        if not phone and first_booking.metadata:
+                            phone = first_booking.metadata.get("guest_phone") or ""
+                        normalized = normalize_phone_for_sns(phone or "")
+                        if normalized:
+                            class_title = getattr(option.classId, "title", "Class")
+                            date_str = first_booking.schedule_instance.date.strftime("%b %d") if first_booking.schedule_instance and first_booking.schedule_instance.date else ""
+                            try:
+                                send_sms_task.delay(normalized, f"You're booked for {class_title} on {date_str}. ClassEasily")
+                            except Exception as sms_e:
+                                logger.warning("Booking confirmation SMS failed: %s", sms_e)
+
                     if business.newBookingNotification:
                         recipients = {business.owner}
                         staff_to_notify = BusinessStaff.objects.filter(
@@ -604,6 +620,21 @@ class CreatePaymentIntentView(APIView):
                         for r in recipients:
                             if r and r.email:
                                 send_business_new_booking_email(r, first_booking)
+
+                        if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False):
+                            class_title = getattr(option.classId, "title", "Class")
+                            date_str = first_booking.schedule_instance.date.strftime("%b %d") if first_booking.schedule_instance and first_booking.schedule_instance.date else ""
+                            sms_msg = f"New booking: {class_title} on {date_str}. ClassEasily"
+                            for r in recipients:
+                                if not r:
+                                    continue
+                                phone = getattr(r, "phone_number", None) or ""
+                                normalized = normalize_phone_for_sns(phone)
+                                if normalized:
+                                    try:
+                                        send_sms_task.delay(normalized, sms_msg)
+                                    except Exception as sms_e:
+                                        logger.warning("New booking SMS failed for %s: %s", getattr(r, "email", ""), sms_e)
 
                         send_super_admin_booking_created_email(first_booking)
 
@@ -1526,6 +1557,20 @@ class ProcessBookingWebhook(APIView):
                 elif recipient_contact:
                     send_booking_confirmation_email(recipient_contact, first_booking)
 
+                if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False):
+                    booker = recipient_user or recipient_contact
+                    phone = getattr(booker, "phone_number", None) if booker else None
+                    if not phone and first_booking.metadata:
+                        phone = first_booking.metadata.get("guest_phone") or ""
+                    normalized = normalize_phone_for_sns(phone or "")
+                    if normalized:
+                        class_title = getattr(first_booking.schedule_instance.schedule.option.classId, "title", "Class")
+                        date_str = first_booking.schedule_instance.date.strftime("%b %d") if first_booking.schedule_instance and first_booking.schedule_instance.date else ""
+                        try:
+                            send_sms_task.delay(normalized, f"You're booked for {class_title} on {date_str}. ClassEasily")
+                        except Exception as sms_e:
+                            logger.warning("Booking confirmation SMS failed: %s", sms_e)
+
                 if business.newBookingNotification:
                     recipients = {business.owner}
                     staff_to_notify = BusinessStaff.objects.filter(
@@ -1541,6 +1586,17 @@ class ProcessBookingWebhook(APIView):
                     for recipient in recipients:
                         if recipient and recipient.email:
                             send_business_new_booking_email(recipient, first_booking)
+
+                    if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False):
+                        class_title = getattr(first_booking.schedule_instance.schedule.option.classId, "title", "Class")
+                        date_str = first_booking.schedule_instance.date.strftime("%b %d") if first_booking.schedule_instance and first_booking.schedule_instance.date else ""
+                        sms_msg = f"New booking: {class_title} on {date_str}. ClassEasily"
+                        for r in recipients:
+                            if r and normalize_phone_for_sns(getattr(r, "phone_number", None) or ""):
+                                try:
+                                    send_sms_task.delay(normalize_phone_for_sns(r.phone_number), sms_msg)
+                                except Exception as sms_e:
+                                    logger.warning("New booking SMS failed: %s", sms_e)
 
                     send_super_admin_booking_created_email(first_booking)
 
@@ -1773,6 +1829,18 @@ class ProcessBookingWebhook(APIView):
             elif contact:
                 send_booking_confirmation_email(contact, booking)
 
+            if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False):
+                booker = user or contact
+                phone = getattr(booker, "phone_number", None) if booker else (booking.metadata or {}).get("guest_phone") or ""
+                normalized = normalize_phone_for_sns(phone or "")
+                if normalized:
+                    class_title = getattr(booking.schedule_instance.schedule.option.classId, "title", "Class")
+                    date_str = booking.schedule_instance.date.strftime("%b %d") if booking.schedule_instance and booking.schedule_instance.date else ""
+                    try:
+                        send_sms_task.delay(normalized, f"You're booked for {class_title} on {date_str}. ClassEasily")
+                    except Exception as sms_e:
+                        logger.warning("Booking confirmation SMS failed: %s", sms_e)
+
             if business.newBookingNotification:
                 recipients = {business.owner}
                 for staff in BusinessStaff.objects.filter(
@@ -1785,6 +1853,18 @@ class ProcessBookingWebhook(APIView):
                 for r in recipients:
                     if r and r.email:
                         send_business_new_booking_email(r, booking)
+                if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False):
+                    class_title = getattr(booking.schedule_instance.schedule.option.classId, "title", "Class")
+                    date_str = booking.schedule_instance.date.strftime("%b %d") if booking.schedule_instance and booking.schedule_instance.date else ""
+                    sms_msg = f"New booking: {class_title} on {date_str}. ClassEasily"
+                    for r in recipients:
+                        if r:
+                            normalized = normalize_phone_for_sns(getattr(r, "phone_number", None) or "")
+                            if normalized:
+                                try:
+                                    send_sms_task.delay(normalized, sms_msg)
+                                except Exception as sms_e:
+                                    logger.warning("New booking SMS failed: %s", sms_e)
                 send_super_admin_booking_created_email(booking)
 
             try:
@@ -2093,6 +2173,20 @@ class ProcessBookingWebhook(APIView):
                 f"[{webhook_id}] CRITICAL: No recipient (user or contact) found for Booking ID {pending_booking.id}. Cannot send confirmation email."
             )
 
+        if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False):
+            booker = recipient_user or recipient_contact
+            phone = getattr(booker, "phone_number", None) if booker else None
+            if not phone and pending_booking.metadata:
+                phone = pending_booking.metadata.get("guest_phone") or ""
+            normalized = normalize_phone_for_sns(phone or "")
+            if normalized:
+                class_title = getattr(pending_booking.schedule_instance.schedule.option.classId, "title", "Class")
+                date_str = pending_booking.schedule_instance.date.strftime("%b %d") if pending_booking.schedule_instance and pending_booking.schedule_instance.date else ""
+                try:
+                    send_sms_task.delay(normalized, f"You're booked for {class_title} on {date_str}. ClassEasily")
+                except Exception as sms_e:
+                    logger.warning("Booking confirmation SMS failed: %s", sms_e)
+
         if business.newBookingNotification:
             logger.info(
                 f"[{webhook_id}] Preparing to send new booking notification to business."
@@ -2115,6 +2209,19 @@ class ProcessBookingWebhook(APIView):
             for recipient in recipients:
                 if recipient and recipient.email:
                     send_business_new_booking_email(recipient, pending_booking)
+
+            if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False):
+                class_title = getattr(pending_booking.schedule_instance.schedule.option.classId, "title", "Class")
+                date_str = pending_booking.schedule_instance.date.strftime("%b %d") if pending_booking.schedule_instance and pending_booking.schedule_instance.date else ""
+                sms_msg = f"New booking: {class_title} on {date_str}. ClassEasily"
+                for r in recipients:
+                    if r:
+                        normalized = normalize_phone_for_sns(getattr(r, "phone_number", None) or "")
+                        if normalized:
+                            try:
+                                send_sms_task.delay(normalized, sms_msg)
+                            except Exception as sms_e:
+                                logger.warning("New booking SMS failed: %s", sms_e)
 
             send_super_admin_booking_created_email(pending_booking)
 

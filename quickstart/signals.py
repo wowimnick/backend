@@ -297,6 +297,24 @@ def create_booking_notification(sender, instance, created, **kwargs):
                         f"In-app student cancellation notification created for manager {manager.email} for booking {instance.id}"
                     )
 
+            if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False):
+                try:
+                    from quickstart.utils.sms_utils import normalize_phone_for_sns
+                    from quickstart.tasks.notification_tasks import send_sms_task
+                    date_str = instance.schedule_instance.date.strftime("%b %d") if instance.schedule_instance and instance.schedule_instance.date else ""
+                    sms_msg = f"Booking cancelled: {class_title} on {date_str}. ClassEasily"
+                    if business.owner:
+                        normalized = normalize_phone_for_sns(getattr(business.owner, "phone_number", None) or "")
+                        if normalized:
+                            send_sms_task.delay(normalized, sms_msg)
+                    for manager in business.managers.all():
+                        if manager and manager.pk != getattr(business.owner, "pk", None):
+                            normalized = normalize_phone_for_sns(getattr(manager, "phone_number", None) or "")
+                            if normalized:
+                                send_sms_task.delay(normalized, sms_msg)
+                except Exception as sms_e:
+                    logger.warning("Cancellation SMS to business failed for booking %s: %s", instance.id, sms_e)
+
         # Super Admin email: booking cancelled (any cancellation)
         try:
             from .utils.email_utils import send_super_admin_booking_cancelled_email
