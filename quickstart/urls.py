@@ -9,7 +9,10 @@ from django.urls import path
 
 # --- Model import for the new redirect view ---
 from quickstart.views.public.public_class_views import paginated_class_reviews
-from quickstart.views.widget.widget_config_views import WidgetConfigManagementView
+from quickstart.views.widget.widget_config_views import (
+    WidgetConfigManagementView,
+    CreateWidgetSubscriptionCheckoutView,
+)
 from quickstart.views.admin.payout_management.admin_payout_views import (
     AdminPayoutViewSet,
 )
@@ -556,6 +559,11 @@ urlpatterns = [
         "my-business/widget-config/",
         WidgetConfigManagementView.as_view(),
         name="my-business-widget-config",
+    ),
+    path(
+        "my-business/widget-subscription/checkout/",
+        CreateWidgetSubscriptionCheckoutView.as_view(),
+        name="my-business-widget-subscription-checkout",
     ),
     path(
         "my-business/profile/",

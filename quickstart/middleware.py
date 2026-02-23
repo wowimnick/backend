@@ -60,28 +60,37 @@ class DynamicCorsMiddleware:
         if request.path.startswith("/api/widget/v1/"):
             origin = request.headers.get("Origin")
             if origin:
-                business = request.business_context
-                # This is the strict, second-level check.
-                if business and business.allowed_widget_origins:
-                    origin_domain = (
-                        origin.replace("https://", "")
-                        .replace("http://", "")
-                        .split("/")[0]
-                    )
-                    normalized_allowed_origins = [
-                        o.replace("https://", "").replace("http://", "").rstrip("/")
-                        for o in business.allowed_widget_origins
-                    ]
-
-                    if origin_domain in normalized_allowed_origins:
-                        response["Access-Control-Allow-Origin"] = origin
-                        logger.debug(
-                            f"Added CORS header for valid origin: {origin} for business {business.businessId}"
+                # Allow localhost / 127.0.0.1 (any port) for development and testing.
+                _host = (
+                    origin.replace("https://", "")
+                    .replace("http://", "")
+                    .split("/")[0]
+                    .split(":")[0]
+                )
+                if _host in ("localhost", "127.0.0.1"):
+                    response["Access-Control-Allow-Origin"] = origin
+                    logger.debug(f"Added CORS header for dev origin: {origin}")
+                else:
+                    business = request.business_context
+                    if business and business.allowed_widget_origins:
+                        origin_domain = (
+                            origin.replace("https://", "")
+                            .replace("http://", "")
+                            .split("/")[0]
                         )
-                    else:
-                        logger.warning(
-                            f"CORS REJECTED: Origin '{origin_domain}' not in allowed list for business {business.businessId}"
-                        )
+                        normalized_allowed_origins = [
+                            o.replace("https://", "").replace("http://", "").rstrip("/")
+                            for o in business.allowed_widget_origins
+                        ]
+                        if origin_domain in normalized_allowed_origins:
+                            response["Access-Control-Allow-Origin"] = origin
+                            logger.debug(
+                                f"Added CORS header for valid origin: {origin} for business {business.businessId}"
+                            )
+                        else:
+                            logger.warning(
+                                f"CORS REJECTED: Origin '{origin_domain}' not in allowed list for business {business.businessId}"
+                            )
 
         return response
 

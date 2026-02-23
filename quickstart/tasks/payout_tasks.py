@@ -10,9 +10,21 @@ import logging
 import pytz
 import random
 
-from quickstart.models import Booking, Payout, BusinessInfo
+from quickstart.models import Booking, Payout, BusinessInfo, Payment
 
 logger = logging.getLogger(__name__)
+
+# Stripe standard processing fee (approximate): 2.9% + fixed fee per charge. Deducted from business payout.
+STRIPE_FEE_PERCENT = Decimal("0.029")
+STRIPE_FEE_FIXED = Decimal("0.30")
+
+
+def _estimate_stripe_processing_fee(charge_amount):
+    """Estimate Stripe processing fee for a charge (2.9% + $0.30). charge_amount in dollars."""
+    if charge_amount <= 0:
+        return Decimal("0.00")
+    fee = (charge_amount * STRIPE_FEE_PERCENT + STRIPE_FEE_FIXED).quantize(Decimal("0.01"))
+    return fee
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
 
@@ -108,17 +120,34 @@ def process_daily_payouts():
                     logger.info(f"No bookings remaining after lock acquisition (another worker processing?). Skipping.")
                     continue
 
-                # Calculate total payout amount
+                # Prefetch payments for Stripe fee estimation
+                bookings_to_process = bookings_to_process.prefetch_related("payments")
+
+                # Calculate total payout amount (Stripe processing fees deducted from business payout)
                 total_payout = Decimal("0.00")
+                total_stripe_fees = Decimal("0.00")
                 booking_ids = []
                 zero_dollar_bookings = []
-                
+
                 for booking in bookings_to_process:
-                    if booking.allocated_net_payout > 0:
-                        total_payout += booking.allocated_net_payout
+                    allocated = booking.allocated_net_payout or Decimal("0.00")
+                    if allocated <= 0:
+                        zero_dollar_bookings.append(booking.id)
+                        continue
+                    # Deduct estimated Stripe processing fee from this booking's payout
+                    payment = next(
+                        (p for p in booking.payments.all() if p.status == "succeeded"),
+                        None,
+                    )
+                    stripe_fee = Decimal("0.00")
+                    if payment and payment.amount:
+                        stripe_fee = _estimate_stripe_processing_fee(payment.amount)
+                    total_stripe_fees += stripe_fee
+                    net_after_stripe = (allocated - stripe_fee).quantize(Decimal("0.01"))
+                    if net_after_stripe > 0:
+                        total_payout += net_after_stripe
                         booking_ids.append(booking.id)
                     else:
-                        # Mark $0/free bookings as processed immediately
                         zero_dollar_bookings.append(booking.id)
 
                 logger.info(f"Total payout amount calculated: ${total_payout}")
@@ -153,6 +182,7 @@ def process_daily_payouts():
                         "source": "daily_payout_task",
                         "business_id": business.businessId,
                         "booking_count": len(booking_ids),
+                        "stripe_fees_deducted": str(total_stripe_fees),
                         "temp_id": True,
                     },
                 )
@@ -178,7 +208,8 @@ def process_daily_payouts():
 
                 arrival_date = timezone.now().date()
 
-                updated_metadata = transfer.metadata.copy()
+                updated_metadata = payout_record.metadata.copy()
+                updated_metadata.update(transfer.metadata or {})
                 updated_metadata.pop("temp_id", None)
 
                 payout_record.stripe_transfer_id = transfer.id

@@ -587,6 +587,13 @@ class BusinessInfo(models.Model):
     stripe_account_id = models.CharField(
         max_length=255, blank=True, null=True, unique=True, db_index=True
     )
+    stripe_customer_id = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        db_index=True,
+        help_text="Stripe Customer ID for platform billing (e.g. widget subscription).",
+    )
     stripe_account_status = models.CharField(
         max_length=30,
         choices=STRIPE_STATUS_CHOICES,
@@ -2880,6 +2887,54 @@ class Payout(models.Model):
             ("trigger_manual_payout", "Can trigger a manual payout process"),
             ("retry_failed_payout", "Can retry a failed payout transfer"),
         ]
+
+
+class WidgetSubscription(models.Model):
+    """
+    Tracks the $50/month widget subscription for a business. One active subscription per business.
+    """
+
+    STATUS_CHOICES = [
+        ("active", "Active"),
+        ("trialing", "Trialing"),
+        ("past_due", "Past Due"),
+        ("canceled", "Canceled"),
+        ("incomplete", "Incomplete"),
+        ("incomplete_expired", "Incomplete Expired"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        BusinessInfo,
+        on_delete=models.CASCADE,
+        related_name="widget_subscriptions",
+    )
+    stripe_subscription_id = models.CharField(
+        max_length=255, unique=True, db_index=True, null=True, blank=True
+    )
+    stripe_customer_id = models.CharField(
+        max_length=255, blank=True, null=True, db_index=True
+    )
+    stripe_price_id = models.CharField(max_length=255, blank=True, null=True)
+    status = models.CharField(
+        max_length=30,
+        choices=STATUS_CHOICES,
+        default="incomplete",
+        db_index=True,
+    )
+    current_period_end = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "widget_subscriptions"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["business", "status"]),
+        ]
+
+    def __str__(self):
+        return f"Widget subscription {self.stripe_subscription_id or self.id} ({self.business.businessName})"
 
 
 class Reviews(models.Model):

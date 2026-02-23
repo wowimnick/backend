@@ -22,6 +22,7 @@ from quickstart.models import (
     Payment,
     ClassImage,
     ClassOption,
+    WidgetSubscription,
 )
 from quickstart.serializers.widget.widget_serializers import (
     WidgetBusinessConfigSerializer,
@@ -36,6 +37,18 @@ logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
 
+def _business_has_active_widget_subscription(business):
+    """True if widget subscription is not required, or business has an active subscription."""
+    if not getattr(settings, "WIDGET_SUBSCRIPTION_REQUIRED", False):
+        return True
+    now = timezone.now()
+    return WidgetSubscription.objects.filter(
+        business=business,
+        status__in=["active", "trialing"],
+        current_period_end__gt=now,
+    ).exists()
+
+
 class WidgetConfigView(generics.RetrieveAPIView):
     permission_classes = [IsValidWidgetRequest]
     serializer_class = WidgetBusinessConfigSerializer
@@ -45,6 +58,14 @@ class WidgetConfigView(generics.RetrieveAPIView):
 
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
+        if not _business_has_active_widget_subscription(instance):
+            return Response(
+                {
+                    "error": "widget_subscription_required",
+                    "message": "An active widget subscription is required. Please subscribe in your dashboard.",
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
         serializer = self.get_serializer(instance)
         data = serializer.data
         data["stripe_publishable_key"] = settings.STRIPE_PUBLIC_KEY
@@ -161,6 +182,15 @@ class CreateGuestPaymentIntentView(APIView):
     permission_classes = [IsValidWidgetRequest]
 
     def post(self, request, *args, **kwargs):
+        business = request.business_context
+        if not _business_has_active_widget_subscription(business):
+            return Response(
+                {
+                    "error": "widget_subscription_required",
+                    "message": "An active widget subscription is required to accept bookings.",
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
         instance_id = request.data.get("schedule_instance_id")
         participants = int(request.data.get("participants", 1))
 
@@ -182,21 +212,21 @@ class CreateGuestPaymentIntentView(APIView):
                 f"Not enough spots available. Only {instance.available_spots} left."
             )
 
-        # Fee calculation
+        # Fee calculation: 4% platform fee on top of class price (customer pays class price + 4%).
         subtotal = instance.price * Decimal(participants)
-        # MODIFICATION: For the widget, a fixed 6% fee is applied, overriding any partner tier.
-        fee_percentage = Decimal("6.00")
+        fee_percentage = Decimal("4.00")
         platform_fee = (subtotal * (fee_percentage / Decimal("100"))).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP
         )
 
-        # Tax calculation
+        # Tax calculation (on subtotal)
         hst_rate = Decimal("0.13")
         tax_on_subtotal = (subtotal * hst_rate).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP
         )
 
-        total_amount_charged = subtotal + tax_on_subtotal
+        # Customer pays: subtotal + platform_fee (4%) + tax. Business payout is subtotal - platform_fee (Stripe fee deducted at payout).
+        total_amount_charged = subtotal + platform_fee + tax_on_subtotal
         net_payout_amount = subtotal - platform_fee
         final_amount_cents = int(total_amount_charged * 100)
 
