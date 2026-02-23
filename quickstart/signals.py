@@ -302,7 +302,10 @@ def create_booking_notification(sender, instance, created, **kwargs):
                     from quickstart.utils.sms_utils import normalize_phone_for_sns
                     from quickstart.tasks.notification_tasks import send_sms_task
                     date_str = instance.schedule_instance.date.strftime("%b %d") if instance.schedule_instance and instance.schedule_instance.date else ""
-                    sms_msg = f"Booking cancelled: {class_title} on {date_str}. ClassEasily"
+                    t = instance.schedule_instance.time if instance.schedule_instance else None
+                    time_str = t.strftime("%I:%M %p").lstrip("0") if t and hasattr(t, "strftime") else (str(t) if t else "")
+                    when_str = f"on {date_str} at {time_str}" if time_str else f"on {date_str}"
+                    sms_msg = f"A booking was cancelled: {class_title} {when_str}.\n\nSpot is available again.\n\n— ClassEasily"
                     if business.owner:
                         normalized = normalize_phone_for_sns(getattr(business.owner, "phone_number", None) or "")
                         if normalized:

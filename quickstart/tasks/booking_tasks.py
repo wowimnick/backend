@@ -163,7 +163,19 @@ def send_upcoming_booking_reminders():
                     t = booking.schedule_instance.time
                     time_str = t.strftime("%I:%M %p").lstrip("0") if hasattr(t, "strftime") else str(t)
                     date_str = booking.schedule_instance.date.strftime("%b %d") if hasattr(booking.schedule_instance.date, "strftime") else str(booking.schedule_instance.date)
-                    sms_msg = f"Reminder: {class_title} tomorrow at {time_str} ({date_str}). ClassEasily"
+                    business_name = getattr(business, "businessName", "") or "ClassEasily"
+                    host_message = getattr(
+                        booking.schedule_instance.schedule.option,
+                        "reminder_message",
+                        "",
+                    ) or getattr(
+                        booking.schedule_instance.schedule,
+                        "reminder_message",
+                        "",
+                    ) or ""
+                    sms_msg = f"Heads up — {class_title} is tomorrow, {date_str} at {time_str}.\n\nNeed to cancel? Do it from your booking.\n\n— {business_name}"
+                    if host_message and str(host_message).strip():
+                        sms_msg = f"{sms_msg}\n\nFrom your host: {str(host_message).strip()}"
                     try:
                         send_sms_task.delay(normalized, sms_msg)
                         logger.info(f"Queued reminder SMS for booking {booking.id}.")

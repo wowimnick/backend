@@ -224,15 +224,19 @@ class AdminBookingViewSet(viewsets.ModelViewSet):
                     )
                 try:
                     business = booking.schedule_instance.schedule.option.classId.businessId
-                    if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False):
+                    if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False) and booking.schedule_instance:
                         user_to_notify = booking.user or booking.contact
                         if user_to_notify:
                             phone = getattr(user_to_notify, "phone_number", None) or (booking.metadata or {}).get("guest_phone") or ""
                             normalized = normalize_phone_for_sns(phone)
                             if normalized:
                                 class_title = getattr(booking.schedule_instance.schedule.option.classId, "title", "Class")
-                                date_str = booking.schedule_instance.date.strftime("%b %d") if booking.schedule_instance and booking.schedule_instance.date else ""
-                                send_sms_task.delay(normalized, f"Your booking for {class_title} on {date_str} was cancelled. ClassEasily")
+                                date_str = booking.schedule_instance.date.strftime("%b %d")
+                                t = booking.schedule_instance.time
+                                time_str = t.strftime("%I:%M %p").lstrip("0") if hasattr(t, "strftime") else str(t)
+                                business_name = getattr(business, "businessName", "") or "ClassEasily"
+                                sms_msg = f"Your booking for {class_title} on {date_str} at {time_str} has been cancelled.\n\nIf you paid, you'll receive a refund.\n\n— {business_name}"
+                                send_sms_task.delay(normalized, sms_msg)
                 except Exception as sms_e:
                     logger.warning("Cancellation SMS failed for booking %s: %s", booking.id, sms_e)
 

@@ -599,11 +599,15 @@ class CreatePaymentIntentView(APIView):
                         if not phone and first_booking.metadata:
                             phone = first_booking.metadata.get("guest_phone") or ""
                         normalized = normalize_phone_for_sns(phone or "")
-                        if normalized:
+                        if normalized and first_booking.schedule_instance:
                             class_title = getattr(option.classId, "title", "Class")
-                            date_str = first_booking.schedule_instance.date.strftime("%b %d") if first_booking.schedule_instance and first_booking.schedule_instance.date else ""
+                            date_str = first_booking.schedule_instance.date.strftime("%b %d")
+                            t = first_booking.schedule_instance.time
+                            time_str = t.strftime("%I:%M %p").lstrip("0") if hasattr(t, "strftime") else str(t)
+                            business_name = getattr(business, "businessName", "") or "ClassEasily"
+                            sms_msg = f"You're in! {class_title} is on {date_str} at {time_str}.\n\nAdd it to your calendar — we'll send a reminder the day before.\n\n— {business_name}"
                             try:
-                                send_sms_task.delay(normalized, f"You're booked for {class_title} on {date_str}. ClassEasily")
+                                send_sms_task.delay(normalized, sms_msg)
                             except Exception as sms_e:
                                 logger.warning("Booking confirmation SMS failed: %s", sms_e)
 
@@ -623,10 +627,19 @@ class CreatePaymentIntentView(APIView):
                             if r and r.email:
                                 send_business_new_booking_email(r, first_booking)
 
-                        if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False):
+                        if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False) and first_booking.schedule_instance:
                             class_title = getattr(option.classId, "title", "Class")
-                            date_str = first_booking.schedule_instance.date.strftime("%b %d") if first_booking.schedule_instance and first_booking.schedule_instance.date else ""
-                            sms_msg = f"New booking: {class_title} on {date_str}. ClassEasily"
+                            date_str = first_booking.schedule_instance.date.strftime("%b %d")
+                            t = first_booking.schedule_instance.time
+                            time_str = t.strftime("%I:%M %p").lstrip("0") if hasattr(t, "strftime") else str(t)
+                            booker = recipient_user or recipient_contact
+                            if booker and hasattr(booker, "first_name") and hasattr(booker, "last_name"):
+                                booker_name = f"{getattr(booker, 'first_name', '')} {getattr(booker, 'last_name', '')}".strip() or getattr(booker, "email", "A customer")
+                            elif booker:
+                                booker_name = getattr(booker, "email", "A customer") or "A customer"
+                            else:
+                                booker_name = "A customer"
+                            sms_msg = f"New booking: {class_title} on {date_str} at {time_str}.\n\nBooked by {booker_name}. Check your dashboard for details.\n\n— ClassEasily"
                             for r in recipients:
                                 if not r:
                                     continue
@@ -1621,11 +1634,15 @@ class ProcessBookingWebhook(APIView):
                     if not phone and first_booking.metadata:
                         phone = first_booking.metadata.get("guest_phone") or ""
                     normalized = normalize_phone_for_sns(phone or "")
-                    if normalized:
+                    if normalized and first_booking.schedule_instance:
                         class_title = getattr(first_booking.schedule_instance.schedule.option.classId, "title", "Class")
-                        date_str = first_booking.schedule_instance.date.strftime("%b %d") if first_booking.schedule_instance and first_booking.schedule_instance.date else ""
+                        date_str = first_booking.schedule_instance.date.strftime("%b %d")
+                        t = first_booking.schedule_instance.time
+                        time_str = t.strftime("%I:%M %p").lstrip("0") if hasattr(t, "strftime") else str(t)
+                        business_name = getattr(business, "businessName", "") or "ClassEasily"
+                        sms_msg = f"You're in! {class_title} is on {date_str} at {time_str}.\n\nAdd it to your calendar — we'll send a reminder the day before.\n\n— {business_name}"
                         try:
-                            send_sms_task.delay(normalized, f"You're booked for {class_title} on {date_str}. ClassEasily")
+                            send_sms_task.delay(normalized, sms_msg)
                         except Exception as sms_e:
                             logger.warning("Booking confirmation SMS failed: %s", sms_e)
 
@@ -1645,10 +1662,19 @@ class ProcessBookingWebhook(APIView):
                         if recipient and recipient.email:
                             send_business_new_booking_email(recipient, first_booking)
 
-                    if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False):
+                    if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False) and first_booking.schedule_instance:
                         class_title = getattr(first_booking.schedule_instance.schedule.option.classId, "title", "Class")
-                        date_str = first_booking.schedule_instance.date.strftime("%b %d") if first_booking.schedule_instance and first_booking.schedule_instance.date else ""
-                        sms_msg = f"New booking: {class_title} on {date_str}. ClassEasily"
+                        date_str = first_booking.schedule_instance.date.strftime("%b %d")
+                        t = first_booking.schedule_instance.time
+                        time_str = t.strftime("%I:%M %p").lstrip("0") if hasattr(t, "strftime") else str(t)
+                        booker = recipient_user or recipient_contact
+                        if booker and hasattr(booker, "first_name") and hasattr(booker, "last_name"):
+                            booker_name = f"{getattr(booker, 'first_name', '')} {getattr(booker, 'last_name', '')}".strip() or getattr(booker, "email", "A customer")
+                        elif booker:
+                            booker_name = getattr(booker, "email", "A customer") or "A customer"
+                        else:
+                            booker_name = "A customer"
+                        sms_msg = f"New booking: {class_title} on {date_str} at {time_str}.\n\nBooked by {booker_name}. Check your dashboard for details.\n\n— ClassEasily"
                         for r in recipients:
                             if r and normalize_phone_for_sns(getattr(r, "phone_number", None) or ""):
                                 try:
