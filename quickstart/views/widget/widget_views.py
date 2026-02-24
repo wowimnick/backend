@@ -32,6 +32,7 @@ from quickstart.serializers.widget.widget_serializers import (
 )
 
 from quickstart.utils.permissions import IsValidWidgetRequest
+from quickstart.utils.widget_throttle import WidgetRateThrottle
 
 logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
@@ -49,8 +50,39 @@ def _business_has_active_widget_subscription(business):
     ).exists()
 
 
+class WidgetEventsView(APIView):
+    """
+    Accepts widget analytics/error events (loaded, booking_completed, error).
+    No PII. Rate limited. Logs for support/analytics.
+    """
+
+    permission_classes = [IsValidWidgetRequest]
+    throttle_classes = [WidgetRateThrottle]
+
+    def post(self, request, *args, **kwargs):
+        event = request.data.get("event") or ""
+        message = request.data.get("message", "")
+        component_stack = request.data.get("component_stack", "")
+        business_id = getattr(request.business_context, "businessId", None)
+        logger.info(
+            "Widget event: event=%s business_id=%s message=%s",
+            event,
+            business_id,
+            (message or "")[:200],
+        )
+        if event == "error" and (message or component_stack):
+            logger.warning(
+                "Widget error report: business_id=%s message=%s stack=%s",
+                business_id,
+                message[:500] if message else "",
+                (component_stack[:500] if component_stack else ""),
+            )
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 class WidgetConfigView(generics.RetrieveAPIView):
     permission_classes = [IsValidWidgetRequest]
+    throttle_classes = [WidgetRateThrottle]
     serializer_class = WidgetBusinessConfigSerializer
 
     def get_object(self):
@@ -69,11 +101,15 @@ class WidgetConfigView(generics.RetrieveAPIView):
         serializer = self.get_serializer(instance)
         data = serializer.data
         data["stripe_publishable_key"] = settings.STRIPE_PUBLIC_KEY
+        base = getattr(settings, "FRONTEND_BASE_URL", "https://www.classeasily.com").rstrip("/")
+        data["terms_url"] = f"{base}/terms-of-service"
+        data["privacy_url"] = f"{base}/privacy-policy"
         return Response(data)
 
 
 class WidgetClassListView(generics.ListAPIView):
     permission_classes = [IsValidWidgetRequest]
+    throttle_classes = [WidgetRateThrottle]
     serializer_class = WidgetClassSerializer
 
     def get_queryset(self):
@@ -87,6 +123,7 @@ class WidgetClassListView(generics.ListAPIView):
 
 class WidgetAvailabilityView(APIView):
     permission_classes = [IsValidWidgetRequest]
+    throttle_classes = [WidgetRateThrottle]
 
     def get(self, request, *args, **kwargs):
         logger.info(f"Widget availability request: {request.query_params}")
@@ -180,6 +217,7 @@ class CreateGuestPaymentIntentView(APIView):
     """
 
     permission_classes = [IsValidWidgetRequest]
+    throttle_classes = [WidgetRateThrottle]
 
     def post(self, request, *args, **kwargs):
         business = request.business_context
@@ -265,6 +303,7 @@ class GuestBookingCreateView(generics.CreateAPIView):
     """
 
     permission_classes = [IsValidWidgetRequest]
+    throttle_classes = [WidgetRateThrottle]
     serializer_class = GuestBookingCreateSerializer
 
     def create(self, request, *args, **kwargs):

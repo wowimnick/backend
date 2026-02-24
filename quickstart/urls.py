@@ -144,6 +144,7 @@ from quickstart.views.widget.widget_views import (
     WidgetAvailabilityView,
     CreateGuestPaymentIntentView,
     GuestBookingCreateView,
+    WidgetEventsView,
 )
 
 # =============================================================================
@@ -319,6 +320,7 @@ widget_urlpatterns = [
         name="widget-payment-intent",
     ),
     path("bookings/", GuestBookingCreateView.as_view(), name="widget-create-booking"),
+    path("events/", WidgetEventsView.as_view(), name="widget-events"),
 ]
 
 urlpatterns = [

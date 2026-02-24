@@ -1,4 +1,18 @@
-# quickstart/serializers/business/widget_config_serializer.py
+# quickstart/serializers/widget/widget_config_serializer.py
+"""
+Widget config is stored in BusinessInfo.widget_config (JSON). Supported keys
+used by the dashboard customizer and embeddable widget include:
+
+Display: view (inline|modal|drawer|floating), buttonText, drawerPosition (left|right|bottom),
+  responsiveDrawerOnMobile (bool), floatingPosition, floatingSize, floatingShape,
+  floatingZIndex, modalSize, modalMaxWidth, inlineMinHeight, inlineFullWidth.
+Theme: primary, background, cardBackground, textPrimary, textSecondary, textOnPrimary, border,
+  fontFamily, borderRadiusPreset, layoutStyle, densityPreset, version, classLayout.
+Behavior: specificClassId (classId to feature a single class in the widget).
+Security: allowed_widget_origins (handled separately on the model).
+
+The public widget API returns widget_config as "theme" via WidgetBusinessConfigSerializer.
+"""
 
 from rest_framework import serializers
 from quickstart.models import BusinessInfo

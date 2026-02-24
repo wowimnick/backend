@@ -401,6 +401,7 @@ REST_FRAMEWORK = {
         "burst": "300/minute",
         "sensitive": "25/minute",
         "chat": "30/minute",
+        "widget": "120/minute",  # per X-Business-ID (widget embed)
     },
 }
 
