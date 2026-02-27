@@ -48,6 +48,18 @@ class BusinessConversationMessageCreateSerializer(serializers.Serializer):
         return value.strip()
 
 
+class BusinessStartConversationByBookingSerializer(serializers.Serializer):
+    """Business starts or gets a conversation by booking_id (optional first message)."""
+
+    booking_id = serializers.IntegerField(required=True, min_value=1)
+    text = serializers.CharField(max_length=5000, trim_whitespace=True, required=False, allow_blank=True)
+
+    def validate_text(self, value):
+        if value is not None and value.strip():
+            return value.strip()
+        return ""
+
+
 class BusinessConversationListSerializer(serializers.ModelSerializer):
     """List item for business: conversation with guest name and last message preview."""
 
@@ -69,6 +81,7 @@ class BusinessConversationListSerializer(serializers.ModelSerializer):
             "booker_email",
             "last_message_at",
             "last_message_preview",
+            "last_read_by_business_at",
             "created_at",
         ]
 

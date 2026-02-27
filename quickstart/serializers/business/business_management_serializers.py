@@ -22,8 +22,8 @@ from quickstart.models import (
     Role,
     ImportedGoogleReview,
 )
-from django.db.models import Sum, Count, Avg, Q, Subquery, OuterRef, IntegerField, F
-from django.db.models.functions import Coalesce
+from django.db.models import Sum, Count, Avg, Q, Subquery, OuterRef, IntegerField, F, CharField
+from django.db.models.functions import Coalesce, Cast
 from datetime import (
     timedelta,
     time,
@@ -933,37 +933,30 @@ class BusinessStatsSerializer(serializers.ModelSerializer):
         return round(combined_avg_rating, 1)
 
     def get_total_revenue(self, obj):
-        valid_booking_ids = (
+        # Sum all paid bookings (courses: each session's amount_paid; matches Revenue Analytics)
+        total = (
+            Booking.objects.filter(
+                schedule_instance__schedule__option__classId__businessId=obj,
+                payment_status="paid",
+            ).aggregate(total=Sum("amount_paid"))["total"]
+            or Decimal("0.00")
+        )
+        return float(total)
+
+    def get_total_students(self, obj):
+        # Count distinct bookers (user or contact), paid only
+        return (
             Booking.objects.filter(
                 schedule_instance__schedule__option__classId__businessId=obj,
                 payment_status="paid",
             )
-            .filter(
-                Q(booking_group_id__isnull=True)
-                | Q(
-                    id=Subquery(
-                        Booking.objects.filter(
-                            booking_group_id=OuterRef("booking_group_id")
-                        )
-                        .order_by("id")
-                        .values("id")[:1]
-                    )
+            .annotate(
+                booker_id=Coalesce(
+                    Cast("user_id", output_field=CharField()),
+                    Cast("contact_id", output_field=CharField()),
                 )
             )
-            .values_list("id", flat=True)
-        )
-
-        total = Booking.objects.filter(id__in=list(valid_booking_ids)).aggregate(
-            total=Sum("amount_paid")
-        )["total"] or Decimal("0.00")
-        return float(total)
-
-    def get_total_students(self, obj):
-        return (
-            Booking.objects.filter(
-                schedule_instance__schedule__option__classId__businessId=obj
-            )
-            .values("user")
+            .values("booker_id")
             .distinct()
             .count()
         )
@@ -974,26 +967,11 @@ class BusinessStatsSerializer(serializers.ModelSerializer):
 
     def get_recent_bookings(self, obj):
         thirty_days_ago = timezone.now() - timedelta(days=30)
-        return (
-            Booking.objects.filter(
-                schedule_instance__schedule__option__classId__businessId=obj,
-                booking_date__gte=thirty_days_ago,
-                payment_status="paid",
-            )
-            .filter(
-                Q(booking_group_id__isnull=True)
-                | Q(
-                    id=Subquery(
-                        Booking.objects.filter(
-                            booking_group_id=OuterRef("booking_group_id")
-                        )
-                        .order_by("id")
-                        .values("id")[:1]
-                    )
-                )
-            )
-            .count()
-        )
+        return Booking.objects.filter(
+            schedule_instance__schedule__option__classId__businessId=obj,
+            booking_date__gte=thirty_days_ago,
+            payment_status="paid",
+        ).count()
 
 
 class BusinessDiscountSerializer(serializers.ModelSerializer):
