@@ -42,23 +42,42 @@ def _normalize_origin_domain(origin):
     )
 
 
+def _is_classeasily_domain(origin):
+    """
+    True only for classeasily.com or *.classeasily.com (e.g. staging.classeasily.com, www.classeasily.com).
+    Used so our app and widget-demo work without being in a business's Allowed Domains.
+    """
+    if not origin:
+        return False
+    domain = _normalize_origin_domain(origin)
+    if not domain:
+        return False
+    domain = domain.lower()
+    return domain == "classeasily.com" or domain.endswith(".classeasily.com")
+
+
 def _origin_allowed_for_business(origin, business):
     """
-    Return True if this Origin is allowed for the business (localhost/dev or in allowed_widget_origins).
-    Server-side validation: only allow CORS when Origin matches business config.
+    Return True if this Origin is allowed for this business.
+    - localhost/127.0.0.1: allowed (dev).
+    - classeasily.com or *.classeasily.com: allowed (our app/widget-demo).
+    - Any other domain: allowed only if listed in this business's Allowed Domains (allowed_widget_origins).
+    So testsite.com works only for the business that has testsite.com in their box; other businesses get 403.
     """
     if not origin:
         return False
     origin_domain = _normalize_origin_domain(origin)
     if origin_domain in ("localhost", "127.0.0.1"):
         return True
+    if _is_classeasily_domain(origin):
+        return True
     if not business or not business.allowed_widget_origins:
         return False
     normalized_allowed = [
-        o.replace("https://", "").replace("http://", "").rstrip("/").split(":")[0]
+        o.replace("https://", "").replace("http://", "").rstrip("/").split(":")[0].lower()
         for o in business.allowed_widget_origins
     ]
-    return origin_domain in normalized_allowed
+    return (origin_domain or "").lower() in normalized_allowed
 
 
 class DynamicCorsMiddleware:
@@ -70,20 +89,18 @@ class DynamicCorsMiddleware:
         request.business_context = SimpleLazyObject(lambda: get_business(request))
 
         # --- STAGE 1: Handle the Preflight (OPTIONS) Request ---
-        # Validate Origin the same way as actual requests; only allow CORS for valid origins.
+        # Browser does not send X-Business-ID on preflight, so we cannot look up business.
+        # Allow preflight for any origin so that customer domains in Allowed Domains can send the actual request.
+        # GET/POST still enforce: only classeasily.com/*.classeasily.com or origin in this business's Allowed Domains.
         if request.method == "OPTIONS" and _is_widget_path(request.path):
+            response = HttpResponse(status=200)
+            response["Access-Control-Allow-Headers"] = "X-Business-ID, Content-Type"
+            response["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
             origin = request.headers.get("Origin")
             if origin:
-                response = HttpResponse(status=200)
-                response["Access-Control-Allow-Headers"] = "X-Business-ID, Content-Type"
-                response["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-                business = request.business_context
-                if _origin_allowed_for_business(origin, business):
-                    response["Access-Control-Allow-Origin"] = origin
-                    logger.debug(f"Preflight: allowed origin {origin}")
-                else:
-                    logger.debug(f"Preflight: origin not allowed, not setting ACAO")
-                return response
+                response["Access-Control-Allow-Origin"] = origin
+                logger.debug("Preflight: ACAO set for origin %s", _normalize_origin_domain(origin))
+            return response
 
         # --- STAGE 2: Actual (GET, POST) — reject invalid origins before running the view ---
         # This prevents widget data from being returned to disallowed origins at all.
