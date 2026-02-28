@@ -1307,6 +1307,10 @@ class ProcessBookingWebhook(APIView):
                 stripe_price_id = None
                 if subscription.get("items") and subscription["items"].get("data"):
                     stripe_price_id = subscription["items"]["data"][0].get("price", {}).get("id")
+                plan_id = (subscription.metadata.get("plan_id") or "growth").strip().lower()
+                if plan_id not in ("basic", "growth", "advanced"):
+                    plan_id = "growth"
+                cancel_at_period_end = bool(subscription.get("cancel_at_period_end"))
                 sub, _ = WidgetSubscription.objects.update_or_create(
                     stripe_subscription_id=subscription.id,
                     defaults={
@@ -1315,6 +1319,8 @@ class ProcessBookingWebhook(APIView):
                         "stripe_price_id": stripe_price_id,
                         "status": subscription.status,
                         "current_period_end": current_period_end,
+                        "plan_id": plan_id,
+                        "cancel_at_period_end": cancel_at_period_end,
                     },
                 )
                 if not business.stripe_customer_id and subscription.get("customer"):

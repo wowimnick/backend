@@ -346,13 +346,14 @@ class MyBusinessOverviewView(APIView):
                 monthly_revenue = {"value": 0, "change": 0}
                 revenue_trend_data = []
 
-        # --- PERFORMANCE FIX: More efficient student count ---
+        # --- PERFORMANCE FIX: More efficient student count (paid bookers only) ---
         try:
             # Subquery to get unique booker identifiers (user_id or contact_id)
             bookers_in_current_month = (
                 Booking.objects.filter(
                     schedule_instance__schedule__option__classId__businessId=business,
                     booking_date__gte=current_month_start,
+                    payment_status="paid",
                 )
                 .annotate(
                     booker_id=Coalesce(
@@ -369,6 +370,7 @@ class MyBusinessOverviewView(APIView):
                 Booking.objects.filter(
                     schedule_instance__schedule__option__classId__businessId=business,
                     booking_date__range=(prev_month_start, prev_month_end),
+                    payment_status="paid",
                 )
                 .annotate(
                     booker_id=Coalesce(
@@ -482,13 +484,13 @@ class MyBusinessOverviewView(APIView):
             )
             upcoming_classes_data = []
 
-        # --- Popular Classes ---
+        # --- Popular Classes (paid bookings only, matches revenue metrics) ---
         popular_classes_data = []
         try:
             popular_classes_raw = (
                 Booking.objects.filter(
                     schedule_instance__schedule__option__classId__businessId=business,
-                    status__in=["confirmed", "completed"],
+                    payment_status="paid",
                 )
                 .values("schedule_instance__schedule__option__classId__title")
                 .annotate(enrollment_spots=Sum("participants"))
@@ -757,13 +759,11 @@ class BusinessDashboardViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=["get"])
     def revenue_over_time(self, request, pk=None):
-        """Get revenue trend data for the business."""
+        """Get revenue trend data for the business (all paid bookings, matches Revenue Analytics)."""
         business = self.get_object()  # Permission/ownership checked
         timeframe = request.query_params.get("timeframe", "monthly")
-        # Use business.pk directly for filtering
         bookings_qs = Booking.objects.filter(
             schedule_instance__schedule__option__classId__businessId=business.pk,
-            status="completed",
             payment_status="paid",
         )
         if timeframe == "daily":
@@ -815,27 +815,22 @@ class BusinessDashboardViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=["get"])
     def class_performance(self, request, pk=None):
-        """Get performance metrics per class for this business."""
+        """Get performance metrics per class (all paid bookings, matches Revenue Analytics)."""
         business = self.get_object()  # Permission/ownership checked
+        paid_filter = Q(
+            options__schedules__instances__bookings__payment_status="paid",
+        )
         classes_qs = (
-            ClassesMain.objects.filter(
-                businessId=business  # Use the fetched business object directly
-            )
+            ClassesMain.objects.filter(businessId=business)
             .annotate(
                 booking_count=Count(
                     "options__schedules__instances__bookings",
-                    filter=Q(
-                        options__schedules__instances__bookings__status="completed",
-                        options__schedules__instances__bookings__payment_status="paid",
-                    ),
+                    filter=paid_filter,
                     distinct=True,
                 ),
                 revenue=Sum(
                     "options__schedules__instances__bookings__amount_paid",
-                    filter=Q(
-                        options__schedules__instances__bookings__status="completed",
-                        options__schedules__instances__bookings__payment_status="paid",
-                    ),
+                    filter=paid_filter,
                 ),
                 review_count=Count(
                     "reviews", filter=Q(reviews__status="approved"), distinct=True

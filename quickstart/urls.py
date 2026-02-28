@@ -12,6 +12,10 @@ from quickstart.views.public.public_class_views import paginated_class_reviews
 from quickstart.views.widget.widget_config_views import (
     WidgetConfigManagementView,
     CreateWidgetSubscriptionCheckoutView,
+    CreateWidgetSubscriptionPaymentIntentView,
+    WidgetSubscriptionView,
+    WidgetSubscriptionCancelView,
+    WidgetSubscriptionReactivateView,
 )
 from quickstart.views.admin.payout_management.admin_payout_views import (
     AdminPayoutViewSet,
@@ -144,6 +148,7 @@ from quickstart.views.widget.widget_views import (
     WidgetAvailabilityView,
     CreateGuestPaymentIntentView,
     GuestBookingCreateView,
+    WidgetEventsView,
 )
 
 # =============================================================================
@@ -319,6 +324,7 @@ widget_urlpatterns = [
         name="widget-payment-intent",
     ),
     path("bookings/", GuestBookingCreateView.as_view(), name="widget-create-booking"),
+    path("events/", WidgetEventsView.as_view(), name="widget-events"),
 ]
 
 urlpatterns = [
@@ -561,9 +567,29 @@ urlpatterns = [
         name="my-business-widget-config",
     ),
     path(
+        "my-business/widget-subscription/",
+        WidgetSubscriptionView.as_view(),
+        name="my-business-widget-subscription",
+    ),
+    path(
+        "my-business/widget-subscription/cancel/",
+        WidgetSubscriptionCancelView.as_view(),
+        name="my-business-widget-subscription-cancel",
+    ),
+    path(
+        "my-business/widget-subscription/reactivate/",
+        WidgetSubscriptionReactivateView.as_view(),
+        name="my-business-widget-subscription-reactivate",
+    ),
+    path(
         "my-business/widget-subscription/checkout/",
         CreateWidgetSubscriptionCheckoutView.as_view(),
         name="my-business-widget-subscription-checkout",
+    ),
+    path(
+        "my-business/widget-subscription/payment-intent/",
+        CreateWidgetSubscriptionPaymentIntentView.as_view(),
+        name="my-business-widget-subscription-payment-intent",
     ),
     path(
         "my-business/profile/",

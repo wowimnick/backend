@@ -143,8 +143,11 @@ STRIPE_CONNECT_WEBHOOK_SECRET = os.environ.get("STRIPE_CONNECT_WEBHOOK_SECRET")
 
 # Secret for the endpoint at /api/payments/webhook/
 STRIPE_PAYMENTS_WEBHOOK_SECRET = os.environ.get("STRIPE_PAYMENTS_WEBHOOK_SECRET")
-# Widget subscription: $50/month. Set WIDGET_SUBSCRIPTION_PRICE_ID (Stripe Price ID) to enable.
+# Widget subscription. Set Stripe Price IDs to enable. Per-plan IDs override the single ID.
 WIDGET_SUBSCRIPTION_PRICE_ID = os.environ.get("WIDGET_SUBSCRIPTION_PRICE_ID")
+WIDGET_SUBSCRIPTION_PRICE_BASIC = os.environ.get("WIDGET_SUBSCRIPTION_PRICE_BASIC") or WIDGET_SUBSCRIPTION_PRICE_ID
+WIDGET_SUBSCRIPTION_PRICE_GROWTH = os.environ.get("WIDGET_SUBSCRIPTION_PRICE_GROWTH") or WIDGET_SUBSCRIPTION_PRICE_ID
+WIDGET_SUBSCRIPTION_PRICE_ADVANCED = os.environ.get("WIDGET_SUBSCRIPTION_PRICE_ADVANCED") or WIDGET_SUBSCRIPTION_PRICE_ID
 WIDGET_SUBSCRIPTION_REQUIRED = os.environ.get("WIDGET_SUBSCRIPTION_REQUIRED", "False").lower() == "true"
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
 VERCEL_AUTOMATION_BYPASS_SECRET = os.environ["VERCEL_AUTOMATION_BYPASS_SECRET"]
@@ -401,6 +404,7 @@ REST_FRAMEWORK = {
         "burst": "300/minute",
         "sensitive": "25/minute",
         "chat": "30/minute",
+        "widget": "120/minute",  # per X-Business-ID (widget embed)
     },
 }
 

@@ -65,6 +65,9 @@ class WidgetClassOptionSerializer(serializers.ModelSerializer):
     """
 
     schedules = WidgetScheduleSerializer(many=True, read_only=True)
+    cancellation_policy = serializers.CharField(source="cancellationPolicy", read_only=True)
+    cancellation_refund_percentage = serializers.IntegerField(source="cancellationRefundPercentage", read_only=True)
+    cancellation_custom_hours = serializers.IntegerField(source="cancellationCustomHours", read_only=True, allow_null=True)
 
     class Meta:
         model = ClassOption
@@ -73,6 +76,9 @@ class WidgetClassOptionSerializer(serializers.ModelSerializer):
             "booking_type",
             "level",
             "schedules",
+            "cancellation_policy",
+            "cancellation_refund_percentage",
+            "cancellation_custom_hours",
         ]
         read_only_fields = fields
 
@@ -105,6 +111,8 @@ class WidgetClassSerializer(serializers.ModelSerializer):
 
     options = WidgetClassOptionSerializer(many=True, read_only=True)
     images = WidgetClassImageSerializer(many=True, read_only=True)
+    average_rating = serializers.FloatField(read_only=True, allow_null=True)
+    review_count = serializers.IntegerField(read_only=True, default=0)
 
     class Meta:
         model = ClassesMain
@@ -114,6 +122,8 @@ class WidgetClassSerializer(serializers.ModelSerializer):
             "description",
             "options",
             "images",
+            "average_rating",
+            "review_count",
         ]
         read_only_fields = fields
 

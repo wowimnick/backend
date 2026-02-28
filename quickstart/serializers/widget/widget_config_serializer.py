@@ -1,7 +1,21 @@
-# quickstart/serializers/business/widget_config_serializer.py
+# quickstart/serializers/widget/widget_config_serializer.py
+"""
+Widget config is stored in BusinessInfo.widget_config (JSON). Supported keys
+used by the dashboard customizer and embeddable widget include:
+
+Display: view (inline|modal|drawer|floating), buttonText, drawerPosition (left|right|bottom),
+  responsiveDrawerOnMobile (bool), floatingPosition, floatingSize, floatingShape,
+  floatingZIndex, modalSize, modalMaxWidth, inlineMinHeight, inlineFullWidth.
+Theme: primary, background, cardBackground, textPrimary, textSecondary, textOnPrimary, border,
+  fontFamily, borderRadiusPreset, layoutStyle, densityPreset, version, classLayout.
+Behavior: specificClassId (classId to feature a single class in the widget).
+Security: allowed_widget_origins (handled separately on the model).
+
+The public widget API returns widget_config as "theme" via WidgetBusinessConfigSerializer.
+"""
 
 from rest_framework import serializers
-from quickstart.models import BusinessInfo
+from quickstart.models import BusinessInfo, WidgetSubscription
 
 # Define default domains that should always be allowed but hidden from the user UI.
 DEFAULT_WIDGET_DOMAINS = {"classeasily.com", "staging.classeasily.com"}
@@ -49,4 +63,26 @@ class BusinessWidgetConfigSerializer(serializers.ModelSerializer):
     def to_internal_value(self, data):
         # We accept any valid key-value pairs for the config
         # so we pass them all through for the update method to handle.
+        return data
+
+
+class WidgetSubscriptionSerializer(serializers.ModelSerializer):
+    """Read/write serializer for widget subscription (plan_id, status, current_period_end, cancel_at_period_end)."""
+
+    class Meta:
+        model = WidgetSubscription
+        fields = [
+            "id",
+            "plan_id",
+            "status",
+            "current_period_end",
+            "cancel_at_period_end",
+            "created_at",
+        ]
+        read_only_fields = ["id", "status", "current_period_end", "created_at"]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if instance.current_period_end:
+            data["current_period_end"] = instance.current_period_end.isoformat()
         return data

@@ -26,6 +26,41 @@ def get_business(request):
         return None
 
 
+def _is_widget_path(path):
+    return path.startswith("/api/widget/v1/")
+
+
+def _normalize_origin_domain(origin):
+    """Extract host from Origin header (scheme + host, no path, no port for comparison)."""
+    if not origin:
+        return None
+    return (
+        origin.replace("https://", "")
+        .replace("http://", "")
+        .split("/")[0]
+        .split(":")[0]
+    )
+
+
+def _origin_allowed_for_business(origin, business):
+    """
+    Return True if this Origin is allowed for the business (localhost/dev or in allowed_widget_origins).
+    Server-side validation: only allow CORS when Origin matches business config.
+    """
+    if not origin:
+        return False
+    origin_domain = _normalize_origin_domain(origin)
+    if origin_domain in ("localhost", "127.0.0.1"):
+        return True
+    if not business or not business.allowed_widget_origins:
+        return False
+    normalized_allowed = [
+        o.replace("https://", "").replace("http://", "").rstrip("/").split(":")[0]
+        for o in business.allowed_widget_origins
+    ]
+    return origin_domain in normalized_allowed
+
+
 class DynamicCorsMiddleware:
     def __init__(self, get_response):
         self.get_response = get_response
@@ -35,62 +70,52 @@ class DynamicCorsMiddleware:
         request.business_context = SimpleLazyObject(lambda: get_business(request))
 
         # --- STAGE 1: Handle the Preflight (OPTIONS) Request ---
-        # This block runs *before* the actual view is processed.
-        if request.method == "OPTIONS" and request.path.startswith("/api/widget/v1/"):
+        # Validate Origin the same way as actual requests; only allow CORS for valid origins.
+        if request.method == "OPTIONS" and _is_widget_path(request.path):
             origin = request.headers.get("Origin")
             if origin:
-                # For preflight, we create a blank response and add headers to it.
                 response = HttpResponse(status=200)
-
-                # We "provisionally" allow the origin. The real check happens on the actual request.
-                response["Access-Control-Allow-Origin"] = origin
-
-                # We explicitly state which headers and methods are allowed.
                 response["Access-Control-Allow-Headers"] = "X-Business-ID, Content-Type"
                 response["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-
-                logger.debug(f"Handled preflight request from origin: {origin}")
+                business = request.business_context
+                if _origin_allowed_for_business(origin, business):
+                    response["Access-Control-Allow-Origin"] = origin
+                    logger.debug(f"Preflight: allowed origin {origin}")
+                else:
+                    logger.debug(f"Preflight: origin not allowed, not setting ACAO")
                 return response
 
-        # --- STAGE 2: Handle the Actual (GET, POST) Request ---
-        # For non-preflight requests, we process the view first to get the response.
-        response = self.get_response(request)
-
-        # Now, we add the CORS header to the *actual* response, but only if it's a valid widget request.
-        if request.path.startswith("/api/widget/v1/"):
+        # --- STAGE 2: Actual (GET, POST) — reject invalid origins before running the view ---
+        # This prevents widget data from being returned to disallowed origins at all.
+        if request.method in ("GET", "POST") and _is_widget_path(request.path):
             origin = request.headers.get("Origin")
             if origin:
-                # Allow localhost / 127.0.0.1 (any port) for development and testing.
-                _host = (
-                    origin.replace("https://", "")
-                    .replace("http://", "")
-                    .split("/")[0]
-                    .split(":")[0]
-                )
-                if _host in ("localhost", "127.0.0.1"):
+                business = request.business_context
+                if not _origin_allowed_for_business(origin, business):
+                    logger.warning(
+                        "CORS REJECTED: Origin '%s' not allowed for business %s",
+                        _normalize_origin_domain(origin),
+                        getattr(business, "businessId", None),
+                    )
+                    return HttpResponse(
+                        '{"detail":"Origin not allowed."}',
+                        status=403,
+                        content_type="application/json",
+                    )
+
+        response = self.get_response(request)
+
+        # Add CORS header to the response only for allowed origins (GET/POST already validated above).
+        if _is_widget_path(request.path):
+            origin = request.headers.get("Origin")
+            if origin:
+                business = request.business_context
+                if _origin_allowed_for_business(origin, business):
                     response["Access-Control-Allow-Origin"] = origin
-                    logger.debug(f"Added CORS header for dev origin: {origin}")
-                else:
-                    business = request.business_context
-                    if business and business.allowed_widget_origins:
-                        origin_domain = (
-                            origin.replace("https://", "")
-                            .replace("http://", "")
-                            .split("/")[0]
-                        )
-                        normalized_allowed_origins = [
-                            o.replace("https://", "").replace("http://", "").rstrip("/")
-                            for o in business.allowed_widget_origins
-                        ]
-                        if origin_domain in normalized_allowed_origins:
-                            response["Access-Control-Allow-Origin"] = origin
-                            logger.debug(
-                                f"Added CORS header for valid origin: {origin} for business {business.businessId}"
-                            )
-                        else:
-                            logger.warning(
-                                f"CORS REJECTED: Origin '{origin_domain}' not in allowed list for business {business.businessId}"
-                            )
+                    logger.debug(
+                        "Added CORS header for valid origin: %s",
+                        origin,
+                    )
 
         return response
 

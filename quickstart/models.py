@@ -2891,8 +2891,15 @@ class Payout(models.Model):
 
 class WidgetSubscription(models.Model):
     """
-    Tracks the $50/month widget subscription for a business. One active subscription per business.
+    Tracks the widget subscription for a business (Basic/Growth/Advanced).
+    One active subscription per business. Can be created via Stripe or directly (plan_id + period).
     """
+
+    PLAN_CHOICES = [
+        ("basic", "Basic"),
+        ("growth", "Growth"),
+        ("advanced", "Advanced"),
+    ]
 
     STATUS_CHOICES = [
         ("active", "Active"),
@@ -2908,6 +2915,17 @@ class WidgetSubscription(models.Model):
         BusinessInfo,
         on_delete=models.CASCADE,
         related_name="widget_subscriptions",
+    )
+    plan_id = models.CharField(
+        max_length=20,
+        choices=PLAN_CHOICES,
+        default="basic",
+        db_index=True,
+        help_text="Plan tier: basic, growth, advanced.",
+    )
+    cancel_at_period_end = models.BooleanField(
+        default=False,
+        help_text="If True, subscription will end at current_period_end.",
     )
     stripe_subscription_id = models.CharField(
         max_length=255, unique=True, db_index=True, null=True, blank=True
