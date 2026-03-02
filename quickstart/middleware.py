@@ -7,6 +7,14 @@ from quickstart.models import BusinessInfo
 
 logger = logging.getLogger(__name__)
 
+# Reserved widget key: when X-Business-ID is this, no DB lookup; views return mock data and checkout is disabled.
+WIDGET_DEMO_KEY = "demo"
+
+
+class DemoBusinessContext:
+    """Sentinel for demo mode. No real business; config/classes/availability are mock; booking disabled."""
+    is_demo = True
+
 
 def get_business(request):
     if hasattr(request, "_cached_business"):
@@ -16,6 +24,10 @@ def get_business(request):
     if not business_key:
         request._cached_business = None
         return None
+
+    if business_key.strip() == WIDGET_DEMO_KEY:
+        request._cached_business = DemoBusinessContext()
+        return request._cached_business
 
     try:
         business = BusinessInfo.objects.get(widget_api_key=business_key)
@@ -61,8 +73,8 @@ def _origin_allowed_for_business(origin, business):
     Return True if this Origin is allowed for this business.
     - localhost/127.0.0.1: allowed (dev).
     - classeasily.com or *.classeasily.com: allowed (our app/widget-demo).
+    - Demo key: only localhost and classeasily domains (no customer domains).
     - Any other domain: allowed only if listed in this business's Allowed Domains (allowed_widget_origins).
-    So testsite.com works only for the business that has testsite.com in their box; other businesses get 403.
     """
     if not origin:
         return False
@@ -71,6 +83,8 @@ def _origin_allowed_for_business(origin, business):
         return True
     if _is_classeasily_domain(origin):
         return True
+    if getattr(business, "is_demo", False):
+        return False  # demo key only allowed from our app / localhost
     if not business or not business.allowed_widget_origins:
         return False
     normalized_allowed = [

@@ -2,6 +2,7 @@
 import uuid
 import stripe
 import logging
+from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from django.conf import settings
 from django.db import transaction
@@ -15,6 +16,7 @@ from django.db.models.functions import Coalesce
 
 from quickstart.models import (
     BusinessInfo,
+    BusinessStaff,
     ClassesMain,
     ScheduleInstance,
     Booking,
@@ -31,6 +33,10 @@ from quickstart.serializers.widget.widget_serializers import (
     GuestBookingCreateSerializer,
 )
 
+from quickstart.utils.email_utils import (
+    send_booking_confirmation_email,
+    send_business_new_booking_email,
+)
 from quickstart.utils.permissions import IsValidWidgetRequest
 from quickstart.utils.widget_throttle import WidgetRateThrottle
 
@@ -38,8 +44,15 @@ logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
 
+def _is_demo(request):
+    """True when X-Business-ID is the reserved demo key; no DB business, mock data only."""
+    return getattr(request.business_context, "is_demo", False)
+
+
 def _business_has_active_widget_subscription(business):
     """True if widget subscription is not required, or business has an active subscription."""
+    if getattr(business, "is_demo", False):
+        return True
     if not getattr(settings, "WIDGET_SUBSCRIPTION_REQUIRED", False):
         return True
     now = timezone.now()
@@ -89,6 +102,22 @@ class WidgetConfigView(generics.RetrieveAPIView):
         return self.request.business_context
 
     def retrieve(self, request, *args, **kwargs):
+        if _is_demo(request):
+            base = getattr(settings, "FRONTEND_BASE_URL", "https://www.classeasily.com").rstrip("/")
+            return Response({
+                "businessName": "Demo Business",
+                "business_timezone": "America/Los_Angeles",
+                "currency": "USD",
+                "theme": {
+                    "view": "modal",
+                    "primaryColor": "#2563eb",
+                    "backgroundColor": "#ffffff",
+                    "fontFamily": "inherit",
+                },
+                "stripe_publishable_key": getattr(settings, "STRIPE_PUBLIC_KEY", ""),
+                "terms_url": f"{base}/terms-of-service",
+                "privacy_url": f"{base}/privacy-policy",
+            })
         instance = self.get_object()
         if not _business_has_active_widget_subscription(instance):
             return Response(
@@ -107,10 +136,84 @@ class WidgetConfigView(generics.RetrieveAPIView):
         return Response(data)
 
 
+# Mock option ID used for demo availability; must match mock class below.
+DEMO_OPTION_ID = "demo-option-1"
+
+# Fake instance IDs for demo slots (widget only displays; booking is disabled).
+DEMO_INSTANCE_ID_BASE = 90000
+
+
+def _get_demo_availability(start_date_str, end_date_str):
+    """Build mock availability by date for demo option (next 4–8 weeks, a few times per day)."""
+    try:
+        start = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+        end = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+    except ValueError:
+        return {}
+    if start > end:
+        return {}
+    # Cap range for demo
+    today = timezone.now().date()
+    start = max(start, today)
+    end = min(end, today + timedelta(days=56))
+    availability_by_date = {}
+    slot_times = ["09:00:00", "14:00:00", "18:00:00"]
+    instance_id = DEMO_INSTANCE_ID_BASE
+    d = start
+    while d <= end:
+        availability_by_date[d.isoformat()] = [
+            {
+                "instance_id": instance_id + i,
+                "time": slot_times[i % len(slot_times)],
+                "duration": 120,
+                "price": "49.00",
+                "max_participants": 8,
+                "available_spots": 6,
+                "min_participants": 1,
+            }
+            for i in range(len(slot_times))
+        ]
+        instance_id += len(slot_times)
+        d += timedelta(days=1)
+    return availability_by_date
+
+
+def _get_demo_classes_payload():
+    """Single mock class with one option for demo mode."""
+    return [
+        {
+            "classId": "demo-class-1",
+            "title": "Sunset Paddleboard Tour",
+            "description": "A relaxing guided tour along the coast. No experience required.",
+            "options": [
+                {
+                    "optionId": DEMO_OPTION_ID,
+                    "booking_type": "group",
+                    "level": "all",
+                    "schedules": [
+                        {"id": 1, "duration": 120, "price": "49.00", "maxParticipants": 8},
+                    ],
+                    "cancellation_policy": "standard",
+                    "cancellation_refund_percentage": 100,
+                    "cancellation_custom_hours": 24,
+                },
+            ],
+            "images": [],
+            "average_rating": 4.5,
+            "review_count": 12,
+        },
+    ]
+
+
 class WidgetClassListView(generics.ListAPIView):
     permission_classes = [IsValidWidgetRequest]
     throttle_classes = [WidgetRateThrottle]
     serializer_class = WidgetClassSerializer
+
+    def list(self, request, *args, **kwargs):
+        if _is_demo(request):
+            return Response(_get_demo_classes_payload())
+        return super().list(request, *args, **kwargs)
 
     def get_queryset(self):
         return ClassesMain.objects.filter(
@@ -136,6 +239,11 @@ class WidgetAvailabilityView(APIView):
             raise ValidationError(
                 "`option_id`, `start_date`, and `end_date` are required."
             )
+
+        if _is_demo(request):
+            if option_id != DEMO_OPTION_ID:
+                raise ValidationError("Invalid option_id for this business.")
+            return Response(_get_demo_availability(start_date, end_date))
 
         try:
             # Verify the option belongs to this business
@@ -220,6 +328,14 @@ class CreateGuestPaymentIntentView(APIView):
     throttle_classes = [WidgetRateThrottle]
 
     def post(self, request, *args, **kwargs):
+        if _is_demo(request):
+            return Response(
+                {
+                    "error": "demo_mode",
+                    "message": "Demo mode: booking and payment are disabled.",
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
         business = request.business_context
         if not _business_has_active_widget_subscription(business):
             return Response(
@@ -307,6 +423,14 @@ class GuestBookingCreateView(generics.CreateAPIView):
     serializer_class = GuestBookingCreateSerializer
 
     def create(self, request, *args, **kwargs):
+        if _is_demo(request):
+            return Response(
+                {
+                    "error": "demo_mode",
+                    "message": "Demo mode: booking is disabled.",
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
@@ -384,11 +508,39 @@ class GuestBookingCreateView(generics.CreateAPIView):
                         pi.charges.data[0].receipt_url if pi.charges.data else None
                     ),
                     created_at=timezone.now(),
+                    metadata={"original_stripe_metadata": dict(metadata)},
                 )
 
-            # --- Post-Transaction Actions (e.g., Email Notifications) ---
-            # send_guest_booking_confirmation_email(booking)
-            # send_new_booking_notification_to_business(booking)
+            # --- Post-Transaction Actions: Emails (guest confirmation + business notification) ---
+            try:
+                send_booking_confirmation_email(contact, booking)
+            except Exception as email_err:
+                logger.warning(
+                    "Widget: failed to send guest confirmation email for booking %s: %s",
+                    booking.id,
+                    email_err,
+                    exc_info=True,
+                )
+            if getattr(business, "newBookingNotification", False):
+                try:
+                    recipients = {business.owner}
+                    for staff in BusinessStaff.objects.filter(
+                        business=business,
+                        status="accepted",
+                        role__permissions__codename="receive_booking_notifications",
+                    ).select_related("user"):
+                        if staff.user:
+                            recipients.add(staff.user)
+                    for r in recipients:
+                        if r and getattr(r, "email", None):
+                            send_business_new_booking_email(r, booking)
+                except Exception as email_err:
+                    logger.warning(
+                        "Widget: failed to send business new-booking email for booking %s: %s",
+                        booking.id,
+                        email_err,
+                        exc_info=True,
+                    )
 
             return Response(
                 {

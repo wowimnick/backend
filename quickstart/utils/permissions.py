@@ -715,16 +715,19 @@ class CanManageBusinessStudentNotes(BasePermission):
 
 # --- Widget ---
 class IsValidWidgetRequest(BasePermission):
-    """Checks that request.business_context is set and valid (use after IsWidgetRequest or middleware)."""
+    """Checks that request.business_context is set and valid (use after middleware). Allows demo sentinel."""
 
     message = "Invalid or missing Business ID."
 
     def has_permission(self, request, view):
-        if not getattr(request, "business_context", None):
+        business = getattr(request, "business_context", None)
+        if not business:
             return False
+        if getattr(business, "is_demo", False):
+            return True
         return (
-            request.business_context.isActive
-            and request.business_context.verificationStatus == "verified"
+            business.isActive
+            and business.verificationStatus == "verified"
         )
 
 
