@@ -433,8 +433,12 @@ class WidgetSubscriptionView(APIView):
     def get(self, request, *args, **kwargs):
         business = _get_business_for_subscription(request.user)
         sub = _get_current_subscription(business)
+        subscription_required = getattr(settings, "WIDGET_SUBSCRIPTION_REQUIRED", False)
         if not sub:
-            return Response({"subscription": None}, status=status.HTTP_200_OK)
+            return Response(
+                {"subscription": None, "widget_subscription_required": subscription_required},
+                status=status.HTTP_200_OK,
+            )
         data = {
             "subscription": {
                 "planId": sub.plan_id,
@@ -443,7 +447,8 @@ class WidgetSubscriptionView(APIView):
                     sub.current_period_end.isoformat() if sub.current_period_end else None
                 ),
                 "cancelAtPeriodEnd": sub.cancel_at_period_end,
-            }
+            },
+            "widget_subscription_required": subscription_required,
         }
         return Response(data, status=status.HTTP_200_OK)
 

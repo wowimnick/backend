@@ -143,7 +143,10 @@ STRIPE_CONNECT_WEBHOOK_SECRET = os.environ.get("STRIPE_CONNECT_WEBHOOK_SECRET")
 
 # Secret for the endpoint at /api/payments/webhook/
 STRIPE_PAYMENTS_WEBHOOK_SECRET = os.environ.get("STRIPE_PAYMENTS_WEBHOOK_SECRET")
-# Widget subscription. Set Stripe Price IDs to enable. Per-plan IDs override the single ID.
+# Widget subscription. Set Stripe Price IDs to enable.
+# Per-plan pricing: set WIDGET_SUBSCRIPTION_PRICE_BASIC, WIDGET_SUBSCRIPTION_PRICE_GROWTH,
+# WIDGET_SUBSCRIPTION_PRICE_ADVANCED (each falls back to WIDGET_SUBSCRIPTION_PRICE_ID if unset).
+# When WIDGET_SUBSCRIPTION_REQUIRED is True, the widget tab is locked until the business subscribes.
 WIDGET_SUBSCRIPTION_PRICE_ID = os.environ.get("WIDGET_SUBSCRIPTION_PRICE_ID")
 WIDGET_SUBSCRIPTION_PRICE_BASIC = os.environ.get("WIDGET_SUBSCRIPTION_PRICE_BASIC") or WIDGET_SUBSCRIPTION_PRICE_ID
 WIDGET_SUBSCRIPTION_PRICE_GROWTH = os.environ.get("WIDGET_SUBSCRIPTION_PRICE_GROWTH") or WIDGET_SUBSCRIPTION_PRICE_ID

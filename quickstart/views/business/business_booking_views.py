@@ -21,6 +21,7 @@ from django.db.models import (
     BooleanField,
     CharField,
     Min,
+    Exists,
 )
 from django.db.models.functions import (
     TruncDate,
@@ -51,7 +52,8 @@ from quickstart.models import (
     ScheduleInstance,
     CustomUser,
     ClassesMain,
-)  # Added ClassesMain
+    Payment,
+)
 from quickstart.serializers.business.business_booking_serializers import (
     BusinessBookingListSerializer,
     BusinessBookingDetailSerializer,
@@ -619,6 +621,19 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                 bookings_qs_base = bookings_qs_base.filter(
                     schedule_instance__schedule__option__classId_id=class_id_filter
                 )
+
+            source_filter = request.query_params.get("source", "all")
+            if source_filter not in ("widget", "marketplace", "all"):
+                source_filter = "all"
+            _widget_payment_exists = Payment.objects.filter(
+                booking=OuterRef("pk"),
+                status="succeeded",
+                metadata__original_stripe_metadata__booking_source="widget",
+            )
+            if source_filter == "widget":
+                bookings_qs_base = bookings_qs_base.filter(Exists(_widget_payment_exists))
+            elif source_filter == "marketplace":
+                bookings_qs_base = bookings_qs_base.exclude(Exists(_widget_payment_exists))
 
             bookings_qs = bookings_qs_base.select_related(
                 "schedule_instance__schedule__option__classId",

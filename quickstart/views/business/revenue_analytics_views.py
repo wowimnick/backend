@@ -22,6 +22,7 @@ from django.db.models import (
     DateTimeField,
     DateField,
     CharField,
+    Exists,
 )
 from django.db.models.functions import (
     TruncDate,
@@ -92,12 +93,13 @@ class RevenueAnalyticsView(views.APIView):
             raise ValidationError("Error processing date range.")
 
     def get_valid_bookings_queryset(
-            self, business, start_date, end_date, class_id=None
+            self, business, start_date, end_date, class_id=None, source="all"
         ):
             """
             Returns all bookings that contribute to revenue (paid).
             UPDATED: Now includes ALL bookings for a course, because revenue is split 1/N
             across them. We no longer filter for just the first booking.
+            `source` can be "all" (default), "widget", or "marketplace".
             """
             if not business:
                 return Booking.objects.none()
@@ -118,7 +120,17 @@ class RevenueAnalyticsView(views.APIView):
                 base_bookings = base_bookings.filter(
                     schedule_instance__schedule__option__classId_id=class_id
                 )
-            
+
+            _widget_payment_exists = Payment.objects.filter(
+                booking=OuterRef("pk"),
+                status="succeeded",
+                metadata__original_stripe_metadata__booking_source="widget",
+            )
+            if source == "widget":
+                base_bookings = base_bookings.filter(Exists(_widget_payment_exists))
+            elif source == "marketplace":
+                base_bookings = base_bookings.exclude(Exists(_widget_payment_exists))
+
             return base_bookings
 
     def _get_fee_rate_for_business(self, business):
@@ -139,9 +151,9 @@ class RevenueAnalyticsView(views.APIView):
             )
             return Decimal("0.13")
 
-    def calculate_metrics(self, business, start_date, end_date, class_id=None):
+    def calculate_metrics(self, business, start_date, end_date, class_id=None, source="all"):
         current_period_qs = self.get_valid_bookings_queryset(
-            business, start_date, end_date, class_id
+            business, start_date, end_date, class_id, source
         )
         period_length_timedelta = end_date - start_date
         if period_length_timedelta < timedelta(days=1):
@@ -151,7 +163,7 @@ class RevenueAnalyticsView(views.APIView):
             previous_end_date - period_length_timedelta + timedelta.resolution
         )
         previous_period_qs = self.get_valid_bookings_queryset(
-            business, previous_start_date, previous_end_date, class_id
+            business, previous_start_date, previous_end_date, class_id, source
         )
 
         current_aggregates = current_period_qs.aggregate(
@@ -232,9 +244,9 @@ class RevenueAnalyticsView(views.APIView):
             "recurring_revenue": 0.0,  # Placeholder
         }
 
-    def get_revenue_trends(self, business, start_date, end_date, class_id=None):
+    def get_revenue_trends(self, business, start_date, end_date, class_id=None, source="all"):
         valid_bookings_qs = self.get_valid_bookings_queryset(
-            business, start_date, end_date, class_id
+            business, start_date, end_date, class_id, source
         )
         business_pytz = pytz.timezone(business.business_timezone)
 
@@ -288,9 +300,9 @@ class RevenueAnalyticsView(views.APIView):
         ]
         return formatted_trends
 
-    def get_class_revenue(self, business, start_date, end_date, class_id_filter=None):
+    def get_class_revenue(self, business, start_date, end_date, class_id_filter=None, source="all"):
         valid_bookings_qs = self.get_valid_bookings_queryset(
-            business, start_date, end_date, class_id_filter
+            business, start_date, end_date, class_id_filter, source
         )
 
         # Booking-based totals (actual payout logic: matches webhook allocated_net_payout)
@@ -389,10 +401,10 @@ class RevenueAnalyticsView(views.APIView):
         return result
 
     def get_revenue_by_booking_type(
-        self, business, start_date, end_date, class_id=None
+        self, business, start_date, end_date, class_id=None, source="all"
     ):
         valid_bookings_qs = self.get_valid_bookings_queryset(
-            business, start_date, end_date, class_id
+            business, start_date, end_date, class_id, source
         )
 
         revenue_by_type_data = (
@@ -435,17 +447,21 @@ class RevenueAnalyticsView(views.APIView):
                 raise ValidationError("Invalid class_id format.")
             class_id_filter = int(class_id_filter) if class_id_filter else None
 
+            source_filter = request.query_params.get("source", "all")
+            if source_filter not in ("widget", "marketplace", "all"):
+                source_filter = "all"
+
             metrics = self.calculate_metrics(
-                business, start_date_utc, end_date_utc, class_id_filter
+                business, start_date_utc, end_date_utc, class_id_filter, source_filter
             )
             trends = self.get_revenue_trends(
-                business, start_date_utc, end_date_utc, class_id_filter
+                business, start_date_utc, end_date_utc, class_id_filter, source_filter
             )
             class_revenue_breakdown = self.get_class_revenue(
-                business, start_date_utc, end_date_utc, class_id_filter
+                business, start_date_utc, end_date_utc, class_id_filter, source_filter
             )
             revenue_by_booking_type = self.get_revenue_by_booking_type(
-                business, start_date_utc, end_date_utc, class_id_filter
+                business, start_date_utc, end_date_utc, class_id_filter, source_filter
             )
 
             data = {
@@ -500,7 +516,14 @@ class RevenueAnalyticsView(views.APIView):
                     f"{start_date_utc.date().strftime('%Y-%m-%d')} to {end_date_utc.date().strftime('%Y-%m-%d')}",
                 ]
             )
-            
+            writer.writerow([])
+            writer.writerow(
+                [
+                    "Note:",
+                    "All amounts reflect actual amounts after any business discounts, global discounts, and gift cards applied at checkout. Net Payout is the amount allocated to the business.",
+                ]
+            )
+
             # --- 1. Metrics Summary (uses actual payout and platform take from bookings) ---
             metrics = self.calculate_metrics(
                 business, start_date_utc, end_date_utc, class_id_filter
@@ -580,8 +603,11 @@ class RevenueAnalyticsView(views.APIView):
                     f"Platform Fee (est. {fee_percentage_text}, Pre-tax)",
                     "HST on Platform Fee (ITC for Business)",
                     "Net Payout to Business",
+                    "Business Discount/Coupon",
+                    "Global Discount",
+                    "Gift Card Used",
                     "Payment Status",
-                    "Booking Status"
+                    "Booking Status",
                 ]
             )
 
@@ -592,7 +618,11 @@ class RevenueAnalyticsView(views.APIView):
                 .select_related(
                     "user", "contact", "schedule_instance__schedule__option__classId"
                 )
-                .prefetch_related("payments")
+                .prefetch_related(
+                    "payments",
+                    "applied_global_discounts__global_discount",
+                    "discounts",
+                )
                 .order_by("booking_date")
             )
 
@@ -625,6 +655,20 @@ class RevenueAnalyticsView(views.APIView):
                 if net_payout == Decimal("0.00") and total_paid > 0:
                      net_payout = total_paid - (platform_fee_pre_tax + hst_on_fee + tax_collected)
 
+                business_discount = "—"
+                if booking.discounts.exists():
+                    names = [d.name or (d.code or "—") for d in booking.discounts.all()]
+                    business_discount = ", ".join(names) if names else "—"
+                global_discount = "—"
+                if booking.applied_global_discounts.exists():
+                    names = [a.global_discount.name for a in booking.applied_global_discounts.all()]
+                    global_discount = ", ".join(names) if names else "—"
+                gift_card_used = "No"
+                for pay in booking.payments.filter(status="succeeded"):
+                    if pay.metadata and pay.metadata.get("paid_via_giftcard"):
+                        gift_card_used = "Yes"
+                        break
+
                 writer.writerow(
                     [
                         booking.user_facing_reference or f"ID-{booking.id}",
@@ -640,6 +684,9 @@ class RevenueAnalyticsView(views.APIView):
                         f"${platform_fee_pre_tax:.2f}",
                         f"${hst_on_fee:.2f}",
                         f"${net_payout:.2f}",
+                        business_discount,
+                        global_discount,
+                        gift_card_used,
                         booking.get_payment_status_display(),
                         booking.get_status_display(),
                     ]

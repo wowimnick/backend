@@ -131,6 +131,7 @@ class _PaymentDetailSerializerForBusiness(serializers.ModelSerializer):
             "refund_reason",
             "refund_date",
             "failure_message",  # If payment failed
+            "metadata",  # e.g. booking_source (widget / marketplace)
         ]
         read_only_fields = fields
 
@@ -267,6 +268,8 @@ class BusinessBookingDetailSerializer(serializers.ModelSerializer):
     rescheduled_at = serializers.DateTimeField(read_only=True)
     original_session_details = serializers.SerializerMethodField()
     course_schedule = serializers.SerializerMethodField()
+    has_multiple_options = serializers.SerializerMethodField()
+    payout_eta = serializers.SerializerMethodField()
 
     class Meta:
         model = Booking
@@ -277,6 +280,7 @@ class BusinessBookingDetailSerializer(serializers.ModelSerializer):
             "booker_details",
             "class_name",
             "option_name",
+            "has_multiple_options",
             "date",
             "time",
             "duration",
@@ -294,6 +298,9 @@ class BusinessBookingDetailSerializer(serializers.ModelSerializer):
             "payment_status",
             "session_info",
             "payment_info",
+            "payout_status",
+            "allocated_net_payout",
+            "payout_eta",
             "is_rescheduled",
             "rescheduled_at",
             "original_session_details",
@@ -404,6 +411,29 @@ class BusinessBookingDetailSerializer(serializers.ModelSerializer):
         logger.info(
             f"No payment information found for Booking ID {obj.id} (Group ID: {obj.booking_group_id}) after checks."
         )
+        return None
+
+    def get_has_multiple_options(self, obj):
+        try:
+            option = getattr(
+                getattr(
+                    getattr(obj.schedule_instance, "schedule", None),
+                    "option",
+                    None,
+                ),
+                "classId",
+                None,
+            )
+            if option is None:
+                return False
+            return option.options.count() > 1
+        except Exception:
+            return False
+
+    def get_payout_eta(self, obj):
+        payout = obj.payouts.order_by("-created_at").first()
+        if payout and getattr(payout, "arrival_date", None):
+            return payout.arrival_date.isoformat()
         return None
 
     def get_course_schedule(self, obj):

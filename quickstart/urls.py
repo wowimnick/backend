@@ -79,6 +79,9 @@ from quickstart.views.admin.business_management.business_admin_views import (
 from quickstart.views.admin.global_discount.admin_global_discount_views import (
     AdminGlobalDiscountViewSet,
 )
+from quickstart.views.admin.widget_subscription_admin_views import (
+    AdminWidgetSubscriptionViewSet,
+)
 from quickstart.views.public.public_global_discount_views import (
     ActiveGlobalDiscountView,
 )
@@ -281,6 +284,11 @@ admin_router.register(
     r"global-discounts",
     AdminGlobalDiscountViewSet,
     basename="admin-global-discounts",
+)
+admin_router.register(
+    r"widget-subscriptions",
+    AdminWidgetSubscriptionViewSet,
+    basename="admin-widget-subscriptions",
 )
 
 
