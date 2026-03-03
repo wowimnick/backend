@@ -1190,7 +1190,17 @@ class ProcessBookingWebhook(APIView):
                     )
                     return Response(status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-            # 2. STANDARD BOOKING FLOW
+            # 2. SKIP INVOICE PAYMENTS (e.g. widget subscription) — not bookings; no CAPI
+            invoice_id = getattr(payment_intent, "invoice", None) or (
+                payment_intent.get("invoice") if isinstance(payment_intent, dict) else None
+            )
+            if invoice_id:
+                logger.info(
+                    f"[{webhook_id}] Skipping booking flow for PI {payment_intent.id} (invoice payment)."
+                )
+                return Response(status=status.HTTP_200_OK)
+
+            # 3. STANDARD BOOKING FLOW
             try:
                 response_data = self.handle_successful_payment(
                     payment_intent, webhook_id
