@@ -25,6 +25,8 @@ from quickstart.models import (
     ClassImage,
     ClassOption,
     WidgetSubscription,
+    Discount,
+    AppliedDiscount,
 )
 from quickstart.serializers.widget.widget_serializers import (
     WidgetBusinessConfigSerializer,
@@ -61,6 +63,46 @@ def _business_has_active_widget_subscription(business):
         status__in=["active", "trialing"],
         current_period_end__gt=now,
     ).exists()
+
+
+# Commission by plan: basic=4%, growth=3%, advanced=2%
+WIDGET_PLAN_FEE_PERCENT = {"basic": Decimal("4.00"), "growth": Decimal("3.00"), "advanced": Decimal("2.00")}
+
+
+def _get_widget_plan_fee_percentage(business):
+    """Return fee percentage (Decimal) for business's active widget plan; default 4% if none."""
+    if getattr(business, "is_demo", False):
+        return Decimal("4.00")
+    now = timezone.now()
+    sub = (
+        WidgetSubscription.objects.filter(
+            business=business,
+            status__in=["active", "trialing"],
+            current_period_end__gt=now,
+        )
+        .order_by("-current_period_end")
+        .first()
+    )
+    if not sub or not sub.plan_id:
+        return Decimal("4.00")
+    return WIDGET_PLAN_FEE_PERCENT.get((sub.plan_id or "").lower(), Decimal("4.00"))
+
+
+def _get_widget_plan_id(business):
+    """Return plan_id for business's active widget subscription, or None."""
+    if getattr(business, "is_demo", False):
+        return "basic"
+    now = timezone.now()
+    sub = (
+        WidgetSubscription.objects.filter(
+            business=business,
+            status__in=["active", "trialing"],
+            current_period_end__gt=now,
+        )
+        .order_by("-current_period_end")
+        .first()
+    )
+    return (sub.plan_id or "").lower() if sub else None
 
 
 class WidgetEventsView(APIView):
@@ -319,6 +361,121 @@ class WidgetAvailabilityView(APIView):
         return Response(availability_by_date)
 
 
+class ValidateWidgetCouponView(APIView):
+    """
+    Validate a coupon for widget checkout. Requires code, schedule_instance_id, base_amount.
+    Returns discount id and calculated_discount_amount; only discounts with apply_to_widget=True are valid.
+    """
+
+    permission_classes = [IsValidWidgetRequest]
+    throttle_classes = [WidgetRateThrottle]
+
+    def post(self, request, *args, **kwargs):
+        if _is_demo(request):
+            return Response(
+                {"error": "demo_mode", "message": "Demo mode."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        business = request.business_context
+        code = request.data.get("code")
+        base_amount_str = request.data.get("base_amount")
+        schedule_instance_id = request.data.get("schedule_instance_id")
+        if not all([code, base_amount_str, schedule_instance_id]):
+            return Response(
+                {"detail": "code, base_amount, and schedule_instance_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            base_amount = Decimal(str(base_amount_str))
+            instance = ScheduleInstance.objects.select_related(
+                "schedule__option__classId"
+            ).get(id=schedule_instance_id, schedule__option__classId__businessId=business)
+        except (ScheduleInstance.DoesNotExist, ValueError, TypeError):
+            return Response(
+                {"detail": "Invalid schedule instance or amount."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        option = instance.schedule.option
+        coupon_code_upper = code.strip().upper()
+        try:
+            discount = Discount.objects.get(business=business, code=coupon_code_upper)
+        except Discount.DoesNotExist:
+            return Response(
+                {"detail": "This coupon code is not valid."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not discount.apply_to_widget:
+            return Response(
+                {"detail": "This code is not valid for widget bookings."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not discount.is_active:
+            return Response(
+                {"detail": "This coupon is currently inactive."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        now = timezone.now()
+        if discount.valid_from and now < discount.valid_from:
+            return Response(
+                {"detail": "This coupon is not yet active."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if discount.valid_to and now > discount.valid_to:
+            return Response(
+                {"detail": "This coupon has expired."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if discount.usage_limit is not None:
+            current_usage = Booking.objects.filter(discounts=discount).count()
+            if current_usage >= discount.usage_limit:
+                return Response(
+                    {"detail": "This coupon has reached its usage limit."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        if (
+            discount.min_purchase_amount is not None
+            and base_amount < discount.min_purchase_amount
+        ):
+            return Response(
+                {
+                    "detail": f"A minimum purchase of ${discount.min_purchase_amount:.2f} is required to use this coupon."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if discount.scope == "class" and discount.target_class_id != option.classId_id:
+            return Response(
+                {"detail": "This coupon is not valid for the selected class."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if discount.scope == "schedule_group" and (
+            discount.target_class_option_id != option.id
+            or not discount.target_schedule_group_name
+        ):
+            return Response(
+                {"detail": "This coupon is not valid for the selected session."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        calculated_discount = Decimal("0.00")
+        if discount.discount_type == "percentage":
+            calculated_discount = (
+                base_amount * (discount.value / Decimal(100))
+            ).quantize(Decimal("0.01"))
+        elif discount.discount_type == "fixed_amount":
+            calculated_discount = discount.value
+        calculated_discount = min(base_amount, calculated_discount)
+        return Response(
+            {
+                "id": str(discount.id),
+                "code": discount.code,
+                "name": discount.name,
+                "discount_type": discount.discount_type,
+                "value": float(discount.value),
+                "calculated_discount_amount": float(calculated_discount),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
 class CreateGuestPaymentIntentView(APIView):
     """
     Backend-authoritative price calculation and Payment Intent creation.
@@ -366,23 +523,95 @@ class CreateGuestPaymentIntentView(APIView):
                 f"Not enough spots available. Only {instance.available_spots} left."
             )
 
-        # Fee calculation: 4% platform fee on top of class price (customer pays class price + 4%).
         subtotal = instance.price * Decimal(participants)
-        fee_percentage = Decimal("4.00")
-        platform_fee = (subtotal * (fee_percentage / Decimal("100"))).quantize(
+        applied_discount_id = request.data.get("applied_discount_id")
+        discount_amount = None
+        if applied_discount_id:
+            try:
+                discount_amount = Decimal(str(request.data.get("discount_amount", 0)))
+            except (TypeError, ValueError):
+                discount_amount = Decimal("0.00")
+            if discount_amount <= 0:
+                applied_discount_id = None
+                discount_amount = None
+
+        if applied_discount_id and discount_amount is not None:
+            try:
+                discount = Discount.objects.get(
+                    id=applied_discount_id, business=business
+                )
+            except (Discount.DoesNotExist, ValueError):
+                raise ValidationError("Invalid or expired discount.")
+            if not discount.apply_to_widget:
+                raise ValidationError("This discount is not valid for widget bookings.")
+            if not discount.is_active:
+                raise ValidationError("This coupon is currently inactive.")
+            now = timezone.now()
+            if discount.valid_from and now < discount.valid_from:
+                raise ValidationError("This coupon is not yet active.")
+            if discount.valid_to and now > discount.valid_to:
+                raise ValidationError("This coupon has expired.")
+            if discount.usage_limit is not None:
+                current_usage = Booking.objects.filter(discounts=discount).count()
+                if current_usage >= discount.usage_limit:
+                    raise ValidationError("This coupon has reached its usage limit.")
+            if (
+                discount.min_purchase_amount is not None
+                and subtotal < discount.min_purchase_amount
+            ):
+                raise ValidationError(
+                    f"A minimum purchase of ${discount.min_purchase_amount:.2f} is required."
+                )
+            option = instance.schedule.option
+            if discount.scope == "class" and discount.target_class_id != option.classId_id:
+                raise ValidationError("This coupon is not valid for the selected class.")
+            if discount.scope == "schedule_group" and (
+                discount.target_class_option_id != option.id
+                or not discount.target_schedule_group_name
+            ):
+                raise ValidationError("This coupon is not valid for the selected session.")
+            discount_amount = min(discount_amount, subtotal)
+        else:
+            applied_discount_id = None
+            discount_amount = Decimal("0.00")
+
+        subtotal_for_payout = (subtotal - discount_amount).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP
         )
+        if subtotal_for_payout < 0:
+            subtotal_for_payout = Decimal("0.00")
 
-        # Tax calculation (on subtotal)
+        # Fee calculation: plan-based commission on post-discount subtotal
+        plan_id = _get_widget_plan_id(business)
+        fee_percentage = _get_widget_plan_fee_percentage(business)
+        platform_fee = (
+            subtotal_for_payout * (fee_percentage / Decimal("100"))
+        ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
         hst_rate = Decimal("0.13")
-        tax_on_subtotal = (subtotal * hst_rate).quantize(
+        tax_on_subtotal = (subtotal_for_payout * hst_rate).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP
         )
 
-        # Customer pays: subtotal + platform_fee (4%) + tax. Business payout is subtotal - platform_fee (Stripe fee deducted at payout).
-        total_amount_charged = subtotal + platform_fee + tax_on_subtotal
-        net_payout_amount = subtotal - platform_fee
+        total_amount_charged = subtotal_for_payout + platform_fee + tax_on_subtotal
+        net_payout_amount = subtotal_for_payout - platform_fee
         final_amount_cents = int(total_amount_charged * 100)
+
+        metadata = {
+            "business_id": business.businessId,
+            "schedule_instance_id": instance.id,
+            "participants": participants,
+            "booking_source": "widget",
+            "plan_id": plan_id or "basic",
+            "subtotal_cents": int(subtotal * 100),
+            "subtotal_for_payout": str(subtotal_for_payout),
+            "tax_cents": int(tax_on_subtotal * 100),
+            "platform_fee_cents": int(platform_fee * 100),
+            "net_payout_cents": int(net_payout_amount * 100),
+        }
+        if applied_discount_id:
+            metadata["applied_discount_id"] = str(applied_discount_id)
+            metadata["discount_amount"] = str(discount_amount)
 
         try:
             payment_intent = stripe.PaymentIntent.create(
@@ -390,16 +619,7 @@ class CreateGuestPaymentIntentView(APIView):
                 currency=business.currency.lower(),
                 automatic_payment_methods={"enabled": True},
                 transfer_group=f"booking_widget_{uuid.uuid4()}",
-                metadata={
-                    "business_id": business.businessId,
-                    "schedule_instance_id": instance.id,
-                    "participants": participants,
-                    "booking_source": "widget",  # MODIFICATION: Explicitly flag as a widget booking
-                    "subtotal_cents": int(subtotal * 100),
-                    "tax_cents": int(tax_on_subtotal * 100),
-                    "platform_fee_cents": int(platform_fee * 100),
-                    "net_payout_cents": int(net_payout_amount * 100),
-                },
+                metadata=metadata,
             )
             return Response({"client_secret": payment_intent.client_secret})
         except stripe.StripeError as e:
@@ -493,11 +713,10 @@ class GuestBookingCreateView(generics.CreateAPIView):
                     stripe_payment_intent_id=pi.id,
                     stripe_charge_id=pi.latest_charge,
                     status="succeeded",
-                    amount=Decimal(metadata["subtotal_cents"]) / 100
-                    + Decimal(metadata["tax_cents"]) / 100,
-                    tax_amount=Decimal(metadata["tax_cents"]) / 100,
-                    platform_fee_amount=Decimal(metadata["platform_fee_cents"]) / 100,
-                    net_payout_amount=Decimal(metadata["net_payout_cents"]) / 100,
+                    amount=Decimal(pi.amount_received) / 100,
+                    tax_amount=Decimal(metadata.get("tax_cents", 0)) / 100,
+                    platform_fee_amount=Decimal(metadata.get("platform_fee_cents", 0)) / 100,
+                    net_payout_amount=Decimal(metadata.get("net_payout_cents", 0)) / 100,
                     currency=business.currency,
                     payment_method_type=(
                         pi.payment_method_types[0]
@@ -511,9 +730,38 @@ class GuestBookingCreateView(generics.CreateAPIView):
                     metadata={"original_stripe_metadata": dict(metadata)},
                 )
 
+                applied_discount_id = metadata.get("applied_discount_id")
+                discount_amount_str = metadata.get("discount_amount")
+                if applied_discount_id and discount_amount_str:
+                    try:
+                        discount = Discount.objects.select_for_update().get(
+                            pk=applied_discount_id, business=business
+                        )
+                        discount_amount_val = Decimal(discount_amount_str)
+                        discount.redeem()
+                        AppliedDiscount.objects.create(
+                            booking=booking,
+                            discount=discount,
+                            amount_saved=discount_amount_val,
+                        )
+                        logger.info(
+                            "Widget: redeemed discount %s for booking %s",
+                            discount.code,
+                            booking.id,
+                        )
+                    except (Discount.DoesNotExist, ValueError) as e:
+                        logger.warning(
+                            "Widget: could not redeem discount %s for booking %s: %s",
+                            applied_discount_id,
+                            booking.id,
+                            e,
+                        )
+
             # --- Post-Transaction Actions: Emails (guest confirmation + business notification) ---
             try:
-                send_booking_confirmation_email(contact, booking)
+                send_booking_confirmation_email(
+                    contact, booking, booking_source="widget"
+                )
             except Exception as email_err:
                 logger.warning(
                     "Widget: failed to send guest confirmation email for booking %s: %s",

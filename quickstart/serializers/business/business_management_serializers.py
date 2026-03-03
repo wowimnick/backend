@@ -1012,6 +1012,7 @@ class BusinessDiscountSerializer(serializers.ModelSerializer):
             "usage_count",
             "usage_limit_per_user",
             "min_purchase_amount",
+            "apply_to_widget",
             "created_at",
             "updated_at",
         ]

@@ -2,7 +2,8 @@ from celery import shared_task
 from django.utils import timezone
 from datetime import timedelta
 from django.core.cache import cache
-from quickstart.models import Booking, Reviews
+from django.db.models import Exists, OuterRef
+from quickstart.models import Booking, Payment, Reviews
 import logging
 
 logger = logging.getLogger(__name__)
@@ -12,7 +13,7 @@ logger = logging.getLogger(__name__)
 def send_pending_review_requests():
     """
     Sends review request emails for bookings completed 24-48h ago.
-    
+    Excludes widget-origin bookings (no review reminder for widget bookings).
     ZERO SPAM GUARANTEE:
     Uses atomic cache.add() to lock the booking ID.
     """
@@ -27,6 +28,14 @@ def send_pending_review_requests():
             schedule_instance__date__gte=start_time.date(),
             schedule_instance__date__lt=end_time.date() + timedelta(days=1),
             review__isnull=True,
+        )
+        .exclude(
+            Exists(
+                Payment.objects.filter(
+                    booking=OuterRef("pk"),
+                    metadata__original_stripe_metadata__booking_source="widget",
+                )
+            )
         )
         .select_related("user", "schedule_instance__schedule__option__classId")
         .distinct()

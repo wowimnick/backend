@@ -57,6 +57,7 @@ from quickstart.models import (
     Payment,
     Discount,
     ImportedGoogleReview,
+    WidgetSubscription,
 )
 
 from .revenue_analytics_views import RevenueAnalyticsView
@@ -78,6 +79,24 @@ from quickstart.utils.permissions import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _business_has_growth_or_advanced_widget_plan(business):
+    """True if business has an active Growth or Advanced widget subscription."""
+    from django.utils import timezone as tz
+    now = tz.now()
+    sub = (
+        WidgetSubscription.objects.filter(
+            business=business,
+            status__in=["active", "trialing"],
+            current_period_end__gt=now,
+        )
+        .order_by("-current_period_end")
+        .first()
+    )
+    if not sub or not sub.plan_id:
+        return False
+    return (sub.plan_id or "").lower() in ("growth", "advanced")
 
 
 @api_view(["POST"])
@@ -1155,12 +1174,25 @@ class BusinessDiscountViewSet(viewsets.ModelViewSet):
             raise PermissionDenied(
                 "You must be associated with a business to create a discount."
             )
+        if serializer.validated_data.get("apply_to_widget") and not _business_has_growth_or_advanced_widget_plan(business):
+            raise DRFValidationError(
+                "Upgrade to Growth or Advanced to use discounts on the widget."
+            )
 
         # The serializer's validate method already checks if targets belong to the business.
         serializer.save(business=business)
         logger.info(
             f"Discount '{serializer.instance.name}' created for business '{business.businessName}' by user {user.email}"
         )
+
+    def perform_update(self, serializer):
+        discount = serializer.instance
+        business = discount.business
+        if serializer.validated_data.get("apply_to_widget") and not _business_has_growth_or_advanced_widget_plan(business):
+            raise DRFValidationError(
+                "Upgrade to Growth or Advanced to use discounts on the widget."
+            )
+        serializer.save()
 
     @action(detail=True, methods=["patch"], url_path="toggle-active")
     def toggle_active(self, request, pk=None):
@@ -1186,26 +1218,49 @@ class BusinessDiscountViewSet(viewsets.ModelViewSet):
         code = request.data.get("code")
         option_id = request.data.get("option_id")
         base_amount_str = request.data.get("base_amount")
+        source = (request.data.get("source") or "").strip().lower()
+        schedule_instance_id = request.data.get("schedule_instance_id")
 
-        if not all([code, option_id, base_amount_str]):
-            raise DRFValidationError(
-                "`code`, `option_id`, and `base_amount` are required."
-            )
-
-        try:
-            base_amount = Decimal(base_amount_str)
-            option = ClassOption.objects.select_related("classId").get(
-                optionId=option_id
-            )
-            business = option.classId.businessId
-            coupon_code_upper = code.strip().upper()
-        except (ClassOption.DoesNotExist, ValueError, TypeError):
-            raise DRFValidationError("Invalid option ID or amount.")
+        # Widget: require code, base_amount, schedule_instance_id, source=widget
+        if source == "widget":
+            if not all([code, base_amount_str, schedule_instance_id]):
+                raise DRFValidationError(
+                    "`code`, `base_amount`, and `schedule_instance_id` are required for widget."
+                )
+            try:
+                base_amount = Decimal(base_amount_str)
+                instance = ScheduleInstance.objects.select_related(
+                    "schedule__option__classId"
+                ).get(id=schedule_instance_id)
+                option = instance.schedule.option
+                business = option.classId.businessId
+                coupon_code_upper = code.strip().upper()
+            except (ScheduleInstance.DoesNotExist, ValueError, TypeError):
+                raise DRFValidationError("Invalid schedule instance or amount.")
+        else:
+            if not all([code, option_id, base_amount_str]):
+                raise DRFValidationError(
+                    "`code`, `option_id`, and `base_amount` are required."
+                )
+            try:
+                base_amount = Decimal(base_amount_str)
+                option = ClassOption.objects.select_related("classId").get(
+                    optionId=option_id
+                )
+                business = option.classId.businessId
+                coupon_code_upper = code.strip().upper()
+            except (ClassOption.DoesNotExist, ValueError, TypeError):
+                raise DRFValidationError("Invalid option ID or amount.")
 
         try:
             discount = Discount.objects.get(business=business, code=coupon_code_upper)
         except Discount.DoesNotExist:
             raise DRFValidationError({"detail": "This coupon code is not valid."})
+
+        if source == "widget" and not discount.apply_to_widget:
+            raise DRFValidationError(
+                {"detail": "This code is not valid for widget bookings."}
+            )
 
         # --- Validation Checks ---
         if not discount.is_active:
@@ -1225,8 +1280,11 @@ class BusinessDiscountViewSet(viewsets.ModelViewSet):
                     {"detail": "This coupon has reached its usage limit."}
                 )
 
-        if request.user.is_authenticated and discount.usage_limit_per_user is not None:
-            # CORRECTED: Changed 'discount_applied' to 'discounts'
+        if (
+            source != "widget"
+            and request.user.is_authenticated
+            and discount.usage_limit_per_user is not None
+        ):
             user_usage = Booking.objects.filter(
                 discounts=discount, user=request.user
             ).count()

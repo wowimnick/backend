@@ -337,10 +337,12 @@ def send_templated_email(
         return task_result
 
 
-def send_booking_confirmation_email(user, booking: Booking):
+def send_booking_confirmation_email(user, booking: Booking, booking_source=None):
     """
     Sends a booking confirmation email to either a registered user (CustomUser)
     or a guest (Contact).
+    booking_source: optional "widget" | "marketplace". When "widget", uses business
+    widget_email_branding (logo, colors, footer) if the business has Growth/Advanced and has set it.
     """
     logger.info(
         f"--- send_booking_confirmation_email initiated for Booking ID: {booking.id} ---"
@@ -431,6 +433,23 @@ def send_booking_confirmation_email(user, booking: Booking):
         "formatted_timezone_display": formatted_timezone_display,
         "formatted_duration_minutes": formatted_duration_minutes,
     }
+    if booking.schedule_instance:
+        try:
+            business = (
+                booking.schedule_instance.schedule.option.classId.businessId
+            )
+            if booking_source == "widget":
+                branding = getattr(business, "widget_email_branding", None) or {}
+                if branding:
+                    context["email_branding"] = branding
+            elif getattr(business, "marketplace_email_branding_enabled", False):
+                branding = getattr(business, "marketplace_email_branding", None) or {}
+                if branding:
+                    context["email_branding"] = branding
+        except Exception as e:
+            logger.warning(
+                f"Could not attach email branding for booking {booking.id}: {e}"
+            )
 
     if context["is_guest"] and booking.cancellation_token:
         guest_cancellation_url = (
@@ -786,9 +805,11 @@ def send_booking_cancelled_by_other_email(
     logger.info(f"'Cancelled by other' email prepared/queued for booking {booking.id}")
 
 
-def send_booking_reminder_email(user, booking: Booking):
+def send_booking_reminder_email(user, booking: Booking, booking_source=None):
     """
     Sends a reminder email to a user about an upcoming class.
+    booking_source: optional "widget" | "marketplace". When "widget", uses business
+    widget_email_branding if set (Growth/Advanced).
     """
     if not user or not user.email or not booking:
         logger.warning(
@@ -844,6 +865,23 @@ def send_booking_reminder_email(user, booking: Booking):
         "calculated_end_time": calculated_end_time,
         "formatted_timezone": formatted_timezone,
     }
+    if booking.schedule_instance:
+        try:
+            business = (
+                booking.schedule_instance.schedule.option.classId.businessId
+            )
+            if booking_source == "widget":
+                branding = getattr(business, "widget_email_branding", None) or {}
+                if branding:
+                    context["email_branding"] = branding
+            elif getattr(business, "marketplace_email_branding_enabled", False):
+                branding = getattr(business, "marketplace_email_branding", None) or {}
+                if branding:
+                    context["email_branding"] = branding
+        except Exception as e:
+            logger.warning(
+                f"Could not attach email branding for reminder booking {booking.id}: {e}"
+            )
 
     # Pass course session context if available
     if booking.enrollment_type == "Full Course" and booking.course_session_number:

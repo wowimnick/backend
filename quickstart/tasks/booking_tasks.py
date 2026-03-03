@@ -142,7 +142,14 @@ def send_upcoming_booking_reminders():
                 logger.warning(f"Booking {booking.id} has no recipient. Skipping.")
                 continue
 
-            send_booking_reminder_email(user=recipient, booking=booking)
+            is_widget_booking = booking.payments.filter(
+                metadata__original_stripe_metadata__booking_source="widget"
+            ).exists()
+            send_booking_reminder_email(
+                user=recipient,
+                booking=booking,
+                booking_source="widget" if is_widget_booking else None,
+            )
             sent_count += 1
             logger.info(f"Queued reminder email for booking {booking.id}.")
 

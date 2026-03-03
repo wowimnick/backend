@@ -16,6 +16,13 @@ from quickstart.views.widget.widget_config_views import (
     WidgetSubscriptionView,
     WidgetSubscriptionCancelView,
     WidgetSubscriptionReactivateView,
+    WidgetSubscriptionInvoicesView,
+    BusinessAddonsView,
+    CreateMarketplaceEmailAddonCheckoutView,
+    CreateMarketplaceEmailAddonPaymentIntentView,
+    InstantSubscribeMarketplaceEmailAddonView,
+    CancelMarketplaceEmailAddonView,
+    ReactivateMarketplaceEmailAddonView,
 )
 from quickstart.views.admin.payout_management.admin_payout_views import (
     AdminPayoutViewSet,
@@ -149,6 +156,7 @@ from quickstart.views.widget.widget_views import (
     WidgetConfigView,
     WidgetClassListView,
     WidgetAvailabilityView,
+    ValidateWidgetCouponView,
     CreateGuestPaymentIntentView,
     GuestBookingCreateView,
     WidgetEventsView,
@@ -326,6 +334,11 @@ widget_urlpatterns = [
     path("config/", WidgetConfigView.as_view(), name="widget-config"),
     path("classes/", WidgetClassListView.as_view(), name="widget-classes"),
     path("availability/", WidgetAvailabilityView.as_view(), name="widget-availability"),
+    path(
+        "validate-coupon/",
+        ValidateWidgetCouponView.as_view(),
+        name="widget-validate-coupon",
+    ),
     path(
         "payment-intent/",
         CreateGuestPaymentIntentView.as_view(),
@@ -590,6 +603,11 @@ urlpatterns = [
         name="my-business-widget-subscription-reactivate",
     ),
     path(
+        "my-business/widget-subscription/invoices/",
+        WidgetSubscriptionInvoicesView.as_view(),
+        name="my-business-widget-subscription-invoices",
+    ),
+    path(
         "my-business/widget-subscription/checkout/",
         CreateWidgetSubscriptionCheckoutView.as_view(),
         name="my-business-widget-subscription-checkout",
@@ -598,6 +616,36 @@ urlpatterns = [
         "my-business/widget-subscription/payment-intent/",
         CreateWidgetSubscriptionPaymentIntentView.as_view(),
         name="my-business-widget-subscription-payment-intent",
+    ),
+    path(
+        "my-business/addons/",
+        BusinessAddonsView.as_view(),
+        name="my-business-addons",
+    ),
+    path(
+        "my-business/addons/marketplace-email/checkout/",
+        CreateMarketplaceEmailAddonCheckoutView.as_view(),
+        name="my-business-addon-marketplace-email-checkout",
+    ),
+    path(
+        "my-business/addons/marketplace-email/payment-intent/",
+        CreateMarketplaceEmailAddonPaymentIntentView.as_view(),
+        name="my-business-addon-marketplace-email-payment-intent",
+    ),
+    path(
+        "my-business/addons/marketplace-email/instant-subscribe/",
+        InstantSubscribeMarketplaceEmailAddonView.as_view(),
+        name="my-business-addon-marketplace-email-instant-subscribe",
+    ),
+    path(
+        "my-business/addons/marketplace-email/cancel/",
+        CancelMarketplaceEmailAddonView.as_view(),
+        name="my-business-addon-marketplace-email-cancel",
+    ),
+    path(
+        "my-business/addons/marketplace-email/reactivate/",
+        ReactivateMarketplaceEmailAddonView.as_view(),
+        name="my-business-addon-marketplace-email-reactivate",
     ),
     path(
         "my-business/profile/",

@@ -680,6 +680,24 @@ class BusinessInfo(models.Model):
         help_text="A list of domains (e.g., 'www.mywebsite.com') where the widget is allowed to be embedded.",
     )
 
+    # Widget email branding (Growth/Advanced only). Used for confirmation/reminder emails for widget bookings.
+    widget_email_branding = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Optional branding for widget booking emails: logo_url, primary_color, footer_text, confirmation_message.",
+    )
+
+    # Marketplace email branding addon: when enabled, confirmation/reminder for marketplace bookings use marketplace_email_branding.
+    marketplace_email_branding_enabled = models.BooleanField(
+        default=False,
+        help_text="When True, marketplace booking emails use marketplace_email_branding (addon).",
+    )
+    marketplace_email_branding = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Branding for marketplace booking emails when addon is enabled: logo_url, primary_color, footer_text, confirmation_message.",
+    )
+
     def _generate_unique_slug(self):
         """Generates a unique slug from the business name."""
         if self.slug:  # Do not regenerate if a slug already exists and is being saved
@@ -2497,6 +2515,11 @@ class Discount(models.Model):
         help_text="The minimum booking total required to use this discount.",
     )
 
+    apply_to_widget = models.BooleanField(
+        default=False,
+        help_text="When True, this discount can be applied at widget checkout as well as marketplace. Requires Growth or Advanced widget plan.",
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -2953,6 +2976,61 @@ class WidgetSubscription(models.Model):
 
     def __str__(self):
         return f"Widget subscription {self.stripe_subscription_id or self.id} ({self.business.businessName})"
+
+
+ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING = "marketplace_email_branding"
+
+
+class BusinessAddonSubscription(models.Model):
+    """
+    Tracks addon subscriptions (e.g. marketplace email branding $7/mo).
+    One active subscription per business per addon_type.
+    """
+    STATUS_CHOICES = [
+        ("active", "Active"),
+        ("trialing", "Trialing"),
+        ("past_due", "Past Due"),
+        ("canceled", "Canceled"),
+        ("incomplete", "Incomplete"),
+        ("incomplete_expired", "Incomplete Expired"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        BusinessInfo,
+        on_delete=models.CASCADE,
+        related_name="addon_subscriptions",
+    )
+    addon_type = models.CharField(
+        max_length=64,
+        db_index=True,
+        help_text="e.g. marketplace_email_branding",
+    )
+    stripe_subscription_id = models.CharField(
+        max_length=255, unique=True, db_index=True, null=True, blank=True
+    )
+    stripe_customer_id = models.CharField(max_length=255, blank=True, null=True)
+    stripe_price_id = models.CharField(max_length=255, blank=True, null=True)
+    status = models.CharField(
+        max_length=30,
+        choices=STATUS_CHOICES,
+        default="incomplete",
+        db_index=True,
+    )
+    current_period_end = models.DateTimeField(null=True, blank=True)
+    cancel_at_period_end = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "business_addon_subscriptions"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["business", "addon_type", "status"]),
+        ]
+
+    def __str__(self):
+        return f"Addon {self.addon_type} ({self.business.businessName})"
 
 
 class Reviews(models.Model):
