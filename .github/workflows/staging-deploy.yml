@@ -141,7 +141,7 @@ jobs:
 
             # 5. START THE STRIPE CLI SIDECAR CONTAINERS (No changes here)
             echo "--- Starting Stripe CLI for Payments Webhook... ---"
-            docker run -d --rm --name $STRIPE_PAYMENTS_CONTAINER_NAME --network $NETWORK_NAME stripe/stripe-cli:latest listen --api-key "${{ secrets.STRIPE_SECRET_KEY }}" --forward-to "http://web:8000/api/payments/webhook/" --events "payment_intent.succeeded,payment_intent.payment_failed"
+            docker run -d --rm --name $STRIPE_PAYMENTS_CONTAINER_NAME --network $NETWORK_NAME stripe/stripe-cli:latest listen --api-key "${{ secrets.STRIPE_SECRET_KEY }}" --forward-to "http://web:8000/api/payments/webhook/" --events "payment_intent.succeeded,payment_intent.payment_failed,invoice.paid,customer.subscription.created,customer.subscription.updated,customer.subscription.deleted"
 
             echo "--- Starting Stripe CLI for Connect Webhook... ---"
             docker run -d --rm --name $STRIPE_CONNECT_CONTAINER_NAME --network $NETWORK_NAME stripe/stripe-cli:latest listen --api-key "${{ secrets.STRIPE_SECRET_KEY }}" --forward-to "http://web:8000/api/webhooks/stripe-connect/" --events "account.updated,capability.updated,transfer.created"
