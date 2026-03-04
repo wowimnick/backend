@@ -1052,10 +1052,23 @@ def _get_current_addon_subscription(business, addon_type):
     )
 
 
-def _business_can_instant_subscribe(business):
-    """True if business has a Stripe customer with a default payment method (so we can charge without Checkout)."""
+def _normalize_payment_method_id(pm):
+    """Extract payment method id from Stripe object (string or expanded)."""
+    if pm is None:
+        return None
+    if isinstance(pm, str):
+        return pm
+    return getattr(pm, "id", None) or (pm.get("id") if isinstance(pm, dict) else None)
+
+
+def _get_business_default_payment_method_id(business):
+    """
+    Return the business's default payment method id for charging, or None.
+    Checks (1) Stripe customer invoice_settings.default_payment_method,
+    (2) active widget subscription's default_payment_method (e.g. after widget checkout).
+    """
     if not business.stripe_customer_id:
-        return False
+        return None
     try:
         customer = stripe.Customer.retrieve(
             business.stripe_customer_id,
@@ -1066,17 +1079,40 @@ def _business_can_instant_subscribe(business):
             "default_payment_method",
             None,
         )
-        if default_pm is None:
-            return False
-        # Can be id string or expanded object
-        pm_id = (
-            default_pm
-            if isinstance(default_pm, str)
-            else (getattr(default_pm, "id", None) or (default_pm.get("id") if isinstance(default_pm, dict) else None))
-        )
-        return bool(pm_id)
+        pm_id = _normalize_payment_method_id(default_pm)
+        if pm_id:
+            return pm_id
     except stripe.StripeError:
-        return False
+        pass
+    # Fallback: use payment method from active widget subscription (set when they paid for widget plan)
+    try:
+        now = timezone.now()
+        widget_sub = (
+            WidgetSubscription.objects.filter(
+                business=business,
+                status__in=["active", "trialing"],
+                current_period_end__gt=now,
+            )
+            .order_by("-current_period_end")
+            .first()
+        )
+        if widget_sub and widget_sub.stripe_subscription_id:
+            stripe_sub = stripe.Subscription.retrieve(
+                widget_sub.stripe_subscription_id,
+                expand=["default_payment_method"],
+            )
+            default_pm = getattr(stripe_sub, "default_payment_method", None) or (
+                stripe_sub.get("default_payment_method") if isinstance(stripe_sub, dict) else None
+            )
+            return _normalize_payment_method_id(default_pm)
+    except stripe.StripeError:
+        pass
+    return None
+
+
+def _business_can_instant_subscribe(business):
+    """True if business has a Stripe customer with a default payment method (so we can charge without Checkout)."""
+    return bool(_get_business_default_payment_method_id(business))
 
 
 class BusinessAddonsView(APIView):
@@ -1267,46 +1303,13 @@ class InstantSubscribeMarketplaceEmailAddonView(APIView):
                 {"error": "You already have an active marketplace email branding subscription."},
                 status=status.HTTP_409_CONFLICT,
             )
-        if not business.stripe_customer_id:
+        pm_id = _get_business_default_payment_method_id(business)
+        if not pm_id:
             return Response(
                 {
                     "error": "No saved payment method. Use the link below to enter payment details.",
                     "can_instant": False,
                 },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        try:
-            customer = stripe.Customer.retrieve(
-                business.stripe_customer_id,
-                expand=["invoice_settings.default_payment_method"],
-            )
-            default_pm = getattr(
-                getattr(customer, "invoice_settings", None),
-                "default_payment_method",
-                None,
-            )
-            if default_pm is None:
-                return Response(
-                    {
-                        "error": "No saved payment method. Use the link below to enter payment details.",
-                        "can_instant": False,
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            pm_id = (
-                default_pm
-                if isinstance(default_pm, str)
-                else (getattr(default_pm, "id", None) or (default_pm.get("id") if isinstance(default_pm, dict) else None))
-            )
-            if not pm_id:
-                return Response(
-                    {"error": "Saved payment method invalid. Use the link below to enter payment details.", "can_instant": False},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-        except stripe.StripeError as e:
-            logger.warning("Stripe Customer.retrieve failed for instant addon: %s", e)
-            return Response(
-                {"error": "Could not verify payment method. Use the link below to enter payment details.", "can_instant": False},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
