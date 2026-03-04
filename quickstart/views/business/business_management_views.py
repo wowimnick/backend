@@ -45,7 +45,7 @@ import logging
 
 from quickstart.utils.revalidation import trigger_nextjs_revalidation
 from quickstart.views.public.public_business_views import invalidate_business_detail_cache
-from quickstart.utils.url_utils import sanitize_filename_for_s3
+from quickstart.utils.url_utils import sanitize_filename_for_s3, build_cloudfront_url
 from quickstart.models import (
     BusinessInfo,
     Booking,
@@ -125,6 +125,7 @@ def generate_presigned_upload_url(request):
     allowed_upload_types = {
         "avatar": "avatars/",
         "business_image": "business_images/",
+        "email_branding_logo": "email_branding_logos/",
         "class_image": "class_images/",
         "review_image": "review_images/",
         "category_image": "category_images/",
@@ -169,6 +170,9 @@ def generate_presigned_upload_url(request):
         )
 
         response["s3_key"] = unique_key
+        public_url = build_cloudfront_url(unique_key)
+        if public_url:
+            response["public_url"] = public_url
 
         return Response(response)
     except ClientError as e:

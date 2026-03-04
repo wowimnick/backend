@@ -32,6 +32,16 @@ def trigger_nextjs_revalidation(
         logger.warning("Neither path nor tag provided for revalidation. Skipping.")
         return False
 
+    # Skip when frontend URL is localhost and unreachable (e.g. backend in Docker, frontend not running).
+    # Set FRONTEND_URL to your real frontend URL in staging/prod so revalidation works.
+    base = (settings.FRONTEND_BASE_URL or "").strip().lower()
+    if "localhost" in base or "127.0.0.1" in base:
+        logger.debug(
+            "Revalidation skipped (FRONTEND_BASE_URL is localhost). "
+            "Set FRONTEND_URL to your frontend URL when deploying."
+        )
+        return False
+
     # Construct request
     base_url = f"{settings.FRONTEND_BASE_URL.rstrip('/')}/api/revalidate"
     headers = {"Content-Type": "application/json"}

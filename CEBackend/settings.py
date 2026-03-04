@@ -439,6 +439,9 @@ SIMPLE_JWT = {
     "USER_ID_CLAIM": "user_id",
 }
 
+# Frontend base URL for revalidation, emails, redirects. When the backend runs in Docker or on
+# a different host, set FRONTEND_URL to a URL reachable from the backend (e.g. your staging/prod
+# frontend). Otherwise revalidation and other callbacks will try localhost:3000 and fail.
 FRONTEND_BASE_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 
 # Meta Conversions API (CAPI) - server-side events with Pixel deduplication

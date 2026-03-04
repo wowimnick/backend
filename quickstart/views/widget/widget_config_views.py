@@ -1340,29 +1340,36 @@ class InstantSubscribeMarketplaceEmailAddonView(APIView):
             )
 
         # Sync locally so UI updates immediately (webhook will also run)
-        period_end = stripe_sub.current_period_end
-        current_period_end = None
+        period_end = stripe_sub.get("current_period_end")
+        current_period_end_dt = None
         if period_end:
             from datetime import datetime
             import pytz
-            current_period_end = datetime.fromtimestamp(period_end, tz=pytz.UTC)
+            current_period_end_dt = datetime.fromtimestamp(period_end, tz=pytz.UTC)
         stripe_price_id = None
-        if stripe_sub.get("items") and stripe_sub["items"].get("data"):
-            stripe_price_id = stripe_sub["items"]["data"][0].get("price", {}).get("id")
+        items = stripe_sub.get("items")
+        if items and items.get("data"):
+            first_item = items["data"][0] if isinstance(items["data"], list) else None
+            if first_item:
+                price = first_item.get("price") if isinstance(first_item, dict) else getattr(first_item, "price", None)
+                stripe_price_id = price.get("id") if isinstance(price, dict) else getattr(price, "id", None)
+        sub_status = stripe_sub.get("status") or getattr(stripe_sub, "status", None)
+        stripe_sub_id = stripe_sub.get("id") or getattr(stripe_sub, "id", None)
+        stripe_customer = stripe_sub.get("customer") or getattr(stripe_sub, "customer", None) or ""
 
         BusinessAddonSubscription.objects.update_or_create(
-            stripe_subscription_id=stripe_sub.id,
+            stripe_subscription_id=stripe_sub_id,
             defaults={
                 "business": business,
                 "addon_type": ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING,
-                "stripe_customer_id": stripe_sub.get("customer") or "",
+                "stripe_customer_id": str(stripe_customer) if stripe_customer else "",
                 "stripe_price_id": stripe_price_id,
-                "status": stripe_sub.status,
-                "current_period_end": current_period_end,
-                "cancel_at_period_end": bool(stripe_sub.get("cancel_at_period_end")),
+                "status": sub_status or "active",
+                "current_period_end": current_period_end_dt,
+                "cancel_at_period_end": bool(stripe_sub.get("cancel_at_period_end") or getattr(stripe_sub, "cancel_at_period_end", False)),
             },
         )
-        business.marketplace_email_branding_enabled = stripe_sub.status in ("active", "trialing")
+        business.marketplace_email_branding_enabled = sub_status in ("active", "trialing")
         business.save(update_fields=["marketplace_email_branding_enabled"])
 
         return Response(
@@ -1370,7 +1377,7 @@ class InstantSubscribeMarketplaceEmailAddonView(APIView):
                 "marketplace_email_branding": {
                     "active": True,
                     "currentPeriodEnd": (
-                        current_period_end.isoformat() if current_period_end else None
+                        current_period_end_dt.isoformat() if current_period_end_dt else None
                     ),
                     "cancelAtPeriodEnd": False,
                 }
