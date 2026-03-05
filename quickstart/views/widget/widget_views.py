@@ -156,6 +156,7 @@ class WidgetConfigView(generics.RetrieveAPIView):
                     "backgroundColor": "#ffffff",
                     "fontFamily": "inherit",
                 },
+                "widget_fee_percentage": 4.0,
                 "stripe_publishable_key": getattr(settings, "STRIPE_PUBLIC_KEY", ""),
                 "terms_url": f"{base}/terms-of-service",
                 "privacy_url": f"{base}/privacy-policy",

@@ -32,6 +32,7 @@ class WidgetBusinessConfigSerializer(serializers.ModelSerializer):
     # CRITICAL CHANGE: This sources data from the `widget_config` JSONField on the model
     # but presents it as `theme` in the API response, matching what the frontend expects.
     theme = serializers.JSONField(source="widget_config")
+    widget_fee_percentage = serializers.SerializerMethodField()
 
     class Meta:
         model = BusinessInfo
@@ -40,8 +41,13 @@ class WidgetBusinessConfigSerializer(serializers.ModelSerializer):
             "business_timezone",
             "currency",
             "theme",
+            "widget_fee_percentage",
         ]
         read_only_fields = fields
+
+    def get_widget_fee_percentage(self, obj):
+        from quickstart.views.widget.widget_views import _get_widget_plan_fee_percentage
+        return float(_get_widget_plan_fee_percentage(obj))
 
 
 class WidgetScheduleSerializer(serializers.ModelSerializer):
