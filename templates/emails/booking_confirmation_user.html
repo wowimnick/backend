@@ -10,10 +10,7 @@
         <h1 style="margin-bottom: 8px;">{% trans "Get ready for something great." %}</h1>
         <p style="font-size: 16px; color: #484848; margin-bottom: {% if email_branding and email_branding.confirmation_message %}8px;">{% else %}24px;">{% endif %}
             {% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}
-            {% trans "your spot is secured for" %} <strong>{{ related_data.class_title }}</strong>
-            {% if related_data.has_multiple_options and related_data.option_title and related_data.option_title != related_data.class_title %}
-                <span style="color: #86868B;">({{ related_data.option_title }})</span>
-            {% endif %}.
+            {% trans "your spot is secured for" %} <strong>{{ related_data.class_title }}</strong>{% if related_data.has_multiple_options and related_data.option_title and related_data.option_title != related_data.class_title %} <span style="color: #86868B;">({{ related_data.option_title }})</span>{% endif %}.
         </p>
         {% if email_branding and email_branding.confirmation_message %}
         <p style="font-size: 14px; color: #484848; margin-bottom: 24px;">{{ email_branding.confirmation_message }}</p>
