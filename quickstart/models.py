@@ -601,6 +601,11 @@ class BusinessInfo(models.Model):
         null=True,
         db_index=True,
     )
+    last_payout_connect_reminder_sent = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When we last emailed this business to connect Stripe for pending payouts (3-day cooldown).",
+    )
 
     managers = models.ManyToManyField(
         settings.AUTH_USER_MODEL, related_name="managed_businesses", blank=True

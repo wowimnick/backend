@@ -6,24 +6,20 @@
 {% endblock title %}
 {% block content %}
     <div style="text-align: center;">
-        {% if email_branding and email_branding.logo_url %}
-        <p style="margin-bottom: 16px;"><img src="{{ email_branding.logo_url }}" alt="" style="max-width: 160px; max-height: 60px; height: auto;" /></p>
-        {% else %}
         <div style="font-size: 48px; margin-bottom: 16px; line-height: 1;">🎉</div>
-        {% endif %}
         <h1 style="margin-bottom: 8px;">{% trans "Get ready for something great." %}</h1>
-        {% if email_branding and email_branding.confirmation_message %}
-        <p style="font-size: 14px; color: #484848; margin-bottom: 16px;">{{ email_branding.confirmation_message }}</p>
-        {% endif %}
-        <p style="font-size: 16px; color: #484848; margin-bottom: 24px;">
+        <p style="font-size: 16px; color: #484848; margin-bottom: {% if email_branding and email_branding.confirmation_message %}8px;">{% else %}24px;">{% endif %}
             {% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}
             {% trans "your spot is secured for" %} <strong>{{ related_data.class_title }}</strong>
-            {% if related_data.option_title and related_data.option_title != related_data.class_title %}
+            {% if related_data.has_multiple_options and related_data.option_title and related_data.option_title != related_data.class_title %}
                 <span style="color: #86868B;">({{ related_data.option_title }})</span>
             {% endif %}.
         </p>
+        {% if email_branding and email_branding.confirmation_message %}
+        <p style="font-size: 14px; color: #484848; margin-bottom: 24px;">{{ email_branding.confirmation_message }}</p>
+        {% endif %}
         <!-- Main card -->
-        <div style="background: #fff; border: 1px solid #E5E7EB; border-radius: 16px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.04); margin-bottom: 24px; max-width: 480px; margin-left: auto; margin-right: auto;">
+        <div style="background: #fff; border: {% if email_branding and email_branding.card_border_width != None and email_branding.card_border_width != '' %}{{ email_branding.card_border_width }}{% else %}1{% endif %}px solid #E5E7EB; border-radius: {% if email_branding and email_branding.card_border_radius != None and email_branding.card_border_radius != '' %}{{ email_branding.card_border_radius }}{% else %}16{% endif %}px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.04); margin-bottom: 24px; max-width: 480px; margin-left: auto; margin-right: auto;">
             <div style="background: #F5F5F7; padding: 20px 24px; border-bottom: 1px solid #E5E7EB;">
                 <div style="font-size: 11px; color: #86868B; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">{% trans "Date & time" %}</div>
                 <div style="font-size: 22px; font-weight: 700; color: #1D1D1F;">{{ booking.schedule_instance.date|date:"l, F j" }}</div>
@@ -79,9 +75,9 @@
         <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
             <tr><td align="center">
                 {% if is_guest and guest_cancellation_url %}
-                    <a href="{{ guest_cancellation_url }}" target="_blank" class="button">{% trans 'Manage Booking' %}</a>
+                    <a href="{{ guest_cancellation_url }}" target="_blank" class="button" style="background-color: {% if email_branding and email_branding.primary_color %}{{ email_branding.primary_color }}{% else %}#F81E3E{% endif %} !important; color: #ffffff !important;">{% trans 'Manage Booking' %}</a>
                 {% else %}
-                    <a href="{{ manage_bookings_url }}" target="_blank" class="button">{% trans 'View Ticket & Details' %}</a>
+                    <a href="{{ manage_bookings_url }}" target="_blank" class="button" style="background-color: {% if email_branding and email_branding.primary_color %}{{ email_branding.primary_color }}{% else %}#F81E3E{% endif %} !important; color: #ffffff !important;">{% trans 'View Ticket & Details' %}</a>
                 {% endif %}
             </td></tr>
         </table>
@@ -92,9 +88,6 @@
                 {% blocktrans %}View directions and manage your booking in your account.{% endblocktrans %}
             {% endif %}
         </p>
-        {% if email_branding and email_branding.footer_text %}
-        <p style="margin-top: 16px; font-size: 12px; color: #9ca3af;">{{ email_branding.footer_text }}</p>
-        {% endif %}
     </div>
 {% endblock content %}
 {% block footer_recipient %}

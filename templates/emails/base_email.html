@@ -78,13 +78,13 @@
         margin: 0 0 24px 0;
       }
 
-      /* Links - using your Brand Color */
-      a { color: #f81e3e; text-decoration: none; font-weight: 600; }
+      /* Links - Brand Color (custom when email_branding.primary_color set) */
+      a { color: {% if email_branding and email_branding.primary_color %}{{ email_branding.primary_color }}{% else %}#f81e3e{% endif %}; text-decoration: none; font-weight: 600; }
       a:hover { text-decoration: underline; }
 
-      /* Buttons - Pill Shape, Brand Color, Soft Shadow */
+      /* Buttons - Pill Shape, Brand Color (custom when email_branding.primary_color set) */
       .button {
-        background-color: #f81e3e !important;
+        background-color: {% if email_branding and email_branding.primary_color %}{{ email_branding.primary_color }}{% else %}#f81e3e{% endif %} !important;
         color: #ffffff !important;
         border-radius: 980px; /* Full Pill */
         padding: 16px 36px;
@@ -94,10 +94,9 @@
         text-decoration: none !important;
         text-align: center;
         mso-padding-alt: 0;
-        /* Subtle colored shadow matching the button */
-        box-shadow: 0 4px 10px rgba(248, 30, 62, 0.25);
+        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
       }
-      .button:hover { background-color: #d61532 !important; }
+      .button:hover { opacity: 0.9; }
 
       /* Card Style - The "Floating" Look */
       .card-container {
@@ -142,10 +141,14 @@
                  style="width: 600px;
                         margin: 0 auto;
                         max-width: 600px">
-            <!-- LOGO HEADER -->
+            <!-- LOGO HEADER (business logo when email_branding.logo_url set, else ClassEasily) -->
             <tr>
               <td align="center" style="padding-bottom: 32px;">
-                <!-- Ensure this logo works on the light gray background -->
+                {% if header_logo_url %}
+                <img src="{{ header_logo_url }}"
+                     alt=""
+                     style="max-width: {% if header_logo_max_width %}{{ header_logo_max_width }}{% else %}160{% endif %}px; max-height: {% if header_logo_max_height %}{{ header_logo_max_height }}{% else %}60{% endif %}px; width: auto; height: auto; display: block; object-fit: contain" />
+                {% else %}
                 <img src="https://d1uuoquc68y10e.cloudfront.net/public/sig.png"
                      alt="ClassEasily"
                      width="150"
@@ -153,6 +156,7 @@
                             max-width: 100%;
                             height: auto;
                             display: block" />
+                {% endif %}
               </td>
             </tr>
             <!-- CARD CONTENT -->

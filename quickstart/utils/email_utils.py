@@ -442,10 +442,32 @@ def send_booking_confirmation_email(user, booking: Booking, booking_source=None)
                 branding = getattr(business, "widget_email_branding", None) or {}
                 if branding:
                     context["email_branding"] = branding
+                    logo_url = (branding.get("logo_url") or "").strip()
+                    if logo_url:
+                        context["header_logo_url"] = logo_url
+                        try:
+                            _w = branding.get("logo_max_width")
+                            _h = branding.get("logo_max_height")
+                            context["header_logo_max_width"] = int(_w) if _w not in (None, "") else 160
+                            context["header_logo_max_height"] = int(_h) if _h not in (None, "") else 60
+                        except (TypeError, ValueError):
+                            context["header_logo_max_width"] = 160
+                            context["header_logo_max_height"] = 60
             elif getattr(business, "marketplace_email_branding_enabled", False):
                 branding = getattr(business, "marketplace_email_branding", None) or {}
                 if branding:
                     context["email_branding"] = branding
+                    logo_url = (branding.get("logo_url") or "").strip()
+                    if logo_url:
+                        context["header_logo_url"] = logo_url
+                        try:
+                            _w = branding.get("logo_max_width")
+                            _h = branding.get("logo_max_height")
+                            context["header_logo_max_width"] = int(_w) if _w not in (None, "") else 160
+                            context["header_logo_max_height"] = int(_h) if _h not in (None, "") else 60
+                        except (TypeError, ValueError):
+                            context["header_logo_max_width"] = 160
+                            context["header_logo_max_height"] = 60
         except Exception as e:
             logger.warning(
                 f"Could not attach email branding for booking {booking.id}: {e}"
@@ -874,10 +896,32 @@ def send_booking_reminder_email(user, booking: Booking, booking_source=None):
                 branding = getattr(business, "widget_email_branding", None) or {}
                 if branding:
                     context["email_branding"] = branding
+                    logo_url = (branding.get("logo_url") or "").strip()
+                    if logo_url:
+                        context["header_logo_url"] = logo_url
+                        try:
+                            _w = branding.get("logo_max_width")
+                            _h = branding.get("logo_max_height")
+                            context["header_logo_max_width"] = int(_w) if _w not in (None, "") else 160
+                            context["header_logo_max_height"] = int(_h) if _h not in (None, "") else 60
+                        except (TypeError, ValueError):
+                            context["header_logo_max_width"] = 160
+                            context["header_logo_max_height"] = 60
             elif getattr(business, "marketplace_email_branding_enabled", False):
                 branding = getattr(business, "marketplace_email_branding", None) or {}
                 if branding:
                     context["email_branding"] = branding
+                    logo_url = (branding.get("logo_url") or "").strip()
+                    if logo_url:
+                        context["header_logo_url"] = logo_url
+                        try:
+                            _w = branding.get("logo_max_width")
+                            _h = branding.get("logo_max_height")
+                            context["header_logo_max_width"] = int(_w) if _w not in (None, "") else 160
+                            context["header_logo_max_height"] = int(_h) if _h not in (None, "") else 60
+                        except (TypeError, ValueError):
+                            context["header_logo_max_width"] = 160
+                            context["header_logo_max_height"] = 60
         except Exception as e:
             logger.warning(
                 f"Could not attach email branding for reminder booking {booking.id}: {e}"
@@ -1453,6 +1497,44 @@ def send_payout_initiated_email(business_user: CustomUser, payout: Payout):
         template_name="emails/business_payout_initiated.html",
         context=context,
         subject=f"Your Payout of ${payout.amount:.2f} is on its way!",
+    )
+
+
+def send_payout_connect_required_email(
+    business_user: CustomUser,
+    pending_amount,
+    booking_count: int,
+    currency: str = "CAD",
+):
+    """
+    Notifies a business user that they have pending payout earnings but no
+    connected Stripe account. Sent at most once every 3 days (enforced by caller).
+    """
+    if not business_user or not business_user.email:
+        logger.warning(
+            "Attempted to send payout connect required email with invalid user."
+        )
+        return
+
+    logger.info(
+        f"Preparing payout connect required email to {business_user.email} "
+        f"(pending_amount={pending_amount}, booking_count={booking_count})"
+    )
+
+    dashboard_url = f"{settings.FRONTEND_BASE_URL}/business/dashboard/payouts"
+    context = {
+        "user": business_user,
+        "pending_amount": pending_amount,
+        "booking_count": booking_count,
+        "currency": currency or "CAD",
+        "dashboard_url": dashboard_url,
+        "recipient_email": business_user.email,
+    }
+    send_templated_email(
+        recipient_list=[business_user.email],
+        template_name="emails/business_payout_connect_required.html",
+        context=context,
+        subject="Connect your account to receive your payout",
     )
 
 

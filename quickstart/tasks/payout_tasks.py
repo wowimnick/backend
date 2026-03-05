@@ -25,6 +25,78 @@ def _estimate_stripe_processing_fee(charge_amount):
         return Decimal("0.00")
     fee = (charge_amount * STRIPE_FEE_PERCENT + STRIPE_FEE_FIXED).quantize(Decimal("0.01"))
     return fee
+
+
+def _maybe_send_payout_connect_reminder(business):
+    """
+    If the business has pending payout bookings and we haven't sent the
+    "connect Stripe" reminder in the last 3 days, send it and update the cooldown.
+    """
+    from quickstart.utils.email_utils import send_payout_connect_required_email
+
+    pending_bookings = (
+        Booking.objects.filter(
+            schedule_instance__schedule__option__classId__businessId=business,
+            status__in=["completed", "forfeited"],
+            payment_status="paid",
+            payout_status="pending",
+        )
+        .prefetch_related("payments")
+    )
+    if not pending_bookings.exists():
+        return
+
+    total_payout = Decimal("0.00")
+    booking_count = 0
+    for booking in pending_bookings:
+        allocated = booking.allocated_net_payout or Decimal("0.00")
+        if allocated <= 0:
+            continue
+        payment = next(
+            (p for p in booking.payments.all() if p.status == "succeeded"),
+            None,
+        )
+        stripe_fee = Decimal("0.00")
+        if payment and payment.amount:
+            stripe_fee = _estimate_stripe_processing_fee(payment.amount)
+        net_after_stripe = (allocated - stripe_fee).quantize(Decimal("0.01"))
+        if net_after_stripe > 0:
+            total_payout += net_after_stripe
+            booking_count += 1
+
+    if booking_count == 0:
+        return
+
+    last_sent = getattr(business, "last_payout_connect_reminder_sent", None)
+    if last_sent and (timezone.now() - last_sent).days < 3:
+        logger.info(
+            f"Payout connect reminder cooldown: Business {business.businessId} "
+            f"last sent {last_sent}. Skipping."
+        )
+        return
+
+    owner = business.owner
+    if not owner or not owner.email:
+        logger.warning(
+            f"Business {business.businessId} has no owner email for payout connect reminder."
+        )
+        return
+
+    send_payout_connect_required_email(
+        business_user=owner,
+        pending_amount=total_payout,
+        booking_count=booking_count,
+        currency=business.currency or "CAD",
+    )
+    BusinessInfo.objects.filter(pk=business.businessId).update(
+        last_payout_connect_reminder_sent=timezone.now()
+    )
+    logger.info(
+        f"Sent payout connect required email to {owner.email} for Business {business.businessId} "
+        f"(pending_amount=${total_payout}, booking_count={booking_count})"
+    )
+
+
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
 
@@ -100,6 +172,8 @@ def process_daily_payouts():
                 
                 if not business.stripe_account_id:
                     logger.warning(f"Business {business_id} has no Stripe account. Skipping.")
+                    # Compute pending amount/count and send "connect Stripe" reminder at most once every 3 days
+                    _maybe_send_payout_connect_reminder(business)
                     continue
 
                 logger.info(f"Stripe Account ID: {business.stripe_account_id}")

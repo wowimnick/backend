@@ -1,0 +1,74 @@
+{# templates/emails/business_payout_connect_required.html #}
+{% extends "emails/base_email.html" %}
+{% load i18n %}
+{% block title %}
+    {% trans "Connect your account to receive your payout" %}
+{% endblock title %}
+{% block content %}
+    <div style="text-align: center;">
+        <!-- Icon -->
+        <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">💸</div>
+        <h1>{% trans "You have earnings waiting." %}</h1>
+        <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+            {% blocktrans with first_name=user.first_name|default:"Partner" %}Hi {{ first_name }},{% endblocktrans %}
+            <br>
+            {% trans "We can't send your payout yet because no payout account is connected. Connect your Stripe account to receive your funds." %}
+        </p>
+        <!-- Main Card -->
+        <div style="background-color: #ffffff;
+                    border: 1px solid #E5E7EB;
+                    border-radius: 20px;
+                    overflow: hidden;
+                    margin-bottom: 32px;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.03)">
+            <!-- Hero Amount -->
+            <div style="background-color: #F9FAFB;
+                        padding: 32px;
+                        border-bottom: 1px solid #E5E7EB">
+                <div style="color: #86868B;
+                            font-size: 13px;
+                            font-weight: 600;
+                            text-transform: uppercase;
+                            letter-spacing: 0.05em;
+                            margin-bottom: 8px">{% trans "Pending amount" %}</div>
+                <div style="color: #1D1D1F;
+                            font-size: 48px;
+                            font-weight: 800;
+                            line-height: 1;
+                            letter-spacing: -1px">
+                    ${{ pending_amount|floatformat:2 }}
+                    <span style="font-size: 20px;
+                                 color: #86868B;
+                                 font-weight: 600;
+                                 vertical-align: middle">{{ currency|upper }}</span>
+                </div>
+            </div>
+            <!-- Details -->
+            <div style="padding: 24px; text-align: left;">
+                <div style="display: flex;
+                            justify-content: space-between;
+                            margin-bottom: 0">
+                    <span style="color: #86868B; font-size: 15px;">{% trans "Bookings included" %}</span>
+                    <span style="color: #1D1D1F; font-weight: 600; font-size: 15px;">{{ booking_count }}</span>
+                </div>
+            </div>
+        </div>
+        <p style="font-size: 14px;
+                  color: #86868B;
+                  line-height: 1.5;
+                  margin-bottom: 32px">
+            {% trans "Your funds are held safely. Connect your payout account in Settings to receive this amount and future payouts." %}
+        </p>
+        <table role="presentation"
+               border="0"
+               cellpadding="0"
+               cellspacing="0"
+               width="100%">
+            <tr>
+                <td align="center">
+                    <a href="{{ dashboard_url }}" target="_blank" class="button">{% trans 'Connect payout account' %}</a>
+                </td>
+            </tr>
+        </table>
+    </div>
+{% endblock content %}
