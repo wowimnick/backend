@@ -536,6 +536,26 @@ class TestWidgetEndpoints:
         )
         assert response.status_code == 400
 
+    def test_widget_events_post_204_with_valid_key(self, api_client, business):
+        """POST widget/v1/events/ with valid X-Business-ID returns 204."""
+        response = api_client.post(
+            f"{API}/widget/v1/events/",
+            {"event": "loaded"},
+            format="json",
+            HTTP_X_BUSINESS_ID=str(business.widget_api_key),
+        )
+        assert response.status_code == 204
+
+    def test_widget_validate_coupon_missing_params_400(self, api_client, business):
+        """POST widget/v1/validate-coupon/ with missing params returns 400."""
+        response = api_client.post(
+            f"{API}/widget/v1/validate-coupon/",
+            {},
+            format="json",
+            HTTP_X_BUSINESS_ID=str(business.widget_api_key),
+        )
+        assert response.status_code == 400
+
 
 # -----------------------------------------------------------------------------
 # Class reviews (public paginated)
