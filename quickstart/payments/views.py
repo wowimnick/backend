@@ -1347,6 +1347,8 @@ class ProcessBookingWebhook(APIView):
 
         elif event.type == "invoice.paid":
             # When a widget subscription invoice is paid (e.g. plan switch proration), sync plan_id.
+            # Derive plan_id from the subscription's current price (source of truth), not metadata,
+            # because invoice.paid can fire before our second modify(metadata) is applied (race).
             logger.info("[%s] invoice.paid received", webhook_id)
             invoice = event.data.object
             sub_id = getattr(invoice, "subscription", None) or (
@@ -1357,7 +1359,18 @@ class ProcessBookingWebhook(APIView):
                     stripe_sub = stripe.Subscription.retrieve(sub_id)
                     meta = getattr(stripe_sub, "metadata", None) or stripe_sub.get("metadata") or {}
                     if meta.get("business_id") and not meta.get("addon_type"):
-                        plan_id = (meta.get("plan_id") or "growth").strip().lower()
+                        # Resolve plan_id from subscription's current price (avoids stale metadata when invoice.paid fires early).
+                        price_to_plan = {
+                            getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_BASIC", None): "basic",
+                            getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_GROWTH", None): "growth",
+                            getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_ADVANCED", None): "advanced",
+                        }
+                        stripe_price_id = None
+                        items = (stripe_sub.get("items") or {}).get("data") or []
+                        if items and items[0].get("price"):
+                            price_obj = items[0]["price"]
+                            stripe_price_id = price_obj.get("id") if isinstance(price_obj, dict) else getattr(price_obj, "id", None)
+                        plan_id = (price_to_plan.get(stripe_price_id) or (meta.get("plan_id") or "growth")).strip().lower()
                         if plan_id not in ("basic", "growth", "advanced"):
                             plan_id = "growth"
                         cancel_at_period_end = bool(getattr(stripe_sub, "cancel_at_period_end", None) or stripe_sub.get("cancel_at_period_end"))
@@ -1365,7 +1378,7 @@ class ProcessBookingWebhook(APIView):
                             stripe_subscription_id=stripe_sub.id
                         ).update(plan_id=plan_id, cancel_at_period_end=cancel_at_period_end)
                         logger.info(
-                            f"[{webhook_id}] Widget subscription {stripe_sub.id} plan_id synced to {plan_id} after invoice.paid."
+                            f"[{webhook_id}] Widget subscription {stripe_sub.id} plan_id synced to {plan_id} after invoice.paid (price_id={stripe_price_id})."
                         )
                 except (stripe.StripeError, Exception) as e:
                     logger.warning(
