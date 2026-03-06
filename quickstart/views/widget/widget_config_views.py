@@ -1280,6 +1280,122 @@ def _business_can_instant_subscribe(business):
     return bool(_get_business_default_payment_method_id(business))
 
 
+class CreateUpdatePaymentMethodSetupIntentView(APIView):
+    """POST: Create a SetupIntent for updating the business's saved payment method (no charge)."""
+
+    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+
+    def post(self, request, *args, **kwargs):
+        business = _get_business_for_subscription(request.user)
+        if not business.stripe_customer_id:
+            customer = stripe.Customer.create(
+                email=business.studentContactEmail,
+                name=business.businessName,
+                metadata={"business_id": str(business.businessId)},
+            )
+            business.stripe_customer_id = customer.id
+            business.save(update_fields=["stripe_customer_id"])
+        try:
+            si = stripe.SetupIntent.create(
+                customer=business.stripe_customer_id,
+                usage="off_session",
+                payment_method_types=["card"],
+            )
+            return Response(
+                {"client_secret": si.client_secret},
+                status=status.HTTP_200_OK,
+            )
+        except stripe.StripeError as e:
+            logger.warning("SetupIntent.create failed for business %s: %s", business.businessId, e)
+            return Response(
+                {"error": "Could not prepare payment form. Please try again."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+
+class SetDefaultPaymentMethodView(APIView):
+    """POST: Set the business's default payment method (payment_method id from client after confirmSetup)."""
+
+    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+
+    def post(self, request, *args, **kwargs):
+        business = _get_business_for_subscription(request.user)
+        if not business.stripe_customer_id:
+            return Response(
+                {"error": "No billing account found. Subscribe to a plan first."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        payment_method = (request.data.get("payment_method") or "").strip()
+        if not payment_method:
+            return Response(
+                {"error": "payment_method is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            pm = stripe.PaymentMethod.retrieve(payment_method)
+            pm_customer = getattr(pm, "customer", None) or (pm.get("customer") if isinstance(pm, dict) else None)
+            if pm_customer != business.stripe_customer_id:
+                return Response(
+                    {"error": "Invalid payment method."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            stripe.Customer.modify(
+                business.stripe_customer_id,
+                invoice_settings={"default_payment_method": payment_method},
+            )
+            sub = _get_current_subscription(business)
+            if sub and sub.stripe_subscription_id:
+                try:
+                    stripe.Subscription.modify(
+                        sub.stripe_subscription_id,
+                        default_payment_method=payment_method,
+                    )
+                except stripe.StripeError as e:
+                    logger.warning(
+                        "Subscription.modify default_payment_method failed sub_id=%s: %s",
+                        sub.stripe_subscription_id,
+                        e,
+                    )
+            return Response({"success": True}, status=status.HTTP_200_OK)
+        except stripe.StripeError as e:
+            logger.warning("SetDefaultPaymentMethod failed for business %s: %s", business.businessId, e)
+            return Response(
+                {"error": "Could not update payment method. Please try again."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+
+class DefaultPaymentMethodView(APIView):
+    """GET: Return masked default payment method (brand, last4) for UI, or null if none."""
+
+    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+
+    def get(self, request, *args, **kwargs):
+        business = _get_business_for_subscription(request.user)
+        pm_id = _get_business_default_payment_method_id(business)
+        if not pm_id:
+            return Response({"payment_method": None}, status=status.HTTP_200_OK)
+        try:
+            pm = stripe.PaymentMethod.retrieve(pm_id)
+            card = getattr(pm, "card", None) or (pm.get("card") if isinstance(pm, dict) else None)
+            if not card:
+                return Response({"payment_method": None}, status=status.HTTP_200_OK)
+            brand = getattr(card, "brand", None) or (card.get("brand") if isinstance(card, dict) else None)
+            last4 = getattr(card, "last4", None) or (card.get("last4") if isinstance(card, dict) else None)
+            return Response(
+                {
+                    "payment_method": {
+                        "brand": (brand or "card").lower() if brand else "card",
+                        "last4": last4 or "",
+                    }
+                },
+                status=status.HTTP_200_OK,
+            )
+        except stripe.StripeError as e:
+            logger.warning("PaymentMethod.retrieve failed pm_id=%s: %s", pm_id, e)
+            return Response({"payment_method": None}, status=status.HTTP_200_OK)
+
+
 class BusinessAddonsView(APIView):
     """GET: Return status of addon subscriptions for the authenticated business."""
 

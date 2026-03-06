@@ -17,6 +17,9 @@ from quickstart.views.widget.widget_config_views import (
     WidgetSubscriptionCancelView,
     WidgetSubscriptionReactivateView,
     WidgetSubscriptionInvoicesView,
+    CreateUpdatePaymentMethodSetupIntentView,
+    SetDefaultPaymentMethodView,
+    DefaultPaymentMethodView,
     BusinessAddonsView,
     CreateMarketplaceEmailAddonCheckoutView,
     CreateMarketplaceEmailAddonPaymentIntentView,
@@ -616,6 +619,21 @@ urlpatterns = [
         "my-business/widget-subscription/payment-intent/",
         CreateWidgetSubscriptionPaymentIntentView.as_view(),
         name="my-business-widget-subscription-payment-intent",
+    ),
+    path(
+        "my-business/widget-subscription/setup-intent/",
+        CreateUpdatePaymentMethodSetupIntentView.as_view(),
+        name="my-business-widget-subscription-setup-intent",
+    ),
+    path(
+        "my-business/widget-subscription/set-default-payment-method/",
+        SetDefaultPaymentMethodView.as_view(),
+        name="my-business-widget-subscription-set-default-payment-method",
+    ),
+    path(
+        "my-business/widget-subscription/default-payment-method/",
+        DefaultPaymentMethodView.as_view(),
+        name="my-business-widget-subscription-default-payment-method",
     ),
     path(
         "my-business/addons/",
