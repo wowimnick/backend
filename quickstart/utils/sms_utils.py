@@ -13,6 +13,19 @@ logger = logging.getLogger(__name__)
 SNS_SMS_MAX_LENGTH = 1600
 
 
+def business_sms_enabled(business) -> bool:
+    """
+    Whether the business has SMS notifications enabled (and platform SMS is on).
+    Use this for all booking-related SMS (confirmations, cancellations, new-booking alerts).
+    """
+    if business is None:
+        return False
+    return bool(
+        getattr(settings, "AWS_SMS_ENABLED", False)
+        and getattr(business, "smsNotifications", False)
+    )
+
+
 def normalize_phone_for_sns(phone_number: str) -> str | None:
     """
     Normalize phone to E.164 for SNS.

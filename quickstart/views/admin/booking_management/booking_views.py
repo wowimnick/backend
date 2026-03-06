@@ -40,7 +40,7 @@ except ImportError:
         logging.warning("Dummy send_booking_cancelled_by_other_email called.")
         pass
 
-from quickstart.utils.sms_utils import normalize_phone_for_sns
+from quickstart.utils.sms_utils import normalize_phone_for_sns, business_sms_enabled
 from quickstart.tasks.notification_tasks import send_sms_task
 
 
@@ -224,7 +224,7 @@ class AdminBookingViewSet(viewsets.ModelViewSet):
                     )
                 try:
                     business = booking.schedule_instance.schedule.option.classId.businessId
-                    if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False) and booking.schedule_instance:
+                    if business_sms_enabled(business) and booking.schedule_instance:
                         user_to_notify = booking.user or booking.contact
                         if user_to_notify:
                             phone = getattr(user_to_notify, "phone_number", None) or (booking.metadata or {}).get("guest_phone") or ""

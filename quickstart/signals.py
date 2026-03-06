@@ -19,6 +19,7 @@ from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
+from quickstart.utils.sms_utils import business_sms_enabled
 from quickstart.tasks.business_tasks import classify_class_task, update_trending_collections_task
 from .models import (
     Booking,
@@ -297,7 +298,7 @@ def create_booking_notification(sender, instance, created, **kwargs):
                         f"In-app student cancellation notification created for manager {manager.email} for booking {instance.id}"
                     )
 
-            if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False):
+            if business_sms_enabled(business):
                 try:
                     from quickstart.utils.sms_utils import normalize_phone_for_sns
                     from quickstart.tasks.notification_tasks import send_sms_task

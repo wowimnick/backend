@@ -264,3 +264,69 @@ class GuestBookingCreateSerializer(serializers.Serializer):
                     )
 
         return data
+
+
+class GuestFreeBookingCreateSerializer(serializers.Serializer):
+    """
+    Validates payload for a free (no payment) guest booking from the widget.
+    Same validation as GuestBookingCreateSerializer for instance/participants, minus payment_intent_id.
+    """
+
+    schedule_instance_id = serializers.IntegerField(required=True, write_only=True)
+    participants = serializers.IntegerField(
+        required=True, min_value=1, max_value=10, write_only=True
+    )
+    first_name = serializers.CharField(max_length=150, required=True, write_only=True)
+    last_name = serializers.CharField(
+        max_length=150, required=False, allow_blank=True, write_only=True
+    )
+    email = serializers.EmailField(required=True, write_only=True)
+    phone_number = serializers.CharField(
+        max_length=100, required=False, allow_blank=True, write_only=True
+    )
+    participant_details = serializers.ListField(
+        child=serializers.DictField(), required=False, allow_empty=True, write_only=True
+    )
+    notes = serializers.CharField(
+        required=False, allow_blank=True, trim_whitespace=True, write_only=True
+    )
+    applied_discount_id = serializers.IntegerField(required=False, allow_null=True, write_only=True)
+    discount_amount = serializers.DecimalField(
+        max_digits=10, decimal_places=2, required=False, allow_null=True, write_only=True
+    )
+
+    def validate(self, data):
+        business = self.context["request"].business_context
+        try:
+            instance = ScheduleInstance.objects.get(
+                id=data["schedule_instance_id"],
+                schedule__option__classId__businessId=business,
+            )
+        except ScheduleInstance.DoesNotExist:
+            raise DRFValidationError(
+                {"schedule_instance_id": "The selected session is no longer available or invalid."}
+            )
+        if instance.status != "scheduled":
+            raise DRFValidationError(
+                {"schedule_instance_id": "This session has been cancelled or is already complete."}
+            )
+        if instance.date < timezone.now().date():
+            raise DRFValidationError(
+                {"schedule_instance_id": "You cannot book a session that is in the past."}
+            )
+        if not instance.can_accommodate(data["participants"]):
+            raise DRFValidationError(
+                {"participants": f"Not enough spots available. Only {instance.available_spots} spots remain."}
+            )
+        participants_count = data["participants"]
+        participant_details = data.get("participant_details", [])
+        if participant_details and len(participant_details) != participants_count:
+            raise DRFValidationError(
+                {"participant_details": f"You specified {participants_count} participants but provided details for {len(participant_details)}."}
+            )
+        for i, detail in enumerate(participant_details or []):
+            if not isinstance(detail, dict) or "name" not in detail or not str(detail.get("name", "")).strip():
+                raise DRFValidationError(
+                    {"participant_details": f"A name is required for participant #{i + 1}."}
+                )
+        return data

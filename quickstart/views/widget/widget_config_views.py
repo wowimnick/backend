@@ -833,6 +833,15 @@ class WidgetSubscriptionView(APIView):
                         {"error": str(e)},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
+                # Update subscription metadata so invoice.paid webhook syncs correct plan_id; clear cancel_at_period_end so upgrade/downgrade doesn't show "Reactivate".
+                try:
+                    stripe.Subscription.modify(
+                        sub.stripe_subscription_id,
+                        metadata={"business_id": str(business.businessId), "plan_id": plan_id},
+                        cancel_at_period_end=False,
+                    )
+                except stripe.StripeError as e:
+                    logger.warning("widget_subscription: Stripe Subscription.modify metadata/cancel_at_period_end failed sub_id=%s err=%s", sub.stripe_subscription_id, e)
                 # Use latest_invoice from the modify response (the invoice Stripe just created for this change).
                 latest_invoice = getattr(stripe_sub, "latest_invoice", None) or stripe_sub.get("latest_invoice")
                 latest_inv_id = None
@@ -919,6 +928,24 @@ class WidgetSubscriptionView(APIView):
                         {"error": "This payment link is no longer valid. Please try switching plan again."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
+                # If there is any open invoice for this subscription, do not sync plan — payment is required.
+                try:
+                    open_invoices_check = stripe.Invoice.list(
+                        subscription=sub.stripe_subscription_id,
+                        status="open",
+                        limit=1,
+                    )
+                    if (open_invoices_check.get("data") or []):
+                        logger.info(
+                            "widget_subscription: open invoice exists, not syncing plan sub_id=%s",
+                            sub.stripe_subscription_id,
+                        )
+                        return Response(
+                            {"error": "Payment is required to complete this plan change. Please complete payment when prompted or try again."},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                except stripe.StripeError as e:
+                    logger.warning("widget_subscription: Invoice.list open check failed sub_id=%s err=%s", sub.stripe_subscription_id, e)
                 # Need subscription with items to check if new price was applied (for sync vs 400).
                 try:
                     stripe_sub = stripe.Subscription.retrieve(

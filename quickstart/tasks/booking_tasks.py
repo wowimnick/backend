@@ -8,7 +8,7 @@ from quickstart.models import Booking, CourseEnrollment, Payment
 from django.db import transaction
 from django.conf import settings
 from quickstart.utils.email_utils import send_booking_reminder_email
-from quickstart.utils.sms_utils import normalize_phone_for_sns
+from quickstart.utils.sms_utils import normalize_phone_for_sns, business_sms_enabled
 from quickstart.tasks.notification_tasks import send_sms_task
 import logging
 
@@ -154,11 +154,7 @@ def send_upcoming_booking_reminders():
             logger.info(f"Queued reminder email for booking {booking.id}.")
 
             business = booking.schedule_instance.schedule.option.classId.businessId
-            if (
-                getattr(settings, "AWS_SMS_ENABLED", False)
-                and getattr(business, "smsNotifications", False)
-                and getattr(business, "reminderNotification", True)
-            ):
+            if business_sms_enabled(business) and getattr(business, "reminderNotification", True):
                 phone = getattr(recipient, "phone_number", None) or (booking.metadata or {}).get("guest_phone") or ""
                 normalized = normalize_phone_for_sns(phone)
                 if normalized:

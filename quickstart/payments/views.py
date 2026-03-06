@@ -50,7 +50,7 @@ from quickstart.utils.email_utils import (
     _is_placeholder_phone,
     is_placeholder_guest_contact,
 )
-from quickstart.utils.sms_utils import normalize_phone_for_sns
+from quickstart.utils.sms_utils import normalize_phone_for_sns, business_sms_enabled
 from quickstart.tasks.notification_tasks import send_sms_task
 
 import logging
@@ -598,7 +598,7 @@ class CreatePaymentIntentView(APIView):
                             recipient_contact, first_booking
                         )
 
-                    if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False):
+                    if business_sms_enabled(business):
                         booker = recipient_user or recipient_contact
                         phone = getattr(booker, "phone_number", None) if booker else None
                         if not phone and first_booking.metadata:
@@ -632,7 +632,7 @@ class CreatePaymentIntentView(APIView):
                             if r and r.email:
                                 send_business_new_booking_email(r, first_booking)
 
-                        if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False) and first_booking.schedule_instance:
+                        if business_sms_enabled(business) and first_booking.schedule_instance:
                             class_title = getattr(option.classId, "title", "Class")
                             date_str = first_booking.schedule_instance.date.strftime("%b %d")
                             t = first_booking.schedule_instance.time
@@ -710,6 +710,12 @@ class CreatePaymentIntentView(APIView):
             #  - Single Session: No spot holding; create Stripe intent only; booking created in webhook.
             #  - Full Course: Keep pending enrollment/bookings (course webhook expects them).
             # ==========================================
+            logger.info(
+                "[%s] Paid booking flow: building metadata booking_type=%s participants=%s",
+                request_id,
+                booking_type,
+                participants,
+            )
             currency_code = getattr(settings, "STRIPE_CURRENCY", "cad")
 
             # Common metadata for webhook
@@ -749,6 +755,7 @@ class CreatePaymentIntentView(APIView):
 
             if booking_type == "Full Course":
                 # Course: create pending enrollment + bookings so course webhook can confirm them
+                logger.info("[%s] Creating pending course enrollment and bookings", request_id)
                 with transaction.atomic():
                     booking_group_id = uuid.uuid4()
                     enrollment = CourseEnrollment.objects.create(
@@ -801,6 +808,7 @@ class CreatePaymentIntentView(APIView):
                 # Single Session: no pending records; webhook will create booking from metadata
                 metadata["schedule_instance_id"] = str(instance.id)
                 metadata["participant_details_json"] = json.dumps(participant_details)
+                logger.info("[%s] Single session: metadata ready, creating PaymentIntent (no DB hold)", request_id)
 
             try:
                 intent = stripe.PaymentIntent.create(
@@ -908,9 +916,13 @@ class UpdatePaymentIntentView(APIView):
     permission_classes = []
 
     def post(self, request):
+        update_id = str(uuid.uuid4())[:8]
+        logger.info("[%s] UpdatePaymentIntentView START", update_id)
+
         payment_intent_id = request.data.get("payment_intent_id")
 
         if not payment_intent_id:
+            logger.warning("[%s] UpdatePaymentIntent: missing payment_intent_id", update_id)
             return Response(
                 {"error": "Payment Intent ID is required"},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -966,16 +978,19 @@ class UpdatePaymentIntentView(APIView):
             payment = Payment.objects.select_related(
                 "booking", "booking__contact"
             ).get(stripe_payment_intent_id=payment_intent_id, status="pending")
+            logger.info("[%s] UpdatePaymentIntent: found pending payment id=%s booking_id=%s", update_id, payment.id, payment.booking_id)
         except Payment.DoesNotExist:
             # No pending Payment = single-session flow. Just update Stripe metadata and return success.
+            logger.info("[%s] UpdatePaymentIntent: no pending payment (single-session flow), updating Stripe metadata only", update_id)
             try:
                 merge_and_modify_metadata()
+                logger.info("[%s] UpdatePaymentIntent: Stripe metadata updated for PI %s", update_id, payment_intent_id)
                 return Response(
                     {"status": "updated", "metadata_only": True},
                     status=status.HTTP_200_OK,
                 )
             except stripe.error.StripeError as e:
-                logger.warning(f"UpdatePaymentIntent: Stripe modify failed for {payment_intent_id}: {e}")
+                logger.warning("[%s] UpdatePaymentIntent: Stripe modify failed for %s: %s", update_id, payment_intent_id, e)
                 return Response(
                     {"error": "Could not update payment intent."},
                     status=status.HTTP_400_BAD_REQUEST,
@@ -1063,13 +1078,14 @@ class UpdatePaymentIntentView(APIView):
                 # 4. Update Stripe metadata (merge so we don't wipe schedule_instance_id, etc.)
                 merge_and_modify_metadata()
 
+            logger.info("[%s] UpdatePaymentIntent: DB and Stripe updated for booking_id=%s", update_id, booking.id)
             return Response(
                 {"status": "updated", "booking_id": booking.id},
                 status=status.HTTP_200_OK,
             )
 
         except Exception as e:
-            logger.error(f"Error updating payment intent: {e}", exc_info=True)
+            logger.error("[%s] UpdatePaymentIntent error: %s", update_id, e, exc_info=True)
             return Response(
                 {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
@@ -1192,7 +1208,15 @@ class ProcessBookingWebhook(APIView):
                 payload, sig_header, settings.STRIPE_PAYMENTS_WEBHOOK_SECRET
             )
         except Exception as e:
+            logger.warning("[%s] Webhook signature verification failed: %s", webhook_id, e)
             return Response(status=status.HTTP_400_BAD_REQUEST)
+
+        logger.info(
+            "[%s] Booking webhook received: event_type=%s event_id=%s",
+            webhook_id,
+            getattr(event, "type", "unknown"),
+            getattr(event, "id", ""),
+        )
 
         if event.type == "payment_intent.succeeded":
             payment_intent = event.data.object
@@ -1202,8 +1226,10 @@ class ProcessBookingWebhook(APIView):
 
             # 1. CHECK FOR GIFT CARD PURCHASE
             if payment_intent.metadata.get("type") == "gift_card_purchase":
+                logger.info("[%s] Routing to gift card creation for PI %s", webhook_id, payment_intent.id)
                 try:
                     self.handle_gift_card_creation(payment_intent)
+                    logger.info("[%s] Gift card created successfully for PI %s", webhook_id, payment_intent.id)
                     return Response(status=status.HTTP_200_OK)
                 except Exception as e:
                     logger.error(
@@ -1222,10 +1248,12 @@ class ProcessBookingWebhook(APIView):
                 return Response(status=status.HTTP_200_OK)
 
             # 3. STANDARD BOOKING FLOW
+            logger.info("[%s] Starting standard booking flow for PI %s", webhook_id, payment_intent.id)
             try:
                 response_data = self.handle_successful_payment(
                     payment_intent, webhook_id
                 )
+                logger.info("[%s] Booking flow completed for PI %s response=%s", webhook_id, payment_intent.id, response_data)
                 return Response(response_data or {}, status=status.HTTP_200_OK)
             except DRFValidationError as ve:
                 error_msg = str(ve.detail)
@@ -1270,6 +1298,12 @@ class ProcessBookingWebhook(APIView):
                 if payment_intent.last_payment_error
                 else "Payment failed."
             )
+            logger.info(
+                "[%s] payment_intent.payment_failed PI=%s message=%s",
+                webhook_id,
+                payment_intent.id,
+                failure_message,
+            )
 
             try:
                 with transaction.atomic():
@@ -1289,21 +1323,31 @@ class ProcessBookingWebhook(APIView):
                         booking_to_fail.cancelled_at = timezone.now()
                         booking_to_fail.save()
                         logger.info(
-                            f"Set booking {booking_to_fail.id} to cancelled due to failed payment."
+                            "[%s] Set booking %s to cancelled due to failed payment (PI %s).",
+                            webhook_id,
+                            booking_to_fail.id,
+                            payment_intent.id,
                         )
                         _revalidate_for_booking(booking_to_fail)
 
             except Payment.DoesNotExist:
                 logger.warning(
-                    f"Received payment_failed webhook for PI {payment_intent.id}, but no corresponding pending payment was found."
+                    "[%s] payment_failed: no pending payment for PI %s.",
+                    webhook_id,
+                    payment_intent.id,
                 )
             except Exception as e:
                 logger.error(
-                    f"Error processing payment_failed webhook for PI {payment_intent.id}: {str(e)}"
+                    "[%s] Error processing payment_failed webhook for PI %s: %s",
+                    webhook_id,
+                    payment_intent.id,
+                    str(e),
+                    exc_info=True,
                 )
 
         elif event.type == "invoice.paid":
             # When a widget subscription invoice is paid (e.g. plan switch proration), sync plan_id.
+            logger.info("[%s] invoice.paid received", webhook_id)
             invoice = event.data.object
             sub_id = getattr(invoice, "subscription", None) or (
                 invoice.get("subscription") if isinstance(invoice, dict) else None
@@ -1316,9 +1360,10 @@ class ProcessBookingWebhook(APIView):
                         plan_id = (meta.get("plan_id") or "growth").strip().lower()
                         if plan_id not in ("basic", "growth", "advanced"):
                             plan_id = "growth"
+                        cancel_at_period_end = bool(getattr(stripe_sub, "cancel_at_period_end", None) or stripe_sub.get("cancel_at_period_end"))
                         WidgetSubscription.objects.filter(
                             stripe_subscription_id=stripe_sub.id
-                        ).update(plan_id=plan_id)
+                        ).update(plan_id=plan_id, cancel_at_period_end=cancel_at_period_end)
                         logger.info(
                             f"[{webhook_id}] Widget subscription {stripe_sub.id} plan_id synced to {plan_id} after invoice.paid."
                         )
@@ -1333,6 +1378,7 @@ class ProcessBookingWebhook(APIView):
             "customer.subscription.updated",
             "customer.subscription.deleted",
         ):
+            logger.info("[%s] Subscription event: %s", webhook_id, event.type)
             subscription = event.data.object
             metadata = getattr(subscription, "metadata", None) or subscription.get("metadata") or {}
             business_id = metadata.get("business_id")
@@ -1484,10 +1530,16 @@ class ProcessBookingWebhook(APIView):
         Updates CourseEnrollment and all session Bookings with 1/N payout allocation.
         Redeems discounts if applicable.
         """
+        booking_group_id = payment_intent.metadata.get("booking_group_id")
+        logger.info(
+            "[%s] handle_course_payment_success PI=%s booking_group_id=%s",
+            webhook_id,
+            payment_intent.id,
+            booking_group_id,
+        )
         try:
             with transaction.atomic():
                 # Get booking group ID from metadata
-                booking_group_id = payment_intent.metadata.get("booking_group_id")
                 if not booking_group_id:
                     logger.error(
                         f"[{webhook_id}] No booking_group_id in payment intent metadata"
@@ -1784,7 +1836,7 @@ class ProcessBookingWebhook(APIView):
                 elif recipient_contact:
                     send_booking_confirmation_email(recipient_contact, first_booking)
 
-                if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False):
+                if business_sms_enabled(business):
                     booker = recipient_user or recipient_contact
                     phone = getattr(booker, "phone_number", None) if booker else None
                     if not phone and first_booking.metadata:
@@ -1818,7 +1870,7 @@ class ProcessBookingWebhook(APIView):
                         if recipient and recipient.email:
                             send_business_new_booking_email(recipient, first_booking)
 
-                    if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False) and first_booking.schedule_instance:
+                    if business_sms_enabled(business) and first_booking.schedule_instance:
                         class_title = getattr(first_booking.schedule_instance.schedule.option.classId, "title", "Class")
                         date_str = first_booking.schedule_instance.date.strftime("%b %d")
                         t = first_booking.schedule_instance.time
@@ -1877,7 +1929,10 @@ class ProcessBookingWebhook(APIView):
         """
         metadata = payment_intent.metadata
         instance_id = metadata.get("schedule_instance_id")
+        logger.info("[%s] _create_single_booking_from_metadata PI=%s schedule_instance_id=%s", webhook_id, payment_intent.id, instance_id)
+
         if not instance_id:
+            logger.error("[%s] Missing schedule_instance_id in metadata", webhook_id)
             raise DRFValidationError(
                 "Missing schedule_instance_id in metadata. Initiating refund."
             )
@@ -1885,13 +1940,16 @@ class ProcessBookingWebhook(APIView):
             instance = ScheduleInstance.objects.select_related(
                 "schedule__option__classId__businessId"
             ).get(pk=int(instance_id))
+            logger.info("[%s] Resolved ScheduleInstance id=%s date=%s", webhook_id, instance.id, getattr(instance, "date", None))
         except (ValueError, ScheduleInstance.DoesNotExist):
+            logger.warning("[%s] Invalid or missing schedule instance id=%s", webhook_id, instance_id)
             raise DRFValidationError(
                 "Invalid or missing schedule instance. Initiating refund."
             )
 
         participants = int(metadata.get("participants", 1))
         if not instance.can_accommodate(participants):
+            logger.warning("[%s] Slot no longer has capacity for %s participants", webhook_id, participants)
             raise DRFValidationError(
                 f"Session on {instance.date.strftime('%b %d')} is now full. Initiating refund."
             )
@@ -1982,6 +2040,7 @@ class ProcessBookingWebhook(APIView):
             )
             booking.user_facing_reference = booking._generate_user_facing_reference()
             booking.save(update_fields=["user_facing_reference"])
+            logger.info("[%s] Created booking id=%s user_facing_reference=%s", webhook_id, booking.id, booking.user_facing_reference)
 
             if contact and not user:
                 booking.cancellation_token = uuid.uuid4()
@@ -2018,6 +2077,7 @@ class ProcessBookingWebhook(APIView):
                 net_payout_amount=net_payout_to_business,
                 metadata={"original_stripe_metadata": dict(metadata)},
             )
+            logger.info("[%s] Created Payment record for booking %s PI=%s", webhook_id, booking.id, payment_intent.id)
 
             applied_discount_id = metadata.get("applied_discount_id")
             discount_amount = Decimal(metadata.get("discount_amount", "0.00"))
@@ -2074,7 +2134,7 @@ class ProcessBookingWebhook(APIView):
             elif contact:
                 send_booking_confirmation_email(contact, booking)
 
-            if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False):
+            if business_sms_enabled(business):
                 booker = user or contact
                 phone = getattr(booker, "phone_number", None) if booker else (booking.metadata or {}).get("guest_phone") or ""
                 normalized = normalize_phone_for_sns(phone or "")
@@ -2098,7 +2158,7 @@ class ProcessBookingWebhook(APIView):
                 for r in recipients:
                     if r and r.email:
                         send_business_new_booking_email(r, booking)
-                if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False):
+                if business_sms_enabled(business):
                     class_title = getattr(booking.schedule_instance.schedule.option.classId, "title", "Class")
                     date_str = booking.schedule_instance.date.strftime("%b %d") if booking.schedule_instance and booking.schedule_instance.date else ""
                     sms_msg = f"New booking: {class_title} on {date_str}. ClassEasily"
@@ -2134,6 +2194,8 @@ class ProcessBookingWebhook(APIView):
         }
 
     def handle_successful_payment(self, payment_intent, webhook_id):
+        logger.info("[%s] handle_successful_payment PI=%s", webhook_id, payment_intent.id)
+
         # Check if we have ANY record for this Stripe ID that isn't 'pending'.
         # This catches 'refunded', 'failed', and 'succeeded' statuses safely.
         existing_payment = (
@@ -2144,18 +2206,23 @@ class ProcessBookingWebhook(APIView):
 
         if existing_payment:
             logger.warning(
-                f"[{webhook_id}] IDEMPOTENCY: PI {payment_intent.id} already processed. "
-                f"Current status: {existing_payment.status}"
+                "[%s] IDEMPOTENCY: PI %s already processed, status=%s",
+                webhook_id,
+                payment_intent.id,
+                existing_payment.status,
             )
             return {"message": "Already processed"}
 
         # 2. Check for Course vs Single Session
         # Use correct metadata key 'booking_type' as sent by CreatePaymentIntentView
         enrollment_type = payment_intent.metadata.get("booking_type")
+        logger.info("[%s] booking_type from metadata: %s", webhook_id, enrollment_type)
 
         if enrollment_type == "Full Course":
             logger.info(
-                f"[{webhook_id}] Detected course payment, routing to course handler"
+                "[%s] Routing to course handler for PI %s",
+                webhook_id,
+                payment_intent.id,
             )
             return self.handle_course_payment_success(payment_intent, webhook_id)
 
@@ -2169,6 +2236,7 @@ class ProcessBookingWebhook(APIView):
 
         if not payment_record:
             # Instant flow (no hold): create booking from metadata; availability check then create
+            logger.info("[%s] No pending payment: creating single booking from metadata (instant flow)", webhook_id)
             try:
                 return self._create_single_booking_from_metadata(
                     payment_intent, webhook_id
@@ -2176,6 +2244,7 @@ class ProcessBookingWebhook(APIView):
             except DRFValidationError:
                 raise
 
+        logger.info("[%s] Pending payment found: confirming single-session booking (with hold)", webhook_id)
         with transaction.atomic():
             # Lock the payment row by PI id (do not filter by status) so we can safely
             # distinguish "already processed" from "missing". Otherwise a concurrent
@@ -2188,13 +2257,16 @@ class ProcessBookingWebhook(APIView):
             )
 
             if not payment_record:
+                logger.error("[%s] Payment record missing for PI %s", webhook_id, payment_intent.id)
                 raise DRFValidationError(
                     "Payment record missing. Initiating refund to prevent lost funds."
                 )
             if payment_record.status != "pending":
                 logger.warning(
-                    f"[{webhook_id}] IDEMPOTENCY: PI {payment_intent.id} already processed "
-                    f"(status={payment_record.status}). Skipping without refund."
+                    "[%s] IDEMPOTENCY: PI %s already processed (status=%s). Skipping without refund.",
+                    webhook_id,
+                    payment_intent.id,
+                    payment_record.status,
                 )
                 return {"message": "Already processed"}
 
@@ -2430,7 +2502,7 @@ class ProcessBookingWebhook(APIView):
                 f"[{webhook_id}] CRITICAL: No recipient (user or contact) found for Booking ID {pending_booking.id}. Cannot send confirmation email."
             )
 
-        if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False):
+        if business_sms_enabled(business):
             booker = recipient_user or recipient_contact
             phone = getattr(booker, "phone_number", None) if booker else None
             if not phone and pending_booking.metadata:
@@ -2467,7 +2539,7 @@ class ProcessBookingWebhook(APIView):
                 if recipient and recipient.email:
                     send_business_new_booking_email(recipient, pending_booking)
 
-            if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False):
+            if business_sms_enabled(business):
                 class_title = getattr(pending_booking.schedule_instance.schedule.option.classId, "title", "Class")
                 date_str = pending_booking.schedule_instance.date.strftime("%b %d") if pending_booking.schedule_instance and pending_booking.schedule_instance.date else ""
                 sms_msg = f"New booking: {class_title} on {date_str}. ClassEasily"

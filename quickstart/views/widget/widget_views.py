@@ -33,12 +33,15 @@ from quickstart.serializers.widget.widget_serializers import (
     WidgetClassSerializer,
     WidgetScheduleInstanceSerializer,
     GuestBookingCreateSerializer,
+    GuestFreeBookingCreateSerializer,
 )
 
 from quickstart.utils.email_utils import (
     send_booking_confirmation_email,
     send_business_new_booking_email,
 )
+from quickstart.utils.sms_utils import business_sms_enabled, normalize_phone_for_sns
+from quickstart.tasks.notification_tasks import send_sms_task
 from quickstart.utils.permissions import IsValidWidgetRequest
 from quickstart.utils.widget_throttle import WidgetRateThrottle
 
@@ -814,5 +817,236 @@ class GuestBookingCreateView(generics.CreateAPIView):
                 {
                     "error": "An unexpected server error occurred. Our team has been notified."
                 },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class GuestFreeBookingCreateView(APIView):
+    """
+    Create a free (no payment) guest booking from the widget.
+    Skips Stripe entirely; creates Contact, Booking, and internal Payment record.
+    """
+
+    permission_classes = [IsValidWidgetRequest]
+    throttle_classes = [WidgetRateThrottle]
+
+    def post(self, request, *args, **kwargs):
+        if _is_demo(request):
+            return Response(
+                {"error": "demo_mode", "message": "Demo mode: booking is disabled."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if not _business_has_active_widget_subscription(request.business_context):
+            return Response(
+                {
+                    "error": "widget_subscription_required",
+                    "message": "An active widget subscription is required to accept bookings.",
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        serializer = GuestFreeBookingCreateSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        business = request.business_context
+
+        instance_id = data["schedule_instance_id"]
+        participants = data["participants"]
+        applied_discount_id = data.get("applied_discount_id")
+        discount_amount = data.get("discount_amount") or Decimal("0.00")
+        participant_details = data.get("participant_details") or []
+        if not participant_details or len(participant_details) != participants:
+            first_name = (data.get("first_name") or "").strip() or "Guest"
+            participant_details = [{"name": first_name} for _ in range(participants)]
+
+        try:
+            with transaction.atomic():
+                instance = ScheduleInstance.objects.select_for_update().get(
+                    id=instance_id,
+                    schedule__option__classId__businessId=business,
+                )
+                if not instance.can_accommodate(participants):
+                    raise ValidationError(
+                        "Not enough spots available. Only %s spots remain."
+                        % instance.available_spots
+                    )
+
+                contact, _ = Contact.objects.get_or_create(
+                    business=business,
+                    email__iexact=data["email"],
+                    defaults={
+                        "first_name": data["first_name"],
+                        "last_name": data.get("last_name", ""),
+                        "phone_number": data.get("phone_number", ""),
+                        "source": "widget_booking",
+                    },
+                )
+                if not contact.first_name and data.get("first_name"):
+                    contact.first_name = data["first_name"]
+                if data.get("last_name") is not None:
+                    contact.last_name = data.get("last_name", "")
+                if data.get("phone_number") is not None:
+                    contact.phone_number = data.get("phone_number", "")
+                contact.save()
+
+                option = instance.schedule.option
+                booking = Booking.objects.create(
+                    contact=contact,
+                    schedule_instance=instance,
+                    participants=participants,
+                    participant_details=participant_details,
+                    notes=data.get("notes", "") or "",
+                    amount_paid=Decimal("0.00"),
+                    status="confirmed",
+                    payment_status="paid",
+                    enrollment_type=option.booking_type,
+                    cancellation_policy=option.cancellationPolicy,
+                    cancellation_custom_hours=option.cancellationCustomHours,
+                    cancellation_refund_percentage=option.cancellationRefundPercentage,
+                    cancellation_token=uuid.uuid4(),
+                )
+                booking.user_facing_reference = booking._generate_user_facing_reference()
+                booking.save(update_fields=["user_facing_reference"])
+
+                Payment.objects.create(
+                    booking=booking,
+                    stripe_payment_intent_id=f"internal_{uuid.uuid4()}",
+                    amount=Decimal("0.00"),
+                    tax_amount=Decimal("0.00"),
+                    platform_fee_amount=Decimal("0.00"),
+                    net_payout_amount=Decimal("0.00"),
+                    currency=business.currency,
+                    status="succeeded",
+                    metadata={
+                        "is_free": True,
+                        "booking_source": "widget",
+                        "applied_discount_id": str(applied_discount_id) if applied_discount_id else None,
+                    },
+                )
+
+                if applied_discount_id and discount_amount > 0:
+                    try:
+                        discount = Discount.objects.select_for_update().get(
+                            pk=applied_discount_id, business=business
+                        )
+                        if discount.apply_to_widget and discount.is_active:
+                            discount.redeem()
+                            AppliedDiscount.objects.create(
+                                booking=booking,
+                                discount=discount,
+                                amount_saved=discount_amount,
+                            )
+                            logger.info(
+                                "Widget free booking: redeemed discount %s for booking %s",
+                                discount.code,
+                                booking.id,
+                            )
+                    except (Discount.DoesNotExist, ValueError) as e:
+                        logger.warning(
+                            "Widget free booking: could not redeem discount %s: %s",
+                            applied_discount_id,
+                            e,
+                        )
+
+            # --- Emails (same as paid widget flow) ---
+            try:
+                send_booking_confirmation_email(
+                    contact, booking, booking_source="widget"
+                )
+            except Exception as email_err:
+                logger.warning(
+                    "Widget free: failed to send guest confirmation for booking %s: %s",
+                    booking.id,
+                    email_err,
+                    exc_info=True,
+                )
+
+            if getattr(business, "newBookingNotification", False):
+                try:
+                    recipients = {business.owner}
+                    for staff in BusinessStaff.objects.filter(
+                        business=business,
+                        status="accepted",
+                        role__permissions__codename="receive_booking_notifications",
+                    ).select_related("user"):
+                        if staff.user:
+                            recipients.add(staff.user)
+                    for r in recipients:
+                        if r and getattr(r, "email", None):
+                            send_business_new_booking_email(r, booking)
+                except Exception as email_err:
+                    logger.warning(
+                        "Widget free: failed to send business new-booking email for %s: %s",
+                        booking.id,
+                        email_err,
+                        exc_info=True,
+                    )
+
+            # --- SMS (guest confirmation + business new booking) ---
+            si = booking.schedule_instance
+            if business_sms_enabled(business) and si:
+                phone = getattr(contact, "phone_number", None) or ""
+                normalized = normalize_phone_for_sns(phone)
+                if normalized:
+                    class_title = getattr(si.schedule.option.classId, "title", "Class")
+                    date_str = si.date.strftime("%b %d")
+                    t = getattr(si, "time", None)
+                    time_str = t.strftime("%I:%M %p").lstrip("0") if t and hasattr(t, "strftime") else (str(t) if t else "")
+                    business_name = getattr(business, "businessName", "") or "ClassEasily"
+                    sms_msg = (
+                        f"You're in! {class_title} is on {date_str} at {time_str}.\n\n"
+                        f"Add it to your calendar — we'll send a reminder the day before.\n\n— {business_name}"
+                    )
+                    try:
+                        send_sms_task.delay(normalized, sms_msg)
+                    except Exception as sms_e:
+                        logger.warning("Widget free: guest confirmation SMS failed: %s", sms_e)
+                if business.newBookingNotification:
+                    recipients = {business.owner}
+                    for staff in BusinessStaff.objects.filter(
+                        business=business,
+                        status="accepted",
+                        role__permissions__codename="receive_booking_notifications",
+                    ).select_related("user"):
+                        if staff.user:
+                            recipients.add(staff.user)
+                    class_title = getattr(si.schedule.option.classId, "title", "Class")
+                    date_str = si.date.strftime("%b %d")
+                    t = getattr(si, "time", None)
+                    time_str = t.strftime("%I:%M %p").lstrip("0") if t and hasattr(t, "strftime") else (str(t) if t else "")
+                    booker_name = f"{contact.first_name or ''} {contact.last_name or ''}".strip() or contact.email or "A customer"
+                    sms_msg = (
+                        f"New booking: {class_title} on {date_str} at {time_str}.\n\n"
+                        f"Booked by {booker_name}. Check your dashboard for details.\n\n— ClassEasily"
+                    )
+                    for r in recipients:
+                        if r:
+                            ph = getattr(r, "phone_number", None) or ""
+                            norm = normalize_phone_for_sns(ph)
+                            if norm:
+                                try:
+                                    send_sms_task.delay(norm, sms_msg)
+                                except Exception as sms_e:
+                                    logger.warning("Widget free: new booking SMS failed: %s", sms_e)
+
+            return Response(
+                {
+                    "message": "Booking confirmed!",
+                    "booking_reference": booking.user_facing_reference,
+                },
+                status=status.HTTP_201_CREATED,
+            )
+
+        except ValidationError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.error(
+                "Widget free booking: unhandled exception: %s",
+                e,
+                exc_info=True,
+            )
+            return Response(
+                {"error": "An unexpected server error occurred. Please try again."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )

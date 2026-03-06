@@ -47,7 +47,7 @@ from quickstart.serializers.admin.class_management.class_management_serializers 
 from quickstart.utils.revalidation import trigger_nextjs_revalidation
 from quickstart.views.public.public_business_views import invalidate_business_detail_cache
 from quickstart.utils.email_utils import send_booking_cancelled_by_other_email
-from quickstart.utils.sms_utils import normalize_phone_for_sns
+from quickstart.utils.sms_utils import normalize_phone_for_sns, business_sms_enabled
 from quickstart.tasks.notification_tasks import send_sms_task
 
 from quickstart.models import (
@@ -609,7 +609,7 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                                 f"Failed to send class suspension cancellation email for booking {booking.id}: {email_error}",
                                 exc_info=True,
                             )
-                        if getattr(settings, "AWS_SMS_ENABLED", False) and getattr(business, "smsNotifications", False) and booking.schedule_instance:
+                        if business_sms_enabled(business) and booking.schedule_instance:
                             user_to_notify = booking.user or booking.contact
                             if user_to_notify:
                                 phone = getattr(user_to_notify, "phone_number", None) or (booking.metadata or {}).get("guest_phone") or ""
