@@ -337,12 +337,16 @@ def send_templated_email(
         return task_result
 
 
-def send_booking_confirmation_email(user, booking: Booking, booking_source=None):
+def send_booking_confirmation_email(user, booking: Booking, booking_source=None, override_recipient_list=None):
     """
     Sends a booking confirmation email to either a registered user (CustomUser)
     or a guest (Contact).
+
     booking_source: optional "widget" | "marketplace". When "widget", uses business
     widget_email_branding (logo, colors, footer) if the business has Growth/Advanced and has set it.
+
+    override_recipient_list: optional list of email addresses to send to instead of
+    the recipient's email (e.g. for test/dry-run sends).
     """
     logger.info(
         f"--- send_booking_confirmation_email initiated for Booking ID: {booking.id} ---"
@@ -542,12 +546,13 @@ def send_booking_confirmation_email(user, booking: Booking, booking_source=None)
     else:
         logger.warning(f"Could not generate ICS attachment for booking {booking.id}")
 
+    to_list = override_recipient_list if override_recipient_list is not None else [recipient.email]
     logger.info(
-        f"Proceeding to call send_templated_email for booking {booking.id} using template '{template_name}' to {recipient.email}"
+        f"Proceeding to call send_templated_email for booking {booking.id} using template '{template_name}' to {to_list}"
     )
 
     send_templated_email(
-        recipient_list=[recipient.email],
+        recipient_list=to_list,
         template_name=template_name,
         context=context,
         subject=f"{subject_prefix} {related_data.get('class_title', '[Class Title]')}",
@@ -1034,6 +1039,23 @@ def _is_placeholder_booker_email(email: str) -> bool:
     if not email or email == "N/A":
         return True
     return "pending@example" in (email or "").lower()
+
+
+def _is_placeholder_phone(phone: str) -> bool:
+    """True if the phone is a known placeholder (e.g. 555-555-5555)."""
+    if not phone or not str(phone).strip():
+        return True
+    normalized = "".join(c for c in str(phone) if c.isdigit())
+    return normalized == "5555555555" or "555-555-5555" in str(phone).replace(" ", "")
+
+
+def is_placeholder_guest_contact(contact) -> bool:
+    """True if the contact has placeholder email or phone (used to block completing bookings with mock data)."""
+    if not contact:
+        return False
+    email = getattr(contact, "email", None) or ""
+    phone = getattr(contact, "phone_number", None) or ""
+    return _is_placeholder_booker_email(email) or _is_placeholder_phone(phone)
 
 
 def send_super_admin_booking_created_email(booking: Booking):

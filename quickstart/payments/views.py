@@ -46,6 +46,9 @@ from quickstart.utils.email_utils import (
     send_business_new_booking_email,
     send_gift_card_email,
     send_super_admin_booking_created_email,
+    _is_placeholder_booker_email,
+    _is_placeholder_phone,
+    is_placeholder_guest_contact,
 )
 from quickstart.utils.sms_utils import normalize_phone_for_sns
 from quickstart.tasks.notification_tasks import send_sms_task
@@ -918,6 +921,24 @@ class UpdatePaymentIntentView(APIView):
         new_phone = request.data.get("guest_phone")
         new_notes = request.data.get("notes")
         new_participants = request.data.get("participant_details")
+
+        # Safeguard: never overwrite metadata with placeholder/mock guest details
+        if new_email and _is_placeholder_booker_email(new_email):
+            return Response(
+                {"error": "Please enter your real email address."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if new_phone and _is_placeholder_phone(new_phone):
+            return Response(
+                {"error": "Please enter your real phone number."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if new_name and (new_name.strip().lower() == "guest" or not new_name.strip()):
+            return Response(
+                {"error": "Please enter your full name."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         if not new_name and new_participants and isinstance(new_participants, list) and new_participants:
             first_p = new_participants[0]
             if isinstance(first_p, dict) and first_p.get("name"):
@@ -1920,6 +1941,11 @@ class ProcessBookingWebhook(APIView):
                 raise DRFValidationError(
                     "Guest contact missing. Initiating refund."
                 )
+            # Safeguard: never create a booking with placeholder guest details
+            if contact and is_placeholder_guest_contact(contact):
+                raise DRFValidationError(
+                    "Guest contact details are invalid. Initiating refund."
+                )
         else:
             try:
                 user = CustomUser.objects.get(
@@ -2197,6 +2223,13 @@ class ProcessBookingWebhook(APIView):
                 raise DRFValidationError(
                     f"Session on {initial_instance.date.strftime('%b %d')} is now full."
                 )
+
+            # Safeguard: never confirm a booking with placeholder guest details
+            if pending_booking.contact and not pending_booking.user:
+                if is_placeholder_guest_contact(pending_booking.contact):
+                    raise DRFValidationError(
+                        "Guest contact details are invalid. Initiating refund."
+                    )
 
             # --- CALCULATE FEES AND NET PAYOUT (use subtotal_for_payout so business never loses from global discount) ---
             grand_total = Decimal(payment_intent.amount_received) / 100
