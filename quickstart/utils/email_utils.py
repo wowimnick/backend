@@ -341,12 +341,9 @@ def send_booking_confirmation_email(user, booking: Booking, booking_source=None,
     """
     Sends a booking confirmation email to either a registered user (CustomUser)
     or a guest (Contact).
-
     booking_source: optional "widget" | "marketplace". When "widget", uses business
-    widget_email_branding (logo, colors, footer) if the business has Growth/Advanced and has set it.
-
-    override_recipient_list: optional list of email addresses to send to instead of
-    the recipient's email (e.g. for test/dry-run sends).
+    widget_email_branding (logo, colors, footer) if set.
+    override_recipient_list: optional list of email addresses to send to instead of recipient.email (e.g. for resend).
     """
     logger.info(
         f"--- send_booking_confirmation_email initiated for Booking ID: {booking.id} ---"
