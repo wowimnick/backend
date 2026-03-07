@@ -39,7 +39,8 @@ def get_business(request):
 
 
 def _is_widget_path(path):
-    return path.startswith("/api/widget/v1/")
+    # Support both /api/widget/v1/ (Django app mounted at root) and /widget/v1/ (e.g. proxy strips /api)
+    return path.startswith("/api/widget/v1/") or path.startswith("/widget/v1/")
 
 
 def _normalize_origin_domain(origin):
@@ -110,16 +111,26 @@ class DynamicCorsMiddleware:
             response = HttpResponse(status=200)
             response["Access-Control-Allow-Headers"] = "X-Business-ID, Content-Type"
             response["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-            origin = request.headers.get("Origin")
+            # Origin can be in request.headers (Django 4+) or request.META (all versions / some proxies)
+            origin = request.headers.get("Origin") if hasattr(request, "headers") else None
+            if not origin:
+                origin = request.META.get("HTTP_ORIGIN")
             if origin:
                 response["Access-Control-Allow-Origin"] = origin
                 logger.debug("Preflight: ACAO set for origin %s", _normalize_origin_domain(origin))
+            else:
+                # Preflight without Origin is unusual; mirror * so browser gets some ACAO (actual GET/POST still validated below)
+                response["Access-Control-Allow-Origin"] = "*"
+                logger.warning("Preflight: no Origin header for path %s, using *", request.path)
+            response["Vary"] = "Origin"
             return response
 
         # --- STAGE 2: Actual (GET, POST) — reject invalid origins before running the view ---
         # This prevents widget data from being returned to disallowed origins at all.
         if request.method in ("GET", "POST") and _is_widget_path(request.path):
-            origin = request.headers.get("Origin")
+            origin = request.headers.get("Origin") if hasattr(request, "headers") else None
+            if not origin:
+                origin = request.META.get("HTTP_ORIGIN")
             if origin:
                 business = request.business_context
                 if not _origin_allowed_for_business(origin, business):
@@ -138,7 +149,9 @@ class DynamicCorsMiddleware:
 
         # Add CORS header to the response only for allowed origins (GET/POST already validated above).
         if _is_widget_path(request.path):
-            origin = request.headers.get("Origin")
+            origin = request.headers.get("Origin") if hasattr(request, "headers") else None
+            if not origin:
+                origin = request.META.get("HTTP_ORIGIN")
             if origin:
                 business = request.business_context
                 if _origin_allowed_for_business(origin, business):
