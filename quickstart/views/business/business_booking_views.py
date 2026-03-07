@@ -766,7 +766,8 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
             # --- Popular Classes (Added Revenue) ---
             popular_classes_data = (
                 bookings_qs.values(
-                    "schedule_instance__schedule__option__classId__title"
+                    "schedule_instance__schedule__option__classId__title",
+                    "schedule_instance__schedule__option__classId_id",
                 )
                 .annotate(
                     total_booking_transactions=Count("id"),
@@ -786,6 +787,7 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
             )
             popular_classes = [
                 {
+                    "class_id": str(entry["schedule_instance__schedule__option__classId_id"]),
                     "class_name": entry[
                         "schedule_instance__schedule__option__classId__title"
                     ],
