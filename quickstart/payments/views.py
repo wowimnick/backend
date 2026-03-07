@@ -2108,16 +2108,62 @@ class ProcessBookingWebhook(APIView):
         if is_guest:
             if metadata.get("guest_contact_id"):
                 try:
-                    contact = Contact.objects.get(pk=metadata.get("guest_contact_id"))
+                    # Prefer contact by (business, email) to avoid unique constraint when
+                    # intent was created with placeholder email then updated to real email
+                    # that already exists for this business.
                     if guest_email:
-                        contact.email = guest_email
-                    if guest_full_name:
-                        parts = guest_full_name.split(" ", 1)
-                        contact.first_name = parts[0]
-                        contact.last_name = parts[1] if len(parts) > 1 else ""
-                    if guest_phone:
-                        contact.phone_number = guest_phone
-                    contact.save()
+                        contact = Contact.objects.filter(
+                            business=business,
+                            email__iexact=guest_email,
+                        ).first()
+                        if contact:
+                            first = (guest_full_name or "Guest").split(" ", 1)[0]
+                            last = (guest_full_name or "Guest").split(" ", 1)[-1] if len((guest_full_name or "Guest").split(" ", 1)) > 1 else ""
+                            Contact.objects.filter(pk=contact.pk).update(
+                                first_name=first,
+                                last_name=last,
+                                phone_number=guest_phone or "",
+                                updated_at=timezone.now(),
+                            )
+                        else:
+                            contact = Contact.objects.get(pk=metadata.get("guest_contact_id"))
+                            if guest_email:
+                                contact.email = guest_email
+                            if guest_full_name:
+                                parts = guest_full_name.split(" ", 1)
+                                contact.first_name = parts[0]
+                                contact.last_name = parts[1] if len(parts) > 1 else ""
+                            if guest_phone:
+                                contact.phone_number = guest_phone
+                            try:
+                                contact.save()
+                            except DjangoIntegrityError:
+                                contact = Contact.objects.get(
+                                    business=business,
+                                    email__iexact=guest_email,
+                                )
+                                first = (guest_full_name or "Guest").split(" ", 1)[0]
+                                last = (guest_full_name or "Guest").split(" ", 1)[-1] if len((guest_full_name or "Guest").split(" ", 1)) > 1 else ""
+                                Contact.objects.filter(pk=contact.pk).update(
+                                    first_name=first,
+                                    last_name=last,
+                                    phone_number=guest_phone or "",
+                                    updated_at=timezone.now(),
+                                )
+                    else:
+                        contact = Contact.objects.get(pk=metadata.get("guest_contact_id"))
+                        if guest_full_name:
+                            parts = guest_full_name.split(" ", 1)
+                            contact.first_name = parts[0]
+                            contact.last_name = parts[1] if len(parts) > 1 else ""
+                        if guest_phone:
+                            contact.phone_number = guest_phone
+                        Contact.objects.filter(pk=contact.pk).update(
+                            first_name=contact.first_name,
+                            last_name=contact.last_name,
+                            phone_number=contact.phone_number,
+                            updated_at=timezone.now(),
+                        )
                 except (ValueError, TypeError, Contact.DoesNotExist):
                     raise DRFValidationError(
                         "Guest contact missing. Initiating refund."
