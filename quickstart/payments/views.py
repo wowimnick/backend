@@ -2154,7 +2154,7 @@ class ProcessBookingWebhook(APIView):
                 if guest_phone:
                     contact.phone_number = guest_phone
                 try:
-                    contact.save()
+                    contact.save(update_fields=["first_name", "last_name", "phone_number", "updated_at"])
                 except DjangoIntegrityError:
                     contact = Contact.objects.get(
                         business=business,
