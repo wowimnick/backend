@@ -80,6 +80,18 @@ REVALIDATION_SECRET = os.environ.get("REVALIDATION_SECRET")
 CORS_ALLOWED_ORIGINS = CSRF_TRUSTED_ORIGINS
 CORS_ALLOW_CREDENTIALS = True
 CORS_EXPOSE_HEADERS = ["Content-Type", "X-CSRFToken"]
+# Allow X-Business-ID so widget and payments (e.g. update-payment-intent) work from cross-origin (staging.classeasily.com → api.staging.classeasily.com)
+CORS_ALLOW_HEADERS = [
+    "accept",
+    "accept-encoding",
+    "authorization",
+    "content-type",
+    "origin",
+    "user-agent",
+    "x-csrftoken",
+    "x-requested-with",
+    "x-business-id",
+]
 
 IS_DEPLOYED_ENV = os.environ.get("DJANGO_ENV") in ["staging", "prod"]
 COOKIE_DOMAIN = ".classeasily.com" if IS_DEPLOYED_ENV else None
