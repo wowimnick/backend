@@ -920,6 +920,14 @@ class UpdatePaymentIntentView(APIView):
     def post(self, request):
         update_id = str(uuid.uuid4())[:8]
         logger.info("[%s] UpdatePaymentIntentView START", update_id)
+        logger.info(
+            "[%s] UpdatePaymentIntent REQUEST data: payment_intent_id=%s guest_email=%s guest_full_name=%s guest_phone=%s",
+            update_id,
+            request.data.get("payment_intent_id"),
+            request.data.get("guest_email"),
+            request.data.get("guest_full_name"),
+            request.data.get("guest_phone"),
+        )
 
         payment_intent_id = request.data.get("payment_intent_id")
 
@@ -984,8 +992,24 @@ class UpdatePaymentIntentView(APIView):
         except Payment.DoesNotExist:
             # No pending Payment = single-session flow. Just update Stripe metadata and return success.
             logger.info("[%s] UpdatePaymentIntent: no pending payment (single-session flow), updating Stripe metadata only", update_id)
+            logger.info(
+                "[%s] UpdatePaymentIntent WRITING to Stripe: guest_email=%s guest_full_name=%s guest_phone=%s",
+                update_id,
+                new_email,
+                new_name,
+                new_phone,
+            )
             try:
                 merge_and_modify_metadata()
+                intent_after = stripe.PaymentIntent.retrieve(payment_intent_id)
+                logger.info(
+                    "[%s] UpdatePaymentIntent: Stripe metadata AFTER update for PI %s: guest_email=%s guest_full_name=%s guest_phone=%s",
+                    update_id,
+                    payment_intent_id,
+                    (intent_after.metadata or {}).get("guest_email"),
+                    (intent_after.metadata or {}).get("guest_full_name"),
+                    (intent_after.metadata or {}).get("guest_phone"),
+                )
                 logger.info("[%s] UpdatePaymentIntent: Stripe metadata updated for PI %s", update_id, payment_intent_id)
                 return Response(
                     {"status": "updated", "metadata_only": True},
@@ -2000,6 +2024,17 @@ class ProcessBookingWebhook(APIView):
         Raises DRFValidationError if slot no longer has capacity (caller will refund).
         """
         metadata = payment_intent.metadata
+        logger.info(
+            "[%s] WEBHOOK _create_single_booking_from_metadata PI=%s METADATA READ: guest_email=%s guest_full_name=%s guest_phone=%s booking_source=%s is_guest=%s user_id=%s",
+            webhook_id,
+            payment_intent.id,
+            metadata.get("guest_email"),
+            metadata.get("guest_full_name"),
+            metadata.get("guest_phone"),
+            metadata.get("booking_source"),
+            metadata.get("is_guest"),
+            metadata.get("user_id"),
+        )
         instance_id = metadata.get("schedule_instance_id")
         logger.info("[%s] _create_single_booking_from_metadata PI=%s schedule_instance_id=%s", webhook_id, payment_intent.id, instance_id)
 
