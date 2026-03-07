@@ -711,6 +711,22 @@ class GuestBookingCreateView(generics.CreateAPIView):
             instance_id = int(metadata["schedule_instance_id"])
             participants = int(metadata["participants"])
 
+            # Webhook may have already created the booking (instant flow); return it idempotently
+            # to avoid duplicate bookings and deadlock with the webhook.
+            existing_payment = (
+                Payment.objects.filter(stripe_payment_intent_id=pi.id)
+                .select_related("booking")
+                .first()
+            )
+            if existing_payment and existing_payment.booking_id:
+                return Response(
+                    {
+                        "message": "Booking confirmed!",
+                        "booking_reference": existing_payment.booking.user_facing_reference,
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
             with transaction.atomic():
                 instance = ScheduleInstance.objects.select_for_update().get(
                     id=instance_id
