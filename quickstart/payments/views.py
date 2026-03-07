@@ -2123,50 +2123,48 @@ class ProcessBookingWebhook(APIView):
                         "Guest contact missing. Initiating refund."
                     )
             elif guest_email or guest_full_name:
-                # Widget/single-session: no guest_contact_id; create or get Contact from metadata
+                # Widget/single-session: no guest_contact_id; get existing contact or create (never full save to avoid unique constraint)
                 if not guest_email:
                     raise DRFValidationError(
                         "Guest email missing. Initiating refund."
                     )
                 first = (guest_full_name or "Guest").split(" ", 1)[0]
                 last = (guest_full_name or "Guest").split(" ", 1)[-1] if len((guest_full_name or "Guest").split(" ", 1)) > 1 else ""
-                try:
-                    contact, _ = Contact.objects.get_or_create(
-                        business=business,
-                        email__iexact=guest_email,
-                        defaults={
-                            "email": guest_email,
-                            "first_name": first,
-                            "last_name": last,
-                            "phone_number": guest_phone or "",
-                            "source": "widget_booking",
-                        },
+                contact = Contact.objects.filter(
+                    business=business,
+                    email__iexact=guest_email,
+                ).first()
+                if contact:
+                    contact.first_name = first
+                    contact.last_name = last
+                    contact.phone_number = guest_phone or ""
+                    Contact.objects.filter(pk=contact.pk).update(
+                        first_name=contact.first_name,
+                        last_name=contact.last_name,
+                        phone_number=contact.phone_number,
+                        updated_at=timezone.now(),
                     )
-                except DjangoIntegrityError:
-                    contact = Contact.objects.get(
-                        business=business,
-                        email__iexact=guest_email,
-                    )
-                if guest_full_name:
-                    parts = guest_full_name.split(" ", 1)
-                    contact.first_name = parts[0]
-                    contact.last_name = parts[1] if len(parts) > 1 else ""
-                if guest_phone:
-                    contact.phone_number = guest_phone
-                try:
-                    contact.save(update_fields=["first_name", "last_name", "phone_number", "updated_at"])
-                except DjangoIntegrityError:
-                    contact = Contact.objects.get(
-                        business=business,
-                        email__iexact=guest_email,
-                    )
-                    if guest_full_name:
-                        parts = guest_full_name.split(" ", 1)
-                        contact.first_name = parts[0]
-                        contact.last_name = parts[1] if len(parts) > 1 else ""
-                    if guest_phone:
-                        contact.phone_number = guest_phone
-                    contact.save(update_fields=["first_name", "last_name", "phone_number", "updated_at"])
+                else:
+                    try:
+                        contact = Contact.objects.create(
+                            business=business,
+                            email=guest_email,
+                            first_name=first,
+                            last_name=last,
+                            phone_number=guest_phone or "",
+                            source="widget_booking",
+                        )
+                    except DjangoIntegrityError:
+                        contact = Contact.objects.get(
+                            business=business,
+                            email__iexact=guest_email,
+                        )
+                        Contact.objects.filter(pk=contact.pk).update(
+                            first_name=first,
+                            last_name=last,
+                            phone_number=guest_phone or "",
+                            updated_at=timezone.now(),
+                        )
             else:
                 raise DRFValidationError(
                     "Guest contact missing. Initiating refund."
