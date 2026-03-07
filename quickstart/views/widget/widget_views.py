@@ -49,6 +49,17 @@ logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
 
+def _get_receipt_url_from_pi(pi):
+    """Safely get receipt_url from a PaymentIntent; PI may not have charges expanded or may be refunded."""
+    charges = getattr(pi, "charges", None)
+    if not charges:
+        return None
+    data = getattr(charges, "data", None)
+    if not data or len(data) == 0:
+        return None
+    return getattr(data[0], "receipt_url", None)
+
+
 def _is_demo(request):
     """True when X-Business-ID is the reserved demo key; no DB business, mock data only."""
     return getattr(request.business_context, "is_demo", False)
@@ -687,7 +698,10 @@ class GuestBookingCreateView(generics.CreateAPIView):
         business = request.business_context
 
         try:
-            pi = stripe.PaymentIntent.retrieve(data["payment_intent_id"])
+            pi = stripe.PaymentIntent.retrieve(
+                data["payment_intent_id"],
+                expand=["charges.data"],
+            )
             if pi.status != "succeeded":
                 raise ValidationError(
                     f"Payment was not successful. Status: {pi.status}"
@@ -753,9 +767,7 @@ class GuestBookingCreateView(generics.CreateAPIView):
                         if pi.payment_method_types
                         else "card"
                     ),
-                    receipt_url=(
-                        pi.charges.data[0].receipt_url if pi.charges.data else None
-                    ),
+                    receipt_url=_get_receipt_url_from_pi(pi),
                     created_at=timezone.now(),
                     metadata={"original_stripe_metadata": dict(metadata)},
                 )

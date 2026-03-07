@@ -2029,6 +2029,15 @@ class ProcessBookingWebhook(APIView):
         option = instance.schedule.option
         business = option.classId.businessId
         is_guest = metadata.get("is_guest") == "True"
+        # Widget (and similar flows) set guest_* via update-payment-intent but may not set is_guest/guest_contact_id
+        guest_email = metadata.get("guest_email") or ""
+        guest_full_name = (metadata.get("guest_full_name") or "").strip()
+        guest_phone = metadata.get("guest_phone") or ""
+        is_widget_guest = metadata.get("booking_source") == "widget" or (
+            not metadata.get("user_id") and (guest_email or guest_full_name)
+        )
+        if is_widget_guest:
+            is_guest = True
 
         try:
             participant_details = json.loads(
@@ -2051,27 +2060,51 @@ class ProcessBookingWebhook(APIView):
         user = None
         contact = None
         if is_guest:
-            try:
-                contact = Contact.objects.get(pk=metadata.get("guest_contact_id"))
-                # Apply guest details from metadata (updated by update_intent before pay)
-                guest_email = metadata.get("guest_email")
-                guest_full_name = (metadata.get("guest_full_name") or "").strip()
-                guest_phone = metadata.get("guest_phone")
-                if guest_email:
-                    contact.email = guest_email
+            if metadata.get("guest_contact_id"):
+                try:
+                    contact = Contact.objects.get(pk=metadata.get("guest_contact_id"))
+                    if guest_email:
+                        contact.email = guest_email
+                    if guest_full_name:
+                        parts = guest_full_name.split(" ", 1)
+                        contact.first_name = parts[0]
+                        contact.last_name = parts[1] if len(parts) > 1 else ""
+                    if guest_phone:
+                        contact.phone_number = guest_phone
+                    contact.save()
+                except (ValueError, TypeError, Contact.DoesNotExist):
+                    raise DRFValidationError(
+                        "Guest contact missing. Initiating refund."
+                    )
+            elif guest_email or guest_full_name:
+                # Widget/single-session: no guest_contact_id; create or get Contact from metadata
+                if not guest_email:
+                    raise DRFValidationError(
+                        "Guest email missing. Initiating refund."
+                    )
+                first = (guest_full_name or "Guest").split(" ", 1)[0]
+                last = (guest_full_name or "Guest").split(" ", 1)[-1] if len((guest_full_name or "Guest").split(" ", 1)) > 1 else ""
+                contact, _ = Contact.objects.get_or_create(
+                    business=business,
+                    email__iexact=guest_email,
+                    defaults={
+                        "first_name": first,
+                        "last_name": last,
+                        "phone_number": guest_phone or "",
+                        "source": "widget_booking",
+                    },
+                )
                 if guest_full_name:
                     parts = guest_full_name.split(" ", 1)
                     contact.first_name = parts[0]
                     contact.last_name = parts[1] if len(parts) > 1 else ""
                 if guest_phone:
                     contact.phone_number = guest_phone
-                if guest_email or guest_full_name or guest_phone:
-                    contact.save()
-            except (ValueError, TypeError, Contact.DoesNotExist):
+                contact.save()
+            else:
                 raise DRFValidationError(
                     "Guest contact missing. Initiating refund."
                 )
-            # Safeguard: never create a booking with placeholder guest details
             if contact and is_placeholder_guest_contact(contact):
                 raise DRFValidationError(
                     "Guest contact details are invalid. Initiating refund."
