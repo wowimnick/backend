@@ -967,6 +967,8 @@ class UpdatePaymentIntentView(APIView):
                 new_name = str(first_p.get("name", "")).strip()
 
         # Stripe replaces entire metadata on modify; merge guest fields into existing.
+        # Do not overwrite existing non-empty metadata with empty values (e.g. second
+        # update_intent from Apple Pay with stale/empty form would otherwise wipe good data).
         guest_updates = {
             "guest_email": new_email,
             "guest_full_name": new_name,
@@ -978,7 +980,15 @@ class UpdatePaymentIntentView(APIView):
             intent = stripe.PaymentIntent.retrieve(payment_intent_id)
             merged = dict(intent.metadata or {})
             for k, v in guest_updates.items():
-                merged[k] = v if v is not None else ""
+                if k == "notes":
+                    merged[k] = v if v is not None else ""
+                else:
+                    # Do not overwrite existing guest_* with empty; prevents a second
+                    # update_intent (e.g. from Apple Pay) with empty form from wiping good data.
+                    if v is not None and str(v).strip():
+                        merged[k] = v
+                    elif k not in merged:
+                        merged[k] = v if v is not None else ""
             stripe.PaymentIntent.modify(
                 payment_intent_id,
                 metadata=merged,
