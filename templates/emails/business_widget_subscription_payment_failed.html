@@ -1,0 +1,52 @@
+{# templates/emails/business_widget_subscription_payment_failed.html #}
+{% extends "emails/base_email.html" %}
+{% load i18n %}
+{% block title %}
+    {% trans "Action required: Update your payment method" %}
+{% endblock title %}
+{% block content %}
+    <div style="text-align: center;">
+        <!-- Icon -->
+        <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">💳</div>
+        <h1>{% trans "We couldn't charge your card" %}</h1>
+        <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+            {% blocktrans with first_name=user.first_name|default:"Partner" %}Hi {{ first_name }},{% endblocktrans %}
+            <br>
+            {% trans "The payment for your booking widget subscription failed. This often happens when a card has expired or was declined. Please update your payment method so your widget plan stays active." %}
+        </p>
+        <!-- Plan info card -->
+        <div style="background-color: #ffffff;
+                    border: 1px solid #E5E7EB;
+                    border-radius: 20px;
+                    overflow: hidden;
+                    margin-bottom: 32px;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.03)">
+            <div style="padding: 24px; text-align: left;">
+                <div style="color: #86868B; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">{% trans "Business" %}</div>
+                <div style="color: #1D1D1F; font-size: 18px; font-weight: 600; margin-bottom: 16px;">{{ business_name }}</div>
+                <div style="color: #86868B; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">{% trans "Current plan" %}</div>
+                <div style="color: #1D1D1F; font-size: 18px; font-weight: 600;">{{ plan_name }}</div>
+            </div>
+        </div>
+        <p style="font-size: 14px;
+                  color: #86868B;
+                  line-height: 1.5;
+                  margin-bottom: 24px">
+            {% blocktrans with grace_days=grace_days %}Please update your payment method within the next <strong>{{ grace_days }} days</strong> to avoid any interruption to your booking widget. You can add a new card or fix the issue in your Plan & Billing settings.{% endblocktrans %}
+        </p>
+        <table role="presentation"
+               border="0"
+               cellpadding="0"
+               cellspacing="0"
+               width="100%">
+            <tr>
+                <td align="center">
+                    <a href="{{ settings_billing_url }}" target="_blank" class="button">{% trans 'Update payment method' %}</a>
+                </td>
+            </tr>
+        </table>
+        <p style="font-size: 13px; color: #86868B; line-height: 1.5; margin-top: 24px; margin-bottom: 0;">
+            {% trans "If you have questions, reply to this email or contact support." %}
+        </p>
+    </div>
+{% endblock content %}

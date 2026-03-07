@@ -68,6 +68,25 @@ def _business_has_active_widget_subscription(business):
     ).exists()
 
 
+def _business_has_growth_or_advanced_widget_plan(business):
+    """True if business has an active Growth or Advanced widget subscription."""
+    if getattr(business, "is_demo", False):
+        return True
+    now = timezone.now()
+    sub = (
+        WidgetSubscription.objects.filter(
+            business=business,
+            status__in=["active", "trialing"],
+            current_period_end__gt=now,
+        )
+        .order_by("-current_period_end")
+        .first()
+    )
+    if not sub or not sub.plan_id:
+        return False
+    return (sub.plan_id or "").lower() in ("growth", "advanced")
+
+
 # Commission by plan: basic=4%, growth=3%, advanced=2%
 WIDGET_PLAN_FEE_PERCENT = {"basic": Decimal("4.00"), "growth": Decimal("3.00"), "advanced": Decimal("2.00")}
 
@@ -175,6 +194,13 @@ class WidgetConfigView(generics.RetrieveAPIView):
             )
         serializer = self.get_serializer(instance)
         data = serializer.data
+        # Pin widget to a specific class is Growth/Advanced only; strip for Basic so embed does not use it.
+        if not _business_has_growth_or_advanced_widget_plan(instance) and isinstance(
+            data.get("theme"), dict
+        ):
+            theme = dict(data["theme"])
+            theme.pop("specificClassId", None)
+            data["theme"] = theme
         data["stripe_publishable_key"] = settings.STRIPE_PUBLIC_KEY
         base = getattr(settings, "FRONTEND_BASE_URL", "https://www.classeasily.com").rstrip("/")
         data["terms_url"] = f"{base}/terms-of-service"

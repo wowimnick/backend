@@ -223,6 +223,25 @@ class WidgetConfigManagementView(APIView):
             business.marketplace_email_branding = marketplace_branding
             business.save(update_fields=["marketplace_email_branding"])
 
+        # Pin widget to a specific class (specificClassId) is Growth/Advanced only.
+        sub = (
+            WidgetSubscription.objects.filter(
+                business=business, status__in=["active", "trialing"]
+            )
+            .order_by("-current_period_end")
+            .first()
+        )
+        plan_id = (sub.plan_id or "").lower() if sub else None
+        if plan_id not in ("growth", "advanced"):
+            if data.get("specificClassId"):
+                return Response(
+                    {
+                        "detail": "Pin widget to a specific class requires a Growth or Advanced widget plan.",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            data.pop("specificClassId", None)
+
         serializer = BusinessWidgetConfigSerializer(
             instance=business, data=data, partial=True
         )
@@ -774,8 +793,40 @@ class WidgetSubscriptionView(APIView):
                             status=status.HTTP_400_BAD_REQUEST,
                         )
                     # Stripe already has this price (e.g. plan was applied by webhook or previous payment; our DB was stale).
+                    # If user reloaded after clicking switch but before paying, there may be an open invoice — require payment, don't grant plan.
                     current_price_id = (item_list[0].get("price") or {}).get("id") if item_list else None
                     if current_price_id == price_id:
+                        open_for_same = []
+                        try:
+                            open_for_same = stripe.Invoice.list(
+                                subscription=sub.stripe_subscription_id,
+                                status="open",
+                                limit=1,
+                            ).get("data") or []
+                        except stripe.StripeError as e:
+                            logger.warning("widget_subscription: open invoice check (already same price) failed: %s", e)
+                        if open_for_same:
+                            # Reload-after-switch: open invoice exists; return requires_payment so they can complete payment.
+                            client_secret = _client_secret_from_stripe_invoice(open_for_same[0])
+                            if client_secret:
+                                logger.info(
+                                    "widget_subscription: Stripe already has target price but open invoice; returning requires_payment sub_id=%s",
+                                    sub.stripe_subscription_id,
+                                )
+                                return Response(
+                                    {
+                                        "requires_payment": True,
+                                        "client_secret": client_secret,
+                                        "subscription_id": sub.stripe_subscription_id,
+                                        "target_plan_id": plan_id,
+                                        "subscription": _subscription_response_from_sub(sub),
+                                    },
+                                    status=status.HTTP_200_OK,
+                                )
+                            return Response(
+                                {"error": "Payment is required to complete this plan change. Please complete payment when prompted or try again."},
+                                status=status.HTTP_400_BAD_REQUEST,
+                            )
                         logger.info(
                             "widget_subscription: Stripe already has target price; syncing DB sub_id=%s plan_id=%s",
                             sub.stripe_subscription_id,
@@ -1197,6 +1248,7 @@ class WidgetSubscriptionInvoicesView(APIView):
                     customer=customer_id,
                     status="paid",
                     limit=50,
+                    expand=["data.charge", "data.lines.data"],
                 )
             except stripe.StripeError as e:
                 logger.warning("Stripe Invoice.list (customer) failed: %s", e)
@@ -1207,6 +1259,7 @@ class WidgetSubscriptionInvoicesView(APIView):
                     subscription=sub.stripe_subscription_id,
                     status="paid",
                     limit=50,
+                    expand=["data.charge", "data.lines.data"],
                 )
             except stripe.StripeError as e:
                 logger.warning("Stripe Invoice.list (subscription) failed: %s", e)
@@ -1221,6 +1274,29 @@ class WidgetSubscriptionInvoicesView(APIView):
                 from datetime import datetime
                 if isinstance(created, (int, float)):
                     created = datetime.utcfromtimestamp(created).isoformat() + "Z"
+            # Card used to pay (from charge.payment_method_details)
+            payment_method = None
+            charge = inv.get("charge")
+            if isinstance(charge, dict):
+                card = (charge.get("payment_method_details") or {}).get("card") or {}
+                if card.get("last4") or card.get("brand"):
+                    payment_method = {
+                        "brand": (card.get("brand") or "card").capitalize(),
+                        "last4": card.get("last4") or "****",
+                    }
+            # Line items breakdown
+            lines_data = (inv.get("lines") or {}).get("data") if isinstance(inv.get("lines"), dict) else []
+            if not lines_data and hasattr(inv.get("lines"), "data"):
+                lines_data = inv["lines"].data or []
+            lines = []
+            for line in (lines_data or []):
+                line_amount = (line.get("amount") or 0) / 100.0
+                line_currency = (line.get("currency") or inv.get("currency") or "usd").upper()
+                lines.append({
+                    "description": line.get("description") or "Charge",
+                    "amount": line_amount,
+                    "currency": line_currency,
+                })
             invoices.append({
                 "id": inv.get("id"),
                 "number": inv.get("number") or inv.get("id"),
@@ -1229,6 +1305,8 @@ class WidgetSubscriptionInvoicesView(APIView):
                 "currency": currency,
                 "status": inv.get("status"),
                 "invoice_pdf": inv.get("invoice_pdf"),
+                "payment_method": payment_method,
+                "lines": lines,
             })
         # Sort by created descending
         invoices.sort(key=lambda x: x.get("created") or "", reverse=True)

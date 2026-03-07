@@ -1557,6 +1557,44 @@ def send_payout_connect_required_email(
     )
 
 
+def send_widget_subscription_payment_failed_email(
+    business_user: CustomUser,
+    business_name: str,
+    plan_name: str,
+    settings_billing_url: str,
+    grace_days: int = 7,
+):
+    """
+    Notify the business owner that their widget subscription payment failed (e.g. card expired or declined).
+    Asks them to update their payment method within the grace period to avoid interruption.
+    """
+    if not business_user or not business_user.email:
+        logger.warning(
+            "Attempted to send widget subscription payment failed email with invalid user."
+        )
+        return
+
+    logger.info(
+        f"Preparing widget subscription payment failed email to {business_user.email} "
+        f"(business={business_name}, plan={plan_name})"
+    )
+
+    context = {
+        "user": business_user,
+        "business_name": business_name,
+        "plan_name": plan_name,
+        "settings_billing_url": settings_billing_url,
+        "grace_days": grace_days,
+        "recipient_email": business_user.email,
+    }
+    send_templated_email(
+        recipient_list=[business_user.email],
+        template_name="emails/business_widget_subscription_payment_failed.html",
+        context=context,
+        subject="Action required: Update your payment method for your booking widget plan",
+    )
+
+
 def send_performance_summary_email(
     business_user: CustomUser, summary_data: dict, period: str
 ):

@@ -12,6 +12,7 @@ from django.db import transaction
 from decimal import Decimal
 import stripe
 from django.conf import settings
+from django.core.cache import cache
 from django.db.models import Q, F, Sum
 from django.db.models.functions import Coalesce
 
@@ -46,6 +47,7 @@ from quickstart.utils.email_utils import (
     send_business_new_booking_email,
     send_gift_card_email,
     send_super_admin_booking_created_email,
+    send_widget_subscription_payment_failed_email,
     _is_placeholder_booker_email,
     _is_placeholder_phone,
     is_placeholder_guest_contact,
@@ -1344,6 +1346,63 @@ class ProcessBookingWebhook(APIView):
                     str(e),
                     exc_info=True,
                 )
+
+        elif event.type == "invoice.payment_failed":
+            # Widget subscription: notify business owner once per invoice (grace period to update card).
+            logger.info("[%s] invoice.payment_failed received", webhook_id)
+            invoice = event.data.object
+            inv_id = getattr(invoice, "id", None) or (invoice.get("id") if isinstance(invoice, dict) else None)
+            sub_id = getattr(invoice, "subscription", None) or (
+                invoice.get("subscription") if isinstance(invoice, dict) else None
+            )
+            if sub_id and inv_id:
+                cache_key = f"widget_sub_payment_failed_email:{inv_id}"
+                if cache.get(cache_key):
+                    logger.info("[%s] invoice.payment_failed: already sent email for invoice %s", webhook_id, inv_id)
+                else:
+                    try:
+                        stripe_sub = stripe.Subscription.retrieve(sub_id)
+                        meta = getattr(stripe_sub, "metadata", None) or stripe_sub.get("metadata") or {}
+                        if meta.get("business_id") and not meta.get("addon_type"):
+                            business_id = meta.get("business_id")
+                            try:
+                                business = BusinessInfo.objects.get(businessId=int(business_id))
+                            except (BusinessInfo.DoesNotExist, ValueError):
+                                logger.warning(
+                                    "[%s] invoice.payment_failed: business %s not found for subscription %s",
+                                    webhook_id, business_id, sub_id,
+                                )
+                            else:
+                                owner = getattr(business, "owner", None)
+                                if not owner or not owner.email:
+                                    logger.warning(
+                                        "[%s] invoice.payment_failed: no owner email for business %s",
+                                        webhook_id, business.businessId,
+                                    )
+                                else:
+                                    plan_id = (meta.get("plan_id") or "growth").strip().lower()
+                                    if plan_id not in ("basic", "growth", "advanced"):
+                                        plan_id = "growth"
+                                    plan_display = plan_id.capitalize()
+                                    settings_billing_url = f"{settings.FRONTEND_BASE_URL or ''}/business/dashboard?tab=settings"
+                                    grace_days = getattr(settings, "WIDGET_SUBSCRIPTION_PAYMENT_FAILED_GRACE_DAYS", 7)
+                                    send_widget_subscription_payment_failed_email(
+                                        business_user=owner,
+                                        business_name=getattr(business, "businessName", None) or f"Business {business_id}",
+                                        plan_name=plan_display,
+                                        settings_billing_url=settings_billing_url,
+                                        grace_days=grace_days,
+                                    )
+                                    cache.set(cache_key, True, timeout=7 * 24 * 3600)  # 7 days
+                                    logger.info(
+                                        "[%s] Sent widget subscription payment failed email to %s for invoice %s",
+                                        webhook_id, owner.email, inv_id,
+                                    )
+                    except (stripe.StripeError, Exception) as e:
+                        logger.warning(
+                            "[%s] invoice.payment_failed handling failed: %s", webhook_id, e, exc_info=True,
+                        )
+            return Response(status=status.HTTP_200_OK)
 
         elif event.type == "invoice.paid":
             # When a widget subscription invoice is paid (e.g. plan switch proration), sync plan_id.
