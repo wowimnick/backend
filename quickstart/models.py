@@ -2150,6 +2150,32 @@ class GiftCard(models.Model):
         indexes = [models.Index(fields=["code"])]
 
 
+class FirstPurchaseGiftCardSent(models.Model):
+    """
+    Tracks customers who have received the first-purchase gift card (one per customer).
+    Used to avoid sending the card more than once. Card is redeemable on next purchase only.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    customer_email = models.CharField(
+        max_length=255, db_index=True, unique=True,
+        help_text="Normalized (e.g. lowercase) email; one gift card per customer.",
+    )
+    gift_card = models.OneToOneField(
+        GiftCard, on_delete=models.CASCADE, related_name="first_purchase_sent_record"
+    )
+    order_total = models.DecimalField(
+        max_digits=10, decimal_places=2,
+        help_text="Grand total (after tax) of the first order that triggered this.",
+    )
+    sent_at = models.DateTimeField(auto_now_add=True)
+    payment_intent_id = models.CharField(max_length=255, blank=True, null=True)
+
+    class Meta:
+        db_table = "first_purchase_gift_card_sent"
+        ordering = ["-sent_at"]
+
+
 class GiftCardTransaction(models.Model):
     """
     Ledger to track every usage of a gift card.

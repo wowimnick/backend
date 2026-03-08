@@ -34,6 +34,7 @@ from quickstart.models import (
     Schedule,
     Contact,
     BusinessStaff,
+    FirstPurchaseGiftCardSent,
     GiftCard,
     GiftCardTransaction,
     WidgetSubscription,
@@ -1128,6 +1129,72 @@ class UpdatePaymentIntentView(APIView):
             )
 
 
+def try_send_first_purchase_gift_card(metadata, grand_total, payment_intent_id=None):
+    """
+    If this is the customer's first completed purchase and grand_total meets the tier,
+    create a gift card, email it, and record that we sent. Card is redeemable on next purchase only.
+    Tiers by total (after tax): $75–$99 → $10, $100–$199 → $15, $200+ → $20.
+    """
+    try:
+        grand_total = Decimal(str(grand_total))
+    except (TypeError, ValueError):
+        return
+    if grand_total < 75:
+        return
+    email = (metadata.get("guest_email") or "").strip()
+    if not email and metadata.get("user_id"):
+        try:
+            user = CustomUser.objects.get(pk=metadata.get("user_id"))
+            email = (user.email or "").strip()
+        except (CustomUser.DoesNotExist, ValueError, TypeError):
+            pass
+    if not email:
+        return
+    normalized_email = email.lower().strip()
+    with transaction.atomic():
+        if FirstPurchaseGiftCardSent.objects.filter(customer_email=normalized_email).exists():
+            return
+        if grand_total >= 200:
+            amount = Decimal("20")
+        elif grand_total >= 100:
+            amount = Decimal("15")
+        elif grand_total >= 75:
+            amount = Decimal("10")
+        else:
+            return
+        recipient_name = (metadata.get("guest_full_name") or "").strip() or "Valued Customer"
+        gc = GiftCard.objects.create(
+            initial_amount=amount,
+            current_balance=amount,
+            recipient_email=normalized_email,
+            recipient_name=recipient_name,
+            sender_name="ClassEasily",
+            message="Thanks for your first class! Use this on your next booking.",
+            stripe_payment_intent_id=None,
+        )
+        GiftCardTransaction.objects.create(
+            gift_card=gc,
+            amount=amount,
+            balance_after=amount,
+            transaction_type="initial_load",
+        )
+        try:
+            FirstPurchaseGiftCardSent.objects.create(
+                customer_email=normalized_email,
+                gift_card=gc,
+                order_total=grand_total,
+                payment_intent_id=payment_intent_id or "",
+            )
+        except DjangoIntegrityError:
+            return
+        send_gift_card_email(gc)
+        logger.info(
+            "First-purchase gift card sent: %s amount=%s email=%s",
+            gc.code, amount, normalized_email,
+        )
+    return
+
+
 class ProcessBookingWebhook(APIView):
     authentication_classes = []
     permission_classes = []
@@ -2020,6 +2087,18 @@ class ProcessBookingWebhook(APIView):
                         capi_err,
                     )
                 _revalidate_for_booking(first_booking)
+                try:
+                    grand_total = Decimal(payment_intent.amount_received) / 100
+                    try_send_first_purchase_gift_card(
+                        dict(payment_intent.metadata),
+                        grand_total,
+                        payment_intent_id=payment_intent.id,
+                    )
+                except Exception as fp_err:
+                    logger.warning(
+                        "[%s] First-purchase gift card failed (non-fatal): %s",
+                        webhook_id, fp_err, exc_info=True,
+                    )
                 return {"message": "Course payment processed successfully"}
 
         except Exception as e:
@@ -2787,6 +2866,18 @@ class ProcessBookingWebhook(APIView):
                 capi_err,
             )
         _revalidate_for_booking(pending_booking)
+        try:
+            grand_total = Decimal(payment_intent.amount_received) / 100
+            try_send_first_purchase_gift_card(
+                dict(metadata),
+                grand_total,
+                payment_intent_id=payment_intent.id,
+            )
+        except Exception as fp_err:
+            logger.warning(
+                "[%s] First-purchase gift card failed (non-fatal): %s",
+                webhook_id, fp_err, exc_info=True,
+            )
         return {
             "booking_id": pending_booking.id,
             "user_facing_reference": pending_booking.user_facing_reference,
