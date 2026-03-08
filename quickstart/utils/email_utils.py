@@ -666,6 +666,38 @@ def send_account_security_email(user, change_type, new_email=None, subject=None)
     )
 
 
+def send_refund_failed_guest_email(booking: Booking, reason: str):
+    """
+    Notify the guest that their cancellation refund could not be completed automatically
+    and that support will follow up.
+    """
+    if not booking:
+        logger.warning("Attempted to send refund failed email with no booking.")
+        return
+    guest_email = None
+    guest_user = None
+    if getattr(booking, "user", None) and getattr(booking.user, "email", None):
+        guest_email = booking.user.email
+        guest_user = booking.user
+    elif getattr(booking, "contact", None) and getattr(booking.contact, "email", None):
+        guest_email = booking.contact.email
+    if not guest_email:
+        logger.warning("Booking %s has no guest email for refund failed notification.", booking.id)
+        return
+    context = {
+        "user": guest_user,
+        "recipient_email": guest_email,
+        "booking_id": booking.id,
+        "reason": reason or "Unknown error",
+    }
+    send_templated_email(
+        recipient_list=[guest_email],
+        template_name="emails/refund_failed_guest.html",
+        context=context,
+        subject="Your refund could not be completed – we'll follow up",
+    )
+
+
 def send_booking_cancellation_user_email(user, booking: Booking, refund_details: str):
     """
     Sends confirmation to a user after they cancelled their booking.
@@ -1554,6 +1586,37 @@ def send_payout_connect_required_email(
         template_name="emails/business_payout_connect_required.html",
         context=context,
         subject="Connect your account to receive your payout",
+    )
+
+
+def send_payout_failed_email(business: BusinessInfo, error_message: str):
+    """
+    Notify the business owner that a payout could not be completed (e.g. Stripe error,
+    Connect account issue). Ask them to check their Stripe Connect account.
+    """
+    if not business:
+        logger.warning("Attempted to send payout failed email with no business.")
+        return
+    owner = getattr(business, "owner", None)
+    if not owner or not getattr(owner, "email", None):
+        logger.warning(
+            "Business %s has no owner email for payout failed notification.",
+            business.businessId,
+        )
+        return
+    dashboard_url = f"{settings.FRONTEND_BASE_URL}/business/dashboard/payouts"
+    context = {
+        "user": owner,
+        "business_name": getattr(business, "businessName", "Your business"),
+        "error_message": error_message or "Unknown error",
+        "dashboard_url": dashboard_url,
+        "recipient_email": owner.email,
+    }
+    send_templated_email(
+        recipient_list=[owner.email],
+        template_name="emails/business_payout_failed.html",
+        context=context,
+        subject="Payout could not be completed – please check your payout account",
     )
 
 

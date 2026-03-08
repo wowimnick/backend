@@ -1250,6 +1250,30 @@ class ProcessBookingWebhook(APIView):
                 f"FAILURE_MARKER: An unexpected error occurred while marking PI {payment_intent_id} as failed: {str(e)}"
             )
 
+    def _on_webhook_refund_failed(self, payment_intent_id, reason_message=""):
+        """
+        When Stripe refund failed after a booking could not be fulfilled: persist state
+        and trigger alert so support can manually refund and/or notify the guest.
+        """
+        try:
+            payment = Payment.objects.filter(
+                stripe_payment_intent_id=payment_intent_id
+            ).first()
+            if payment:
+                suffix = " [Stripe refund failed - manual refund required]"
+                payment.failure_message = (payment.failure_message or "") + suffix
+                payment.save(update_fields=["failure_message"])
+        except Exception as e:
+            logger.warning(
+                "Could not update Payment failure_message for PI %s: %s",
+                payment_intent_id, e,
+            )
+        logger.critical(
+            "REFUND_FAILED: PaymentIntent %s - Stripe refund could not be completed. Reason: %s. Manual refund required.",
+            payment_intent_id,
+            reason_message,
+        )
+
     def handle_gift_card_creation(self, payment_intent):
         """Creates the Gift Card after successful payment (Step E)"""
         meta = payment_intent.metadata
@@ -1368,9 +1392,13 @@ class ProcessBookingWebhook(APIView):
                 self._mark_booking_as_failed(
                     payment_intent.id, f"Booking validation failed: {error_msg}"
                 )
-                self._attempt_stripe_refund(
+                refund_ok = self._attempt_stripe_refund(
                     payment_intent.id, f"Booking validation failed: {error_msg}"
                 )
+                if not refund_ok:
+                    self._on_webhook_refund_failed(
+                        payment_intent.id, f"Booking validation failed: {error_msg}"
+                    )
                 return Response(
                     {"error": error_msg}, status=status.HTTP_400_BAD_REQUEST
                 )
@@ -1388,9 +1416,13 @@ class ProcessBookingWebhook(APIView):
                 self._mark_booking_as_failed(
                     payment_intent.id, f"Unexpected server error: {str(e)}"
                 )
-                self._attempt_stripe_refund(
+                refund_ok = self._attempt_stripe_refund(
                     payment_intent.id, f"Unexpected server error: {e}"
                 )
+                if not refund_ok:
+                    self._on_webhook_refund_failed(
+                        payment_intent.id, f"Unexpected server error: {str(e)}"
+                    )
                 return Response(
                     {"error": "Internal server error"},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -2409,7 +2441,7 @@ class ProcessBookingWebhook(APIView):
                 try:
                     gc_amount = Decimal(gc_amount_str)
                     if gc_amount > 0:
-                        gc = GiftCard.objects.get(code=gc_code)
+                        gc = GiftCard.objects.select_for_update().get(code=gc_code)
                         if gc.current_balance >= gc_amount:
                             gc.current_balance -= gc_amount
                             gc.save()
@@ -2420,8 +2452,22 @@ class ProcessBookingWebhook(APIView):
                                 balance_after=gc.current_balance,
                                 transaction_type="redemption",
                             )
-                except (GiftCard.DoesNotExist, Exception):
-                    pass
+                        else:
+                            logger.critical(
+                                "Insufficient gift card balance at deduction (instant single): code=%s, required=%s, current_balance=%s. Manual review required.",
+                                gc_code,
+                                gc_amount,
+                                gc.current_balance,
+                            )
+                except GiftCard.DoesNotExist:
+                    logger.warning("Gift card not found for instant single booking deduction: code=%s", gc_code)
+                except Exception as e:
+                    logger.critical(
+                        "Gift card deduction failed for instant single booking: code=%s, error=%s. Manual review required.",
+                        gc_code,
+                        e,
+                        exc_info=True,
+                    )
 
             if user:
                 send_booking_confirmation_email(user, booking)

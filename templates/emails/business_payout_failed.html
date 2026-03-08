@@ -1,0 +1,30 @@
+{# templates/emails/business_payout_failed.html #}
+{% extends "emails/base_email.html" %}
+{% load i18n %}
+{% block title %}
+    {% trans "Payout could not be completed" %}
+{% endblock title %}
+{% block content %}
+    <div style="text-align: center;">
+        <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">⚠️</div>
+        <h1>{% trans "Payout could not be completed" %}</h1>
+        <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+            {% blocktrans with first_name=user.first_name|default:"Partner" %}Hi {{ first_name }},{% endblocktrans %}
+            <br>
+            {% trans "We were unable to process your payout. This can happen due to a temporary issue with the payment processor or your connected payout account." %}
+        </p>
+        <div style="background-color: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 12px; padding: 20px; margin-bottom: 32px; text-align: left;">
+            <p style="margin: 0; font-size: 14px; color: #86868B;">{% trans "Details" %}: {{ error_message }}</p>
+        </div>
+        <p style="font-size: 14px; color: #86868B; line-height: 1.5; margin-bottom: 32px;">
+            {% trans "Please check your Stripe Connect payout account and ensure it is valid and fully set up. If the problem continues, contact support." %}
+        </p>
+        <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+            <tr>
+                <td align="center">
+                    <a href="{{ dashboard_url }}" target="_blank" class="button">{% trans 'View payouts' %}</a>
+                </td>
+            </tr>
+        </table>
+    </div>
+{% endblock content %}

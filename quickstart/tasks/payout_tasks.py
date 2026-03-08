@@ -97,6 +97,23 @@ def _maybe_send_payout_connect_reminder(business):
     )
 
 
+def _on_cancellation_refund_failed(booking, reason):
+    """
+    When a cancellation refund could not be completed: log critical for internal alert
+    and optionally email the guest that support will follow up.
+    """
+    logger.critical(
+        "REFUND_FAILED: Booking %s - Cancellation refund could not be completed. Reason: %s. Manual follow-up required.",
+        booking.id,
+        reason,
+    )
+    try:
+        from quickstart.utils.email_utils import send_refund_failed_guest_email
+        send_refund_failed_guest_email(booking, reason)
+    except Exception as e:
+        logger.warning("Could not send refund failed email to guest for booking %s: %s", booking.id, e)
+
+
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
 
@@ -316,11 +333,23 @@ def process_daily_payouts():
         except stripe.StripeError as e:
             failed_payouts += 1
             logger.error(f"✗ STRIPE ERROR for Business {business_id}: {e}")
+            try:
+                business = BusinessInfo.objects.get(pk=business_id)
+                from quickstart.utils.email_utils import send_payout_failed_email
+                send_payout_failed_email(business, str(e))
+            except Exception as email_err:
+                logger.warning("Could not send payout failed email to Host: %s", email_err)
             # Note: Transaction rollback will occur automatically, keeping bookings as 'pending'
-            
+
         except Exception as e:
             failed_payouts += 1
             logger.error(f"✗ ERROR processing payout for Business {business_id}: {e}", exc_info=True)
+            try:
+                business = BusinessInfo.objects.get(pk=business_id)
+                from quickstart.utils.email_utils import send_payout_failed_email
+                send_payout_failed_email(business, str(e))
+            except Exception as email_err:
+                logger.warning("Could not send payout failed email to Host: %s", email_err)
 
     logger.info("=" * 80)
     logger.info(f"TASK END: process_daily_payouts")
@@ -432,7 +461,7 @@ def process_daily_refunds():
                      locked_booking.payment_status = "refunded"
                 elif remaining_refund_needed > 0:
                      # We couldn't refund everything (e.g., Stripe limit reached logic error)
-                     locked_booking.payment_status = "refund_failed" 
+                     locked_booking.payment_status = "refund_failed"
                      logger.error(f"Booking {booking.id}: Could not fully refund. Short by ${remaining_refund_needed}")
                 else:
                      locked_booking.payment_status = "refunded"
@@ -440,8 +469,16 @@ def process_daily_refunds():
                 locked_booking.save(update_fields=["payment_status"])
                 successful_refunds += 1
 
+                # Alert and notify guest when refund failed
+                if locked_booking.payment_status == "refund_failed":
+                    _on_cancellation_refund_failed(
+                        locked_booking,
+                        f"Could not fully refund (short by ${remaining_refund_needed}). Manual review required.",
+                    )
+
         except Exception as e:
             logger.error(f"✗ ERROR refunding Booking {booking.id}: {e}", exc_info=True)
             failed_refunds += 1
+            _on_cancellation_refund_failed(booking, str(e))
 
     return f"Refunds processed. Success: {successful_refunds}, Failed: {failed_refunds}"

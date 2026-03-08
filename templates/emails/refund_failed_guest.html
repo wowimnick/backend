@@ -1,0 +1,27 @@
+{# templates/emails/refund_failed_guest.html #}
+{% extends "emails/base_email.html" %}
+{% load i18n %}
+{% block title %}
+    {% trans "Your refund could not be completed" %}
+{% endblock title %}
+{% block content %}
+    <div style="text-align: center;">
+        <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">⚠️</div>
+        <h1>{% trans "Your refund could not be completed automatically" %}</h1>
+        <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+            {% if user %}
+                {% blocktrans with first_name=user.first_name|default:"there" %}Hi {{ first_name }},{% endblocktrans %}
+            {% else %}
+                {% trans "Hi there," %}
+            {% endif %}
+            <br>
+            {% trans "You cancelled a booking and were entitled to a refund under our cancellation policy. We were unable to process the refund automatically." %}
+        </p>
+        <p style="font-size: 14px; color: #86868B; line-height: 1.5; margin-bottom: 32px;">
+            {% trans "Our team has been notified and will follow up to resolve this. If you do not hear from us within a few business days, please contact support and reference booking #" %}{{ booking_id }}.
+        </p>
+        <p style="font-size: 14px; color: #86868B;">
+            {% trans "We apologize for the inconvenience." %}
+        </p>
+    </div>
+{% endblock content %}
