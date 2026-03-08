@@ -1227,50 +1227,41 @@ class WidgetSubscriptionReactivateView(APIView):
 
 
 class WidgetSubscriptionInvoicesView(APIView):
-    """GET: List Stripe invoices for the business's widget subscription (paid/draft/open)."""
+    """GET: List Stripe invoices for the business customer (widget + add-ons)."""
 
     permission_classes = [IsAuthenticated, CanManageOwnClasses]
 
     def get(self, request, *args, **kwargs):
         business = _get_business_for_subscription(request.user)
-        # Prefer subscription with Stripe ID (any status) to list invoices
-        sub = (
-            WidgetSubscription.objects.filter(business=business)
-            .exclude(stripe_subscription_id__isnull=True)
-            .exclude(stripe_subscription_id="")
-            .order_by("-created_at")
-            .first()
-        )
-        if not sub or not sub.stripe_subscription_id:
-            # Fallback: list by customer so we show something if they paid via Stripe
-            customer_id = getattr(business, "stripe_customer_id", None)
-            if not customer_id:
-                return Response({"invoices": []}, status=status.HTTP_200_OK)
+        customer_id = getattr(business, "stripe_customer_id", None)
+        if not customer_id:
+            return Response({"invoices": []}, status=status.HTTP_200_OK)
+
+        invoices_by_id = {}
+        for stripe_status in ("paid", "open", "draft"):
             try:
                 stripe_invoices = stripe.Invoice.list(
                     customer=customer_id,
-                    status="paid",
+                    status=stripe_status,
                     limit=50,
                     expand=["data.charge", "data.lines.data"],
                 )
+                for inv in stripe_invoices.get("data", []):
+                    inv_id = inv.get("id")
+                    if inv_id:
+                        invoices_by_id[inv_id] = inv
             except stripe.StripeError as e:
-                logger.warning("Stripe Invoice.list (customer) failed: %s", e)
-                return Response({"invoices": []}, status=status.HTTP_200_OK)
-        else:
-            try:
-                stripe_invoices = stripe.Invoice.list(
-                    subscription=sub.stripe_subscription_id,
-                    status="paid",
-                    limit=50,
-                    expand=["data.charge", "data.lines.data"],
-                )
-            except stripe.StripeError as e:
-                logger.warning("Stripe Invoice.list (subscription) failed: %s", e)
-                return Response({"invoices": []}, status=status.HTTP_200_OK)
+                logger.warning("Stripe Invoice.list (customer, status=%s) failed: %s", stripe_status, e)
 
         invoices = []
-        for inv in stripe_invoices.get("data", []):
+        for inv in invoices_by_id.values():
             amount = (inv.get("amount_paid") or 0) / 100.0
+            # For open/draft invoices amount_paid can be 0; use amount_due for visibility.
+            if amount <= 0:
+                amount = (inv.get("amount_due") or 0) / 100.0
+            # Ignore zero-value invoices (free/fully credited), they are noise in billing UI.
+            if amount <= 0:
+                continue
             currency = (inv.get("currency") or "usd").upper()
             created = inv.get("created")
             if created:
@@ -1520,6 +1511,43 @@ class BusinessAddonsView(APIView):
     def get(self, request, *args, **kwargs):
         business = _get_business_for_subscription(request.user)
         addon = _get_current_addon_subscription(business, ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING)
+        # If webhook lagged, reconcile latest local addon row from Stripe so UI can update immediately after payment.
+        if addon is None:
+            latest = (
+                BusinessAddonSubscription.objects.filter(
+                    business=business,
+                    addon_type=ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING,
+                )
+                .exclude(stripe_subscription_id__isnull=True)
+                .exclude(stripe_subscription_id="")
+                .order_by("-created_at")
+                .first()
+            )
+            if latest and latest.stripe_subscription_id:
+                try:
+                    stripe_sub = stripe.Subscription.retrieve(latest.stripe_subscription_id)
+                    stripe_status = (stripe_sub.get("status") or "").strip().lower()
+                    if stripe_status in ("active", "trialing"):
+                        period_end = stripe_sub.get("current_period_end")
+                        current_period_end_dt = None
+                        if period_end:
+                            from datetime import datetime
+                            import pytz
+
+                            current_period_end_dt = datetime.fromtimestamp(period_end, tz=pytz.UTC)
+                        latest.status = stripe_status
+                        latest.current_period_end = current_period_end_dt
+                        latest.cancel_at_period_end = bool(stripe_sub.get("cancel_at_period_end"))
+                        latest.save(
+                            update_fields=[
+                                "status",
+                                "current_period_end",
+                                "cancel_at_period_end",
+                            ]
+                        )
+                        addon = latest
+                except stripe.StripeError:
+                    pass
         # Only offer instant subscribe when not already subscribed and we have a saved payment method
         can_instant = (
             addon is None
