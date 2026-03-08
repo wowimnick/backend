@@ -723,12 +723,14 @@ class WidgetSubscriptionView(APIView):
         business = _get_business_for_subscription(request.user)
         sub = _get_current_subscription(business)
         subscription_required = getattr(settings, "WIDGET_SUBSCRIPTION_REQUIRED", False)
+        has_widget_access = _business_has_active_widget_subscription(business)
         if not sub:
             return Response(
                 {
                     "subscription": None,
                     "widget_subscription_required": subscription_required,
                     "has_stripe_subscription": False,
+                    "has_widget_access": has_widget_access,
                 },
                 status=status.HTTP_200_OK,
             )
@@ -736,6 +738,7 @@ class WidgetSubscriptionView(APIView):
             "subscription": _subscription_response_from_sub(sub),
             "widget_subscription_required": subscription_required,
             "has_stripe_subscription": bool(sub.stripe_subscription_id),
+            "has_widget_access": has_widget_access,
         }
         return Response(data, status=status.HTTP_200_OK)
 
