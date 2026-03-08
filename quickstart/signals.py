@@ -20,7 +20,7 @@ from django.core.cache import cache
 logger = logging.getLogger(__name__)
 
 from quickstart.utils.sms_utils import business_sms_enabled
-from quickstart.tasks.business_tasks import classify_class_task, update_trending_collections_task
+# Do NOT import quickstart.tasks here: it pulls in the whole tasks package (cache_tasks → cache_prewarm → views → pandas/boto3) and can add 5+ minutes to Django startup. Use send_task by name in handlers instead.
 from .models import (
     Booking,
     BusinessRole,
@@ -631,9 +631,14 @@ def trigger_classification(sender, instance, created, update_fields, **kwargs):
     if should_run and instance.status == 'active':
         # FIX: Wrap in on_commit to prevent race conditions where the worker
         # executes before the DB transaction is finalized.
-        transaction.on_commit(
-            lambda: classify_class_task.delay(instance.pk)
-        )
+        class_pk = instance.pk
+        def _queue_classify():
+            from CEBackend.celery import app as celery_app
+            celery_app.send_task(
+                "quickstart.tasks.business_tasks.classify_class_task",
+                args=[class_pk],
+            )
+        transaction.on_commit(_queue_classify)
 
 @receiver(post_save, sender=ClassCollection)
 def trigger_reclassification_on_collection_change(sender, instance, created, update_fields, **kwargs):
@@ -661,8 +666,11 @@ def trigger_reclassification_on_collection_change(sender, instance, created, upd
         
         logger.info(f"🔄 Collection '{instance.name}' changed. Queueing bulk re-classification.")
 
-        # Use the existing task that iterates over all active classes
-        transaction.on_commit(lambda: update_trending_collections_task.delay())
+        # Use the existing task that iterates over all active classes (send by name to avoid importing tasks at startup)
+        def _queue_update_trending():
+            from CEBackend.celery import app as celery_app
+            celery_app.send_task("quickstart.tasks.business_tasks.update_trending_collections_task")
+        transaction.on_commit(_queue_update_trending)
         
 @receiver(post_save, sender=Payout)
 def send_payout_notification(sender, instance: Payout, created, **kwargs):
