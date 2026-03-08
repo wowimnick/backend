@@ -2479,6 +2479,17 @@ class ProcessBookingWebhook(APIView):
                 pass
             _revalidate_for_booking(booking)
 
+        try:
+            try_send_first_purchase_gift_card(
+                dict(metadata),
+                grand_total,
+                payment_intent_id=payment_intent.id,
+            )
+        except Exception as fp_err:
+            logger.warning(
+                "[%s] First-purchase gift card failed (non-fatal): %s",
+                webhook_id, fp_err, exc_info=True,
+            )
         logger.info(
             f"[{webhook_id}] Created single booking from metadata: {booking.id}"
         )
