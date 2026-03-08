@@ -1552,7 +1552,8 @@ class ProcessBookingWebhook(APIView):
                     stripe_sub = stripe.Subscription.retrieve(sub_id)
                     meta = getattr(stripe_sub, "metadata", None) or stripe_sub.get("metadata") or {}
                     if meta.get("business_id") and not meta.get("addon_type"):
-                        # Resolve plan_id from subscription's current price (avoids stale metadata when invoice.paid fires early).
+                        # Prefer metadata.plan_id (set when user requested plan switch) so we don't sync the old
+                        # price when invoice.paid fires before Stripe has updated the subscription's items.
                         price_to_plan = {
                             getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_BASIC", None): "basic",
                             getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_GROWTH", None): "growth",
@@ -1563,7 +1564,11 @@ class ProcessBookingWebhook(APIView):
                         if items and items[0].get("price"):
                             price_obj = items[0]["price"]
                             stripe_price_id = price_obj.get("id") if isinstance(price_obj, dict) else getattr(price_obj, "id", None)
-                        plan_id = (price_to_plan.get(stripe_price_id) or (meta.get("plan_id") or "growth")).strip().lower()
+                        plan_id_from_meta = (meta.get("plan_id") or "").strip().lower()
+                        if plan_id_from_meta in ("basic", "growth", "advanced"):
+                            plan_id = plan_id_from_meta
+                        else:
+                            plan_id = (price_to_plan.get(stripe_price_id) or (meta.get("plan_id") or "growth")).strip().lower()
                         if plan_id not in ("basic", "growth", "advanced"):
                             plan_id = "growth"
                         cancel_at_period_end = bool(getattr(stripe_sub, "cancel_at_period_end", None) or stripe_sub.get("cancel_at_period_end"))
