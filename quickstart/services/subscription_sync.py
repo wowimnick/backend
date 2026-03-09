@@ -58,7 +58,7 @@ def sync_widget_subscription_from_stripe(stripe_subscription_id, subscription_ob
         if subscription_obj is None:
             subscription_obj = stripe.Subscription.retrieve(
                 stripe_subscription_id,
-                expand=["items.data.price"],
+                expand=["items.data.price", "schedule", "schedule.phases"],
             )
     except stripe.StripeError as e:
         logger.warning("subscription_sync: Stripe retrieve failed sub_id=%s err=%s", stripe_subscription_id, e)
@@ -78,6 +78,23 @@ def sync_widget_subscription_from_stripe(stripe_subscription_id, subscription_ob
     status = (subscription_obj.get("status") or "").strip().lower() or "incomplete"
     current_period_end = _subscription_to_period_end(subscription_obj)
     cancel_at_period_end = bool(subscription_obj.get("cancel_at_period_end") or getattr(subscription_obj, "cancel_at_period_end", False))
+    # When cancellation is driven by a schedule (end_behavior=cancel), Stripe may not set cancel_at_period_end on the subscription; derive it from the schedule.
+    schedule_ref = subscription_obj.get("schedule") if isinstance(subscription_obj, dict) else getattr(subscription_obj, "schedule", None)
+    if schedule_ref is not None:
+        end_behavior = None
+        phases = []
+        if isinstance(schedule_ref, str):
+            try:
+                schedule = stripe.SubscriptionSchedule.retrieve(schedule_ref, expand=["phases"])
+                end_behavior = schedule.get("end_behavior") if isinstance(schedule, dict) else getattr(schedule, "end_behavior", None)
+                phases = schedule.get("phases") if isinstance(schedule, dict) else getattr(schedule, "phases", None) or []
+            except stripe.StripeError:
+                pass
+        else:
+            end_behavior = schedule_ref.get("end_behavior") if isinstance(schedule_ref, dict) else getattr(schedule_ref, "end_behavior", None)
+            phases = schedule_ref.get("phases") if isinstance(schedule_ref, dict) else getattr(schedule_ref, "phases", None) or []
+        if end_behavior == "cancel" and phases and len(phases) == 1:
+            cancel_at_period_end = True
 
     items = (subscription_obj.get("items") or {}).get("data") or []
     stripe_price_id = None
