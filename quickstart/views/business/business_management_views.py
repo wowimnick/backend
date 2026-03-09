@@ -340,6 +340,16 @@ class MyBusinessOverviewView(APIView):
         current_month_start = today_utc_date.replace(day=1)
         prev_month_end = current_month_start - timedelta(days=1)
         prev_month_start = prev_month_end.replace(day=1)
+        # Use timezone-aware datetimes for DateTimeField (booking_date) to avoid RuntimeWarning
+        current_month_start_utc = timezone.make_aware(
+            datetime.combine(current_month_start, datetime.min.time()), pytz.utc
+        )
+        prev_month_start_utc = timezone.make_aware(
+            datetime.combine(prev_month_start, datetime.min.time()), pytz.utc
+        )
+        prev_month_end_utc = timezone.make_aware(
+            datetime.combine(prev_month_end, datetime.max.time()), pytz.utc
+        )
 
         monthly_revenue = None
         revenue_trend_data = []
@@ -375,7 +385,7 @@ class MyBusinessOverviewView(APIView):
             bookers_in_current_month = (
                 Booking.objects.filter(
                     schedule_instance__schedule__option__classId__businessId=business,
-                    booking_date__gte=current_month_start,
+                    booking_date__gte=current_month_start_utc,
                     payment_status="paid",
                 )
                 .annotate(
@@ -392,7 +402,7 @@ class MyBusinessOverviewView(APIView):
             bookers_in_previous_month = (
                 Booking.objects.filter(
                     schedule_instance__schedule__option__classId__businessId=business,
-                    booking_date__range=(prev_month_start, prev_month_end),
+                    booking_date__range=(prev_month_start_utc, prev_month_end_utc),
                     payment_status="paid",
                 )
                 .annotate(
