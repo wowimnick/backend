@@ -309,14 +309,17 @@ def downgrade_subscription(sub, plan_id, business):
             schedule = stripe.SubscriptionSchedule.create(
                 from_subscription=sub.stripe_subscription_id
             )
+            # Pass schedule ID as string so class method is used (StripeObject.update rejects 'phases')
+            sched_id = (schedule.get("id") if hasattr(schedule, "get") else getattr(schedule, "id", None)) or ""
+            sched_id = str(sched_id)
             stripe.SubscriptionSchedule.update(
-                schedule.id,
+                sched_id,
                 phases=phases_payload,
                 metadata=metadata_payload,
             )
             logger.info(
                 "widget_subscription_service: downgrade schedule created and updated schedule_id=%s",
-                getattr(schedule, "id", None),
+                sched_id,
             )
         except stripe.StripeError as e:
             err_msg = str(e)
