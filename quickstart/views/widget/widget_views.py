@@ -71,29 +71,30 @@ def _business_has_active_widget_subscription(business):
         return True
     if not getattr(settings, "WIDGET_SUBSCRIPTION_REQUIRED", False):
         return True
+    from quickstart.services.widget_subscription_service import get_widget_subscription
+
+    sub = get_widget_subscription(business)
+    if not sub:
+        return False
     now = timezone.now()
-    return WidgetSubscription.objects.filter(
-        business=business,
-        status__in=["active", "trialing"],
-        current_period_end__gt=now,
-    ).exists()
+    return (sub.status or "").strip().lower() in ("active", "trialing") and (
+        sub.current_period_end is None or sub.current_period_end > now
+    )
 
 
 def _business_has_growth_or_advanced_widget_plan(business):
     """True if business has an active Growth or Advanced widget subscription."""
     if getattr(business, "is_demo", False):
         return True
-    now = timezone.now()
-    sub = (
-        WidgetSubscription.objects.filter(
-            business=business,
-            status__in=["active", "trialing"],
-            current_period_end__gt=now,
-        )
-        .order_by("-current_period_end")
-        .first()
-    )
+    from quickstart.services.widget_subscription_service import get_widget_subscription
+
+    sub = get_widget_subscription(business)
     if not sub or not sub.plan_id:
+        return False
+    now = timezone.now()
+    if (sub.status or "").strip().lower() not in ("active", "trialing"):
+        return False
+    if sub.current_period_end is not None and sub.current_period_end <= now:
         return False
     return (sub.plan_id or "").lower() in ("growth", "advanced")
 

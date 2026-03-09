@@ -34,6 +34,15 @@ from quickstart.services.subscription_sync import (
     mark_addon_subscription_canceled,
     _widget_price_to_plan_id,
 )
+from quickstart.services.widget_subscription_service import (
+    get_widget_subscription,
+    create_subscription,
+    upgrade_subscription,
+    downgrade_subscription,
+    same_price_open_invoice,
+    _get_price_id,
+    _is_downgrade,
+)
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
@@ -179,14 +188,8 @@ class WidgetConfigManagementView(APIView):
             )
             or {},
         }
-        sub = (
-            WidgetSubscription.objects.filter(
-                business=business, status__in=["active", "trialing"]
-            )
-            .order_by("-current_period_end")
-            .first()
-        )
-        if sub:
+        sub = get_widget_subscription(business)
+        if sub and (sub.status or "").strip().lower() in ("active", "trialing"):
             response_data["widget_subscription"] = {
                 "planId": sub.plan_id,
                 "status": sub.status,
@@ -213,14 +216,12 @@ class WidgetConfigManagementView(APIView):
         widget_email_branding = data.pop("widget_email_branding", None)
 
         if widget_email_branding is not None:
-            sub = (
-                WidgetSubscription.objects.filter(
-                    business=business, status__in=["active", "trialing"]
-                )
-                .order_by("-current_period_end")
-                .first()
+            sub = get_widget_subscription(business)
+            plan_id = (
+                (sub.plan_id or "").strip().lower()
+                if sub and (sub.status or "").strip().lower() in ("active", "trialing")
+                else None
             )
-            plan_id = (sub.plan_id or "").lower() if sub else None
             if plan_id not in ("growth", "advanced"):
                 return Response(
                     {
@@ -240,14 +241,12 @@ class WidgetConfigManagementView(APIView):
             business.save(update_fields=["marketplace_email_branding"])
 
         # Pin widget to a specific class (specificClassId) is Growth/Advanced only.
-        sub = (
-            WidgetSubscription.objects.filter(
-                business=business, status__in=["active", "trialing"]
-            )
-            .order_by("-current_period_end")
-            .first()
+        sub = get_widget_subscription(business)
+        plan_id = (
+            (sub.plan_id or "").strip().lower()
+            if sub and (sub.status or "").strip().lower() in ("active", "trialing")
+            else None
         )
-        plan_id = (sub.plan_id or "").lower() if sub else None
         if plan_id not in ("growth", "advanced"):
             if data.get("specificClassId"):
                 return Response(
@@ -379,12 +378,12 @@ class CreateWidgetSubscriptionPaymentIntentView(APIView):
 
         # Block if already active
         now = timezone.now()
-        active_sub = WidgetSubscription.objects.filter(
-            business=business,
-            status__in=["active", "trialing"],
-            current_period_end__gt=now,
-        ).first()
-        if active_sub:
+        active_sub = get_widget_subscription(business)
+        if (
+            active_sub
+            and (active_sub.status or "").strip().lower() in ("active", "trialing")
+            and (active_sub.current_period_end is None or active_sub.current_period_end > now)
+        ):
             return Response(
                 {"error": "already_subscribed", "plan_id": active_sub.plan_id},
                 status=status.HTTP_409_CONFLICT,
@@ -401,18 +400,18 @@ class CreateWidgetSubscriptionPaymentIntentView(APIView):
                 business.stripe_customer_id = customer.id
                 business.save(update_fields=["stripe_customer_id"])
 
-            # Cancel any leftover incomplete subscriptions to avoid stale intents
-            incomplete_subs = WidgetSubscription.objects.filter(
-                business=business,
-                status="incomplete",
-            )
-            for sub in incomplete_subs:
-                if sub.stripe_subscription_id:
-                    try:
-                        stripe.Subscription.cancel(sub.stripe_subscription_id)
-                    except stripe.StripeError:
-                        pass
-            incomplete_subs.delete()
+            # Cancel any leftover incomplete subscription (one row per business) to avoid stale intents
+            incomplete_sub = get_widget_subscription(business)
+            if (
+                incomplete_sub
+                and (incomplete_sub.status or "").strip().lower() == "incomplete"
+                and incomplete_sub.stripe_subscription_id
+            ):
+                try:
+                    stripe.Subscription.cancel(incomplete_sub.stripe_subscription_id)
+                except stripe.StripeError:
+                    pass
+                # Row is kept; create flow will update it with the new Stripe sub
 
             # Create subscription in incomplete mode so we get a payment intent
             stripe_sub = stripe.Subscription.create(
@@ -539,21 +538,36 @@ class CreateWidgetSubscriptionPaymentIntentView(APIView):
                     status=status.HTTP_502_BAD_GATEWAY,
                 )
 
-            # Pre-create a pending WidgetSubscription record so the webhook can update it
+            # Attach new Stripe subscription to the single row for this business (one per business)
             stripe_price_id = None
             if stripe_sub.get("items") and stripe_sub["items"].get("data"):
                 stripe_price_id = stripe_sub["items"]["data"][0].get("price", {}).get("id")
 
-            WidgetSubscription.objects.update_or_create(
-                stripe_subscription_id=stripe_sub.id,
+            widget_sub, _ = WidgetSubscription.objects.get_or_create(
+                business=business,
                 defaults={
-                    "business": business,
+                    "stripe_subscription_id": stripe_sub.id,
                     "stripe_customer_id": business.stripe_customer_id,
                     "stripe_price_id": stripe_price_id,
                     "status": stripe_sub.status,
                     "plan_id": plan_id,
                 },
             )
+            if not _:
+                widget_sub.stripe_subscription_id = stripe_sub.id
+                widget_sub.stripe_customer_id = business.stripe_customer_id
+                widget_sub.stripe_price_id = stripe_price_id
+                widget_sub.status = stripe_sub.status
+                widget_sub.plan_id = plan_id
+                widget_sub.save(
+                    update_fields=[
+                        "stripe_subscription_id",
+                        "stripe_customer_id",
+                        "stripe_price_id",
+                        "status",
+                        "plan_id",
+                    ]
+                )
 
             return Response(
                 {
@@ -577,55 +591,6 @@ def _get_business_for_subscription(user):
     return business
 
 
-def _get_current_subscription(business):
-    """Get the current active/trialing subscription for the business, or None."""
-    now = timezone.now()
-    return (
-        WidgetSubscription.objects.filter(
-            business=business,
-            status__in=["active", "trialing"],
-            current_period_end__gt=now,
-        )
-        .order_by("-current_period_end")
-        .first()
-    )
-
-
-def _get_latest_widget_subscription_with_stripe(business):
-    """Get the most recent WidgetSubscription for this business that has a Stripe id (for sync-from-Stripe recovery).
-    Order by -created_at so we sync the subscription the user just created, not an older one."""
-    return (
-        WidgetSubscription.objects.filter(
-            business=business,
-        )
-        .exclude(stripe_subscription_id__isnull=True)
-        .exclude(stripe_subscription_id="")
-        .order_by("-created_at")
-        .first()
-    )
-
-
-def _get_best_widget_subscription_for_display(business):
-    """For GET recovery: prefer an active/trialing subscription when multiple exist (e.g. one incomplete_expired, one active).
-    Returns (synced WidgetSubscription or None, error). Syncs from Stripe; prefers first that is active/trialing."""
-    candidates = (
-        WidgetSubscription.objects.filter(
-            business=business,
-        )
-        .exclude(stripe_subscription_id__isnull=True)
-        .exclude(stripe_subscription_id="")
-        .order_by("-created_at")
-    )
-    best = None
-    for row in candidates:
-        synced, _ = sync_widget_subscription_from_stripe(row.stripe_subscription_id)
-        if synced and (synced.status or "").strip().lower() in ("active", "trialing"):
-            return synced, None
-        if synced and best is None:
-            best = synced
-    return best, None
-
-
 def _create_stripe_subscription_for_plan(business, plan_id, price_id):
     """
     Ensure Stripe customer, create a Stripe subscription (default_incomplete) for the plan,
@@ -640,18 +605,17 @@ def _create_stripe_subscription_for_plan(business, plan_id, price_id):
         business.stripe_customer_id = customer.id
         business.save(update_fields=["stripe_customer_id"])
 
-    # Cancel any leftover incomplete subscriptions
-    incomplete_subs = WidgetSubscription.objects.filter(
-        business=business,
-        status="incomplete",
-    )
-    for sub in incomplete_subs:
-        if sub.stripe_subscription_id:
-            try:
-                stripe.Subscription.cancel(sub.stripe_subscription_id)
-            except stripe.StripeError:
-                pass
-    incomplete_subs.delete()
+    # Cancel any leftover incomplete subscription (one row per business)
+    incomplete_sub = get_widget_subscription(business)
+    if (
+        incomplete_sub
+        and (incomplete_sub.status or "").strip().lower() == "incomplete"
+        and incomplete_sub.stripe_subscription_id
+    ):
+        try:
+            stripe.Subscription.cancel(incomplete_sub.stripe_subscription_id)
+        except stripe.StripeError:
+            pass
 
     stripe_sub = stripe.Subscription.create(
         customer=business.stripe_customer_id,
@@ -792,18 +756,7 @@ class WidgetSubscriptionView(APIView):
 
     def get(self, request, *args, **kwargs):
         business = _get_business_for_subscription(request.user)
-        sub = _get_current_subscription(business)
-        # Single source of truth: sync from Stripe when we have a linked subscription
-        if sub and sub.stripe_subscription_id:
-            synced, err = sync_widget_subscription_from_stripe(sub.stripe_subscription_id)
-            if synced:
-                sub = synced
-        else:
-            # No "current" sub found. Recover from Stripe: prefer active/trialing when multiple exist
-            # (e.g. one incomplete_expired from abandoned upgrade, one active from new purchase).
-            sub, _ = _get_best_widget_subscription_for_display(business)
-            if not sub:
-                sub = _get_current_subscription(business)
+        sub = get_widget_subscription(business)
         subscription_required = getattr(settings, "WIDGET_SUBSCRIPTION_REQUIRED", False)
         has_widget_access = _business_has_active_widget_subscription(business)
         if not sub:
@@ -865,401 +818,37 @@ class WidgetSubscriptionView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         business = _get_business_for_subscription(request.user)
-        price_map = _widget_subscription_price_map()
-        price_id = price_map.get(plan_id) or getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_ID", None)
+        price_id = _get_price_id(plan_id)
         if not price_id:
             return Response(
                 {"error": "Widget subscription pricing is not configured. Please contact support."},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
-        sub = _get_current_subscription(business)
-        # If no "current" sub (e.g. current_period_end null or filter missed), use latest with Stripe id so we modify instead of creating a duplicate.
-        if not sub:
-            fallback = _get_latest_widget_subscription_with_stripe(business)
-            if fallback and fallback.stripe_subscription_id:
-                try:
-                    stripe_sub_check = stripe.Subscription.retrieve(fallback.stripe_subscription_id)
-                    if (stripe_sub_check.get("status") or "").strip().lower() in ("active", "trialing"):
-                        sub = fallback
-                except stripe.StripeError:
-                    pass
+        sub = get_widget_subscription(business)
 
         with transaction.atomic():
-            # Lock so concurrent plan-switch POSTs for the same business serialize (avoid race).
             if sub:
                 sub = WidgetSubscription.objects.select_for_update().get(pk=sub.pk)
             else:
                 BusinessInfo.objects.select_for_update().get(pk=business.pk)
 
-            # --- Existing subscription: plan switch ---
-            if sub:
-                if sub.stripe_subscription_id:
-                    # Production path: update Stripe subscription (proration, payment if needed)
-                    try:
-                        stripe_sub = stripe.Subscription.retrieve(
-                            sub.stripe_subscription_id,
-                            expand=["items.data.price"],
-                        )
-                    except stripe.StripeError as e:
-                        logger.warning("Stripe Subscription.retrieve failed: %s", e)
-                        return Response(
-                            {"error": "Could not load subscription. Please try again."},
-                            status=status.HTTP_502_BAD_GATEWAY,
-                        )
-                    items_data = stripe_sub.get("items") or {}
-                    item_list = (items_data.get("data") or []) if isinstance(items_data, dict) else []
-                    if not item_list:
-                        return Response(
-                            {"error": "Invalid subscription state. Please contact support."},
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
-                    subscription_item_id = item_list[0].get("id")
-                    if not subscription_item_id:
-                        return Response(
-                            {"error": "Invalid subscription state. Please contact support."},
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
-                    # Stripe already has this price (e.g. plan was applied by webhook or previous payment; our DB was stale).
-                    # If user reloaded after clicking switch but before paying, there may be an open invoice — require payment, don't grant plan.
-                    current_price_id = (item_list[0].get("price") or {}).get("id") if item_list else None
-                    if current_price_id == price_id:
-                        open_for_same = []
-                        try:
-                            open_for_same = stripe.Invoice.list(
-                                subscription=sub.stripe_subscription_id,
-                                status="open",
-                                limit=1,
-                            ).get("data") or []
-                        except stripe.StripeError as e:
-                            logger.warning("widget_subscription: open invoice check (already same price) failed: %s", e)
-                        if open_for_same:
-                            # Reload-after-switch: open invoice exists; return requires_payment so they can complete payment.
-                            client_secret = _client_secret_from_stripe_invoice(open_for_same[0])
-                            if client_secret:
-                                logger.info(
-                                    "widget_subscription: Stripe already has target price but open invoice; returning requires_payment sub_id=%s",
-                                    sub.stripe_subscription_id,
-                                )
-                                return Response(
-                                    {
-                                        "requires_payment": True,
-                                        "client_secret": client_secret,
-                                        "subscription_id": sub.stripe_subscription_id,
-                                        "target_plan_id": plan_id,
-                                        "subscription": _subscription_response_from_sub(sub),
-                                    },
-                                    status=status.HTTP_200_OK,
-                                )
-                            return Response(
-                                {"error": "Payment is required to complete this plan change. Please complete payment when prompted or try again."},
-                                status=status.HTTP_400_BAD_REQUEST,
-                            )
-                        logger.info(
-                            "widget_subscription: Stripe already has target price; syncing DB sub_id=%s plan_id=%s",
-                            sub.stripe_subscription_id,
-                            plan_id,
-                        )
-                        from datetime import datetime
-                        import pytz
-                        period_end = stripe_sub.get("current_period_end")
-                        current_period_end = (
-                            datetime.fromtimestamp(period_end, tz=pytz.UTC) if period_end else None
-                        )
-                        # Only use Stripe status if it keeps the sub visible to GET (active/trialing).
-                        # GET uses status__in=["active", "trialing"] and current_period_end__gt=now.
-                        stripe_status = (stripe_sub.get("status") or "").strip().lower()
-                        if stripe_status in ("active", "trialing"):
-                            sub.status = stripe_status
-                        # If Stripe's period_end is in the past, keep existing so GET still finds this sub.
-                        now = timezone.now()
-                        if current_period_end is not None and current_period_end <= now:
-                            current_period_end = sub.current_period_end  # keep existing
-                        sub.plan_id = plan_id
-                        sub.stripe_price_id = price_id
-                        if current_period_end is not None:
-                            sub.current_period_end = current_period_end
-                        sub.cancel_at_period_end = bool(stripe_sub.get("cancel_at_period_end"))
-                        sub.save(
-                            update_fields=[
-                                "plan_id",
-                                "stripe_price_id",
-                                "current_period_end",
-                                "status",
-                                "cancel_at_period_end",
-                            ]
-                        )
-                        return Response(
-                            {
-                                "subscription": _subscription_response_from_sub(sub),
-                                "stripe_updated": True,
-                            },
-                            status=status.HTTP_200_OK,
-                        )
-                    current_plan_id = _widget_price_to_plan_id(current_price_id) or (sub.plan_id or "").strip().lower() or "growth"
-                    is_downgrade = _is_downgrade(current_plan_id, plan_id)
-
-                    if is_downgrade:
-                        # Downgrade at end of billing period: use Subscription Schedule (no immediate charge).
-                        period_end_ts = stripe_sub.get("current_period_end")
-                        if not period_end_ts:
-                            return Response(
-                                {"error": "Could not schedule downgrade. Please try again."},
-                                status=status.HTTP_400_BAD_REQUEST,
-                            )
-                        try:
-                            existing_schedule = (stripe_sub.get("schedule") or "") if isinstance(stripe_sub.get("schedule"), str) else (getattr(stripe_sub.get("schedule"), "id", None) if stripe_sub.get("schedule") else None)
-                            if existing_schedule:
-                                schedule = stripe.SubscriptionSchedule.retrieve(existing_schedule, expand=["phases"])
-                                phases = getattr(schedule, "phases", None) or schedule.get("phases") or []
-                                if len(phases) >= 2:
-                                    return Response(
-                                        {"error": "A plan change is already scheduled. It will take effect at the end of your billing period."},
-                                        status=status.HTTP_400_BAD_REQUEST,
-                                    )
-                            schedule = stripe.SubscriptionSchedule.create(
-                                from_subscription=sub.stripe_subscription_id,
-                            )
-                            stripe.SubscriptionSchedule.update(
-                                schedule.id,
-                                phases=[
-                                    {
-                                        "items": [{"price": current_price_id}],
-                                        "end_date": period_end_ts,
-                                    },
-                                    {
-                                        "items": [{"price": price_id}],
-                                        "proration_behavior": "none",
-                                    },
-                                ],
-                                metadata={"business_id": str(business.businessId), "plan_id": plan_id},
-                            )
-                        except stripe.StripeError as e:
-                            logger.warning("widget_subscription: SubscriptionSchedule create/update failed sub_id=%s err=%s", sub.stripe_subscription_id, e)
-                            return Response(
-                                {"error": str(e) if str(e) else "Could not schedule downgrade. Please try again."},
-                                status=status.HTTP_400_BAD_REQUEST,
-                            )
-                        synced, _ = sync_widget_subscription_from_stripe(sub.stripe_subscription_id)
-                        sub = synced or sub
-                        return Response(
-                            {
-                                "subscription": _subscription_response_from_sub(sub),
-                                "stripe_updated": True,
-                                "downgrade_scheduled_at_period_end": True,
-                                "scheduled_plan_id": plan_id,
-                            },
-                            status=status.HTTP_200_OK,
-                        )
-
-                    logger.info(
-                        "widget_subscription: plan switch modify (upgrade) sub_id=%s current_price=%s target_price=%s plan_id=%s",
-                        sub.stripe_subscription_id,
-                        current_price_id,
-                        price_id,
-                        plan_id,
-                    )
-                    # Use customer's saved payment method for the upgrade invoice so Stripe can charge automatically.
-                    pm_id = _get_business_default_payment_method_id(business)
-                    modify_params = {
-                        "items": [{"id": subscription_item_id, "price": price_id}],
-                        "proration_behavior": "always_invoice",
-                        "payment_behavior": "pending_if_incomplete",
-                        "expand": ["latest_invoice", "latest_invoice.payment_intent", "latest_invoice.payments"],
-                    }
-                    if pm_id:
-                        modify_params["default_payment_method"] = pm_id
-                    try:
-                        # Upgrade: immediate proration and invoice; Stripe attempts payment with default_payment_method when set.
-                        stripe_sub = stripe.Subscription.modify(
-                            sub.stripe_subscription_id,
-                            **modify_params,
-                        )
-                    except stripe.StripeError as e:
-                        logger.warning("widget_subscription: Stripe Subscription.modify failed sub_id=%s err=%s", sub.stripe_subscription_id, e)
-                        return Response(
-                            {"error": str(e)},
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
-                    # Update subscription metadata so invoice.paid webhook syncs correct plan_id; clear cancel_at_period_end so upgrade/downgrade doesn't show "Reactivate".
-                    try:
-                        stripe.Subscription.modify(
-                            sub.stripe_subscription_id,
-                            metadata={"business_id": str(business.businessId), "plan_id": plan_id},
-                            cancel_at_period_end=False,
-                        )
-                    except stripe.StripeError as e:
-                        logger.warning("widget_subscription: Stripe Subscription.modify metadata/cancel_at_period_end failed sub_id=%s err=%s", sub.stripe_subscription_id, e)
-                    # Use latest_invoice from the modify response (the invoice Stripe just created for this change).
-                    latest_invoice = getattr(stripe_sub, "latest_invoice", None) or stripe_sub.get("latest_invoice")
-                    latest_inv_id = None
-                    latest_inv_status = None
-                    if latest_invoice:
-                        if isinstance(latest_invoice, str):
-                            latest_inv_id = latest_invoice
-                            logger.info(
-                                "widget_subscription: after modify latest_invoice is string id=%s (not expanded)",
-                                latest_inv_id,
-                            )
-                        else:
-                            latest_inv_id = getattr(latest_invoice, "id", None) or (latest_invoice.get("id") if isinstance(latest_invoice, dict) else None)
-                            latest_inv_status = getattr(latest_invoice, "status", None) or (latest_invoice.get("status") if isinstance(latest_invoice, dict) else None)
-                            logger.info(
-                                "widget_subscription: after modify latest_invoice object inv_id=%s status=%s",
-                                latest_inv_id,
-                                latest_inv_status,
-                            )
-                    else:
-                        logger.info("widget_subscription: after modify latest_invoice is None")
-                    client_secret = _client_secret_from_stripe_invoice(latest_invoice) if latest_invoice and not isinstance(latest_invoice, str) else None
-                    # If latest_invoice was only an id (expand not applied), retrieve the invoice and get PI.
-                    if not client_secret and latest_inv_id and isinstance(latest_invoice, str):
-                        try:
-                            inv_obj = stripe.Invoice.retrieve(latest_inv_id, expand=["payment_intent", "payments"])
-                            client_secret = _client_secret_from_stripe_invoice(inv_obj)
-                            if client_secret:
-                                logger.info("widget_subscription: got client_secret from Invoice.retrieve(inv_id=%s)", latest_inv_id)
-                        except stripe.StripeError as e:
-                            logger.warning("widget_subscription: Invoice.retrieve failed inv_id=%s err=%s", latest_inv_id, e)
-                    if client_secret:
-                        logger.info(
-                            "widget_subscription: returning requires_payment client_secret from latest_invoice sub_id=%s",
-                            sub.stripe_subscription_id,
-                        )
-                    # If no client_secret from latest_invoice, try listing open invoices for this subscription (fallback if latest_invoice was not updated).
-                    if not client_secret and sub.stripe_subscription_id:
-                        try:
-                            open_invoices = stripe.Invoice.list(
-                                subscription=sub.stripe_subscription_id,
-                                status="open",
-                                limit=1,
-                            )
-                            open_data = open_invoices.get("data") or []
-                            logger.info(
-                                "widget_subscription: open_invoices fallback sub_id=%s count=%s",
-                                sub.stripe_subscription_id,
-                                len(open_data),
-                            )
-                            if open_data:
-                                client_secret = _client_secret_from_stripe_invoice(open_data[0])
-                                if client_secret:
-                                    logger.info("widget_subscription: got client_secret from open_invoices fallback")
-                        except stripe.StripeError as e:
-                            logger.warning("widget_subscription: Invoice.list open failed sub_id=%s err=%s", sub.stripe_subscription_id, e)
-                    if client_secret:
-                        # Invoice requires payment (e.g. upgrade). Do not update plan_id yet; webhook will after payment.
-                        return Response(
-                            {
-                                "requires_payment": True,
-                                "client_secret": client_secret,
-                                "subscription_id": sub.stripe_subscription_id,
-                                "target_plan_id": plan_id,
-                                "subscription": _subscription_response_from_sub(sub),
-                            },
-                            status=status.HTTP_200_OK,
-                        )
-                    # No client_secret: either no payment needed (e.g. downgrade) or PI was terminal (already used).
-                    inv_status = latest_inv_status
-                    if inv_status is None and latest_invoice and not isinstance(latest_invoice, str):
-                        inv_status = getattr(latest_invoice, "status", None) or (
-                            latest_invoice.get("status") if isinstance(latest_invoice, dict) else None
-                        )
-                    logger.info(
-                        "widget_subscription: no client_secret inv_status=%s latest_inv_id=%s",
-                        inv_status,
-                        latest_inv_id,
-                    )
-                    if inv_status == "open":
-                        # Invoice still open but we had no usable PI -> link expired or already used.
-                        logger.info("widget_subscription: returning 400 invoice open but no usable PI")
-                        return Response(
-                            {"error": "This payment link is no longer valid. Please try switching plan again."},
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
-                    # If there is any open invoice for this subscription, do not sync plan — payment is required.
-                    try:
-                        open_invoices_check = stripe.Invoice.list(
-                            subscription=sub.stripe_subscription_id,
-                            status="open",
-                            limit=1,
-                        )
-                        if (open_invoices_check.get("data") or []):
-                            logger.info(
-                                "widget_subscription: open invoice exists, not syncing plan sub_id=%s",
-                                sub.stripe_subscription_id,
-                            )
-                            return Response(
-                                {"error": "Payment is required to complete this plan change. Please complete payment when prompted or try again."},
-                                status=status.HTTP_400_BAD_REQUEST,
-                            )
-                    except stripe.StripeError as e:
-                        logger.warning("widget_subscription: Invoice.list open check failed sub_id=%s err=%s", sub.stripe_subscription_id, e)
-                    # Need subscription with items to check if new price was applied (for sync vs 400).
-                    try:
-                        stripe_sub = stripe.Subscription.retrieve(
-                            sub.stripe_subscription_id,
-                            expand=["items.data.price"],
-                        )
-                    except stripe.StripeError:
-                        stripe_sub = stripe_sub  # keep modify response
-                    stripe_items = (stripe_sub.get("items") or {}).get("data") or []
-                    stripe_price_id_now = None
-                    if stripe_items and stripe_items[0].get("price"):
-                        stripe_price_id_now = stripe_items[0]["price"].get("id") if isinstance(stripe_items[0]["price"], dict) else getattr(stripe_items[0]["price"], "id", None)
-                    logger.info(
-                        "widget_subscription: stripe_price_id_now=%s target price_id=%s",
-                        stripe_price_id_now,
-                        price_id,
-                    )
-                    if stripe_price_id_now != price_id:
-                        # Subscription in Stripe still has old price (pending update unpaid) – don't save; require payment.
-                        logger.info("widget_subscription: returning 400 payment required (price not applied)")
-                        return Response(
-                            {"error": "Payment is required to complete this plan change. Please try again and complete payment when prompted."},
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
-                    # No payment required (e.g. downgrade credit) or invoice already paid. Sync from Stripe.
-                    logger.info("widget_subscription: syncing plan from Stripe (no payment required or already paid)")
-                    from datetime import datetime
-                    import pytz
-                    period_end = stripe_sub.get("current_period_end")
-                    current_period_end = (
-                        datetime.fromtimestamp(period_end, tz=pytz.UTC) if period_end else None
-                    )
-                    sub.plan_id = plan_id
-                    sub.stripe_price_id = price_id
-                    sub.current_period_end = current_period_end
-                    sub.status = stripe_sub.get("status") or sub.status
-                    sub.cancel_at_period_end = bool(stripe_sub.get("cancel_at_period_end"))
-                    sub.save(
-                        update_fields=[
-                            "plan_id",
-                            "stripe_price_id",
-                            "current_period_end",
-                            "status",
-                            "cancel_at_period_end",
-                        ]
-                    )
-                    return Response(
-                        {
-                            "subscription": _subscription_response_from_sub(sub),
-                            "stripe_updated": True,
-                        },
-                        status=status.HTTP_200_OK,
-                    )
-                # No Stripe subscription yet: create one and require payment (same as addons — always charge)
+            # No row, or row has no Stripe sub or is not active/trialing: create (or replace) subscription
+            if not sub or not sub.stripe_subscription_id or (sub.status or "").strip().lower() not in ("active", "trialing"):
                 try:
-                    stripe_sub, client_secret = _create_stripe_subscription_for_plan(
-                        business, plan_id, price_id
+                    stripe_sub, client_secret, sub = create_subscription(business, plan_id)
+                except ValueError as e:
+                    return Response(
+                        {"error": str(e)},
+                        status=status.HTTP_503_SERVICE_UNAVAILABLE,
                     )
                 except stripe.StripeError as e:
-                    logger.warning("Stripe subscription create (DB-only migrate) failed: %s", e)
+                    logger.warning("Stripe subscription create failed: %s", e)
                     return Response(
                         {"error": str(e)},
                         status=status.HTTP_502_BAD_GATEWAY,
                     )
                 if not client_secret:
-                    # Invoice may already be paid (e.g. default payment method); check Stripe and return success if active
                     try:
                         stripe_sub_fresh = stripe.Subscription.retrieve(stripe_sub.id)
                         if (stripe_sub_fresh.get("status") or "").strip().lower() in ("active", "trialing"):
@@ -1280,23 +869,6 @@ class WidgetSubscriptionView(APIView):
                         {"error": "Could not create payment form. Please try again."},
                         status=status.HTTP_502_BAD_GATEWAY,
                     )
-                stripe_price_id = None
-                if stripe_sub.get("items") and stripe_sub["items"].get("data"):
-                    stripe_price_id = stripe_sub["items"]["data"][0].get("price", {}).get("id")
-                # Attach new Stripe subscription to this existing row so webhook updates the same record.
-                # Do not set plan_id here: subscription is only granted after payment (invoice.paid syncs plan_id).
-                sub.stripe_subscription_id = stripe_sub.id
-                sub.stripe_customer_id = business.stripe_customer_id
-                sub.stripe_price_id = stripe_price_id
-                sub.status = stripe_sub.get("status", "incomplete")
-                sub.save(
-                    update_fields=[
-                        "stripe_subscription_id",
-                        "stripe_customer_id",
-                        "stripe_price_id",
-                        "status",
-                    ]
-                )
                 return Response(
                     {
                         "requires_payment": True,
@@ -1307,62 +879,93 @@ class WidgetSubscriptionView(APIView):
                     },
                     status=status.HTTP_200_OK,
                 )
-    
-            # --- No subscription: create Stripe subscription and require payment (always charge) ---
+
+            # Existing active/trialing subscription: same price, downgrade, or upgrade
             try:
-                stripe_sub, client_secret = _create_stripe_subscription_for_plan(
-                    business, plan_id, price_id
+                stripe_sub = stripe.Subscription.retrieve(
+                    sub.stripe_subscription_id,
+                    expand=["items.data.price"],
                 )
             except stripe.StripeError as e:
-                logger.warning("Stripe subscription create (first-time) failed: %s", e)
+                logger.warning("Stripe Subscription.retrieve failed: %s", e)
                 return Response(
-                    {"error": str(e)},
+                    {"error": "Could not load subscription. Please try again."},
                     status=status.HTTP_502_BAD_GATEWAY,
                 )
-            if not client_secret:
-                # Invoice may already be paid (e.g. default payment method); check Stripe and return success if active
-                try:
-                    stripe_sub_fresh = stripe.Subscription.retrieve(stripe_sub.id)
-                    if (stripe_sub_fresh.get("status") or "").strip().lower() in ("active", "trialing"):
-                        synced, _ = sync_widget_subscription_from_stripe(
-                            stripe_sub.id, subscription_obj=stripe_sub_fresh
-                        )
-                        if synced:
-                            return Response(
-                                {
-                                    "subscription": _subscription_response_from_sub(synced),
-                                    "stripe_updated": True,
-                                },
-                                status=status.HTTP_200_OK,
-                            )
-                except stripe.StripeError:
-                    pass
+            items_data = stripe_sub.get("items") or {}
+            item_list = (items_data.get("data") or []) if isinstance(items_data, dict) else []
+            if not item_list:
                 return Response(
-                    {"error": "Could not create payment form. Please try again."},
-                    status=status.HTTP_502_BAD_GATEWAY,
+                    {"error": "Invalid subscription state. Please contact support."},
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
-            stripe_price_id = None
-            if stripe_sub.get("items") and stripe_sub["items"].get("data"):
-                stripe_price_id = stripe_sub["items"]["data"][0].get("price", {}).get("id")
-            # Use placeholder plan_id until payment; invoice.paid webhook sets real plan_id from metadata.
-            WidgetSubscription.objects.update_or_create(
-                stripe_subscription_id=stripe_sub.id,
-                defaults={
-                    "business": business,
-                    "stripe_customer_id": business.stripe_customer_id,
-                    "stripe_price_id": stripe_price_id,
-                    "status": stripe_sub.get("status", "incomplete"),
-                    "plan_id": "basic",
-                },
-            )
-            sub = WidgetSubscription.objects.get(stripe_subscription_id=stripe_sub.id)
+            current_price_id = (item_list[0].get("price") or {}).get("id") if item_list else None
+
+            if current_price_id == price_id:
+                req_pay, client_secret, sub_resp = same_price_open_invoice(sub, plan_id, price_id)
+                if req_pay is True and client_secret:
+                    return Response(
+                        {
+                            "requires_payment": True,
+                            "client_secret": client_secret,
+                            "subscription_id": sub.stripe_subscription_id,
+                            "target_plan_id": plan_id,
+                            "subscription": _subscription_response_from_sub(sub),
+                        },
+                        status=status.HTTP_200_OK,
+                    )
+                if req_pay is None:
+                    return Response(
+                        {"error": "Payment is required to complete this plan change. Please complete payment when prompted or try again."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                return Response(
+                    {
+                        "subscription": _subscription_response_from_sub(sub_resp),
+                        "stripe_updated": True,
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
+            current_plan_id = _widget_price_to_plan_id(current_price_id) or (sub.plan_id or "").strip().lower() or "growth"
+            if _is_downgrade(current_plan_id, plan_id):
+                synced_sub, err = downgrade_subscription(sub, plan_id, business)
+                if err:
+                    return Response(
+                        {"error": err},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                return Response(
+                    {
+                        "subscription": _subscription_response_from_sub(synced_sub),
+                        "stripe_updated": True,
+                        "downgrade_scheduled_at_period_end": True,
+                        "scheduled_plan_id": plan_id,
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
+            requires_payment, client_secret, updated_sub, err = upgrade_subscription(sub, plan_id, business)
+            if err:
+                return Response(
+                    {"error": err},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if requires_payment and client_secret:
+                return Response(
+                    {
+                        "requires_payment": True,
+                        "client_secret": client_secret,
+                        "subscription_id": sub.stripe_subscription_id,
+                        "target_plan_id": plan_id,
+                        "subscription": _subscription_response_from_sub(sub),
+                    },
+                    status=status.HTTP_200_OK,
+                )
             return Response(
                 {
-                    "requires_payment": True,
-                    "client_secret": client_secret,
-                    "subscription_id": stripe_sub.id,
-                    "target_plan_id": plan_id,
-                    "subscription": _subscription_response_from_sub(sub),
+                    "subscription": _subscription_response_from_sub(updated_sub),
+                    "stripe_updated": True,
                 },
                 status=status.HTTP_200_OK,
             )
@@ -1375,7 +978,7 @@ class WidgetSubscriptionCancelView(APIView):
 
     def post(self, request, *args, **kwargs):
         business = _get_business_for_subscription(request.user)
-        sub = _get_current_subscription(business)
+        sub = get_widget_subscription(business)
         if not sub:
             return Response(
                 {"error": "No active subscription found."},
@@ -1411,7 +1014,7 @@ class WidgetSubscriptionReactivateView(APIView):
 
     def post(self, request, *args, **kwargs):
         business = _get_business_for_subscription(request.user)
-        sub = _get_current_subscription(business)
+        sub = get_widget_subscription(business)
         if not sub:
             return Response(
                 {"error": "No active subscription found."},
@@ -1573,16 +1176,13 @@ def _get_business_default_payment_method_id(business):
     # Fallback: use payment method from active widget subscription (set when they paid for widget plan)
     try:
         now = timezone.now()
-        widget_sub = (
-            WidgetSubscription.objects.filter(
-                business=business,
-                status__in=["active", "trialing"],
-                current_period_end__gt=now,
-            )
-            .order_by("-current_period_end")
-            .first()
-        )
-        if widget_sub and widget_sub.stripe_subscription_id:
+        widget_sub = get_widget_subscription(business)
+        if (
+            widget_sub
+            and widget_sub.stripe_subscription_id
+            and (widget_sub.status or "").strip().lower() in ("active", "trialing")
+            and (widget_sub.current_period_end is None or widget_sub.current_period_end > now)
+        ):
             stripe_sub = stripe.Subscription.retrieve(
                 widget_sub.stripe_subscription_id,
                 expand=["default_payment_method"],
@@ -1664,7 +1264,7 @@ class SetDefaultPaymentMethodView(APIView):
                 business.stripe_customer_id,
                 invoice_settings={"default_payment_method": payment_method},
             )
-            sub = _get_current_subscription(business)
+            sub = get_widget_subscription(business)
             if sub and sub.stripe_subscription_id:
                 try:
                     stripe.Subscription.modify(

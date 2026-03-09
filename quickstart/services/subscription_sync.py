@@ -1,7 +1,7 @@
 """
 Subscription sync: Stripe is the single source of truth.
 All subscription state (widget + addons) is synced FROM Stripe TO DB here.
-Webhooks and API GET use these functions; API write endpoints call Stripe then sync.
+Webhooks call these functions; API write endpoints call Stripe then sync.
 """
 import logging
 from datetime import datetime
@@ -9,6 +9,7 @@ from datetime import datetime
 import pytz
 import stripe
 from django.conf import settings
+from django.db import DatabaseError
 
 from quickstart.models import (
     BusinessAddonSubscription,
@@ -107,40 +108,34 @@ def sync_widget_subscription_from_stripe(stripe_subscription_id, subscription_ob
         "cancel_at_period_end": cancel_at_period_end,
     }
 
+    # Lookup: by stripe_subscription_id first; if not found, by business (webhook may arrive before API set it).
     existing = WidgetSubscription.objects.filter(stripe_subscription_id=stripe_subscription_id).first()
     if existing:
         for k, v in defaults.items():
             setattr(existing, k, v)
         try:
             existing.save(update_fields=list(defaults.keys()))
-        except Exception as e:
-            # Row may have been deleted by concurrent request (e.g. incomplete_subs.delete()).
-            if "did not affect any rows" in str(e):
-                sub, _ = WidgetSubscription.objects.update_or_create(
-                    stripe_subscription_id=stripe_subscription_id,
-                    defaults=defaults,
-                )
-            else:
-                raise
-        else:
-            sub = existing
-    else:
-        db_only = WidgetSubscription.objects.filter(
-            business=business,
-            stripe_subscription_id__isnull=True,
-        ).exclude(stripe_subscription_id="").first()
-        if not db_only:
-            db_only = WidgetSubscription.objects.filter(business=business, stripe_subscription_id="").first()
-        if db_only:
-            db_only.stripe_subscription_id = stripe_subscription_id
-            for k, v in defaults.items():
-                setattr(db_only, k, v)
-            db_only.save(update_fields=["stripe_subscription_id"] + list(defaults.keys()))
-            sub = db_only
-        else:
+        except DatabaseError:
+            # Row may have been deleted by a concurrent request; re-sync via update_or_create.
             sub, _ = WidgetSubscription.objects.update_or_create(
                 stripe_subscription_id=stripe_subscription_id,
                 defaults=defaults,
+            )
+        else:
+            sub = existing
+    else:
+        # One row per business: find the row for this business (may not have stripe_subscription_id set yet).
+        row = getattr(business, "widget_subscription", None)
+        if row:
+            for k, v in defaults.items():
+                setattr(row, k, v)
+            row.stripe_subscription_id = stripe_subscription_id
+            row.save(update_fields=["stripe_subscription_id"] + list(defaults.keys()))
+            sub = row
+        else:
+            sub, _ = WidgetSubscription.objects.update_or_create(
+                business=business,
+                defaults={**defaults, "stripe_subscription_id": stripe_subscription_id},
             )
 
     if not business.stripe_customer_id and stripe_customer_id:

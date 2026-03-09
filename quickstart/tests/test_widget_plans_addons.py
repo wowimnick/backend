@@ -195,6 +195,30 @@ class TestMyBusinessWidgetConfig:
 
 
 @pytest.mark.django_db
+class TestWidgetSubscriptionService:
+    """Unit tests for widget subscription service (get_widget_subscription)."""
+
+    def test_get_widget_subscription_returns_none_when_no_row(self, business):
+        """get_widget_subscription(business) returns None when business has no subscription row."""
+        from quickstart.services.widget_subscription_service import get_widget_subscription
+
+        assert get_widget_subscription(business) is None
+
+    def test_get_widget_subscription_returns_row_when_exists(self, business):
+        """get_widget_subscription(business) returns the single subscription row when it exists."""
+        from quickstart.models import WidgetSubscription
+        from quickstart.services.widget_subscription_service import get_widget_subscription
+
+        sub = WidgetSubscription.objects.create(
+            business=business,
+            plan_id="basic",
+            status="active",
+        )
+        assert get_widget_subscription(business) == sub
+        assert get_widget_subscription(business).plan_id == "basic"
+
+
+@pytest.mark.django_db
 class TestWidgetSubscriptionPlans:
     """GET/POST my-business/widget-subscription/ (plans)."""
 
@@ -211,6 +235,46 @@ class TestWidgetSubscriptionPlans:
         assert "subscription" in data
         assert "widget_subscription_required" in data
         assert "has_stripe_subscription" in data
+
+    def test_widget_subscription_get_no_row_returns_null_subscription(
+        self, business_owner_client, business
+    ):
+        """GET when business has no widget subscription row returns subscription null, no Stripe call."""
+        from quickstart.models import WidgetSubscription
+
+        assert not WidgetSubscription.objects.filter(business=business).exists()
+        response = business_owner_client.get(f"{API}/my-business/widget-subscription/")
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert data["subscription"] is None
+        assert data["has_stripe_subscription"] is False
+        assert "has_widget_access" in data
+        assert "widget_subscription_required" in data
+
+    def test_widget_subscription_get_with_row_returns_subscription_payload(
+        self, business_owner_client, business
+    ):
+        """GET when business has a widget subscription row returns that row's payload (read from DB only)."""
+        from django.utils import timezone
+        from quickstart.models import WidgetSubscription
+
+        period_end = timezone.now() + timezone.timedelta(days=30)
+        WidgetSubscription.objects.create(
+            business=business,
+            plan_id="growth",
+            status="active",
+            current_period_end=period_end,
+            cancel_at_period_end=False,
+        )
+        response = business_owner_client.get(f"{API}/my-business/widget-subscription/")
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert data["subscription"] is not None
+        assert data["subscription"]["planId"] == "growth"
+        assert data["subscription"]["status"] == "active"
+        assert data["subscription"]["cancelAtPeriodEnd"] is False
+        assert "currentPeriodEnd" in data["subscription"]
+        assert data["has_stripe_subscription"] is False  # no stripe_subscription_id set
 
     def test_widget_subscription_post_invalid_plan_id_400(self, business_owner_client):
         """POST my-business/widget-subscription/ with invalid plan_id returns 400."""

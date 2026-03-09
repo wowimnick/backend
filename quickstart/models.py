@@ -2965,10 +2965,10 @@ class WidgetSubscription(models.Model):
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    business = models.ForeignKey(
+    business = models.OneToOneField(
         BusinessInfo,
         on_delete=models.CASCADE,
-        related_name="widget_subscriptions",
+        related_name="widget_subscription",
     )
     plan_id = models.CharField(
         max_length=20,
