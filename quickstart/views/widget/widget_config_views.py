@@ -1032,14 +1032,21 @@ class WidgetSubscriptionView(APIView):
                         price_id,
                         plan_id,
                     )
+                    # Use customer's saved payment method for the upgrade invoice so Stripe can charge automatically.
+                    pm_id = _get_business_default_payment_method_id(business)
+                    modify_params = {
+                        "items": [{"id": subscription_item_id, "price": price_id}],
+                        "proration_behavior": "always_invoice",
+                        "payment_behavior": "pending_if_incomplete",
+                        "expand": ["latest_invoice", "latest_invoice.payment_intent", "latest_invoice.payments"],
+                    }
+                    if pm_id:
+                        modify_params["default_payment_method"] = pm_id
                     try:
-                        # Upgrade: immediate proration and invoice; may require payment.
+                        # Upgrade: immediate proration and invoice; Stripe attempts payment with default_payment_method when set.
                         stripe_sub = stripe.Subscription.modify(
                             sub.stripe_subscription_id,
-                            items=[{"id": subscription_item_id, "price": price_id}],
-                            proration_behavior="always_invoice",
-                            payment_behavior="pending_if_incomplete",
-                            expand=["latest_invoice", "latest_invoice.payment_intent", "latest_invoice.payments"],
+                            **modify_params,
                         )
                     except stripe.StripeError as e:
                         logger.warning("widget_subscription: Stripe Subscription.modify failed sub_id=%s err=%s", sub.stripe_subscription_id, e)
