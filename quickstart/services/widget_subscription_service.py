@@ -283,15 +283,15 @@ def upgrade_subscription(sub, plan_id, business):
     if not subscription_item_id:
         return None, None, None, "Invalid subscription state."
 
-    pm_id = _get_default_payment_method_id(business)
+    # Stripe does not allow default_payment_method when payment_behavior is pending_if_incomplete.
+    # The pending invoice will use the customer's invoice_settings.default_payment_method if set;
+    # otherwise we return client_secret so the frontend can collect payment.
     modify_params = {
         "items": [{"id": subscription_item_id, "price": price_id}],
         "proration_behavior": "always_invoice",
         "payment_behavior": "pending_if_incomplete",
         "expand": ["latest_invoice", "latest_invoice.payment_intent", "latest_invoice.payments"],
     }
-    if pm_id:
-        modify_params["default_payment_method"] = pm_id
     try:
         stripe_sub = stripe.Subscription.modify(sub.stripe_subscription_id, **modify_params)
     except stripe.StripeError as e:
