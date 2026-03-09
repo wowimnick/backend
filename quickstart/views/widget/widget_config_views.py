@@ -40,6 +40,8 @@ from quickstart.services.widget_subscription_service import (
     upgrade_subscription,
     downgrade_subscription,
     same_price_open_invoice,
+    cancel_at_period_end as service_cancel_at_period_end,
+    reactivate as service_reactivate,
     _get_price_id,
     _is_downgrade,
 )
@@ -991,15 +993,12 @@ class WidgetSubscriptionCancelView(APIView):
                 {"subscription": _subscription_response_from_sub(sub)},
                 status=status.HTTP_200_OK,
             )
-        try:
-            stripe.Subscription.modify(sub.stripe_subscription_id, cancel_at_period_end=True)
-        except stripe.StripeError as e:
-            logger.warning("Stripe Subscription.modify cancel_at_period_end failed: %s", e)
+        synced, err = service_cancel_at_period_end(sub)
+        if err:
             return Response(
-                {"error": "Could not update cancellation. Please try again."},
+                {"error": err or "Could not update cancellation. Please try again."},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
-        synced, _ = sync_widget_subscription_from_stripe(sub.stripe_subscription_id)
         sub = synced or sub
         return Response(
             {"subscription": _subscription_response_from_sub(sub)},
@@ -1027,15 +1026,12 @@ class WidgetSubscriptionReactivateView(APIView):
                 {"subscription": _subscription_response_from_sub(sub)},
                 status=status.HTTP_200_OK,
             )
-        try:
-            stripe.Subscription.modify(sub.stripe_subscription_id, cancel_at_period_end=False)
-        except stripe.StripeError as e:
-            logger.warning("Stripe Subscription.modify cancel_at_period_end=False failed: %s", e)
+        synced, err = service_reactivate(sub)
+        if err:
             return Response(
-                {"error": "Could not reactivate. Please try again."},
+                {"error": err or "Could not reactivate. Please try again."},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
-        synced, _ = sync_widget_subscription_from_stripe(sub.stripe_subscription_id)
         sub = synced or sub
         return Response(
             {"subscription": _subscription_response_from_sub(sub)},

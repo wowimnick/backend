@@ -368,6 +368,105 @@ def downgrade_subscription(sub, plan_id, business):
     return synced or sub, None
 
 
+def cancel_at_period_end(sub):
+    """
+    Set subscription to cancel at period end. When a schedule is attached, Stripe requires
+    updating the schedule (single phase to period end with end_behavior=cancel) instead of
+    Subscription.modify(cancel_at_period_end=True). Returns (synced_sub or sub, error_msg).
+    """
+    try:
+        stripe_sub = stripe.Subscription.retrieve(
+            sub.stripe_subscription_id,
+            expand=["items.data.price", "schedule"],
+        )
+    except stripe.StripeError as e:
+        logger.warning("widget_subscription_service: cancel retrieve failed: %s", e)
+        return None, str(e)
+    schedule_ref = stripe_sub.get("schedule")
+    schedule_id = (
+        schedule_ref
+        if isinstance(schedule_ref, str)
+        else (getattr(schedule_ref, "id", None) if schedule_ref else None)
+    )
+    if not schedule_id:
+        try:
+            stripe.Subscription.modify(sub.stripe_subscription_id, cancel_at_period_end=True)
+        except stripe.StripeError as e:
+            logger.warning("widget_subscription_service: cancel modify failed: %s", e)
+            return None, str(e)
+        synced, _ = sync_widget_subscription_from_stripe(sub.stripe_subscription_id)
+        return synced or sub, None
+    # Subscription has a schedule: update schedule to single phase ending at period end with end_behavior=cancel.
+    items_data = stripe_sub.get("items") or {}
+    item_list = (items_data.get("data") or []) if isinstance(items_data, dict) else []
+    if not item_list:
+        return None, "Invalid subscription state."
+    first_item = item_list[0]
+    current_price_id = (first_item.get("price") or {}).get("id") if isinstance(first_item.get("price"), dict) else getattr(first_item.get("price"), "id", None)
+    period_end_ts = (
+        first_item.get("current_period_end")
+        or getattr(first_item, "current_period_end", None)
+        or stripe_sub.get("current_period_end")
+        or getattr(stripe_sub, "current_period_end", None)
+    )
+    if not current_price_id or not period_end_ts:
+        return None, "Could not schedule cancellation. Please try again."
+    try:
+        schedule = stripe.SubscriptionSchedule.retrieve(schedule_id, expand=["phases"])
+        phases = getattr(schedule, "phases", None) or schedule.get("phases") or []
+        first_start = phases[0].get("start_date") if phases and isinstance(phases[0], dict) else (getattr(phases[0], "start_date", None) if phases else None)
+        if not first_start:
+            return None, "Could not schedule cancellation. Please try again."
+        stripe.SubscriptionSchedule.modify(
+            schedule_id,
+            phases=[
+                {
+                    "items": [{"price": current_price_id}],
+                    "start_date": first_start,
+                    "end_date": period_end_ts,
+                },
+            ],
+            end_behavior="cancel",
+        )
+    except stripe.StripeError as e:
+        logger.warning("widget_subscription_service: cancel schedule update failed: %s", e)
+        return None, str(e)
+    synced, _ = sync_widget_subscription_from_stripe(sub.stripe_subscription_id)
+    return synced or sub, None
+
+
+def reactivate(sub):
+    """
+    Clear cancel_at_period_end. When a schedule is attached, release the schedule instead of
+    Subscription.modify(cancel_at_period_end=False). Returns (synced_sub or sub, error_msg).
+    """
+    try:
+        stripe_sub = stripe.Subscription.retrieve(sub.stripe_subscription_id, expand=["schedule"])
+    except stripe.StripeError as e:
+        logger.warning("widget_subscription_service: reactivate retrieve failed: %s", e)
+        return None, str(e)
+    schedule_ref = stripe_sub.get("schedule")
+    schedule_id = (
+        schedule_ref
+        if isinstance(schedule_ref, str)
+        else (getattr(schedule_ref, "id", None) if schedule_ref else None)
+    )
+    if not schedule_id:
+        try:
+            stripe.Subscription.modify(sub.stripe_subscription_id, cancel_at_period_end=False)
+        except stripe.StripeError as e:
+            logger.warning("widget_subscription_service: reactivate modify failed: %s", e)
+            return None, str(e)
+    else:
+        try:
+            stripe.SubscriptionSchedule.release(schedule_id)
+        except stripe.StripeError as e:
+            logger.warning("widget_subscription_service: reactivate release failed: %s", e)
+            return None, str(e)
+    synced, _ = sync_widget_subscription_from_stripe(sub.stripe_subscription_id)
+    return synced or sub, None
+
+
 def upgrade_subscription(sub, plan_id, business):
     """
     Modify Stripe subscription to new price (proration); use default_payment_method when available.
