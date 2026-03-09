@@ -279,7 +279,7 @@ def downgrade_subscription(sub, plan_id, business):
             if len(phases) >= 2:
                 return None, "A plan change is already scheduled. It will take effect at the end of your billing period."
             # Subscription already has a schedule (e.g. from cancel_at_period_end). Update it.
-            stripe.SubscriptionSchedule.update(
+            stripe.SubscriptionSchedule.modify(
                 schedule_id,
                 phases=phases_payload,
                 metadata=metadata_payload,
@@ -309,17 +309,14 @@ def downgrade_subscription(sub, plan_id, business):
             schedule = stripe.SubscriptionSchedule.create(
                 from_subscription=sub.stripe_subscription_id
             )
-            # Pass schedule ID as string so class method is used (StripeObject.update rejects 'phases')
-            sched_id = (schedule.get("id") if hasattr(schedule, "get") else getattr(schedule, "id", None)) or ""
-            sched_id = str(sched_id)
-            stripe.SubscriptionSchedule.update(
-                sched_id,
+            stripe.SubscriptionSchedule.modify(
+                schedule.id,
                 phases=phases_payload,
                 metadata=metadata_payload,
             )
             logger.info(
                 "widget_subscription_service: downgrade schedule created and updated schedule_id=%s",
-                sched_id,
+                getattr(schedule, "id", None),
             )
         except stripe.StripeError as e:
             err_msg = str(e)
