@@ -248,15 +248,14 @@ def downgrade_subscription(sub, plan_id, business):
             sub.stripe_subscription_id,
         )
         return None, "Could not schedule downgrade. Please try again."
-    # First phase must have start_date so Stripe can anchor end dates (e.g. "now" or timestamp).
-    phases_payload = [
-        {
-            "items": [{"price": current_price_id}],
-            "start_date": "now",
-            "end_date": period_end_ts,
-        },
-        {"items": [{"price": price_id}], "proration_behavior": "none"},
-    ]
+
+    def _first_phase_start(phases_list):
+        """Get start_date of current (first) phase. Stripe forbids modifying current phase start_date."""
+        if not phases_list:
+            return None
+        p0 = phases_list[0]
+        return p0.get("start_date") if isinstance(p0, dict) else getattr(p0, "start_date", None)
+
     metadata_payload = {"business_id": str(business.businessId), "plan_id": plan_id}
 
     existing_schedule = stripe_sub.get("schedule")
@@ -283,7 +282,18 @@ def downgrade_subscription(sub, plan_id, business):
             )
             if len(phases) >= 2:
                 return None, "A plan change is already scheduled. It will take effect at the end of your billing period."
-            # Subscription already has a schedule (e.g. from cancel_at_period_end). Update it.
+            # Use existing current phase start_date: Stripe does not allow modifying the current phase start_date.
+            first_start = _first_phase_start(phases)
+            if not first_start:
+                return None, "Could not schedule downgrade. Please try again."
+            phases_payload = [
+                {
+                    "items": [{"price": current_price_id}],
+                    "start_date": first_start,
+                    "end_date": period_end_ts,
+                },
+                {"items": [{"price": price_id}], "proration_behavior": "none"},
+            ]
             stripe.SubscriptionSchedule.modify(
                 schedule_id,
                 phases=phases_payload,
@@ -312,8 +322,21 @@ def downgrade_subscription(sub, plan_id, business):
                 sub.stripe_subscription_id,
             )
             schedule = stripe.SubscriptionSchedule.create(
-                from_subscription=sub.stripe_subscription_id
+                from_subscription=sub.stripe_subscription_id,
+                expand=["phases"],
             )
+            created_phases = getattr(schedule, "phases", None) or schedule.get("phases") or []
+            first_start = _first_phase_start(created_phases)
+            if not first_start:
+                return None, "Could not schedule downgrade. Please try again."
+            phases_payload = [
+                {
+                    "items": [{"price": current_price_id}],
+                    "start_date": first_start,
+                    "end_date": period_end_ts,
+                },
+                {"items": [{"price": price_id}], "proration_behavior": "none"},
+            ]
             stripe.SubscriptionSchedule.modify(
                 schedule.id,
                 phases=phases_payload,
