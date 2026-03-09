@@ -40,6 +40,12 @@ from quickstart.models import (
     WidgetSubscription,
 )
 from quickstart.models import ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING
+from quickstart.services.subscription_sync import (
+    sync_widget_subscription_from_stripe,
+    sync_addon_subscription_from_stripe,
+    mark_widget_subscription_canceled,
+    mark_addon_subscription_canceled,
+)
 from quickstart.serializers.public.public_booking_serializers import (
     BookingCreateSerializer,
 )
@@ -1539,9 +1545,7 @@ class ProcessBookingWebhook(APIView):
             return Response(status=status.HTTP_200_OK)
 
         elif event.type == "invoice.paid":
-            # When a widget subscription invoice is paid (e.g. plan switch proration), sync plan_id.
-            # Derive plan_id from the subscription's current price (source of truth), not metadata,
-            # because invoice.paid can fire before our second modify(metadata) is applied (race).
+            # Single source of truth: full sync from Stripe after any invoice.paid (widget or addon).
             logger.info("[%s] invoice.paid received", webhook_id)
             invoice = event.data.object
             sub_id = getattr(invoice, "subscription", None) or (
@@ -1551,36 +1555,13 @@ class ProcessBookingWebhook(APIView):
                 try:
                     stripe_sub = stripe.Subscription.retrieve(sub_id)
                     meta = getattr(stripe_sub, "metadata", None) or stripe_sub.get("metadata") or {}
-                    if meta.get("business_id") and not meta.get("addon_type"):
-                        # Prefer metadata.plan_id (set when user requested plan switch) so we don't sync the old
-                        # price when invoice.paid fires before Stripe has updated the subscription's items.
-                        price_to_plan = {
-                            getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_BASIC", None): "basic",
-                            getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_GROWTH", None): "growth",
-                            getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_ADVANCED", None): "advanced",
-                        }
-                        stripe_price_id = None
-                        items = (stripe_sub.get("items") or {}).get("data") or []
-                        if items and items[0].get("price"):
-                            price_obj = items[0]["price"]
-                            stripe_price_id = price_obj.get("id") if isinstance(price_obj, dict) else getattr(price_obj, "id", None)
-                        plan_id_from_meta = (meta.get("plan_id") or "").strip().lower()
-                        if plan_id_from_meta in ("basic", "growth", "advanced"):
-                            plan_id = plan_id_from_meta
-                        else:
-                            plan_id = (price_to_plan.get(stripe_price_id) or (meta.get("plan_id") or "growth")).strip().lower()
-                        if plan_id not in ("basic", "growth", "advanced"):
-                            plan_id = "growth"
-                        cancel_at_period_end = bool(getattr(stripe_sub, "cancel_at_period_end", None) or stripe_sub.get("cancel_at_period_end"))
-                        WidgetSubscription.objects.filter(
-                            stripe_subscription_id=stripe_sub.id
-                        ).update(plan_id=plan_id, cancel_at_period_end=cancel_at_period_end)
-                        logger.info(
-                            f"[{webhook_id}] Widget subscription {stripe_sub.id} plan_id synced to {plan_id} after invoice.paid (price_id={stripe_price_id})."
-                        )
+                    if meta.get("addon_type") == ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING:
+                        sync_addon_subscription_from_stripe(sub_id, subscription_obj=stripe_sub)
+                    elif meta.get("business_id"):
+                        sync_widget_subscription_from_stripe(sub_id, subscription_obj=stripe_sub)
                 except (stripe.StripeError, Exception) as e:
                     logger.warning(
-                        f"[{webhook_id}] invoice.paid subscription sync failed: %s", e
+                        "[%s] invoice.paid subscription sync failed: %s", webhook_id, e
                     )
             return Response(status=status.HTTP_200_OK)
 
@@ -1608,129 +1589,27 @@ class ProcessBookingWebhook(APIView):
 
             addon_type = metadata.get("addon_type")
             if addon_type == ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING:
-                from datetime import datetime
-                import pytz
                 if event.type == "customer.subscription.deleted":
-                    BusinessAddonSubscription.objects.filter(
-                        stripe_subscription_id=subscription.id
-                    ).update(status="canceled")
-                    business.marketplace_email_branding_enabled = False
-                    business.save(update_fields=["marketplace_email_branding_enabled"])
-                    logger.info(
-                        f"[{webhook_id}] Addon {addon_type} subscription {subscription.id} canceled; disabled for business {business.businessId}."
-                    )
+                    mark_addon_subscription_canceled(subscription.id, addon_type=addon_type)
                 else:
-                    period_end = subscription.current_period_end
-                    current_period_end = (
-                        datetime.fromtimestamp(period_end, tz=pytz.UTC)
-                        if period_end
-                        else None
-                    )
-                    stripe_price_id = None
-                    if subscription.get("items") and subscription["items"].get("data"):
-                        stripe_price_id = subscription["items"]["data"][0].get("price", {}).get("id")
-                    cancel_at_period_end = bool(subscription.get("cancel_at_period_end"))
-                    BusinessAddonSubscription.objects.update_or_create(
-                        stripe_subscription_id=subscription.id,
-                        defaults={
-                            "business": business,
-                            "addon_type": addon_type,
-                            "stripe_customer_id": subscription.get("customer") or "",
-                            "stripe_price_id": stripe_price_id,
-                            "status": subscription.status,
-                            "current_period_end": current_period_end,
-                            "cancel_at_period_end": cancel_at_period_end,
-                        },
-                    )
-                    business.marketplace_email_branding_enabled = subscription.status in ("active", "trialing")
-                    business.save(update_fields=["marketplace_email_branding_enabled"])
-                    logger.info(
-                        f"[{webhook_id}] Synced addon {addon_type} subscription {subscription.id} for business {business.businessId} (status={subscription.status})."
+                    sync_addon_subscription_from_stripe(
+                        subscription.id,
+                        subscription_obj=subscription,
+                        addon_type=addon_type,
                     )
                 return Response(status=status.HTTP_200_OK)
 
+            # Widget subscription: single source of truth via sync module
             if event.type == "customer.subscription.deleted":
-                WidgetSubscription.objects.filter(
-                    stripe_subscription_id=subscription.id
-                ).update(status="canceled")
-                logger.info(
-                    f"[{webhook_id}] Marked widget subscription {subscription.id} as canceled."
-                )
+                mark_widget_subscription_canceled(subscription.id)
             else:
-                from datetime import datetime
-                import pytz
-                period_end = subscription.current_period_end
-                current_period_end = (
-                    datetime.fromtimestamp(period_end, tz=pytz.UTC)
-                    if period_end
-                    else None
+                sync_widget_subscription_from_stripe(
+                    subscription.id,
+                    subscription_obj=subscription,
                 )
-                stripe_price_id = None
-                if subscription.get("items") and subscription["items"].get("data"):
-                    stripe_price_id = subscription["items"]["data"][0].get("price", {}).get("id")
-                plan_id_from_metadata = (metadata.get("plan_id") or "growth").strip().lower()
-                if plan_id_from_metadata not in ("basic", "growth", "advanced"):
-                    plan_id_from_metadata = "growth"
-                # Only apply plan_id from metadata when latest invoice is paid (avoid showing new plan before payment on switch).
-                existing = WidgetSubscription.objects.filter(
-                    stripe_subscription_id=subscription.id
-                ).first()
-                try:
-                    sub_expanded = stripe.Subscription.retrieve(
-                        subscription.id, expand=["latest_invoice"]
-                    )
-                    latest_inv = sub_expanded.get("latest_invoice")
-                    inv_status = (
-                        getattr(latest_inv, "status", None)
-                        if latest_inv and not isinstance(latest_inv, str)
-                        else (latest_inv.get("status") if isinstance(latest_inv, dict) else None)
-                    )
-                    if inv_status in ("open", "draft") and existing:
-                        plan_id = existing.plan_id
-                    else:
-                        plan_id = plan_id_from_metadata
-                except stripe.StripeError:
-                    plan_id = plan_id_from_metadata
-                cancel_at_period_end = bool(subscription.get("cancel_at_period_end"))
-                defaults = {
-                    "business": business,
-                    "stripe_customer_id": subscription.get("customer") or "",
-                    "stripe_price_id": stripe_price_id,
-                    "status": subscription.status,
-                    "current_period_end": current_period_end,
-                    "plan_id": plan_id,
-                    "cancel_at_period_end": cancel_at_period_end,
-                }
-                existing_by_stripe_id = WidgetSubscription.objects.filter(
-                    stripe_subscription_id=subscription.id
-                ).first()
-                if existing_by_stripe_id:
-                    for k, v in defaults.items():
-                        setattr(existing_by_stripe_id, k, v)
-                    existing_by_stripe_id.save()
-                    sub = existing_by_stripe_id
-                else:
-                    # Attach to existing DB-only row if any (avoid duplicate when webhook runs before backend save)
-                    db_only = WidgetSubscription.objects.filter(
-                        business=business, stripe_subscription_id__isnull=True
-                    ).exclude(stripe_subscription_id="").first()
-                    if db_only:
-                        db_only.stripe_subscription_id = subscription.id
-                        for k, v in defaults.items():
-                            setattr(db_only, k, v)
-                        db_only.save()
-                        sub = db_only
-                    else:
-                        sub, _ = WidgetSubscription.objects.update_or_create(
-                            stripe_subscription_id=subscription.id,
-                            defaults=defaults,
-                        )
                 if not business.stripe_customer_id and subscription.get("customer"):
                     business.stripe_customer_id = subscription["customer"]
                     business.save(update_fields=["stripe_customer_id"])
-                logger.info(
-                    f"[{webhook_id}] Synced widget subscription {subscription.id} for business {business.businessId} (status={subscription.status})."
-                )
             return Response(status=status.HTTP_200_OK)
 
         return Response(status=status.HTTP_200_OK)

@@ -27,8 +27,24 @@ from quickstart.serializers.widget.widget_config_serializer import (
     WidgetSubscriptionSerializer,
 )
 from quickstart.views.widget.widget_views import _business_has_active_widget_subscription
+from quickstart.services.subscription_sync import (
+    sync_widget_subscription_from_stripe,
+    sync_addon_subscription_from_stripe,
+    mark_widget_subscription_canceled,
+    mark_addon_subscription_canceled,
+    _widget_price_to_plan_id,
+)
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
+
+# Plan order for upgrade/downgrade: lower index = lower tier
+PLAN_ORDER = ["basic", "growth", "advanced"]
+
+
+def _is_downgrade(from_plan_id, to_plan_id):
+    if from_plan_id not in VALID_PLAN_IDS or to_plan_id not in VALID_PLAN_IDS:
+        return False
+    return PLAN_ORDER.index(to_plan_id) < PLAN_ORDER.index(from_plan_id)
 
 VALID_PLAN_IDS = {"basic", "growth", "advanced"}
 
@@ -722,6 +738,12 @@ class WidgetSubscriptionView(APIView):
     def get(self, request, *args, **kwargs):
         business = _get_business_for_subscription(request.user)
         sub = _get_current_subscription(business)
+        # Single source of truth: sync from Stripe when we have a linked subscription
+        if sub and sub.stripe_subscription_id:
+            synced, err = sync_widget_subscription_from_stripe(sub.stripe_subscription_id)
+            if synced:
+                sub = synced
+            # If sync failed (e.g. sub deleted in Stripe), sub may be stale; still return DB state
         subscription_required = getattr(settings, "WIDGET_SUBSCRIPTION_REQUIRED", False)
         has_widget_access = _business_has_active_widget_subscription(business)
         if not sub:
@@ -734,13 +756,46 @@ class WidgetSubscriptionView(APIView):
                 },
                 status=status.HTTP_200_OK,
             )
-        data = {
+        payload = {
             "subscription": _subscription_response_from_sub(sub),
             "widget_subscription_required": subscription_required,
             "has_stripe_subscription": bool(sub.stripe_subscription_id),
             "has_widget_access": has_widget_access,
         }
-        return Response(data, status=status.HTTP_200_OK)
+        # Optional: scheduled downgrade from Stripe subscription schedule
+        if sub.stripe_subscription_id:
+            try:
+                stripe_sub = stripe.Subscription.retrieve(
+                    sub.stripe_subscription_id,
+                    expand=["schedule"],
+                )
+                sched = stripe_sub.get("schedule")
+                schedule_id = None
+                if isinstance(sched, str):
+                    schedule_id = sched
+                elif sched is not None:
+                    schedule_id = sched.get("id") if isinstance(sched, dict) else getattr(sched, "id", None)
+                if schedule_id:
+                    schedule = stripe.SubscriptionSchedule.retrieve(schedule_id, expand=["phases"])
+                    phases = getattr(schedule, "phases", None) or schedule.get("phases") or []
+                    if len(phases) >= 2:
+                        next_phase = phases[1]
+                        next_items = (next_phase.get("items") or []) if isinstance(next_phase, dict) else getattr(next_phase, "items", []) or []
+                        if next_items:
+                            next_price_id = next_items[0].get("price") if isinstance(next_items[0], dict) else getattr(next_items[0], "price", None)
+                            if next_price_id and isinstance(next_price_id, str) is False:
+                                next_price_id = next_price_id.get("id") if isinstance(next_price_id, dict) else getattr(next_price_id, "id", None)
+                            scheduled_plan_id = _widget_price_to_plan_id(next_price_id)
+                            start = next_phase.get("start_date") if isinstance(next_phase, dict) else getattr(next_phase, "start_date", None)
+                            if scheduled_plan_id and scheduled_plan_id != (sub.plan_id or "").strip().lower() and start:
+                                from datetime import datetime as dt
+                                payload["scheduled_downgrade"] = {
+                                    "planId": scheduled_plan_id,
+                                    "effectiveDate": dt.utcfromtimestamp(start).isoformat() + "Z" if isinstance(start, (int, float)) else str(start),
+                                }
+            except stripe.StripeError:
+                pass
+        return Response(payload, status=status.HTTP_200_OK)
 
     def post(self, request, *args, **kwargs):
         plan_id = (request.data.get("plan_id") or "").strip().lower()
@@ -871,17 +926,71 @@ class WidgetSubscriptionView(APIView):
                             },
                             status=status.HTTP_200_OK,
                         )
+                    current_plan_id = _widget_price_to_plan_id(current_price_id) or (sub.plan_id or "").strip().lower() or "growth"
+                    is_downgrade = _is_downgrade(current_plan_id, plan_id)
+
+                    if is_downgrade:
+                        # Downgrade at end of billing period: use Subscription Schedule (no immediate charge).
+                        period_end_ts = stripe_sub.get("current_period_end")
+                        if not period_end_ts:
+                            return Response(
+                                {"error": "Could not schedule downgrade. Please try again."},
+                                status=status.HTTP_400_BAD_REQUEST,
+                            )
+                        try:
+                            existing_schedule = (stripe_sub.get("schedule") or "") if isinstance(stripe_sub.get("schedule"), str) else (getattr(stripe_sub.get("schedule"), "id", None) if stripe_sub.get("schedule") else None)
+                            if existing_schedule:
+                                schedule = stripe.SubscriptionSchedule.retrieve(existing_schedule, expand=["phases"])
+                                phases = getattr(schedule, "phases", None) or schedule.get("phases") or []
+                                if len(phases) >= 2:
+                                    return Response(
+                                        {"error": "A plan change is already scheduled. It will take effect at the end of your billing period."},
+                                        status=status.HTTP_400_BAD_REQUEST,
+                                    )
+                            schedule = stripe.SubscriptionSchedule.create(
+                                from_subscription=sub.stripe_subscription_id,
+                            )
+                            stripe.SubscriptionSchedule.update(
+                                schedule.id,
+                                phases=[
+                                    {
+                                        "items": [{"price": current_price_id}],
+                                        "end_date": period_end_ts,
+                                    },
+                                    {
+                                        "items": [{"price": price_id}],
+                                        "proration_behavior": "none",
+                                    },
+                                ],
+                                metadata={"business_id": str(business.businessId), "plan_id": plan_id},
+                            )
+                        except stripe.StripeError as e:
+                            logger.warning("widget_subscription: SubscriptionSchedule create/update failed sub_id=%s err=%s", sub.stripe_subscription_id, e)
+                            return Response(
+                                {"error": str(e) if str(e) else "Could not schedule downgrade. Please try again."},
+                                status=status.HTTP_400_BAD_REQUEST,
+                            )
+                        synced, _ = sync_widget_subscription_from_stripe(sub.stripe_subscription_id)
+                        sub = synced or sub
+                        return Response(
+                            {
+                                "subscription": _subscription_response_from_sub(sub),
+                                "stripe_updated": True,
+                                "downgrade_scheduled_at_period_end": True,
+                                "scheduled_plan_id": plan_id,
+                            },
+                            status=status.HTTP_200_OK,
+                        )
+
                     logger.info(
-                        "widget_subscription: plan switch modify sub_id=%s current_price=%s target_price=%s plan_id=%s",
+                        "widget_subscription: plan switch modify (upgrade) sub_id=%s current_price=%s target_price=%s plan_id=%s",
                         sub.stripe_subscription_id,
                         current_price_id,
                         price_id,
                         plan_id,
                     )
                     try:
-                        # When payment_behavior is pending_if_incomplete, Stripe only allows supported params; metadata is not supported.
-                        # always_invoice: create prorations AND create the invoice now (so we get latest_invoice + payment_intent for upgrades).
-                        # create_prorations alone does not create an invoice until next cycle.
+                        # Upgrade: immediate proration and invoice; may require payment.
                         stripe_sub = stripe.Subscription.modify(
                             sub.stripe_subscription_id,
                             items=[{"id": subscription_item_id, "price": price_id}],
@@ -1149,7 +1258,7 @@ class WidgetSubscriptionView(APIView):
 
 
 class WidgetSubscriptionCancelView(APIView):
-    """POST: Set cancel_at_period_end=True for the current subscription. Syncs to Stripe when present."""
+    """POST: Set cancel_at_period_end=True in Stripe. DB is synced from Stripe (single source of truth)."""
 
     permission_classes = [IsAuthenticated, CanManageOwnClasses]
 
@@ -1161,34 +1270,31 @@ class WidgetSubscriptionCancelView(APIView):
                 {"error": "No active subscription found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        if sub.stripe_subscription_id:
-            try:
-                stripe.Subscription.modify(sub.stripe_subscription_id, cancel_at_period_end=True)
-            except stripe.StripeError as e:
-                logger.warning("Stripe Subscription.modify cancel_at_period_end failed: %s", e)
-                return Response(
-                    {"error": "Could not update cancellation. Please try again."},
-                    status=status.HTTP_502_BAD_GATEWAY,
-                )
-        sub.cancel_at_period_end = True
-        sub.save(update_fields=["cancel_at_period_end"])
+        if not sub.stripe_subscription_id:
+            sub.cancel_at_period_end = True
+            sub.save(update_fields=["cancel_at_period_end"])
+            return Response(
+                {"subscription": _subscription_response_from_sub(sub)},
+                status=status.HTTP_200_OK,
+            )
+        try:
+            stripe.Subscription.modify(sub.stripe_subscription_id, cancel_at_period_end=True)
+        except stripe.StripeError as e:
+            logger.warning("Stripe Subscription.modify cancel_at_period_end failed: %s", e)
+            return Response(
+                {"error": "Could not update cancellation. Please try again."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        synced, _ = sync_widget_subscription_from_stripe(sub.stripe_subscription_id)
+        sub = synced or sub
         return Response(
-            {
-                "subscription": {
-                    "planId": sub.plan_id,
-                    "status": sub.status,
-                    "currentPeriodEnd": (
-                        sub.current_period_end.isoformat() if sub.current_period_end else None
-                    ),
-                    "cancelAtPeriodEnd": True,
-                }
-            },
+            {"subscription": _subscription_response_from_sub(sub)},
             status=status.HTTP_200_OK,
         )
 
 
 class WidgetSubscriptionReactivateView(APIView):
-    """POST: Set cancel_at_period_end=False for the current subscription. Syncs to Stripe when present."""
+    """POST: Set cancel_at_period_end=False in Stripe. DB is synced from Stripe (single source of truth)."""
 
     permission_classes = [IsAuthenticated, CanManageOwnClasses]
 
@@ -1200,28 +1306,25 @@ class WidgetSubscriptionReactivateView(APIView):
                 {"error": "No active subscription found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        if sub.stripe_subscription_id:
-            try:
-                stripe.Subscription.modify(sub.stripe_subscription_id, cancel_at_period_end=False)
-            except stripe.StripeError as e:
-                logger.warning("Stripe Subscription.modify cancel_at_period_end=False failed: %s", e)
-                return Response(
-                    {"error": "Could not reactivate. Please try again."},
-                    status=status.HTTP_502_BAD_GATEWAY,
-                )
-        sub.cancel_at_period_end = False
-        sub.save(update_fields=["cancel_at_period_end"])
+        if not sub.stripe_subscription_id:
+            sub.cancel_at_period_end = False
+            sub.save(update_fields=["cancel_at_period_end"])
+            return Response(
+                {"subscription": _subscription_response_from_sub(sub)},
+                status=status.HTTP_200_OK,
+            )
+        try:
+            stripe.Subscription.modify(sub.stripe_subscription_id, cancel_at_period_end=False)
+        except stripe.StripeError as e:
+            logger.warning("Stripe Subscription.modify cancel_at_period_end=False failed: %s", e)
+            return Response(
+                {"error": "Could not reactivate. Please try again."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        synced, _ = sync_widget_subscription_from_stripe(sub.stripe_subscription_id)
+        sub = synced or sub
         return Response(
-            {
-                "subscription": {
-                    "planId": sub.plan_id,
-                    "status": sub.status,
-                    "currentPeriodEnd": (
-                        sub.current_period_end.isoformat() if sub.current_period_end else None
-                    ),
-                    "cancelAtPeriodEnd": False,
-                }
-            },
+            {"subscription": _subscription_response_from_sub(sub)},
             status=status.HTTP_200_OK,
         )
 
@@ -1511,8 +1614,15 @@ class BusinessAddonsView(APIView):
     def get(self, request, *args, **kwargs):
         business = _get_business_for_subscription(request.user)
         addon = _get_current_addon_subscription(business, ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING)
-        # If webhook lagged, reconcile latest local addon row from Stripe so UI can update immediately after payment.
-        if addon is None:
+        # Single source of truth: sync from Stripe when we have a linked addon subscription
+        if addon and addon.stripe_subscription_id:
+            synced, _ = sync_addon_subscription_from_stripe(
+                addon.stripe_subscription_id,
+                addon_type=ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING,
+            )
+            if synced:
+                addon = synced
+        elif addon is None:
             latest = (
                 BusinessAddonSubscription.objects.filter(
                     business=business,
@@ -1524,30 +1634,12 @@ class BusinessAddonsView(APIView):
                 .first()
             )
             if latest and latest.stripe_subscription_id:
-                try:
-                    stripe_sub = stripe.Subscription.retrieve(latest.stripe_subscription_id)
-                    stripe_status = (stripe_sub.get("status") or "").strip().lower()
-                    if stripe_status in ("active", "trialing"):
-                        period_end = stripe_sub.get("current_period_end")
-                        current_period_end_dt = None
-                        if period_end:
-                            from datetime import datetime
-                            import pytz
-
-                            current_period_end_dt = datetime.fromtimestamp(period_end, tz=pytz.UTC)
-                        latest.status = stripe_status
-                        latest.current_period_end = current_period_end_dt
-                        latest.cancel_at_period_end = bool(stripe_sub.get("cancel_at_period_end"))
-                        latest.save(
-                            update_fields=[
-                                "status",
-                                "current_period_end",
-                                "cancel_at_period_end",
-                            ]
-                        )
-                        addon = latest
-                except stripe.StripeError:
-                    pass
+                synced, _ = sync_addon_subscription_from_stripe(
+                    latest.stripe_subscription_id,
+                    addon_type=ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING,
+                )
+                if synced and synced.status in ("active", "trialing"):
+                    addon = synced
         # Only offer instant subscribe when not already subscribed and we have a saved payment method
         can_instant = (
             addon is None
@@ -1764,47 +1856,25 @@ class InstantSubscribeMarketplaceEmailAddonView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Sync locally so UI updates immediately (webhook will also run)
-        period_end = stripe_sub.get("current_period_end")
-        current_period_end_dt = None
-        if period_end:
-            from datetime import datetime
-            import pytz
-            current_period_end_dt = datetime.fromtimestamp(period_end, tz=pytz.UTC)
-        stripe_price_id = None
-        items = stripe_sub.get("items")
-        if items and items.get("data"):
-            first_item = items["data"][0] if isinstance(items["data"], list) else None
-            if first_item:
-                price = first_item.get("price") if isinstance(first_item, dict) else getattr(first_item, "price", None)
-                stripe_price_id = price.get("id") if isinstance(price, dict) else getattr(price, "id", None)
-        sub_status = stripe_sub.get("status") or getattr(stripe_sub, "status", None)
-        stripe_sub_id = stripe_sub.get("id") or getattr(stripe_sub, "id", None)
-        stripe_customer = stripe_sub.get("customer") or getattr(stripe_sub, "customer", None) or ""
-
-        BusinessAddonSubscription.objects.update_or_create(
-            stripe_subscription_id=stripe_sub_id,
-            defaults={
-                "business": business,
-                "addon_type": ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING,
-                "stripe_customer_id": str(stripe_customer) if stripe_customer else "",
-                "stripe_price_id": stripe_price_id,
-                "status": sub_status or "active",
-                "current_period_end": current_period_end_dt,
-                "cancel_at_period_end": bool(stripe_sub.get("cancel_at_period_end") or getattr(stripe_sub, "cancel_at_period_end", False)),
-            },
+        # Single source of truth: sync from Stripe (webhook will also run)
+        synced, _ = sync_addon_subscription_from_stripe(
+            stripe_sub.id,
+            subscription_obj=stripe_sub,
+            addon_type=ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING,
         )
-        business.marketplace_email_branding_enabled = sub_status in ("active", "trialing")
-        business.save(update_fields=["marketplace_email_branding_enabled"])
-
+        if not synced:
+            return Response(
+                {"error": "Subscription created but could not sync. Please refresh the page."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
         return Response(
             {
                 "marketplace_email_branding": {
                     "active": True,
                     "currentPeriodEnd": (
-                        current_period_end_dt.isoformat() if current_period_end_dt else None
+                        synced.current_period_end.isoformat() if synced.current_period_end else None
                     ),
-                    "cancelAtPeriodEnd": False,
+                    "cancelAtPeriodEnd": synced.cancel_at_period_end,
                 }
             },
             status=status.HTTP_200_OK,
@@ -1812,7 +1882,7 @@ class InstantSubscribeMarketplaceEmailAddonView(APIView):
 
 
 class CancelMarketplaceEmailAddonView(APIView):
-    """POST: Set cancel_at_period_end=True for the marketplace email addon subscription."""
+    """POST: Set cancel_at_period_end=True in Stripe. DB synced from Stripe (single source of truth)."""
 
     permission_classes = [IsAuthenticated, CanManageOwnClasses]
 
@@ -1828,8 +1898,15 @@ class CancelMarketplaceEmailAddonView(APIView):
             stripe.Subscription.modify(sub.stripe_subscription_id, cancel_at_period_end=True)
         except stripe.StripeError as e:
             logger.warning("Stripe modify cancel_at_period_end failed: %s", e)
-        sub.cancel_at_period_end = True
-        sub.save(update_fields=["cancel_at_period_end"])
+            return Response(
+                {"error": "Could not update cancellation. Please try again."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        synced, _ = sync_addon_subscription_from_stripe(
+            sub.stripe_subscription_id,
+            addon_type=ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING,
+        )
+        sub = synced or sub
         return Response(
             {
                 "marketplace_email_branding": {
@@ -1837,7 +1914,7 @@ class CancelMarketplaceEmailAddonView(APIView):
                     "currentPeriodEnd": (
                         sub.current_period_end.isoformat() if sub.current_period_end else None
                     ),
-                    "cancelAtPeriodEnd": True,
+                    "cancelAtPeriodEnd": sub.cancel_at_period_end,
                 }
             },
             status=status.HTTP_200_OK,
@@ -1845,7 +1922,7 @@ class CancelMarketplaceEmailAddonView(APIView):
 
 
 class ReactivateMarketplaceEmailAddonView(APIView):
-    """POST: Set cancel_at_period_end=False for the marketplace email addon subscription."""
+    """POST: Set cancel_at_period_end=False in Stripe. DB synced from Stripe (single source of truth)."""
 
     permission_classes = [IsAuthenticated, CanManageOwnClasses]
 
@@ -1861,8 +1938,15 @@ class ReactivateMarketplaceEmailAddonView(APIView):
             stripe.Subscription.modify(sub.stripe_subscription_id, cancel_at_period_end=False)
         except stripe.StripeError as e:
             logger.warning("Stripe modify cancel_at_period_end failed: %s", e)
-        sub.cancel_at_period_end = False
-        sub.save(update_fields=["cancel_at_period_end"])
+            return Response(
+                {"error": "Could not reactivate. Please try again."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        synced, _ = sync_addon_subscription_from_stripe(
+            sub.stripe_subscription_id,
+            addon_type=ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING,
+        )
+        sub = synced or sub
         return Response(
             {
                 "marketplace_email_branding": {
@@ -1870,7 +1954,7 @@ class ReactivateMarketplaceEmailAddonView(APIView):
                     "currentPeriodEnd": (
                         sub.current_period_end.isoformat() if sub.current_period_end else None
                     ),
-                    "cancelAtPeriodEnd": False,
+                    "cancelAtPeriodEnd": sub.cancel_at_period_end,
                 }
             },
             status=status.HTTP_200_OK,
