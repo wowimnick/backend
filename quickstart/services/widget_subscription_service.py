@@ -234,11 +234,12 @@ def downgrade_subscription(sub, plan_id, business):
     if not item_list:
         return None, "Invalid subscription state."
     current_price_id = (item_list[0].get("price") or {}).get("id") if item_list else None
-    period_end_ts = stripe_sub.get("current_period_end")
+    period_end_ts = getattr(stripe_sub, "current_period_end", None) or stripe_sub.get("current_period_end")
     if not period_end_ts:
         logger.warning(
-            "widget_subscription_service: downgrade sub_id=%s missing current_period_end",
+            "widget_subscription_service: downgrade sub_id=%s missing current_period_end (sub keys: %s)",
             sub.stripe_subscription_id,
+            list(stripe_sub.keys()) if hasattr(stripe_sub, "keys") else getattr(stripe_sub, "__dict__", {}),
         )
         return None, "Could not schedule downgrade. Please try again."
     phases_payload = [
