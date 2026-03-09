@@ -280,29 +280,35 @@ def downgrade_subscription(sub, plan_id, business):
                 schedule_id,
                 len(phases),
             )
-            if len(phases) >= 2:
-                return None, "A plan change is already scheduled. It will take effect at the end of your billing period."
-            # Use existing current phase start_date: Stripe does not allow modifying the current phase start_date.
             first_start = _first_phase_start(phases)
             if not first_start:
                 return None, "Could not schedule downgrade. Please try again."
-            phases_payload = [
-                {
-                    "items": [{"price": current_price_id}],
-                    "start_date": first_start,
-                    "end_date": period_end_ts,
-                },
-                {"items": [{"price": price_id}], "proration_behavior": "none"},
-            ]
-            stripe.SubscriptionSchedule.modify(
-                schedule_id,
-                phases=phases_payload,
-                metadata=metadata_payload,
-            )
-            logger.info(
-                "widget_subscription_service: downgrade schedule updated schedule_id=%s",
-                schedule_id,
-            )
+            # Same plan as current = cancel scheduled downgrade (release schedule).
+            if price_id == current_price_id:
+                stripe.SubscriptionSchedule.release(schedule_id)
+                logger.info(
+                    "widget_subscription_service: downgrade cancelled (schedule released) schedule_id=%s",
+                    schedule_id,
+                )
+            else:
+                # One or two phases: set/update scheduled change to target plan at period end.
+                phases_payload = [
+                    {
+                        "items": [{"price": current_price_id}],
+                        "start_date": first_start,
+                        "end_date": period_end_ts,
+                    },
+                    {"items": [{"price": price_id}], "proration_behavior": "none"},
+                ]
+                stripe.SubscriptionSchedule.modify(
+                    schedule_id,
+                    phases=phases_payload,
+                    metadata=metadata_payload,
+                )
+                logger.info(
+                    "widget_subscription_service: downgrade schedule updated schedule_id=%s",
+                    schedule_id,
+                )
         except stripe.StripeError as e:
             err_msg = str(e)
             err_code = getattr(e, "code", None)
