@@ -512,6 +512,24 @@ class CreateWidgetSubscriptionPaymentIntentView(APIView):
                         logger.warning("Invoice.retrieve failed for %s: %s", invoice_id, e)
 
             if not client_secret:
+                # Invoice may already be paid (e.g. default payment method charged immediately)
+                try:
+                    stripe_sub_fresh = stripe.Subscription.retrieve(stripe_sub.id)
+                    if (stripe_sub_fresh.get("status") or "").strip().lower() in ("active", "trialing"):
+                        synced, _ = sync_widget_subscription_from_stripe(
+                            stripe_sub.id, subscription_obj=stripe_sub_fresh
+                        )
+                        if synced:
+                            return Response(
+                                {
+                                    "subscription_id": stripe_sub.id,
+                                    "already_active": True,
+                                    "subscription": _subscription_response_from_sub(synced),
+                                },
+                                status=status.HTTP_200_OK,
+                            )
+                except stripe.StripeError:
+                    pass
                 logger.warning(
                     "widget-subscription payment-intent: no client_secret; sub_id=%s",
                     stripe_sub.id,
@@ -569,6 +587,19 @@ def _get_current_subscription(business):
             current_period_end__gt=now,
         )
         .order_by("-current_period_end")
+        .first()
+    )
+
+
+def _get_latest_widget_subscription_with_stripe(business):
+    """Get the most recent WidgetSubscription for this business that has a Stripe id (for sync-from-Stripe recovery)."""
+    return (
+        WidgetSubscription.objects.filter(
+            business=business,
+        )
+        .exclude(stripe_subscription_id__isnull=True)
+        .exclude(stripe_subscription_id="")
+        .order_by("-updated_at")
         .first()
     )
 
@@ -743,7 +774,13 @@ class WidgetSubscriptionView(APIView):
             synced, err = sync_widget_subscription_from_stripe(sub.stripe_subscription_id)
             if synced:
                 sub = synced
-            # If sync failed (e.g. sub deleted in Stripe), sub may be stale; still return DB state
+        else:
+            # No "current" sub found (e.g. DB still incomplete or stale). Recover from Stripe:
+            # find any subscription row with stripe_subscription_id and sync so reload shows it.
+            latest_with_stripe = _get_latest_widget_subscription_with_stripe(business)
+            if latest_with_stripe:
+                sync_widget_subscription_from_stripe(latest_with_stripe.stripe_subscription_id)
+                sub = _get_current_subscription(business)
         subscription_required = getattr(settings, "WIDGET_SUBSCRIPTION_REQUIRED", False)
         has_widget_access = _business_has_active_widget_subscription(business)
         if not sub:
@@ -1182,6 +1219,23 @@ class WidgetSubscriptionView(APIView):
                         status=status.HTTP_502_BAD_GATEWAY,
                     )
                 if not client_secret:
+                    # Invoice may already be paid (e.g. default payment method); check Stripe and return success if active
+                    try:
+                        stripe_sub_fresh = stripe.Subscription.retrieve(stripe_sub.id)
+                        if (stripe_sub_fresh.get("status") or "").strip().lower() in ("active", "trialing"):
+                            synced, _ = sync_widget_subscription_from_stripe(
+                                stripe_sub.id, subscription_obj=stripe_sub_fresh
+                            )
+                            if synced:
+                                return Response(
+                                    {
+                                        "subscription": _subscription_response_from_sub(synced),
+                                        "stripe_updated": True,
+                                    },
+                                    status=status.HTTP_200_OK,
+                                )
+                    except stripe.StripeError:
+                        pass
                     return Response(
                         {"error": "Could not create payment form. Please try again."},
                         status=status.HTTP_502_BAD_GATEWAY,
@@ -1226,6 +1280,23 @@ class WidgetSubscriptionView(APIView):
                     status=status.HTTP_502_BAD_GATEWAY,
                 )
             if not client_secret:
+                # Invoice may already be paid (e.g. default payment method); check Stripe and return success if active
+                try:
+                    stripe_sub_fresh = stripe.Subscription.retrieve(stripe_sub.id)
+                    if (stripe_sub_fresh.get("status") or "").strip().lower() in ("active", "trialing"):
+                        synced, _ = sync_widget_subscription_from_stripe(
+                            stripe_sub.id, subscription_obj=stripe_sub_fresh
+                        )
+                        if synced:
+                            return Response(
+                                {
+                                    "subscription": _subscription_response_from_sub(synced),
+                                    "stripe_updated": True,
+                                },
+                                status=status.HTTP_200_OK,
+                            )
+                except stripe.StripeError:
+                    pass
                 return Response(
                     {"error": "Could not create payment form. Please try again."},
                     status=status.HTTP_502_BAD_GATEWAY,
