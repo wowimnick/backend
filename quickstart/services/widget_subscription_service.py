@@ -215,12 +215,17 @@ def downgrade_subscription(sub, plan_id, business):
     """
     Schedule downgrade at period end via Stripe Subscription Schedule.
     Returns (synced_sub, error_message). error_message is None on success.
+    If the subscription already has a schedule (e.g. from cancel_at_period_end), we update it
+    instead of creating a new one (Stripe does not allow creating a schedule for a sub that has one).
     """
     price_id = _get_price_id(plan_id)
     if not price_id:
         return None, "Widget subscription pricing is not configured."
     try:
-        stripe_sub = stripe.Subscription.retrieve(sub.stripe_subscription_id, expand=["items.data.price"])
+        stripe_sub = stripe.Subscription.retrieve(
+            sub.stripe_subscription_id,
+            expand=["items.data.price", "schedule"],
+        )
     except stripe.StripeError as e:
         logger.warning("widget_subscription_service: Stripe retrieve failed: %s", e)
         return None, str(e)
@@ -232,29 +237,50 @@ def downgrade_subscription(sub, plan_id, business):
     period_end_ts = stripe_sub.get("current_period_end")
     if not period_end_ts:
         return None, "Could not schedule downgrade. Please try again."
+    phases_payload = [
+        {"items": [{"price": current_price_id}], "end_date": period_end_ts},
+        {"items": [{"price": price_id}], "proration_behavior": "none"},
+    ]
+    metadata_payload = {"business_id": str(business.businessId), "plan_id": plan_id}
+
     existing_schedule = stripe_sub.get("schedule")
-    schedule_id = existing_schedule if isinstance(existing_schedule, str) else (getattr(existing_schedule, "id", None) if existing_schedule else None)
+    schedule_id = (
+        existing_schedule
+        if isinstance(existing_schedule, str)
+        else (getattr(existing_schedule, "id", None) if existing_schedule else None)
+    )
     if schedule_id:
         try:
             schedule = stripe.SubscriptionSchedule.retrieve(schedule_id, expand=["phases"])
             phases = getattr(schedule, "phases", None) or schedule.get("phases") or []
             if len(phases) >= 2:
                 return None, "A plan change is already scheduled. It will take effect at the end of your billing period."
-        except stripe.StripeError:
-            pass
-    try:
-        schedule = stripe.SubscriptionSchedule.create(from_subscription=sub.stripe_subscription_id)
-        stripe.SubscriptionSchedule.update(
-            schedule.id,
-            phases=[
-                {"items": [{"price": current_price_id}], "end_date": period_end_ts},
-                {"items": [{"price": price_id}], "proration_behavior": "none"},
-            ],
-            metadata={"business_id": str(business.businessId), "plan_id": plan_id},
-        )
-    except stripe.StripeError as e:
-        logger.warning("widget_subscription_service: SubscriptionSchedule failed: %s", e)
-        return None, str(e) if str(e) else "Could not schedule downgrade. Please try again."
+            # Subscription already has a schedule (e.g. from cancel_at_period_end). Update it.
+            stripe.SubscriptionSchedule.update(
+                schedule_id,
+                phases=phases_payload,
+                metadata=metadata_payload,
+            )
+        except stripe.StripeError as e:
+            logger.warning(
+                "widget_subscription_service: SubscriptionSchedule update failed: %s", e
+            )
+            return None, str(e) if str(e) else "Could not schedule downgrade. Please try again."
+    else:
+        try:
+            schedule = stripe.SubscriptionSchedule.create(
+                from_subscription=sub.stripe_subscription_id
+            )
+            stripe.SubscriptionSchedule.update(
+                schedule.id,
+                phases=phases_payload,
+                metadata=metadata_payload,
+            )
+        except stripe.StripeError as e:
+            logger.warning(
+                "widget_subscription_service: SubscriptionSchedule create/update failed: %s", e
+            )
+            return None, str(e) if str(e) else "Could not schedule downgrade. Please try again."
     synced, _ = sync_widget_subscription_from_stripe(sub.stripe_subscription_id)
     return synced or sub, None
 
