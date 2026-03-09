@@ -111,8 +111,19 @@ def sync_widget_subscription_from_stripe(stripe_subscription_id, subscription_ob
     if existing:
         for k, v in defaults.items():
             setattr(existing, k, v)
-        existing.save(update_fields=list(defaults.keys()))
-        sub = existing
+        try:
+            existing.save(update_fields=list(defaults.keys()))
+        except Exception as e:
+            # Row may have been deleted by concurrent request (e.g. incomplete_subs.delete()).
+            if "did not affect any rows" in str(e):
+                sub, _ = WidgetSubscription.objects.update_or_create(
+                    stripe_subscription_id=stripe_subscription_id,
+                    defaults=defaults,
+                )
+            else:
+                raise
+        else:
+            sub = existing
     else:
         db_only = WidgetSubscription.objects.filter(
             business=business,

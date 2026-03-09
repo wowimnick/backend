@@ -857,6 +857,16 @@ class WidgetSubscriptionView(APIView):
             )
 
         sub = _get_current_subscription(business)
+        # If no "current" sub (e.g. current_period_end null or filter missed), use latest with Stripe id so we modify instead of creating a duplicate.
+        if not sub:
+            fallback = _get_latest_widget_subscription_with_stripe(business)
+            if fallback and fallback.stripe_subscription_id:
+                try:
+                    stripe_sub_check = stripe.Subscription.retrieve(fallback.stripe_subscription_id)
+                    if (stripe_sub_check.get("status") or "").strip().lower() in ("active", "trialing"):
+                        sub = fallback
+                except stripe.StripeError:
+                    pass
 
         with transaction.atomic():
             # Lock so concurrent plan-switch POSTs for the same business serialize (avoid race).
