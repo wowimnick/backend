@@ -605,6 +605,27 @@ def _get_latest_widget_subscription_with_stripe(business):
     )
 
 
+def _get_best_widget_subscription_for_display(business):
+    """For GET recovery: prefer an active/trialing subscription when multiple exist (e.g. one incomplete_expired, one active).
+    Returns (synced WidgetSubscription or None, error). Syncs from Stripe; prefers first that is active/trialing."""
+    candidates = (
+        WidgetSubscription.objects.filter(
+            business=business,
+        )
+        .exclude(stripe_subscription_id__isnull=True)
+        .exclude(stripe_subscription_id="")
+        .order_by("-created_at")
+    )
+    best = None
+    for row in candidates:
+        synced, _ = sync_widget_subscription_from_stripe(row.stripe_subscription_id)
+        if synced and (synced.status or "").strip().lower() in ("active", "trialing"):
+            return synced, None
+        if synced and best is None:
+            best = synced
+    return best, None
+
+
 def _create_stripe_subscription_for_plan(business, plan_id, price_id):
     """
     Ensure Stripe customer, create a Stripe subscription (default_incomplete) for the plan,
@@ -778,15 +799,11 @@ class WidgetSubscriptionView(APIView):
             if synced:
                 sub = synced
         else:
-            # No "current" sub found (e.g. DB still incomplete or stale). Recover from Stripe:
-            # find the most recent subscription row with stripe_subscription_id and sync so reload shows it.
-            latest_with_stripe = _get_latest_widget_subscription_with_stripe(business)
-            if latest_with_stripe:
-                synced, _ = sync_widget_subscription_from_stripe(latest_with_stripe.stripe_subscription_id)
+            # No "current" sub found. Recover from Stripe: prefer active/trialing when multiple exist
+            # (e.g. one incomplete_expired from abandoned upgrade, one active from new purchase).
+            sub, _ = _get_best_widget_subscription_for_display(business)
+            if not sub:
                 sub = _get_current_subscription(business)
-                # If filter still misses (e.g. timezone edge case), use synced row when it's active/trialing
-                if not sub and synced and (synced.status or "").strip().lower() in ("active", "trialing"):
-                    sub = synced
         subscription_required = getattr(settings, "WIDGET_SUBSCRIPTION_REQUIRED", False)
         has_widget_access = _business_has_active_widget_subscription(business)
         if not sub:
