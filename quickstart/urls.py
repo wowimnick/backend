@@ -404,17 +404,6 @@ urlpatterns = [
         CheckSlotAvailabilityView.as_view(),
         name="check-slot-availability",
     ),
-    # my-business addon subscription routes (before router includes so they match reliably)
-    path(
-        "my-business/addons/marketplace-email/cancel/",
-        CancelMarketplaceEmailAddonView.as_view(),
-        name="my-business-addon-marketplace-email-cancel",
-    ),
-    path(
-        "my-business/addons/marketplace-email/reactivate/",
-        ReactivateMarketplaceEmailAddonView.as_view(),
-        name="my-business-addon-marketplace-email-reactivate",
-    ),
     path("", include(public_router.urls)),
     path("", include(user_self_router.urls)),
     # --- Authentication & User Management ---
@@ -667,6 +656,16 @@ urlpatterns = [
         "my-business/addons/marketplace-email/instant-subscribe/",
         InstantSubscribeMarketplaceEmailAddonView.as_view(),
         name="my-business-addon-marketplace-email-instant-subscribe",
+    ),
+    path(
+        "my-business/addons/marketplace-email/cancel/",
+        CancelMarketplaceEmailAddonView.as_view(),
+        name="my-business-addon-marketplace-email-cancel",
+    ),
+    path(
+        "my-business/addons/marketplace-email/reactivate/",
+        ReactivateMarketplaceEmailAddonView.as_view(),
+        name="my-business-addon-marketplace-email-reactivate",
     ),
     path(
         "my-business/profile/",

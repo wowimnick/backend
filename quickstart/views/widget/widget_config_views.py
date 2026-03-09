@@ -1588,6 +1588,31 @@ class InstantSubscribeMarketplaceEmailAddonView(APIView):
         )
 
 
+def _get_addon_subscription_for_manage(business, addon_type):
+    """Return current addon sub for cancel/reactivate; if not found by period, try latest row and sync from Stripe (same as GET addons)."""
+    sub = _get_current_addon_subscription(business, addon_type)
+    if sub and sub.stripe_subscription_id:
+        return sub
+    latest = (
+        BusinessAddonSubscription.objects.filter(
+            business=business,
+            addon_type=addon_type,
+        )
+        .exclude(stripe_subscription_id__isnull=True)
+        .exclude(stripe_subscription_id="")
+        .order_by("-created_at")
+        .first()
+    )
+    if latest and latest.stripe_subscription_id:
+        synced, _ = sync_addon_subscription_from_stripe(
+            latest.stripe_subscription_id,
+            addon_type=addon_type,
+        )
+        if synced and synced.status in ("active", "trialing"):
+            return synced
+    return None
+
+
 class CancelMarketplaceEmailAddonView(APIView):
     """POST: Set cancel_at_period_end=True in Stripe. DB synced from Stripe (single source of truth)."""
 
@@ -1595,7 +1620,7 @@ class CancelMarketplaceEmailAddonView(APIView):
 
     def post(self, request, *args, **kwargs):
         business = _get_business_for_subscription(request.user)
-        sub = _get_current_addon_subscription(business, ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING)
+        sub = _get_addon_subscription_for_manage(business, ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING)
         if not sub or not sub.stripe_subscription_id:
             return Response(
                 {"error": "No active addon subscription found."},
@@ -1635,7 +1660,7 @@ class ReactivateMarketplaceEmailAddonView(APIView):
 
     def post(self, request, *args, **kwargs):
         business = _get_business_for_subscription(request.user)
-        sub = _get_current_addon_subscription(business, ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING)
+        sub = _get_addon_subscription_for_manage(business, ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING)
         if not sub or not sub.stripe_subscription_id:
             return Response(
                 {"error": "No active addon subscription found."},
