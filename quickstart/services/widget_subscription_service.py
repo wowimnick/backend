@@ -248,8 +248,13 @@ def downgrade_subscription(sub, plan_id, business):
             sub.stripe_subscription_id,
         )
         return None, "Could not schedule downgrade. Please try again."
+    # First phase must have start_date so Stripe can anchor end dates (e.g. "now" or timestamp).
     phases_payload = [
-        {"items": [{"price": current_price_id}], "end_date": period_end_ts},
+        {
+            "items": [{"price": current_price_id}],
+            "start_date": "now",
+            "end_date": period_end_ts,
+        },
         {"items": [{"price": price_id}], "proration_behavior": "none"},
     ]
     metadata_payload = {"business_id": str(business.businessId), "plan_id": plan_id}
