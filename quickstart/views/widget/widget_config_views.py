@@ -592,14 +592,15 @@ def _get_current_subscription(business):
 
 
 def _get_latest_widget_subscription_with_stripe(business):
-    """Get the most recent WidgetSubscription for this business that has a Stripe id (for sync-from-Stripe recovery)."""
+    """Get the most recent WidgetSubscription for this business that has a Stripe id (for sync-from-Stripe recovery).
+    Order by -created_at so we sync the subscription the user just created, not an older one."""
     return (
         WidgetSubscription.objects.filter(
             business=business,
         )
         .exclude(stripe_subscription_id__isnull=True)
         .exclude(stripe_subscription_id="")
-        .order_by("-updated_at")
+        .order_by("-created_at")
         .first()
     )
 
@@ -671,6 +672,8 @@ def _create_stripe_subscription_for_plan(business, plan_id, price_id):
 def _subscription_response_from_sub(sub):
     """Build subscription dict for API response from WidgetSubscription model."""
     plan_id = (sub.plan_id or "").strip().lower() or None
+    if not plan_id and (sub.status or "").strip().lower() in ("active", "trialing"):
+        plan_id = "basic"
     return {
         "planId": plan_id,
         "status": sub.status,
@@ -776,11 +779,14 @@ class WidgetSubscriptionView(APIView):
                 sub = synced
         else:
             # No "current" sub found (e.g. DB still incomplete or stale). Recover from Stripe:
-            # find any subscription row with stripe_subscription_id and sync so reload shows it.
+            # find the most recent subscription row with stripe_subscription_id and sync so reload shows it.
             latest_with_stripe = _get_latest_widget_subscription_with_stripe(business)
             if latest_with_stripe:
-                sync_widget_subscription_from_stripe(latest_with_stripe.stripe_subscription_id)
+                synced, _ = sync_widget_subscription_from_stripe(latest_with_stripe.stripe_subscription_id)
                 sub = _get_current_subscription(business)
+                # If filter still misses (e.g. timezone edge case), use synced row when it's active/trialing
+                if not sub and synced and (synced.status or "").strip().lower() in ("active", "trialing"):
+                    sub = synced
         subscription_required = getattr(settings, "WIDGET_SUBSCRIPTION_REQUIRED", False)
         has_widget_access = _business_has_active_widget_subscription(business)
         if not sub:
