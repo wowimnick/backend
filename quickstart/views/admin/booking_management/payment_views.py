@@ -4,8 +4,8 @@ from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.utils import timezone
 from django.db import transaction
-from django.db.models import Sum, Count, Avg, Q  # Added Q for search filter
-from django.db.models.functions import Coalesce  # Added Coalesce
+from django.db.models import Sum, Count, Avg, Q, F, Value, ExpressionWrapper, DecimalField
+from django.db.models.functions import Coalesce
 from decimal import Decimal
 
 from quickstart.models import AuditLog, Payment
@@ -200,6 +200,21 @@ class AdminPaymentViewSet(viewsets.ModelViewSet):
             total_transactions = payments.count()
             successful_transactions = payments.filter(status="succeeded").count()
 
+            # Platform fees: sum of stored platform_fee_amount; Stripe: 2.9% + $0.30 per succeeded payment (calculated on the fly)
+            succeeded_payments = payments.filter(status="succeeded")
+            stripe_fee_expr = ExpressionWrapper(
+                F("amount") * Decimal("0.029") + Value(Decimal("0.30")),
+                output_field=DecimalField(),
+            )
+            fee_agg = succeeded_payments.annotate(
+                _stripe_fee=stripe_fee_expr
+            ).aggregate(
+                platform_fees=Coalesce(Sum("platform_fee_amount"), Decimal(0)),
+                stripe_fees=Coalesce(Sum("_stripe_fee"), Decimal(0)),
+            )
+            total_platform_fees = fee_agg["platform_fees"]
+            total_stripe_fees = fee_agg["stripe_fees"]
+
             return Response(
                 {
                     "total_revenue": float(total_revenue),
@@ -208,6 +223,8 @@ class AdminPaymentViewSet(viewsets.ModelViewSet):
                     "refunded_amount": float(refunded_amount),
                     "total_transactions": total_transactions,
                     "successful_transactions": successful_transactions,
+                    "platform_fees": float(total_platform_fees),
+                    "stripe_fees": float(total_stripe_fees),
                     "period_days": window.period_days,
                 }
             )

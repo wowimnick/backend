@@ -6,7 +6,17 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
 from django.db import transaction
-from django.db.models import Q, Sum, Count, DecimalField, IntegerField, Prefetch
+from django.db.models import (
+    Q,
+    Sum,
+    Count,
+    DecimalField,
+    IntegerField,
+    Prefetch,
+    F,
+    Value,
+    ExpressionWrapper,
+)
 from django.db.models.functions import Coalesce
 from rest_framework.pagination import PageNumberPagination
 import logging
@@ -405,6 +415,28 @@ class AdminBookingViewSet(viewsets.ModelViewSet):
                     / previous_period_bookings_count
                 ) * 100
 
+            total_confirmed_revenue = float(aggregates["_total_revenue_for_avg"])
+
+            # Platform and Stripe fees from payments for these bookings (succeeded only). Stripe = 2.9% + $0.30 per payment (on the fly).
+            payments_for_bookings = Payment.objects.filter(
+                booking__booking_date__gte=window.start_dt,
+                booking__booking_date__lt=window.end_dt_exclusive,
+                booking__status__in=["confirmed", "completed"],
+                status="succeeded",
+            )
+            stripe_fee_expr = ExpressionWrapper(
+                F("amount") * Decimal("0.029") + Value(Decimal("0.30")),
+                output_field=DecimalField(),
+            )
+            fee_agg = payments_for_bookings.annotate(
+                _stripe_fee=stripe_fee_expr
+            ).aggregate(
+                platform_fees=Coalesce(Sum("platform_fee_amount"), Decimal(0)),
+                stripe_fees=Coalesce(Sum("_stripe_fee"), Decimal(0)),
+            )
+            total_platform_fees = float(fee_agg["platform_fees"])
+            total_stripe_fees = float(fee_agg["stripe_fees"])
+
             response_data = {
                 "total_bookings": total_bookings,
                 "confirmed_bookings": aggregates["confirmed_bookings"],
@@ -417,6 +449,9 @@ class AdminBookingViewSet(viewsets.ModelViewSet):
                     avg_participants_per_booking, 2
                 ),
                 "booking_growth": round(booking_growth, 1),
+                "total_confirmed_revenue": total_confirmed_revenue,
+                "total_platform_fees": total_platform_fees,
+                "total_stripe_fees": total_stripe_fees,
                 "start_date": window.start_date.strftime("%Y-%m-%d"),
                 "end_date": window.end_date.strftime("%Y-%m-%d"),
             }
