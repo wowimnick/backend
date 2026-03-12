@@ -297,19 +297,55 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
     )
     def available_slots(self, request, pk=None):
         """
-        Returns a list of future, scheduled instances for a booking's class option,
-        annotated with their validity for rescheduling.
+        Returns a list of future, scheduled instances for rescheduling.
+        - scope=option (default): only instances of the booking's same class option.
+        - scope=business: instances from any class/option of the same business.
         """
         booking = self.get_object()
         now = timezone.now()
         today = now.date()
+        scope = (request.query_params.get("scope") or "option").strip().lower()
+        if scope not in ("option", "business"):
+            scope = "option"
+        include_other_classes = scope == "business"
+        booking_option_id = booking.schedule_instance.schedule.option_id
+        booking_business_id = (
+            booking.schedule_instance.schedule.option.classId.businessId_id
+        )
 
-        queryset = (
-            ScheduleInstance.objects.filter(
+        if include_other_classes:
+            base_filter = Q(
+                schedule__option__classId__businessId_id=booking_business_id,
+                status="scheduled",
+                date__gte=today,
+            )
+        else:
+            base_filter = Q(
                 schedule__option=booking.schedule_instance.schedule.option,
                 status="scheduled",
                 date__gte=today,
             )
+
+        values_list = [
+            "id",
+            "date",
+            "time",
+            "price",
+            "max_participants",
+            "current_occupancy",
+            "has_capacity",
+        ]
+        if include_other_classes:
+            values_list.extend(
+                [
+                    "schedule__option_id",
+                    "schedule__option__classId__title",
+                    "schedule__option__title",
+                ]
+            )
+
+        queryset = (
+            ScheduleInstance.objects.filter(base_filter)
             .exclude(Q(date=today) & Q(time__lt=now.time()))
             .exclude(pk=booking.schedule_instance.pk)
             .annotate(
@@ -332,41 +368,38 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                     output_field=BooleanField(),
                 )
             )
-            .filter(has_capacity=True)  # FIX: Add this filter
-            .values(
-                "id",
-                "date",
-                "time",
-                "price",
-                "max_participants",
-                "current_occupancy",
-                "has_capacity",
-            )
+            .filter(has_capacity=True)
+            .values(*values_list)
             .order_by("date", "time")
         )
 
-        # Format the data for the frontend
         slots = []
         for inst in queryset:
-            is_valid = inst["has_capacity"]  # For now, only capacity is a hard blocker
+            is_valid = inst["has_capacity"]
             reason_invalid = (
                 ""
                 if is_valid
                 else f"Not enough spots. Only {inst['max_participants'] - inst['current_occupancy']} available."
             )
-
-            slots.append(
-                {
-                    "id": inst["id"],
-                    "date": inst["date"],
-                    "time": inst["time"],
-                    "price": inst["price"],
-                    "available_spots": inst["max_participants"]
-                    - inst["current_occupancy"],
-                    "is_valid": is_valid,
-                    "reason_invalid": reason_invalid,
-                }
-            )
+            slot_data = {
+                "id": inst["id"],
+                "date": inst["date"],
+                "time": inst["time"],
+                "price": inst["price"],
+                "available_spots": inst["max_participants"]
+                - inst["current_occupancy"],
+                "is_valid": is_valid,
+                "reason_invalid": reason_invalid,
+            }
+            if include_other_classes:
+                slot_data["class_title"] = inst.get(
+                    "schedule__option__classId__title", ""
+                )
+                slot_data["option_title"] = inst.get("schedule__option__title", "")
+                slot_data["is_same_option"] = (
+                    inst.get("schedule__option_id") == booking_option_id
+                )
+            slots.append(slot_data)
 
         return Response(slots)
 
@@ -395,9 +428,22 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
             )
 
         try:
-            new_instance = ScheduleInstance.objects.get(id=new_instance_id)
+            new_instance = ScheduleInstance.objects.select_related(
+                "schedule__option__classId__businessId"
+            ).get(id=new_instance_id)
         except ScheduleInstance.DoesNotExist:
             raise NotFound("The selected new session could not be found.")
+
+        # Must stay within the same business (allow same or different class/option)
+        if (
+            new_instance.schedule.option.classId.businessId_id
+            != booking.schedule_instance.schedule.option.classId.businessId_id
+        ):
+            raise ValidationError(
+                {
+                    "new_schedule_instance_id": "You can only reschedule to a session belonging to your business."
+                }
+            )
 
         # Create a timezone-aware datetime for the new instance's start time
         business_tz_str = (
