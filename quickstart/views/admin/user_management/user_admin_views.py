@@ -1,4 +1,3 @@
-from datetime import timedelta
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -28,6 +27,7 @@ from quickstart.serializers.admin.user_management.admin_serializers import (
 from quickstart.serializers.admin.user_management.audit_serializers import AuditLogSerializer
 
 from quickstart.serializers import CustomUserDetailsSerializer
+from quickstart.views.admin.metrics_time_windows import get_admin_metrics_window
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -560,25 +560,9 @@ class UserAdminViewSet(viewsets.ModelViewSet):
             )
 
         # 1. Date Range Processing
-        try:
-            end_date_str = request.query_params.get(
-                "end_date", timezone.now().strftime("%Y-%m-%d")
-            )
-            default_start_date = (
-                timezone.datetime.strptime(end_date_str, "%Y-%m-%d")
-                - timedelta(days=29)
-            ).strftime("%Y-%m-%d")
-            start_date_str = request.query_params.get("start_date", default_start_date)
-
-            start_date_dt = timezone.make_aware(
-                timezone.datetime.strptime(start_date_str, "%Y-%m-%d")
-            )
-            end_date_dt = timezone.make_aware(
-                timezone.datetime.strptime(end_date_str, "%Y-%m-%d")
-            ).replace(hour=23, minute=59, second=59)
-        except (ValueError, TypeError):
-            end_date_dt = timezone.now()
-            start_date_dt = end_date_dt - timedelta(days=30)
+        window = get_admin_metrics_window(
+            request.query_params, default_days=30, logger=logger
+        )
 
         # 2. User Model Aggregations
         user_counts = User.objects.aggregate(
@@ -592,14 +576,20 @@ class UserAdminViewSet(viewsets.ModelViewSet):
             ),
             # STRICT DATE FILTERING for "New" metrics
             new_users_in_period=Count(
-                "userId", filter=Q(createdAt__range=[start_date_dt, end_date_dt])
+                "userId",
+                filter=Q(
+                    createdAt__gte=window.start_dt,
+                    createdAt__lt=window.end_dt_exclusive,
+                ),
             ),
         )
 
         # 3. Active User (Engagement) Metric from AuditLog (Strict Date Filter)
         active_users_in_period = (
             AuditLog.objects.filter(
-                action="login", timestamp__range=[start_date_dt, end_date_dt]
+                action="login",
+                timestamp__gte=window.start_dt,
+                timestamp__lt=window.end_dt_exclusive,
             )
             .values("user_id")
             .distinct()
@@ -619,7 +609,10 @@ class UserAdminViewSet(viewsets.ModelViewSet):
 
         # Trend (Strict Date Filter)
         registration_trend = (
-            User.objects.filter(createdAt__range=[start_date_dt, end_date_dt])
+            User.objects.filter(
+                createdAt__gte=window.start_dt,
+                createdAt__lt=window.end_dt_exclusive,
+            )
             .annotate(day=TruncDay("createdAt"))
             .values("day")
             .annotate(count=Count("userId"))
@@ -643,8 +636,8 @@ class UserAdminViewSet(viewsets.ModelViewSet):
                     }
                     for item in registration_trend
                 ],
-                "query_start_date": start_date_dt.strftime("%Y-%m-%d"),
-                "query_end_date": end_date_dt.strftime("%Y-%m-%d"),
+                "query_start_date": window.start_date.strftime("%Y-%m-%d"),
+                "query_end_date": window.end_date.strftime("%Y-%m-%d"),
             }
         )
 

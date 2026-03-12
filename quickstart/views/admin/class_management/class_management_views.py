@@ -49,6 +49,7 @@ from quickstart.views.public.public_class_views import (
     HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY,
 )
 from quickstart.views.public.public_business_views import invalidate_business_detail_cache
+from quickstart.views.admin.metrics_time_windows import get_admin_metrics_local_now
 from quickstart.models import (
     ClassCategory,
     ClassCollection,
@@ -497,8 +498,9 @@ class AdminClassViewSet(viewsets.ModelViewSet):
             status_counts = {item["status"]: item["count"] for item in status_counts_qs}
 
             # --- NEW: Schedule Warning Stats (show when < 2 weeks of schedules left) ---
-            two_weeks_from_now = timezone.now() + timedelta(days=14)
-            today = timezone.now().date()
+            local_now = get_admin_metrics_local_now()
+            two_weeks_from_now = local_now + timedelta(days=14)
+            today = local_now.date()
 
             # Single-query: annotate each active class with its latest instance date (no N+1)
             latest_instance_date_subquery = Subquery(

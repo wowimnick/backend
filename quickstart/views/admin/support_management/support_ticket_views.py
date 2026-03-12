@@ -9,6 +9,7 @@ from quickstart.models import SupportTicket, TicketMessage, TicketHistoryLog
 from rest_framework.pagination import PageNumberPagination
 from quickstart.utils.permissions import IsAuthenticated, BasePermission, CanAccessSupportAdmin
 from quickstart.utils.email_utils import send_agent_reply_email, send_ticket_resolved_email
+from quickstart.views.admin.metrics_time_windows import get_admin_metrics_window
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -302,7 +303,13 @@ class AdminSupportTicketViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=["get"])
     def stats(self, request):
-        tickets = SupportTicket.objects.all()
+        window = get_admin_metrics_window(
+            request.query_params, default_days=30, logger=logger
+        )
+        tickets = SupportTicket.objects.filter(
+            created_at__gte=window.start_dt,
+            created_at__lt=window.end_dt_exclusive,
+        )
 
         def format_timedelta(td):
             if not td:

@@ -4,7 +4,6 @@ from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
-from datetime import timedelta
 import logging
 from django.db.models import Q
 
@@ -40,6 +39,7 @@ from quickstart.utils.permissions import (
     CanProcessVerificationRequests,
     CanViewAllVerificationRequests,
 )
+from quickstart.views.admin.metrics_time_windows import get_admin_metrics_window
 
 
 logger = logging.getLogger(__name__)
@@ -443,14 +443,20 @@ class VerificationRequestViewSet(viewsets.ModelViewSet):
     def stats(self, request):
         """Return counts for Verification Overview: pending, verified_30d, rejected_30d."""
         qs = self.get_queryset()
-        now = timezone.now()
-        thirty_days_ago = now - timedelta(days=30)
+        window = get_admin_metrics_window(
+            request.query_params, default_days=30, logger=logger
+        )
+        # Pending is intentionally global snapshot, not period-bound.
         pending = qs.filter(status="pending").count()
         verified_30d = qs.filter(
-            status=VERIFIED_STATUS, reviewed_at__gte=thirty_days_ago
+            status=VERIFIED_STATUS,
+            reviewed_at__gte=window.start_dt,
+            reviewed_at__lt=window.end_dt_exclusive,
         ).count()
         rejected_30d = qs.filter(
-            status="rejected", reviewed_at__gte=thirty_days_ago
+            status="rejected",
+            reviewed_at__gte=window.start_dt,
+            reviewed_at__lt=window.end_dt_exclusive,
         ).count()
         return Response(
             {

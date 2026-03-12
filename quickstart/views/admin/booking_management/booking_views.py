@@ -9,7 +9,6 @@ from django.db import transaction
 from django.db.models import Q, Sum, Count, DecimalField, IntegerField, Prefetch
 from django.db.models.functions import Coalesce
 from rest_framework.pagination import PageNumberPagination
-from datetime import timedelta
 import logging
 import csv
 from django.http import HttpResponse
@@ -42,6 +41,7 @@ except ImportError:
 
 from quickstart.utils.sms_utils import normalize_phone_for_sns, business_sms_enabled
 from quickstart.tasks.notification_tasks import send_sms_task
+from quickstart.views.admin.metrics_time_windows import get_admin_metrics_window
 
 
 logger = logging.getLogger(__name__)
@@ -345,32 +345,13 @@ class AdminBookingViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            today = timezone.localdate()
-            default_end_date = today
-            default_start_date = today - timedelta(days=29)
-
-            start_param = request.query_params.get("start_date")
-            end_param = request.query_params.get("end_date")
-
-            start_date_dt = default_start_date
-            end_date_dt = default_end_date
-
-            if start_param and end_param:
-                try:
-                    start_date_dt = timezone.datetime.strptime(
-                        start_param, "%Y-%m-%d"
-                    ).date()
-                    end_date_dt = timezone.datetime.strptime(
-                        end_param, "%Y-%m-%d"
-                    ).date()
-                except ValueError:
-                    logger.warning(
-                        f"Invalid date format in analytics params: start='{start_param}', end='{end_param}'. Using default range."
-                    )
+            window = get_admin_metrics_window(
+                request.query_params, default_days=30, logger=logger
+            )
 
             bookings_in_period = Booking.objects.filter(
-                booking_date__date__gte=start_date_dt,
-                booking_date__date__lte=end_date_dt,
+                booking_date__gte=window.start_dt,
+                booking_date__lt=window.end_dt_exclusive,
             )
 
             aggregates = bookings_in_period.aggregate(
@@ -412,14 +393,9 @@ class AdminBookingViewSet(viewsets.ModelViewSet):
                 else 0
             )
 
-            period_duration = end_date_dt - start_date_dt
-            previous_start_date_dt = start_date_dt - (
-                period_duration + timedelta(days=1)
-            )
-            previous_end_date_dt = start_date_dt - timedelta(days=1)
             previous_period_bookings_count = Booking.objects.filter(
-                booking_date__date__gte=previous_start_date_dt,
-                booking_date__date__lte=previous_end_date_dt,
+                booking_date__gte=window.previous_start_dt,
+                booking_date__lt=window.previous_end_dt_exclusive,
             ).count()
 
             booking_growth = 0
@@ -441,8 +417,8 @@ class AdminBookingViewSet(viewsets.ModelViewSet):
                     avg_participants_per_booking, 2
                 ),
                 "booking_growth": round(booking_growth, 1),
-                "start_date": start_date_dt.strftime("%Y-%m-%d"),
-                "end_date": end_date_dt.strftime("%Y-%m-%d"),
+                "start_date": window.start_date.strftime("%Y-%m-%d"),
+                "end_date": window.end_date.strftime("%Y-%m-%d"),
             }
 
             return Response(response_data)

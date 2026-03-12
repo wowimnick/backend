@@ -6,7 +6,6 @@ from django.utils import timezone
 from django.db import transaction
 from django.db.models import Sum, Count, Avg, Q  # Added Q for search filter
 from django.db.models.functions import Coalesce  # Added Coalesce
-from datetime import timedelta
 from decimal import Decimal
 
 from quickstart.models import AuditLog, Payment
@@ -25,6 +24,8 @@ from django.conf import settings
 import logging
 import csv
 from django.http import HttpResponse
+
+from quickstart.views.admin.metrics_time_windows import get_admin_metrics_window
 
 logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
@@ -161,22 +162,25 @@ class AdminPaymentViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            # --- Calculation logic remains the same ---
-            end_date = timezone.now()
-            days = int(request.query_params.get("days", 30))  # Allow specifying days
-            start_date = end_date - timedelta(days=days)
+            try:
+                days = max(int(request.query_params.get("days", 30)), 1)
+            except (TypeError, ValueError):
+                days = 30
+            window = get_admin_metrics_window(
+                request.query_params, default_days=days, logger=logger
+            )
 
-            payments = Payment.objects.filter(created_at__range=[start_date, end_date])
+            payments = Payment.objects.filter(
+                created_at__gte=window.start_dt,
+                created_at__lt=window.end_dt_exclusive,
+            )
             total_revenue = payments.filter(status="succeeded").aggregate(
                 total=Coalesce(Sum("amount"), Decimal(0))  # Use Coalesce for Sum
             )["total"]
 
-            previous_start = start_date - timedelta(days=days)
             previous_revenue = Payment.objects.filter(
-                created_at__range=[
-                    previous_start,
-                    start_date,
-                ],  # Compare correct previous period
+                created_at__gte=window.previous_start_dt,
+                created_at__lt=window.previous_end_dt_exclusive,
                 status="succeeded",
             ).aggregate(total=Coalesce(Sum("amount"), Decimal(0)))["total"]
 
@@ -186,10 +190,8 @@ class AdminPaymentViewSet(viewsets.ModelViewSet):
                     (total_revenue - previous_revenue) / previous_revenue
                 ) * 100
 
-            # Use base queryset to get pending count
-            pending_payments = Payment.objects.filter(
-                status="pending"
-            ).count()  # Overall pending
+            # Keep all counters in the same selected period.
+            pending_payments = payments.filter(status="pending").count()
 
             refunded_amount = payments.filter(
                 status__in=["refunded", "partially_refunded"]
@@ -206,7 +208,7 @@ class AdminPaymentViewSet(viewsets.ModelViewSet):
                     "refunded_amount": float(refunded_amount),
                     "total_transactions": total_transactions,
                     "successful_transactions": successful_transactions,
-                    "period_days": days,
+                    "period_days": window.period_days,
                 }
             )
         except Exception as e:

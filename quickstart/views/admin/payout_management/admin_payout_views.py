@@ -5,7 +5,6 @@ from rest_framework.pagination import PageNumberPagination
 from django.db.models import Sum, Count, Q, F, Avg
 from django.db.models.functions import Coalesce
 from django.utils import timezone
-from datetime import timedelta
 from decimal import Decimal
 import logging
 import csv
@@ -19,6 +18,7 @@ from quickstart.serializers.admin.payout_management.admin_payout_serializers imp
 )
 
 from quickstart.tasks import process_daily_payouts
+from quickstart.views.admin.metrics_time_windows import get_admin_metrics_window
 
 logger = logging.getLogger(__name__)
 
@@ -64,18 +64,13 @@ class AdminPayoutViewSet(viewsets.ReadOnlyModelViewSet):
             self.permission_denied(request, message="You cannot view payout analytics.")
 
         try:
-            start_param = request.query_params.get("start_date")
-            end_param = request.query_params.get("end_date")
-
-            if start_param and end_param:
-                start_date = timezone.datetime.strptime(start_param, "%Y-%m-%d").date()
-                end_date = timezone.datetime.strptime(end_param, "%Y-%m-%d").date()
-            else:
-                end_date = timezone.localdate()
-                start_date = end_date - timedelta(days=29)
+            window = get_admin_metrics_window(
+                request.query_params, default_days=30, logger=logger
+            )
 
             payouts_in_period = Payout.objects.filter(
-                created_at__date__range=[start_date, end_date]
+                created_at__gte=window.start_dt,
+                created_at__lt=window.end_dt_exclusive,
             )
 
             aggregates = payouts_in_period.aggregate(
@@ -103,8 +98,8 @@ class AdminPayoutViewSet(viewsets.ReadOnlyModelViewSet):
                 "payouts_failed": aggregates["payouts_failed"],
                 "businesses_paid_count": businesses_paid_count,
                 "average_payout_amount": aggregates["avg_payout_amount"],
-                "start_date": start_date.strftime("%Y-%m-%d"),
-                "end_date": end_date.strftime("%Y-%m-%d"),
+                "start_date": window.start_date.strftime("%Y-%m-%d"),
+                "end_date": window.end_date.strftime("%Y-%m-%d"),
             }
             return Response(response_data)
 

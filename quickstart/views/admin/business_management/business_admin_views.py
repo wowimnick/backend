@@ -58,6 +58,7 @@ from quickstart.serializers.admin.business_management.admin_business_serializers
     AdminBusinessListSerializer,
     GeographicBoundaryDataSerializer,
 )
+from quickstart.views.admin.metrics_time_windows import get_admin_metrics_window
 
 logger = logging.getLogger(__name__)
 
@@ -482,30 +483,38 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
                 request, message="You do not have permission to view business metrics."
             )
 
-        today = timezone.now().date()
-        thirty_days_ago = today - timedelta(days=30)
+        window = get_admin_metrics_window(
+            request.query_params, default_days=30, logger=logger
+        )
 
         business_counts = BusinessInfo.objects.aggregate(
             total_businesses=Count("pk"),
             active_businesses=Count("pk", filter=Q(isActive=True)),
             featured_businesses=Count("pk", filter=Q(featured=True)),
             new_businesses_30d=Count(
-                "pk", filter=Q(createdAt__date__gte=thirty_days_ago)
+                "pk",
+                filter=Q(
+                    createdAt__gte=window.start_dt,
+                    createdAt__lt=window.end_dt_exclusive,
+                ),
             ),
         )
 
-        businesses_30d_ago_count = BusinessInfo.objects.filter(
-            createdAt__date__lt=thirty_days_ago
+        previous_period_businesses = BusinessInfo.objects.filter(
+            createdAt__gte=window.previous_start_dt,
+            createdAt__lt=window.previous_end_dt_exclusive,
         ).count()
         total_business_growth = 0
-        if businesses_30d_ago_count > 0:
+        if previous_period_businesses > 0:
             total_business_growth = (
-                (business_counts["total_businesses"] - businesses_30d_ago_count)
-                / businesses_30d_ago_count
+                (business_counts["new_businesses_30d"] - previous_period_businesses)
+                / previous_period_businesses
             ) * 100
 
         total_gross_revenue = Booking.objects.filter(
-            status__in=["confirmed", "completed"]
+            status__in=["confirmed", "completed"],
+            booking_date__gte=window.start_dt,
+            booking_date__lt=window.end_dt_exclusive,
         ).aggregate(
             total=Coalesce(
                 Sum("amount_paid"),
@@ -518,7 +527,9 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
 
         # Calculate total platform revenue by summing the fee AND the tax on the fee.
         total_platform_revenue_agg = Payment.objects.filter(
-            status__in=["succeeded", "partially_refunded"]
+            status__in=["succeeded", "partially_refunded"],
+            created_at__gte=window.start_dt,
+            created_at__lt=window.end_dt_exclusive,
         ).aggregate(
             total=Coalesce(
                 Sum(
