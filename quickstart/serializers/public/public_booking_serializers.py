@@ -240,6 +240,7 @@ class BookingDetailSerializer(serializers.ModelSerializer):
     user_timezone = serializers.SerializerMethodField(read_only=True)
     user_facing_reference = serializers.CharField(read_only=True, allow_null=True)
     session_info = serializers.SerializerMethodField()
+    payment = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Booking
@@ -272,8 +273,20 @@ class BookingDetailSerializer(serializers.ModelSerializer):
             "cancellation_policy",
             "cancellation_custom_hours",
             "cancellation_refund_percentage",
+            "payment",
         ]
         read_only_fields = fields
+
+    def get_payment(self, obj):
+        """Include payment with platform_fee_amount for admin booking details drawer."""
+        from quickstart.serializers.admin.booking_management.payment_serializers import (
+            AdminBookingPaymentSerializer,
+        )
+
+        payment_instance = obj.payments.order_by("-created_at").first()
+        if payment_instance:
+            return AdminBookingPaymentSerializer(payment_instance).data
+        return None
 
     def get_user_name(self, obj):
         if obj.user:

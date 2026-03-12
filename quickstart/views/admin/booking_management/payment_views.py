@@ -170,17 +170,18 @@ class AdminPaymentViewSet(viewsets.ModelViewSet):
                 request.query_params, default_days=days, logger=logger
             )
 
+            # Use same date basis as Bookings tab: filter by booking_date so metrics align.
             payments = Payment.objects.filter(
-                created_at__gte=window.start_dt,
-                created_at__lt=window.end_dt_exclusive,
+                booking__booking_date__gte=window.start_dt,
+                booking__booking_date__lt=window.end_dt_exclusive,
             )
             total_revenue = payments.filter(status="succeeded").aggregate(
                 total=Coalesce(Sum("amount"), Decimal(0))  # Use Coalesce for Sum
             )["total"]
 
             previous_revenue = Payment.objects.filter(
-                created_at__gte=window.previous_start_dt,
-                created_at__lt=window.previous_end_dt_exclusive,
+                booking__booking_date__gte=window.previous_start_dt,
+                booking__booking_date__lt=window.previous_end_dt_exclusive,
                 status="succeeded",
             ).aggregate(total=Coalesce(Sum("amount"), Decimal(0)))["total"]
 
@@ -200,7 +201,7 @@ class AdminPaymentViewSet(viewsets.ModelViewSet):
             total_transactions = payments.count()
             successful_transactions = payments.filter(status="succeeded").count()
 
-            # Platform fees: sum of stored platform_fee_amount; Stripe: 2.9% + $0.30 per succeeded payment (calculated on the fly)
+            # Platform fees: sum of stored platform_fee_amount (respects business tier, discounts at payment time); Stripe: 2.9% + $0.30 per succeeded payment (calculated on the fly)
             succeeded_payments = payments.filter(status="succeeded")
             stripe_fee_expr = ExpressionWrapper(
                 F("amount") * Decimal("0.029") + Value(Decimal("0.30")),
