@@ -20,12 +20,15 @@ def get_business(request):
     if hasattr(request, "_cached_business"):
         return request._cached_business
 
-    business_key = request.headers.get("X-Business-ID")
-    if not business_key:
+    raw_key = request.headers.get("X-Business-ID")
+    if not raw_key:
         request._cached_business = None
         return None
 
-    if business_key.strip() == WIDGET_DEMO_KEY:
+    # Use only the key part; ignore any query string (e.g. "demo?ce_plan=uuid")
+    business_key = raw_key.split("?")[0].strip()
+
+    if business_key == WIDGET_DEMO_KEY:
         request._cached_business = DemoBusinessContext()
         return request._cached_business
 

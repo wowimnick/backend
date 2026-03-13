@@ -25,6 +25,7 @@ from quickstart.models import (
     BusinessInfo,
     ClassImage,
     ClassesMain,
+    MembershipProduct,
     Reviews,
     Schedule,
     ScheduleInstance,
@@ -87,6 +88,29 @@ class PublicBusinessInfoViewSet(viewsets.ReadOnlyModelViewSet):
         if self.action == "retrieve":
             return PublicBusinessDetailSerializer
         return PublicBusinessInfoSerializer
+
+    @action(detail=True, url_path="memberships", methods=["get"])
+    def memberships(self, request, slug=None):
+        """List active membership products for this business (public)."""
+        business = self.get_object()
+        products = MembershipProduct.objects.filter(
+            business=business, is_active=True
+        ).order_by("price")
+        data = [
+            {
+                "id": str(p.id),
+                "name": p.name,
+                "description": p.description or "",
+                "price": str(p.price),
+                "currency": p.currency,
+                "billing_interval": p.billing_interval,
+                "access_type": p.access_type,
+                "credit_allowance": p.credit_allowance,
+                "credit_unit": p.credit_unit or "",
+            }
+            for p in products
+        ]
+        return Response(data, status=status.HTTP_200_OK)
 
     # --- CACHING: versioned so we can invalidate when class/business changes ---
     # Authenticated users get fresh data (is_favorited). Anonymous use cache; invalidate on update.

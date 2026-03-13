@@ -768,14 +768,18 @@ class WidgetSubscriptionView(APIView):
                     "widget_subscription_required": subscription_required,
                     "has_stripe_subscription": False,
                     "has_widget_access": has_widget_access,
+                    "has_membership_access": False,
                 },
                 status=status.HTTP_200_OK,
             )
+        plan_id = (sub.plan_id or "").strip().lower()
+        has_membership_access = has_widget_access and plan_id in ("growth", "advanced")
         payload = {
             "subscription": _subscription_response_from_sub(sub),
             "widget_subscription_required": subscription_required,
             "has_stripe_subscription": bool(sub.stripe_subscription_id),
             "has_widget_access": has_widget_access,
+            "has_membership_access": has_membership_access,
         }
         # Optional: scheduled downgrade from Stripe subscription schedule
         if sub.stripe_subscription_id:

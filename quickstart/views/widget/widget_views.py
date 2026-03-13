@@ -21,12 +21,19 @@ from quickstart.models import (
     ScheduleInstance,
     Booking,
     Contact,
+    CustomerMembership,
     Payment,
     ClassImage,
     ClassOption,
     WidgetSubscription,
     Discount,
     AppliedDiscount,
+    MembershipProduct,
+)
+from quickstart.services.membership_service import (
+    create_customer_membership_subscription,
+    get_credits_remaining,
+    consume_credit,
 )
 from quickstart.serializers.widget.widget_serializers import (
     WidgetBusinessConfigSerializer,
@@ -120,6 +127,43 @@ def _get_widget_plan_fee_percentage(business):
     if not sub or not sub.plan_id:
         return Decimal("4.00")
     return WIDGET_PLAN_FEE_PERCENT.get((sub.plan_id or "").lower(), Decimal("4.00"))
+
+
+def _get_active_membership_for_booking(business, email, class_id):
+    """
+    If the given email has an active membership for this business that covers the class,
+    return (CustomerMembership, use_credits). Otherwise return (None, False).
+    use_credits: True when access_type is credits (caller must check credits_remaining).
+    """
+    if not email or getattr(business, "is_demo", False):
+        return None, False
+    try:
+        contact = Contact.objects.get(business=business, email__iexact=email.strip())
+    except Contact.DoesNotExist:
+        return None, False
+    now = timezone.now()
+    membership = (
+        CustomerMembership.objects.filter(
+            contact=contact,
+            product__business=business,
+            status__in=["active", "trialing"],
+        )
+        .filter(
+            Q(current_period_end__isnull=True) | Q(current_period_end__gt=now)
+        )
+        .select_related("product")
+        .first()
+    )
+    if not membership:
+        return None, False
+    product = membership.product
+    if not product.is_active:
+        return None, False
+    applicable = product.applicable_classes.all()
+    if applicable.exists() and not applicable.filter(classId=class_id).exists():
+        return None, False
+    use_credits = product.access_type == "credits"
+    return membership, use_credits
 
 
 def _get_widget_plan_id(business):
@@ -565,8 +609,33 @@ class CreateGuestPaymentIntentView(APIView):
                 f"Not enough spots available. Only {instance.available_spots} left."
             )
 
-        subtotal = instance.price * Decimal(participants)
-        applied_discount_id = request.data.get("applied_discount_id")
+        # Member entitlement: if guest has active membership covering this class, charge $0
+        guest_email = (request.data.get("email") or "").strip()
+        membership = None
+        member_booking = False
+        if guest_email:
+            membership, use_credits = _get_active_membership_for_booking(
+                business,
+                guest_email,
+                instance.schedule.option.classId_id,
+            )
+            if membership:
+                if use_credits:
+                    remaining = get_credits_remaining(membership)
+                    if remaining is not None and remaining <= 0:
+                        membership = None
+                    else:
+                        member_booking = True
+                else:
+                    member_booking = True
+
+        if member_booking and membership:
+            subtotal = Decimal("0.00")
+            applied_discount_id = None
+            discount_amount = Decimal("0.00")
+        else:
+            subtotal = instance.price * Decimal(participants)
+            applied_discount_id = request.data.get("applied_discount_id")
         discount_amount = None
         if applied_discount_id:
             try:
@@ -643,7 +712,7 @@ class CreateGuestPaymentIntentView(APIView):
             "business_id": business.businessId,
             "schedule_instance_id": instance.id,
             "participants": participants,
-            "booking_source": "widget",
+            "booking_source": "member_widget" if (member_booking and membership) else "widget",
             "plan_id": plan_id or "basic",
             "subtotal_cents": int(subtotal * 100),
             "subtotal_for_payout": str(subtotal_for_payout),
@@ -651,6 +720,8 @@ class CreateGuestPaymentIntentView(APIView):
             "platform_fee_cents": int(platform_fee * 100),
             "net_payout_cents": int(net_payout_amount * 100),
         }
+        if member_booking and membership:
+            metadata["membership_id"] = str(membership.id)
         if applied_discount_id:
             metadata["applied_discount_id"] = str(applied_discount_id)
             metadata["discount_amount"] = str(discount_amount)
@@ -816,10 +887,27 @@ class GuestBookingCreateView(generics.CreateAPIView):
                             e,
                         )
 
+                # Member booking: consume one credit if access_type is credits
+                if metadata.get("booking_source") == "member_widget" and metadata.get("membership_id"):
+                    try:
+                        member = CustomerMembership.objects.get(
+                            id=metadata["membership_id"],
+                            product__business=business,
+                        )
+                        consume_credit(member, booking)
+                    except (CustomerMembership.DoesNotExist, ValueError) as e:
+                        logger.warning(
+                            "Widget: could not consume credit for member booking %s: %s",
+                            booking.id,
+                            e,
+                        )
+
             # --- Post-Transaction Actions: Emails (guest confirmation + business notification) ---
             try:
                 send_booking_confirmation_email(
-                    contact, booking, booking_source="widget"
+                    contact,
+                    booking,
+                    booking_source=metadata.get("booking_source", "widget"),
                 )
             except Exception as email_err:
                 logger.warning(
@@ -1105,3 +1193,155 @@ class GuestFreeBookingCreateView(APIView):
                 {"error": "An unexpected server error occurred. Please try again."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+class WidgetMembershipProductsView(APIView):
+    """GET: List active membership products for the business (widget, no auth)."""
+
+    permission_classes = [IsValidWidgetRequest]
+    throttle_classes = [WidgetRateThrottle]
+
+    def get(self, request):
+        business = request.business_context
+        if getattr(business, "is_demo", False):
+            # Demo mode: return one mock product so the widget can show the membership flow.
+            ce_plan = (request.query_params.get("ce_plan") or "").strip() or None
+            mock_id = ce_plan if ce_plan else "00000000-0000-4000-8000-000000000001"
+            return Response({
+                "products": [
+                    {
+                        "id": mock_id,
+                        "name": "Demo membership",
+                        "description": "Sample plan for widget preview. Subscriptions are disabled in demo.",
+                        "price": "29.00",
+                        "currency": "USD",
+                        "billing_interval": "month",
+                        "access_type": "unlimited",
+                        "credit_allowance": None,
+                        "credit_unit": "",
+                    }
+                ]
+            }, status=status.HTTP_200_OK)
+        products = MembershipProduct.objects.filter(
+            business=business, is_active=True
+        ).order_by("price")
+        out = []
+        for p in products:
+            out.append({
+                "id": str(p.id),
+                "name": p.name,
+                "description": p.description or "",
+                "price": str(p.price),
+                "currency": p.currency,
+                "billing_interval": p.billing_interval,
+                "access_type": p.access_type,
+                "credit_allowance": p.credit_allowance,
+                "credit_unit": p.credit_unit or "",
+            })
+        return Response({"products": out}, status=status.HTTP_200_OK)
+
+
+class WidgetMembershipSubscribeView(APIView):
+    """POST: Create Stripe subscription for a customer membership; returns client_secret."""
+
+    permission_classes = [IsValidWidgetRequest]
+    throttle_classes = [WidgetRateThrottle]
+
+    def post(self, request):
+        if _is_demo(request):
+            return Response(
+                {"error": "demo_mode", "message": "Demo mode: subscriptions disabled."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        business = request.business_context
+        product_id = request.data.get("product_id")
+        if not product_id:
+            return Response(
+                {"error": "product_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            product = MembershipProduct.objects.get(
+                id=product_id, business=business, is_active=True
+            )
+        except (MembershipProduct.DoesNotExist, ValueError, TypeError):
+            raise NotFound("Membership product not found.")
+        email = (request.data.get("email") or "").strip()
+        if not email:
+            return Response(
+                {"error": "email is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        first_name = (request.data.get("first_name") or "").strip()
+        last_name = (request.data.get("last_name") or "").strip()
+        payment_method_id = (request.data.get("payment_method_id") or "").strip() or None
+        try:
+            membership, client_secret = create_customer_membership_subscription(
+                business=business,
+                product=product,
+                email=email,
+                first_name=first_name,
+                last_name=last_name,
+                payment_method_id=payment_method_id,
+            )
+        except Exception as e:
+            logger.exception("Widget membership subscribe failed: %s", e)
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(
+            {"client_secret": client_secret, "membership_id": str(membership.id)},
+            status=status.HTTP_200_OK,
+        )
+
+
+class WidgetMembershipStatusView(APIView):
+    """GET: Check if email has an active membership for this business."""
+
+    permission_classes = [IsValidWidgetRequest]
+    throttle_classes = [WidgetRateThrottle]
+
+    def get(self, request):
+        business = request.business_context
+        email = (request.query_params.get("email") or "").strip()
+        if not email:
+            return Response(
+                {"active": False, "error": "email is required"},
+                status=status.HTTP_200_OK,
+            )
+        if getattr(business, "is_demo", False):
+            return Response({"active": False}, status=status.HTTP_200_OK)
+        try:
+            contact = Contact.objects.get(
+                business=business, email__iexact=email
+            )
+        except Contact.DoesNotExist:
+            return Response({"active": False}, status=status.HTTP_200_OK)
+        now = timezone.now()
+        membership = (
+            CustomerMembership.objects.filter(
+                contact=contact,
+                product__business=business,
+                status__in=["active", "trialing"],
+            )
+            .filter(
+                Q(current_period_end__isnull=True) | Q(current_period_end__gt=now)
+            )
+            .select_related("product")
+            .first()
+        )
+        if not membership:
+            return Response({"active": False}, status=status.HTTP_200_OK)
+        product = membership.product
+        credits_remaining = None
+        if product.access_type == "credits" and product.credit_allowance:
+            credits_remaining = get_credits_remaining(membership)
+        return Response(
+            {
+                "active": True,
+                "product_name": product.name,
+                "credits_remaining": credits_remaining,
+            },
+            status=status.HTTP_200_OK,
+        )
