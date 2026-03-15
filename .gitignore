@@ -34,3 +34,4 @@ venv/
 ENV/
 VENV/
 .aider*
+.cursor/debug.log

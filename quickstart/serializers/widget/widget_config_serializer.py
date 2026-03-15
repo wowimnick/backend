@@ -54,7 +54,12 @@ class BusinessWidgetConfigSerializer(serializers.ModelSerializer):
         # All other fields passed in validated_data are part of the widget_config
         # We merge them with the existing config to perform a partial update
         current_config = instance.widget_config or {}
-        current_config.update(validated_data)
+        for key, value in validated_data.items():
+            # Treat null/empty/inherit as "clear this key" so stale values don't persist
+            if key == "fontFamily" and (value is None or value == "" or value == "inherit"):
+                current_config.pop("fontFamily", None)
+            else:
+                current_config[key] = value
         instance.widget_config = current_config
 
         instance.save()
