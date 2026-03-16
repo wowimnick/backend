@@ -19,6 +19,7 @@ from quickstart.models import (
     BusinessInfo,
     BusinessAddonSubscription,
     ClassesMain,
+    MembershipProduct,
     WidgetSubscription,
 )
 from quickstart.models import ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING
@@ -204,6 +205,22 @@ class WidgetConfigManagementView(APIView):
             }
         else:
             response_data["widget_subscription"] = None
+
+        # Active membership products for widget customizer subscription copy-paste snippets
+        membership_products = MembershipProduct.objects.filter(
+            business=business, is_active=True
+        ).values("id", "name", "price", "billing_interval")
+        response_data["membership_products"] = [
+            {
+                "id": str(p["id"]),
+                "name": p["name"],
+                "price": str(p["price"]),
+                "billing_interval": p["billing_interval"],
+                "is_active": True,
+            }
+            for p in membership_products
+        ]
+
         return Response(response_data, status=status.HTTP_200_OK)
 
     def patch(self, request, *args, **kwargs):

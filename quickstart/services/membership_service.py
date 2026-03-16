@@ -146,33 +146,109 @@ def create_customer_membership_subscription(
         source="widget",
     )
 
-    # Extract client_secret from latest_invoice's payment_intent
-    client_secret = None
-    latest_invoice = getattr(stripe_sub, "latest_invoice", None) or (
-        stripe_sub.get("latest_invoice") if isinstance(stripe_sub, dict) else None
+    # Extract client_secret using the same battle-tested pattern as widget_config_views.py.
+    # Stripe's API shape varies by account API version:
+    #   - Classic: invoice.payment_intent (expanded object or id string)
+    #   - New (2024+): invoice.payments.data[0].payment.payment_intent
+    # We try three passes: create response → re-retrieve sub → retrieve invoice directly.
+    invoice = getattr(stripe_sub, "latest_invoice", None) or (
+        stripe_sub.get("latest_invoice") if hasattr(stripe_sub, "get") else None
     )
-    if latest_invoice and not isinstance(latest_invoice, str):
-        pi = getattr(latest_invoice, "payment_intent", None) or (
-            latest_invoice.get("payment_intent") if isinstance(latest_invoice, dict) else None
-        )
-        if pi and not isinstance(pi, str):
-            client_secret = getattr(pi, "client_secret", None) or (
-                pi.get("client_secret") if isinstance(pi, dict) else None
+    client_secret = _client_secret_from_stripe_invoice(invoice)
+
+    if not client_secret and stripe_sub.id:
+        try:
+            stripe_sub_expanded = stripe.Subscription.retrieve(
+                stripe_sub.id,
+                expand=["latest_invoice.payments"],
             )
-        if not client_secret and getattr(latest_invoice, "payment_intent", None):
+            inv = getattr(stripe_sub_expanded, "latest_invoice", None) or (
+                stripe_sub_expanded.get("latest_invoice") if hasattr(stripe_sub_expanded, "get") else None
+            )
+            client_secret = _client_secret_from_stripe_invoice(inv)
+        except stripe.StripeError as e:
+            logger.warning("membership_service: Subscription.retrieve expand failed: %s", e)
+
+    if not client_secret:
+        latest_inv = getattr(stripe_sub, "latest_invoice", None) or (
+            stripe_sub.get("latest_invoice") if hasattr(stripe_sub, "get") else None
+        )
+        inv_id = (
+            getattr(latest_inv, "id", None)
+            if latest_inv is not None and not isinstance(latest_inv, str)
+            else (latest_inv if isinstance(latest_inv, str) else None)
+        )
+        if inv_id:
             try:
-                pi_id = (
-                    latest_invoice.payment_intent
-                    if isinstance(latest_invoice.payment_intent, str)
-                    else getattr(latest_invoice.payment_intent, "id", None)
-                )
-                if pi_id:
-                    pi_obj = stripe.PaymentIntent.retrieve(pi_id)
-                    client_secret = getattr(pi_obj, "client_secret", None)
-            except stripe.StripeError:
-                pass
+                inv_obj = stripe.Invoice.retrieve(str(inv_id), expand=["payments"])
+                client_secret = _client_secret_from_stripe_invoice(inv_obj)
+            except stripe.StripeError as e:
+                logger.warning("membership_service: Invoice.retrieve fallback failed: %s", e)
 
     return customer_membership, client_secret
+
+
+def _client_secret_from_stripe_invoice(invoice):
+    """
+    Extract payment_intent client_secret from a Stripe invoice object.
+    Mirrors widget_config_views._client_secret_from_stripe_invoice exactly.
+    Handles both classic (invoice.payment_intent) and new (invoice.payments) API shapes.
+    """
+    if invoice is None or isinstance(invoice, str):
+        return None
+
+    inv_id = getattr(invoice, "id", None) or (invoice.get("id") if isinstance(invoice, dict) else None)
+
+    # Classic path: invoice.payment_intent
+    pi = getattr(invoice, "payment_intent", None) or (
+        invoice.get("payment_intent") if isinstance(invoice, dict) else None
+    )
+
+    # New API path: invoice.payments.data[0].payment.payment_intent
+    if pi is None:
+        payments = getattr(invoice, "payments", None) or (
+            invoice.get("payments") if isinstance(invoice, dict) else None
+        )
+        if payments:
+            data = getattr(payments, "data", None) or (payments.get("data") if isinstance(payments, dict) else None)
+            if data and len(data):
+                first = data[0]
+                payment = getattr(first, "payment", None) or (
+                    first.get("payment") if isinstance(first, dict) else None
+                )
+                if payment:
+                    pi = getattr(payment, "payment_intent", None) or (
+                        payment.get("payment_intent") if isinstance(payment, dict) else None
+                    )
+
+    if pi is None:
+        logger.info("membership_service: no payment_intent found on invoice inv_id=%s", inv_id)
+        return None
+
+    pi_id = (
+        pi if isinstance(pi, str)
+        else (getattr(pi, "id", None) or (pi.get("id") if isinstance(pi, dict) else None))
+    )
+    if not pi_id:
+        return None
+
+    try:
+        pi_obj = stripe.PaymentIntent.retrieve(pi_id)
+        pi_status = getattr(pi_obj, "status", None) or (
+            pi_obj.get("status") if isinstance(pi_obj, dict) else None
+        )
+        # Only return client_secret for PIs that can be used with Stripe Elements.
+        if pi_status not in ("requires_payment_method", "requires_confirmation", "requires_action"):
+            logger.info(
+                "membership_service: PI not actionable pi_id=%s status=%s", pi_id, pi_status
+            )
+            return None
+        return getattr(pi_obj, "client_secret", None) or (
+            pi_obj.get("client_secret") if isinstance(pi_obj, dict) else None
+        )
+    except stripe.StripeError as e:
+        logger.warning("membership_service: PaymentIntent.retrieve failed pi_id=%s err=%s", pi_id, e)
+        return None
 
 
 def get_credits_remaining(membership, period_start=None):
