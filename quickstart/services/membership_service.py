@@ -8,6 +8,7 @@ from decimal import Decimal
 
 import stripe
 from django.conf import settings
+from django.core.mail import send_mail
 from django.utils import timezone
 
 from django.db.models import Sum
@@ -62,7 +63,14 @@ def create_stripe_price(product):
 
 
 def create_customer_membership_subscription(
-    business, product, email, first_name, last_name, payment_method_id=None
+    business,
+    product,
+    email,
+    first_name,
+    last_name,
+    payment_method_id=None,
+    custom_data=None,
+    trial_period_days=None,
 ):
     """
     Create Stripe Customer + Subscription for a customer membership.
@@ -119,6 +127,8 @@ def create_customer_membership_subscription(
     }
     if payment_method_id:
         create_params["default_payment_method"] = payment_method_id
+    if trial_period_days is not None and trial_period_days > 0:
+        create_params["trial_period_days"] = trial_period_days
 
     stripe_sub = stripe.Subscription.create(**create_params)
 
@@ -144,6 +154,7 @@ def create_customer_membership_subscription(
         current_period_start=period_start,
         current_period_end=period_end,
         source="widget",
+        custom_data=custom_data or {},
     )
 
     # Extract client_secret using the same battle-tested pattern as widget_config_views.py.
@@ -186,6 +197,157 @@ def create_customer_membership_subscription(
                 logger.warning("membership_service: Invoice.retrieve fallback failed: %s", e)
 
     return customer_membership, client_secret
+
+
+def create_approval_membership(
+    business, product, email, first_name, last_name, custom_data=None
+):
+    """
+    Create a CustomerMembership with status=pending_approval (no Stripe).
+    Used when product.requires_approval=True. Returns the membership.
+    """
+    contact, _ = Contact.objects.get_or_create(
+        business=business,
+        email__iexact=email,
+        defaults={
+            "first_name": first_name or "",
+            "last_name": last_name or "",
+            "email": email,
+            "source": "widget_booking",
+        },
+    )
+    if contact.first_name != (first_name or "") or contact.last_name != (last_name or ""):
+        contact.first_name = first_name or contact.first_name
+        contact.last_name = last_name or contact.last_name
+        contact.save(update_fields=["first_name", "last_name"])
+
+    membership = CustomerMembership.objects.create(
+        product=product,
+        contact=contact,
+        user=None,
+        stripe_subscription_id=None,
+        stripe_customer_id=None,
+        status="pending_approval",
+        current_period_start=None,
+        current_period_end=None,
+        source="widget",
+        custom_data=custom_data or {},
+    )
+    return membership
+
+
+def approve_membership(membership):
+    """
+    For a membership with status=pending_approval: create Stripe Customer + Subscription
+    (incomplete), save IDs on membership, set status=approved_pending_payment,
+    send email to contact with hosted_invoice_url for payment.
+    Returns (membership, hosted_invoice_url).
+    """
+    if membership.status != "pending_approval":
+        raise ValueError("Membership must have status pending_approval to approve")
+    if not membership.contact or not membership.contact.email:
+        raise ValueError("Membership must have a contact with email")
+
+    stripe.api_key = settings.STRIPE_SECRET_KEY
+    product = membership.product
+    contact = membership.contact
+    email = contact.email
+    first_name = contact.first_name or ""
+    last_name = contact.last_name or ""
+
+    price_id = product.stripe_price_id
+    if not price_id:
+        price_id = create_stripe_price(product)
+
+    stripe_customer = stripe.Customer.create(
+        email=email,
+        name=f"{first_name} {last_name}".strip() or email,
+        metadata={
+            "business_id": str(product.business_id),
+            "membership_product_id": str(product.id),
+            "contact_id": str(contact.id),
+        },
+    )
+    stripe_customer_id = stripe_customer.id
+
+    create_params = {
+        "customer": stripe_customer_id,
+        "items": [{"price": price_id}],
+        "payment_behavior": "default_incomplete",
+        "payment_settings": {"save_default_payment_method": "on_subscription"},
+        "expand": ["latest_invoice"],
+        "metadata": {
+            "business_id": str(product.business_id),
+            "membership_product_id": str(product.id),
+            "contact_id": str(contact.id),
+        },
+    }
+    if getattr(product, "trial_period_days", None) and product.trial_period_days > 0:
+        create_params["trial_period_days"] = product.trial_period_days
+
+    stripe_sub = stripe.Subscription.create(**create_params)
+
+    period_start = None
+    period_end = None
+    if getattr(stripe_sub, "current_period_start", None):
+        period_start = timezone.make_aware(
+            datetime.utcfromtimestamp(stripe_sub.current_period_start)
+        )
+    if getattr(stripe_sub, "current_period_end", None):
+        period_end = timezone.make_aware(
+            datetime.utcfromtimestamp(stripe_sub.current_period_end)
+        )
+
+    membership.stripe_subscription_id = stripe_sub.id
+    membership.stripe_customer_id = stripe_customer_id
+    membership.status = "approved_pending_payment"
+    membership.current_period_start = period_start
+    membership.current_period_end = period_end
+    membership.save(update_fields=[
+        "stripe_subscription_id", "stripe_customer_id", "status",
+        "current_period_start", "current_period_end", "updated_at",
+    ])
+
+    invoice = getattr(stripe_sub, "latest_invoice", None) or (
+        stripe_sub.get("latest_invoice") if hasattr(stripe_sub, "get") else None
+    )
+    hosted_invoice_url = None
+    if invoice and not isinstance(invoice, str):
+        hosted_invoice_url = getattr(invoice, "hosted_invoice_url", None) or (
+            invoice.get("hosted_invoice_url") if isinstance(invoice, dict) else None
+        )
+    if not hosted_invoice_url and stripe_sub.id:
+        try:
+            inv_id = getattr(invoice, "id", None) if invoice and not isinstance(invoice, str) else None
+            if inv_id:
+                inv_obj = stripe.Invoice.retrieve(str(inv_id))
+                hosted_invoice_url = getattr(inv_obj, "hosted_invoice_url", None) or inv_obj.get("hosted_invoice_url")
+        except stripe.StripeError as e:
+            logger.warning("approve_membership: could not get hosted_invoice_url: %s", e)
+
+    business_name = getattr(product.business, "businessName", None) or "the business"
+    subject = f"Your {product.name} membership has been approved"
+    body = (
+        f"Hi {first_name or 'there'},\n\n"
+        f"Your application for {product.name} at {business_name} has been approved.\n\n"
+    )
+    if hosted_invoice_url:
+        body += f"Complete your payment here to activate your membership:\n{hosted_invoice_url}\n\n"
+    body += "If you have any questions, please reply to this email or contact the business directly."
+
+    try:
+        send_mail(
+            subject=subject,
+            message=body,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[email],
+            fail_silently=False,
+        )
+    except Exception as e:
+        logger.exception("approve_membership: failed to send email: %s", e)
+        # Still return success; business can resend link from dashboard if needed
+
+    return membership, hosted_invoice_url
 
 
 def _client_secret_from_stripe_invoice(invoice):

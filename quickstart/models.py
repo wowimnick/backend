@@ -3113,6 +3113,34 @@ class MembershipProduct(models.Model):
         default=False,
         help_text="If True, show application form link",
     )
+    confirmation_message = models.TextField(
+        blank=True,
+        help_text="Shown to the member after they subscribe. Leave blank for default.",
+    )
+    welcome_url = models.CharField(
+        max_length=500,
+        blank=True,
+        help_text="e.g. https://yoursite.com/members — shown as 'Access member portal' on success screen",
+    )
+    application_instructions = models.TextField(
+        blank=True,
+        help_text="Shown above the signup form when requires_approval=True.",
+    )
+    signup_fields = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Array of { key, label, type, required, options? } for custom signup form fields",
+    )
+    max_members = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Cap on active members; null = unlimited",
+    )
+    trial_period_days = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Free trial days before first charge; passed to Stripe",
+    )
     stripe_price_id = models.CharField(max_length=255, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -3138,6 +3166,7 @@ class CustomerMembership(models.Model):
         ("canceled", "Canceled"),
         ("paused", "Paused"),
         ("pending_approval", "Pending Approval"),
+        ("approved_pending_payment", "Approved (pending payment)"),
         ("incomplete", "Incomplete"),
     ]
 
@@ -3177,6 +3206,11 @@ class CustomerMembership(models.Model):
     source = models.CharField(
         max_length=50,
         help_text="e.g. widget, manual, import",
+    )
+    custom_data = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Submitted signup field values from widget (key: value)",
     )
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

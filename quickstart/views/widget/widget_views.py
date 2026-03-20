@@ -31,6 +31,7 @@ from quickstart.models import (
     MembershipProduct,
 )
 from quickstart.services.membership_service import (
+    create_approval_membership,
     create_customer_membership_subscription,
     get_credits_remaining,
     consume_credit,
@@ -1219,6 +1220,12 @@ class WidgetMembershipProductsView(APIView):
                         "access_type": "unlimited",
                         "credit_allowance": None,
                         "credit_unit": "",
+                        "requires_approval": False,
+                        "application_instructions": "",
+                        "signup_fields": [],
+                        "confirmation_message": "",
+                        "welcome_url": "",
+                        "max_members": None,
                     }
                 ]
             }, status=status.HTTP_200_OK)
@@ -1237,6 +1244,12 @@ class WidgetMembershipProductsView(APIView):
                 "access_type": p.access_type,
                 "credit_allowance": p.credit_allowance,
                 "credit_unit": p.credit_unit or "",
+                "requires_approval": getattr(p, "requires_approval", False),
+                "application_instructions": getattr(p, "application_instructions", "") or "",
+                "signup_fields": getattr(p, "signup_fields", None) or [],
+                "confirmation_message": getattr(p, "confirmation_message", "") or "",
+                "welcome_url": getattr(p, "welcome_url", "") or "",
+                "max_members": getattr(p, "max_members", None),
             })
         return Response({"products": out}, status=status.HTTP_200_OK)
 
@@ -1272,9 +1285,77 @@ class WidgetMembershipSubscribeView(APIView):
                 {"error": "email is required"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # Block same email from subscribing again to this plan (active or trialing)
+        try:
+            contact = Contact.objects.get(business=business, email__iexact=email)
+            if CustomerMembership.objects.filter(
+                contact=contact,
+                product=product,
+                status__in=["active", "trialing"],
+            ).exists():
+                return Response(
+                    {
+                        "error": "already_subscribed",
+                        "message": "This email is already subscribed to this plan.",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        except Contact.DoesNotExist:
+            pass  # New contact, allow subscription
+
+        # 1. Enforce member cap
+        if getattr(product, "max_members", None) is not None:
+            active_count = CustomerMembership.objects.filter(
+                product=product, status__in=["active", "trialing"]
+            ).count()
+            if active_count >= product.max_members:
+                return Response(
+                    {"error": "plan_full", "message": "This plan is currently full."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        # 2. Validate required custom fields
+        custom_data = request.data.get("custom_data") or {}
+        if not isinstance(custom_data, dict):
+            custom_data = {}
+        for field in (getattr(product, "signup_fields", None) or []):
+            if field.get("required") and not custom_data.get(field.get("key")):
+                return Response(
+                    {
+                        "error": "missing_field",
+                        "message": f"{field.get('label', field.get('key', 'Field'))} is required.",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         first_name = (request.data.get("first_name") or "").strip()
         last_name = (request.data.get("last_name") or "").strip()
         payment_method_id = (request.data.get("payment_method_id") or "").strip() or None
+
+        # 3. Approval path: no Stripe, create pending_approval membership
+        if getattr(product, "requires_approval", False):
+            try:
+                membership = create_approval_membership(
+                    business=business,
+                    product=product,
+                    email=email,
+                    first_name=first_name,
+                    last_name=last_name,
+                    custom_data=custom_data,
+                )
+            except Exception as e:
+                logger.exception("Widget membership subscribe (approval) failed: %s", e)
+                return Response(
+                    {"error": str(e)},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            return Response(
+                {"status": "pending_approval", "membership_id": str(membership.id)},
+                status=status.HTTP_200_OK,
+            )
+
+        # 4. Normal path: create Stripe subscription
+        trial_period_days = getattr(product, "trial_period_days", None)
         try:
             membership, client_secret = create_customer_membership_subscription(
                 business=business,
@@ -1283,6 +1364,8 @@ class WidgetMembershipSubscribeView(APIView):
                 first_name=first_name,
                 last_name=last_name,
                 payment_method_id=payment_method_id,
+                custom_data=custom_data,
+                trial_period_days=trial_period_days,
             )
         except Exception as e:
             logger.exception("Widget membership subscribe failed: %s", e)

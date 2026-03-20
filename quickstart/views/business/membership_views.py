@@ -24,6 +24,7 @@ from quickstart.models import (
     MembershipProduct,
 )
 from quickstart.services.membership_service import (
+    approve_membership,
     create_stripe_price,
     get_credits_remaining,
 )
@@ -45,6 +46,32 @@ def _get_business(user):
     return business
 
 
+def _validate_signup_fields(signup_fields):
+    """Validate signup_fields list; return (True, None) or (False, error_message)."""
+    if signup_fields is None:
+        return True, None
+    if not isinstance(signup_fields, list):
+        return False, "signup_fields must be a list"
+    allowed_types = {"text", "textarea", "select", "checkbox"}
+    keys_seen = set()
+    for i, field in enumerate(signup_fields):
+        if not isinstance(field, dict):
+            return False, f"signup_fields[{i}] must be an object"
+        key = field.get("key")
+        label = field.get("label")
+        if not key or not isinstance(key, str) or not key.strip():
+            return False, f"signup_fields[{i}] must have a non-empty key"
+        if not label or not isinstance(label, str) or not label.strip():
+            return False, f"signup_fields[{i}] must have a non-empty label"
+        if key.strip() in keys_seen:
+            return False, f"signup_fields: duplicate key '{key.strip()}'"
+        keys_seen.add(key.strip())
+        ftype = field.get("type", "text")
+        if ftype not in allowed_types:
+            return False, f"signup_fields[{i}].type must be one of: {', '.join(sorted(allowed_types))}"
+    return True, None
+
+
 def _product_to_dict(product):
     """Serialize MembershipProduct for API response."""
     return {
@@ -62,6 +89,12 @@ def _product_to_dict(product):
         ),
         "is_active": product.is_active,
         "requires_approval": product.requires_approval,
+        "confirmation_message": getattr(product, "confirmation_message", "") or "",
+        "welcome_url": getattr(product, "welcome_url", "") or "",
+        "application_instructions": getattr(product, "application_instructions", "") or "",
+        "signup_fields": getattr(product, "signup_fields", None) or [],
+        "max_members": getattr(product, "max_members", None),
+        "trial_period_days": getattr(product, "trial_period_days", None),
         "stripe_price_id": product.stripe_price_id,
         "created_at": product.created_at.isoformat() if product.created_at else None,
         "updated_at": product.updated_at.isoformat() if product.updated_at else None,
@@ -99,6 +132,7 @@ def _member_to_dict(membership):
         "cancel_at_period_end": membership.cancel_at_period_end,
         "source": membership.source,
         "notes": membership.notes or "",
+        "custom_data": getattr(membership, "custom_data", None) or {},
         "credits_remaining": credits_remaining,
         "created_at": membership.created_at.isoformat() if membership.created_at else None,
     }
@@ -142,6 +176,10 @@ class MembershipProductListCreateView(APIView):
                 {"error": "price must be a non-negative number"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        signup_fields = data.get("signup_fields")
+        ok, err = _validate_signup_fields(signup_fields)
+        if not ok:
+            return Response({"error": err}, status=status.HTTP_400_BAD_REQUEST)
         product = MembershipProduct.objects.create(
             business=business,
             name=name,
@@ -154,6 +192,12 @@ class MembershipProductListCreateView(APIView):
             credit_unit=(data.get("credit_unit") or "").strip()[:100],
             is_active=data.get("is_active", True),
             requires_approval=data.get("requires_approval", False),
+            confirmation_message=(data.get("confirmation_message") or "").strip(),
+            welcome_url=(data.get("welcome_url") or "").strip()[:500],
+            application_instructions=(data.get("application_instructions") or "").strip(),
+            signup_fields=signup_fields if isinstance(signup_fields, list) else [],
+            max_members=data.get("max_members") if data.get("max_members") is not None else None,
+            trial_period_days=data.get("trial_period_days") if data.get("trial_period_days") is not None else None,
         )
         if data.get("applicable_class_ids"):
             try:
@@ -213,6 +257,21 @@ class MembershipProductDetailView(APIView):
             product.is_active = bool(data["is_active"])
         if "requires_approval" in data:
             product.requires_approval = bool(data["requires_approval"])
+        if "confirmation_message" in data:
+            product.confirmation_message = (data.get("confirmation_message") or "").strip()
+        if "welcome_url" in data:
+            product.welcome_url = (data.get("welcome_url") or "").strip()[:500]
+        if "application_instructions" in data:
+            product.application_instructions = (data.get("application_instructions") or "").strip()
+        if "signup_fields" in data:
+            ok, err = _validate_signup_fields(data["signup_fields"])
+            if not ok:
+                return Response({"error": err}, status=status.HTTP_400_BAD_REQUEST)
+            product.signup_fields = data["signup_fields"] if isinstance(data["signup_fields"], list) else []
+        if "max_members" in data:
+            product.max_members = data["max_members"] if data["max_members"] is not None else None
+        if "trial_period_days" in data:
+            product.trial_period_days = data["trial_period_days"] if data["trial_period_days"] is not None else None
         if "applicable_class_ids" in data:
             business = _get_business(request.user)
             if data["applicable_class_ids"] is None or data["applicable_class_ids"] == []:
@@ -460,5 +519,59 @@ class MemberManualAddView(APIView):
             cancel_at_period_end=False,
             source="manual",
             notes=(data.get("notes") or "").strip(),
+            custom_data=data.get("custom_data") if isinstance(data.get("custom_data"), dict) else {},
         )
         return Response(_member_to_dict(membership), status=status.HTTP_201_CREATED)
+
+
+class MemberApproveView(APIView):
+    """POST: Approve a pending_approval membership; creates Stripe subscription and emails payment link."""
+
+    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+
+    def post(self, request, pk):
+        business = _get_business(request.user)
+        membership = get_object_or_404(
+            CustomerMembership.objects.select_related("product", "contact"),
+            id=pk,
+            product__business=business,
+        )
+        if membership.status != "pending_approval":
+            return Response(
+                {"error": "Only memberships with status 'pending_approval' can be approved."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            approve_membership(membership)
+        except ValueError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.exception("MemberApproveView failed: %s", e)
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        membership.refresh_from_db()
+        return Response(_member_to_dict(membership), status=status.HTTP_200_OK)
+
+
+class MemberDeclineView(APIView):
+    """POST: Decline a pending_approval membership; set status to canceled."""
+
+    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+
+    def post(self, request, pk):
+        business = _get_business(request.user)
+        membership = get_object_or_404(
+            CustomerMembership,
+            id=pk,
+            product__business=business,
+        )
+        if membership.status != "pending_approval":
+            return Response(
+                {"error": "Only memberships with status 'pending_approval' can be declined."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        membership.status = "canceled"
+        membership.save(update_fields=["status", "updated_at"])
+        return Response(_member_to_dict(membership), status=status.HTTP_200_OK)
