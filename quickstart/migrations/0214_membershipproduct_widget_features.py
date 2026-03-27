@@ -10,7 +10,12 @@ def _ensure_widget_features(apps, schema_editor):
         desc = schema_editor.connection.introspection.get_table_description(cursor, table)
     columns = {row.name for row in desc}
     if "widget_features" not in columns:
-        field = MembershipProduct._meta.get_field("widget_features")
+        field = models.JSONField(
+            blank=True,
+            default=dict,
+            help_text="Optional feature flags / config for widget membership UI (e.g. display options).",
+        )
+        field.set_attributes_from_name("widget_features")
         schema_editor.add_field(MembershipProduct, field)
         return
     # from_state.apps in RunPython does not include this field yet; use raw SQL.

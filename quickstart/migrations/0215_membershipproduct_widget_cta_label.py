@@ -10,7 +10,13 @@ def _ensure_widget_cta_label(apps, schema_editor):
         desc = schema_editor.connection.introspection.get_table_description(cursor, table)
     columns = {row.name for row in desc}
     if "widget_cta_label" not in columns:
-        field = MembershipProduct._meta.get_field("widget_cta_label")
+        field = models.CharField(
+            blank=True,
+            default="",
+            help_text="Optional CTA label override for the membership widget (e.g. Subscribe).",
+            max_length=200,
+        )
+        field.set_attributes_from_name("widget_cta_label")
         schema_editor.add_field(MembershipProduct, field)
         return
     if schema_editor.connection.vendor == "postgresql":

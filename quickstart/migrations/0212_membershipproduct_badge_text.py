@@ -10,7 +10,15 @@ def _ensure_badge_text(apps, schema_editor):
         desc = schema_editor.connection.introspection.get_table_description(cursor, table)
     columns = {row.name for row in desc}
     if "badge_text" not in columns:
-        field = MembershipProduct._meta.get_field("badge_text")
+        # Historical model from RunPython has no badge_text (SeparateDatabaseAndState
+        # passes from_state to RunPython). Build the field to match state_operations.
+        field = models.CharField(
+            blank=True,
+            default="",
+            help_text="Optional short label on pricing cards (e.g. Popular).",
+            max_length=100,
+        )
+        field.set_attributes_from_name("badge_text")
         schema_editor.add_field(MembershipProduct, field)
         return
     if schema_editor.connection.vendor == "postgresql":
