@@ -3141,6 +3141,11 @@ class MembershipProduct(models.Model):
         blank=True,
         help_text="Free trial days before first charge; passed to Stripe",
     )
+    widget_button_config = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Optional: open_class_id, button_label, button_background, button_text_color, button_radius_px for website embed snippet.",
+    )
     stripe_price_id = models.CharField(max_length=255, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

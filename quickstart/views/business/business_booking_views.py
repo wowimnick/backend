@@ -68,6 +68,10 @@ from quickstart.utils.email_utils import (
     send_booking_cancelled_by_other_email,
     send_booking_rescheduled_by_business_email,
 )
+from quickstart.services.reschedule_payout import (
+    apply_reschedule_payout_adjustment,
+    preview_reschedule_payout_adjustment,
+)
 from quickstart.utils.sms_utils import normalize_phone_for_sns, business_sms_enabled
 from quickstart.tasks.notification_tasks import send_sms_task
 import logging
@@ -481,6 +485,23 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
 
         # --- Handle Dry Run Request ---
         if dry_run:
+            payout_preview = preview_reschedule_payout_adjustment(booking, new_instance)
+            payout_payload = None
+            if payout_preview:
+                payout_payload = {
+                    "applies": payout_preview.get("should_apply", False),
+                    "reason": payout_preview.get("reason"),
+                }
+                for key, out_key in (
+                    ("s_customer", "customer_pre_tax_subtotal"),
+                    ("s_new", "new_session_pre_tax_subtotal"),
+                    ("platform_fee_amount", "platform_fee_amount"),
+                    ("platform_fee_tax", "platform_fee_tax"),
+                    ("net_payout_amount", "business_net_payout"),
+                ):
+                    if payout_preview.get(key) is not None:
+                        payout_payload[out_key] = float(payout_preview[key])
+
             return Response(
                 {
                     "status": "check_success",
@@ -490,6 +511,7 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                     "price_difference": price_difference,
                     "original_price": booking.schedule_instance.price,
                     "new_price": new_instance.price,
+                    "payout_recalculation": payout_payload,
                 },
                 status=status.HTTP_200_OK,
             )
@@ -517,6 +539,16 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                         "rescheduled_by",
                     ]
                 )
+
+                payout_adj = apply_reschedule_payout_adjustment(booking, new_instance)
+                if payout_adj.get("should_apply"):
+                    logger.info(
+                        "Booking %s reschedule: payout recalculated (s_customer=%s s_new=%s net_payout=%s)",
+                        booking.id,
+                        payout_adj.get("s_customer"),
+                        payout_adj.get("s_new"),
+                        payout_adj.get("net_payout_amount"),
+                    )
 
                 logger.info(
                     f"Booking {booking.id} rescheduled from instance {original_instance.id} to {new_instance.id} by user {request.user.email}."

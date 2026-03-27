@@ -135,6 +135,8 @@ def _get_active_membership_for_booking(business, email, class_id):
     If the given email has an active membership for this business that covers the class,
     return (CustomerMembership, use_credits). Otherwise return (None, False).
     use_credits: True when access_type is credits (caller must check credits_remaining).
+    When multiple memberships match, prefer a credit-based plan with remaining balance,
+    otherwise an unlimited (non-credit) plan.
     """
     if not email or getattr(business, "is_demo", False):
         return None, False
@@ -143,7 +145,7 @@ def _get_active_membership_for_booking(business, email, class_id):
     except Contact.DoesNotExist:
         return None, False
     now = timezone.now()
-    membership = (
+    memberships = (
         CustomerMembership.objects.filter(
             contact=contact,
             product__business=business,
@@ -153,18 +155,36 @@ def _get_active_membership_for_booking(business, email, class_id):
             Q(current_period_end__isnull=True) | Q(current_period_end__gt=now)
         )
         .select_related("product")
-        .first()
+        .prefetch_related("product__applicable_classes")
     )
-    if not membership:
+    candidates = []
+    for membership in memberships:
+        product = membership.product
+        if not product.is_active:
+            continue
+        applicable = product.applicable_classes.all()
+        if applicable.exists() and not applicable.filter(classId=class_id).exists():
+            continue
+        candidates.append(membership)
+    if not candidates:
         return None, False
-    product = membership.product
-    if not product.is_active:
-        return None, False
-    applicable = product.applicable_classes.all()
-    if applicable.exists() and not applicable.filter(classId=class_id).exists():
-        return None, False
-    use_credits = product.access_type == "credits"
-    return membership, use_credits
+    credit_eligible = [
+        m
+        for m in candidates
+        if m.product.access_type == "credits" and m.product.credit_allowance
+    ]
+    for m in credit_eligible:
+        remaining = get_credits_remaining(m)
+        if remaining is not None and remaining > 0:
+            return m, True
+    non_credit = [
+        m
+        for m in candidates
+        if not (m.product.access_type == "credits" and m.product.credit_allowance)
+    ]
+    if non_credit:
+        return non_credit[0], False
+    return None, False
 
 
 def _get_widget_plan_id(business):
@@ -727,6 +747,12 @@ class CreateGuestPaymentIntentView(APIView):
             metadata["applied_discount_id"] = str(applied_discount_id)
             metadata["discount_amount"] = str(discount_amount)
 
+        if final_amount_cents <= 0 and member_booking and membership:
+            return Response(
+                {"free_member_booking": True},
+                status=status.HTTP_200_OK,
+            )
+
         try:
             payment_intent = stripe.PaymentIntent.create(
                 amount=final_amount_cents,
@@ -1004,6 +1030,8 @@ class GuestFreeBookingCreateView(APIView):
             first_name = (data.get("first_name") or "").strip() or "Guest"
             participant_details = [{"name": first_name} for _ in range(participants)]
 
+        membership = None
+        member_booking = False
         try:
             with transaction.atomic():
                 instance = ScheduleInstance.objects.select_for_update().get(
@@ -1015,6 +1043,26 @@ class GuestFreeBookingCreateView(APIView):
                         "Not enough spots available. Only %s spots remain."
                         % instance.available_spots
                     )
+
+                class_id = instance.schedule.option.classId_id
+                session_subtotal = instance.price * Decimal(participants)
+                if session_subtotal > 0:
+                    membership, use_credits = _get_active_membership_for_booking(
+                        business,
+                        data["email"],
+                        class_id,
+                    )
+                    if not membership:
+                        raise ValidationError(
+                            "This session requires payment. Use the email on your active membership, or pay by card."
+                        )
+                    if use_credits:
+                        rem = get_credits_remaining(membership)
+                        if rem is None or rem <= 0:
+                            raise ValidationError(
+                                "No credits remaining for this membership period."
+                            )
+                    member_booking = True
 
                 contact, _ = Contact.objects.get_or_create(
                     business=business,
@@ -1053,6 +1101,13 @@ class GuestFreeBookingCreateView(APIView):
                 booking.user_facing_reference = booking._generate_user_facing_reference()
                 booking.save(update_fields=["user_facing_reference"])
 
+                pay_meta = {
+                    "is_free": True,
+                    "booking_source": "member_widget" if member_booking else "widget",
+                    "applied_discount_id": str(applied_discount_id) if applied_discount_id else None,
+                }
+                if member_booking and membership:
+                    pay_meta["membership_id"] = str(membership.id)
                 Payment.objects.create(
                     booking=booking,
                     stripe_payment_intent_id=f"internal_{uuid.uuid4()}",
@@ -1062,12 +1117,14 @@ class GuestFreeBookingCreateView(APIView):
                     net_payout_amount=Decimal("0.00"),
                     currency=business.currency,
                     status="succeeded",
-                    metadata={
-                        "is_free": True,
-                        "booking_source": "widget",
-                        "applied_discount_id": str(applied_discount_id) if applied_discount_id else None,
-                    },
+                    metadata=pay_meta,
                 )
+
+                if member_booking and membership:
+                    try:
+                        consume_credit(membership, booking)
+                    except ValueError as e:
+                        raise ValidationError(str(e))
 
                 if applied_discount_id and discount_amount > 0:
                     try:
@@ -1096,7 +1153,9 @@ class GuestFreeBookingCreateView(APIView):
             # --- Emails (same as paid widget flow) ---
             try:
                 send_booking_confirmation_email(
-                    contact, booking, booking_source="widget"
+                    contact,
+                    booking,
+                    booking_source="member_widget" if member_booking else "widget",
                 )
             except Exception as email_err:
                 logger.warning(
@@ -1226,6 +1285,7 @@ class WidgetMembershipProductsView(APIView):
                         "confirmation_message": "",
                         "welcome_url": "",
                         "max_members": None,
+                        "widget_button_config": {},
                     }
                 ]
             }, status=status.HTTP_200_OK)
@@ -1250,6 +1310,7 @@ class WidgetMembershipProductsView(APIView):
                 "confirmation_message": getattr(p, "confirmation_message", "") or "",
                 "welcome_url": getattr(p, "welcome_url", "") or "",
                 "max_members": getattr(p, "max_members", None),
+                "widget_button_config": getattr(p, "widget_button_config", None) or {},
             })
         return Response({"products": out}, status=status.HTTP_200_OK)
 

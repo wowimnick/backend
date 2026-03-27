@@ -28,6 +28,7 @@ from quickstart.services.membership_service import (
     create_stripe_price,
     get_credits_remaining,
 )
+from quickstart.services.membership_sync import sync_customer_membership_from_stripe
 from quickstart.utils.permissions import CanManageOwnClasses
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,50 @@ def _get_business(user):
         from rest_framework.exceptions import NotFound
         raise NotFound("You are not a member of any business.")
     return business
+
+
+def _normalize_widget_button_config(raw):
+    """Sanitize per-product embed button options for Sell Memberships snippets."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    oc = raw.get("open_class_id")
+    if oc is not None and oc != "":
+        try:
+            out["open_class_id"] = int(oc)
+        except (TypeError, ValueError):
+            out["open_class_id"] = None
+    else:
+        out["open_class_id"] = None
+    bl = raw.get("button_label")
+    if isinstance(bl, str) and bl.strip():
+        out["button_label"] = bl.strip()[:120]
+    for key, maxlen in (
+        ("button_background", 32),
+        ("button_text_color", 32),
+    ):
+        v = raw.get(key)
+        if isinstance(v, str) and v.strip():
+            out[key] = v.strip()[:maxlen]
+    preset = raw.get("button_radius_preset")
+    if isinstance(preset, str) and preset.strip().lower() in (
+        "none",
+        "small",
+        "medium",
+        "large",
+    ):
+        out["button_radius_preset"] = preset.strip().lower()
+    else:
+        br = raw.get("button_radius_px")
+        if br is not None and br != "":
+            try:
+                n = int(br)
+                out["button_radius_px"] = max(0, min(48, n))
+            except (TypeError, ValueError):
+                pass
+    return out
 
 
 def _validate_signup_fields(signup_fields):
@@ -95,6 +140,7 @@ def _product_to_dict(product):
         "signup_fields": getattr(product, "signup_fields", None) or [],
         "max_members": getattr(product, "max_members", None),
         "trial_period_days": getattr(product, "trial_period_days", None),
+        "widget_button_config": getattr(product, "widget_button_config", None) or {},
         "stripe_price_id": product.stripe_price_id,
         "created_at": product.created_at.isoformat() if product.created_at else None,
         "updated_at": product.updated_at.isoformat() if product.updated_at else None,
@@ -116,8 +162,12 @@ def _member_to_dict(membership):
         email = getattr(membership.user, "email", "") or ""
 
     credits_remaining = None
-    if product.access_type == "credits" and product.credit_allowance and membership.current_period_start:
+    credit_allowance = None
+    credit_unit = ""
+    if product.access_type == "credits" and product.credit_allowance:
         credits_remaining = get_credits_remaining(membership)
+        credit_allowance = product.credit_allowance
+        credit_unit = product.credit_unit or ""
 
     return {
         "id": str(membership.id),
@@ -134,6 +184,8 @@ def _member_to_dict(membership):
         "notes": membership.notes or "",
         "custom_data": getattr(membership, "custom_data", None) or {},
         "credits_remaining": credits_remaining,
+        "credit_allowance": credit_allowance,
+        "credit_unit": credit_unit,
         "created_at": membership.created_at.isoformat() if membership.created_at else None,
     }
 
@@ -198,6 +250,7 @@ class MembershipProductListCreateView(APIView):
             signup_fields=signup_fields if isinstance(signup_fields, list) else [],
             max_members=data.get("max_members") if data.get("max_members") is not None else None,
             trial_period_days=data.get("trial_period_days") if data.get("trial_period_days") is not None else None,
+            widget_button_config=_normalize_widget_button_config(data.get("widget_button_config")),
         )
         if data.get("applicable_class_ids"):
             try:
@@ -272,6 +325,10 @@ class MembershipProductDetailView(APIView):
             product.max_members = data["max_members"] if data["max_members"] is not None else None
         if "trial_period_days" in data:
             product.trial_period_days = data["trial_period_days"] if data["trial_period_days"] is not None else None
+        if "widget_button_config" in data:
+            product.widget_button_config = _normalize_widget_button_config(
+                data.get("widget_button_config")
+            )
         if "applicable_class_ids" in data:
             business = _get_business(request.user)
             if data["applicable_class_ids"] is None or data["applicable_class_ids"] == []:
@@ -331,6 +388,8 @@ class MemberListView(APIView):
         qs = CustomerMembership.objects.filter(product__business=business).select_related(
             "product", "contact", "user"
         ).order_by("-created_at")
+        # Dashboard: never list incomplete/expired Stripe states — not actionable for the business.
+        qs = qs.exclude(status__in=["incomplete", "expired"])
 
         product_id = request.query_params.get("product_id")
         if product_id:
@@ -354,6 +413,24 @@ class MemberListView(APIView):
         offset = (page - 1) * page_size
         total = qs.count()
         items = list(qs[offset : offset + page_size])
+        # Backfill billing period from Stripe when missing (list view does not load detail).
+        for m in items:
+            if m.stripe_subscription_id and (
+                m.current_period_start is None or m.current_period_end is None
+            ):
+                synced, sync_err = sync_customer_membership_from_stripe(
+                    m.stripe_subscription_id,
+                    subscription_obj=None,
+                    invoice_obj=None,
+                )
+                if sync_err:
+                    logger.debug(
+                        "MemberListView: stripe period sync skipped for %s: %s",
+                        m.id,
+                        sync_err,
+                    )
+                if synced is not None:
+                    m.refresh_from_db()
         return Response(
             {
                 "results": [_member_to_dict(m) for m in items],
@@ -377,6 +454,23 @@ class MemberDetailView(APIView):
             id=member_id,
             product__business=business,
         )
+        # Fill billing period from Stripe when missing (e.g. before webhooks or backfill).
+        if membership.stripe_subscription_id and (
+            membership.current_period_start is None or membership.current_period_end is None
+        ):
+            synced, sync_err = sync_customer_membership_from_stripe(
+                membership.stripe_subscription_id,
+                subscription_obj=None,
+                invoice_obj=None,
+            )
+            if sync_err:
+                logger.warning(
+                    "MemberDetailView: could not sync Stripe periods for membership %s: %s",
+                    membership.id,
+                    sync_err,
+                )
+            if synced is not None:
+                membership.refresh_from_db()
         ledger = list(
             MembershipCreditLedger.objects.filter(membership=membership).order_by("-created_at")[:100]
         )
@@ -387,7 +481,7 @@ class MemberDetailView(APIView):
         data["ledger"] = [
             {
                 "id": str(e.id),
-                "period_start": str(e.period_start),
+                "period_start": e.period_start.isoformat() if e.period_start else None,
                 "credits_used": e.credits_used,
                 "action": e.action,
                 "booking_id": e.booking_id,
@@ -442,23 +536,6 @@ class MemberCancelView(APIView):
         else:
             membership.status = "canceled"
             membership.save(update_fields=["status"])
-        return Response(_member_to_dict(membership), status=status.HTTP_200_OK)
-
-
-class MemberPauseView(APIView):
-    """POST: Pause a membership (manual status update)."""
-
-    permission_classes = [IsAuthenticated, CanManageOwnClasses]
-
-    def post(self, request, member_id):
-        business = _get_business(request.user)
-        membership = get_object_or_404(
-            CustomerMembership,
-            id=member_id,
-            product__business=business,
-        )
-        membership.status = "paused"
-        membership.save(update_fields=["status"])
         return Response(_member_to_dict(membership), status=status.HTTP_200_OK)
 
 

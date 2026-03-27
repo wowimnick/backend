@@ -21,14 +21,54 @@ from quickstart.views.widget.widget_views import (
 logger = logging.getLogger(__name__)
 
 
+def _stripe_dict_get(obj, key, default=None):
+    """Read key from dict or Stripe StripeObject (StripeObject has no .get)."""
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    try:
+        return obj[key]
+    except (KeyError, TypeError, AttributeError):
+        pass
+    return getattr(obj, key, default)
+
+
 def _subscription_to_period(sub, key):
-    """Extract current_period_start or current_period_end from Stripe subscription."""
-    raw = sub.get(key) if isinstance(sub, dict) else getattr(sub, key, None)
+    """Extract current_period_start or current_period_end from Stripe subscription or item."""
+    raw = _stripe_dict_get(sub, key)
     if raw is None:
         return None
+    if isinstance(raw, str) and raw.isdigit():
+        raw = int(raw)
     if isinstance(raw, (int, float)):
-        return timezone.make_aware(datetime.utcfromtimestamp(raw))
+        return timezone.make_aware(datetime.utcfromtimestamp(int(raw)))
     return raw
+
+
+def _subscription_current_period_bounds(subscription_obj):
+    """
+    Stripe returns current_period_start / current_period_end as Unix timestamps (seconds) on
+    the Subscription object (see Stripe API: Subscription object). If either is missing on
+    the parent, fall back to the first subscription item (items.data[0]), which also exposes
+    current_period_start / current_period_end per item.
+    """
+    start = _subscription_to_period(subscription_obj, "current_period_start")
+    end = _subscription_to_period(subscription_obj, "current_period_end")
+    if start is not None and end is not None:
+        return start, end
+    items = _stripe_dict_get(subscription_obj, "items")
+    inner = _stripe_dict_get(items, "data") if items is not None else None
+    if not inner:
+        return start, end
+    first = inner[0] if isinstance(inner, (list, tuple)) else None
+    if first is None:
+        return start, end
+    if start is None:
+        start = _subscription_to_period(first, "current_period_start")
+    if end is None:
+        end = _subscription_to_period(first, "current_period_end")
+    return start, end
 
 
 def sync_customer_membership_from_stripe(
@@ -56,12 +96,8 @@ def sync_customer_membership_from_stripe(
         )
         return None, str(e)
 
-    meta = (
-        subscription_obj.get("metadata")
-        if isinstance(subscription_obj, dict)
-        else getattr(subscription_obj, "metadata", None)
-    ) or {}
-    if not meta.get("membership_product_id"):
+    meta = _stripe_dict_get(subscription_obj, "metadata")
+    if not _stripe_dict_get(meta, "membership_product_id"):
         return None, "Not a customer membership subscription"
 
     try:
@@ -76,26 +112,15 @@ def sync_customer_membership_from_stripe(
         return None, "CustomerMembership not found"
 
     business = membership.product.business
-    status_str = (
-        subscription_obj.get("status")
-        if isinstance(subscription_obj, dict)
-        else getattr(subscription_obj, "status", None)
-    )
-    status_str = (status_str or "active").strip().lower()
-    current_period_start = _subscription_to_period(
-        subscription_obj, "current_period_start"
-    )
-    current_period_end = _subscription_to_period(
-        subscription_obj, "current_period_end"
+    raw_status = _stripe_dict_get(subscription_obj, "status")
+    status_str = (raw_status or "active").strip().lower()
+    current_period_start, current_period_end = _subscription_current_period_bounds(
+        subscription_obj
     )
     cancel_at_period_end = bool(
-        subscription_obj.get("cancel_at_period_end")
-        or getattr(subscription_obj, "cancel_at_period_end", False)
+        _stripe_dict_get(subscription_obj, "cancel_at_period_end", False)
     )
-    customer_id = (
-        subscription_obj.get("customer")
-        or getattr(subscription_obj, "customer", None)
-    )
+    customer_id = _stripe_dict_get(subscription_obj, "customer")
     stripe_customer_id = str(customer_id) if customer_id else None
 
     membership.status = status_str
@@ -108,11 +133,7 @@ def sync_customer_membership_from_stripe(
 
     if invoice_obj is not None:
         # Record payment and platform fee
-        amount_paid = (
-            getattr(invoice_obj, "amount_paid", None)
-            or invoice_obj.get("amount_paid")
-            or 0
-        )
+        amount_paid = _stripe_dict_get(invoice_obj, "amount_paid") or 0
         amount_decimal = Decimal(amount_paid) / 100
         fee_pct = _get_widget_plan_fee_percentage(business)
         platform_fee = (amount_decimal * (fee_pct / Decimal("100"))).quantize(
@@ -121,18 +142,15 @@ def sync_customer_membership_from_stripe(
         net_payout = amount_decimal - platform_fee
         if net_payout < 0:
             net_payout = Decimal("0.00")
-        invoice_id = (
-            getattr(invoice_obj, "id", None) or invoice_obj.get("id") or ""
-        )
+        invoice_id = _stripe_dict_get(invoice_obj, "id") or ""
         if invoice_id and not MembershipPayment.objects.filter(
             stripe_invoice_id=invoice_id
         ).exists():
             MembershipPayment.objects.create(
                 membership=membership,
                 stripe_invoice_id=invoice_id,
-                stripe_payment_intent_id=(
-                    getattr(invoice_obj, "payment_intent", None)
-                    or invoice_obj.get("payment_intent")
+                stripe_payment_intent_id=_stripe_dict_get(
+                    invoice_obj, "payment_intent"
                 ),
                 amount=amount_decimal,
                 platform_fee_amount=platform_fee,

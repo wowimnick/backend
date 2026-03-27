@@ -34,7 +34,6 @@ from quickstart.views.business.membership_views import (
     MemberListView,
     MemberDetailView,
     MemberCancelView,
-    MemberPauseView,
     MemberManualAddView,
     MemberApproveView,
     MemberDeclineView,
@@ -723,11 +722,6 @@ urlpatterns = [
         "my-business/members/<uuid:member_id>/cancel/",
         MemberCancelView.as_view(),
         name="my-business-member-cancel",
-    ),
-    path(
-        "my-business/members/<uuid:member_id>/pause/",
-        MemberPauseView.as_view(),
-        name="my-business-member-pause",
     ),
     path(
         "my-business/members/<uuid:pk>/approve/",
