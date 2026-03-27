@@ -91,6 +91,15 @@ def _normalize_widget_button_config(raw):
     return out
 
 
+def _normalize_widget_features(raw):
+    """Sanitize per-product widget feature flags; must be a JSON object (default {})."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return dict(raw)
+
+
 def _validate_signup_fields(signup_fields):
     """Validate signup_fields list; return (True, None) or (False, error_message)."""
     if signup_fields is None:
@@ -122,6 +131,7 @@ def _product_to_dict(product):
     return {
         "id": str(product.id),
         "name": product.name,
+        "badge_text": getattr(product, "badge_text", "") or "",
         "description": product.description or "",
         "price": str(product.price),
         "currency": product.currency,
@@ -141,6 +151,8 @@ def _product_to_dict(product):
         "max_members": getattr(product, "max_members", None),
         "trial_period_days": getattr(product, "trial_period_days", None),
         "widget_button_config": getattr(product, "widget_button_config", None) or {},
+        "widget_features": getattr(product, "widget_features", None) or {},
+        "widget_cta_label": getattr(product, "widget_cta_label", "") or "",
         "stripe_price_id": product.stripe_price_id,
         "created_at": product.created_at.isoformat() if product.created_at else None,
         "updated_at": product.updated_at.isoformat() if product.updated_at else None,
@@ -232,9 +244,16 @@ class MembershipProductListCreateView(APIView):
         ok, err = _validate_signup_fields(signup_fields)
         if not ok:
             return Response({"error": err}, status=status.HTTP_400_BAD_REQUEST)
+        wf = data.get("widget_features")
+        if wf is not None and not isinstance(wf, dict):
+            return Response(
+                {"error": "widget_features must be an object"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         product = MembershipProduct.objects.create(
             business=business,
             name=name,
+            badge_text=(data.get("badge_text") or "").strip()[:100],
             description=(data.get("description") or "").strip(),
             price=Decimal(str(price)),
             currency=(data.get("currency") or "CAD").strip().upper()[:3],
@@ -251,6 +270,8 @@ class MembershipProductListCreateView(APIView):
             max_members=data.get("max_members") if data.get("max_members") is not None else None,
             trial_period_days=data.get("trial_period_days") if data.get("trial_period_days") is not None else None,
             widget_button_config=_normalize_widget_button_config(data.get("widget_button_config")),
+            widget_features=_normalize_widget_features(wf),
+            widget_cta_label=(data.get("widget_cta_label") or "").strip()[:200],
         )
         if data.get("applicable_class_ids"):
             try:
@@ -289,6 +310,8 @@ class MembershipProductDetailView(APIView):
         data = request.data
         if "name" in data and data["name"] is not None:
             product.name = (data["name"] or "").strip() or product.name
+        if "badge_text" in data:
+            product.badge_text = (data.get("badge_text") or "").strip()[:100]
         if "description" in data:
             product.description = (data["description"] or "").strip()
         if "price" in data and data["price"] is not None:
@@ -329,6 +352,16 @@ class MembershipProductDetailView(APIView):
             product.widget_button_config = _normalize_widget_button_config(
                 data.get("widget_button_config")
             )
+        if "widget_features" in data:
+            wfp = data.get("widget_features")
+            if wfp is not None and not isinstance(wfp, dict):
+                return Response(
+                    {"error": "widget_features must be an object"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            product.widget_features = _normalize_widget_features(wfp)
+        if "widget_cta_label" in data:
+            product.widget_cta_label = (data.get("widget_cta_label") or "").strip()[:200]
         if "applicable_class_ids" in data:
             business = _get_business(request.user)
             if data["applicable_class_ids"] is None or data["applicable_class_ids"] == []:

@@ -100,6 +100,7 @@ class PublicBusinessInfoViewSet(viewsets.ReadOnlyModelViewSet):
             {
                 "id": str(p.id),
                 "name": p.name,
+                "badge_text": getattr(p, "badge_text", "") or "",
                 "description": p.description or "",
                 "price": str(p.price),
                 "currency": p.currency,

@@ -58,6 +58,8 @@ class BusinessWidgetConfigSerializer(serializers.ModelSerializer):
             # Treat null/empty/inherit as "clear this key" so stale values don't persist
             if key == "fontFamily" and (value is None or value == "" or value == "inherit"):
                 current_config.pop("fontFamily", None)
+            elif key == "specificClassId" and (value is None or value == ""):
+                current_config.pop("specificClassId", None)
             else:
                 current_config[key] = value
         instance.widget_config = current_config

@@ -3077,6 +3077,12 @@ class MembershipProduct(models.Model):
         related_name="membership_products",
     )
     name = models.CharField(max_length=200)
+    badge_text = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+        help_text="Optional short label on pricing cards (e.g. Popular).",
+    )
     description = models.TextField(blank=True)
     price = models.DecimalField(
         max_digits=10, decimal_places=2, validators=[MinValueValidator(0)]
@@ -3145,6 +3151,17 @@ class MembershipProduct(models.Model):
         default=dict,
         blank=True,
         help_text="Optional: open_class_id, button_label, button_background, button_text_color, button_radius_px for website embed snippet.",
+    )
+    widget_features = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Optional feature flags / config for widget membership UI (e.g. display options).",
+    )
+    widget_cta_label = models.CharField(
+        max_length=200,
+        blank=True,
+        default="",
+        help_text="Optional CTA label override for the membership widget (e.g. Subscribe).",
     )
     stripe_price_id = models.CharField(max_length=255, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

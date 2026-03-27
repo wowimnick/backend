@@ -221,10 +221,13 @@ class WidgetConfigManagementView(APIView):
             {
                 "id": str(p.id),
                 "name": p.name,
+                "badge_text": getattr(p, "badge_text", "") or "",
                 "price": str(p.price),
                 "billing_interval": p.billing_interval,
                 "is_active": True,
                 "widget_button_config": getattr(p, "widget_button_config", None) or {},
+                "widget_features": getattr(p, "widget_features", None) or {},
+                "widget_cta_label": getattr(p, "widget_cta_label", "") or "",
             }
             for p in membership_products
         ]
@@ -282,7 +285,7 @@ class WidgetConfigManagementView(APIView):
                     },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            data.pop("specificClassId", None)
+            # Allow null/empty specificClassId through so the serializer can clear a stored global pin.
 
         serializer = BusinessWidgetConfigSerializer(
             instance=business, data=data, partial=True

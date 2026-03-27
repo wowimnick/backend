@@ -1272,6 +1272,7 @@ class WidgetMembershipProductsView(APIView):
                     {
                         "id": mock_id,
                         "name": "Demo membership",
+                        "badge_text": "",
                         "description": "Sample plan for widget preview. Subscriptions are disabled in demo.",
                         "price": "29.00",
                         "currency": "USD",
@@ -1286,6 +1287,8 @@ class WidgetMembershipProductsView(APIView):
                         "welcome_url": "",
                         "max_members": None,
                         "widget_button_config": {},
+                        "widget_features": {},
+                        "widget_cta_label": "",
                     }
                 ]
             }, status=status.HTTP_200_OK)
@@ -1297,6 +1300,7 @@ class WidgetMembershipProductsView(APIView):
             out.append({
                 "id": str(p.id),
                 "name": p.name,
+                "badge_text": getattr(p, "badge_text", "") or "",
                 "description": p.description or "",
                 "price": str(p.price),
                 "currency": p.currency,
@@ -1311,6 +1315,8 @@ class WidgetMembershipProductsView(APIView):
                 "welcome_url": getattr(p, "welcome_url", "") or "",
                 "max_members": getattr(p, "max_members", None),
                 "widget_button_config": getattr(p, "widget_button_config", None) or {},
+                "widget_features": getattr(p, "widget_features", None) or {},
+                "widget_cta_label": getattr(p, "widget_cta_label", "") or "",
             })
         return Response({"products": out}, status=status.HTTP_200_OK)
 
