@@ -19,6 +19,7 @@ from quickstart.models import (
     BusinessInfo,
     BusinessAddonSubscription,
     ClassesMain,
+    MembershipProduct,
     WidgetSubscription,
 )
 from quickstart.models import ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING
@@ -60,6 +61,13 @@ def _is_downgrade(from_plan_id, to_plan_id):
 VALID_PLAN_IDS = {"basic", "growth", "advanced"}
 
 
+def _obj_get(obj, key, default=None):
+    """Read a field from dict-like or StripeObject without calling .get on StripeObject."""
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
 def _subscription_client_secret_from_invoice(invoice):
     """Extract payment intent client_secret from a Stripe invoice (for subscription payment)."""
     def _pi_id(inv):
@@ -95,7 +103,7 @@ def _subscription_client_secret_from_invoice(invoice):
 
 def _get_subscription_client_secret(stripe_sub):
     """Get client_secret from a subscription's latest_invoice (for on-site payment)."""
-    invoice = getattr(stripe_sub, "latest_invoice", None) or (stripe_sub.get("latest_invoice") if hasattr(stripe_sub, "get") else None)
+    invoice = getattr(stripe_sub, "latest_invoice", None) or _obj_get(stripe_sub, "latest_invoice")
     if invoice is not None and not isinstance(invoice, str):
         secret = _subscription_client_secret_from_invoice(invoice)
         if secret:
@@ -103,14 +111,14 @@ def _get_subscription_client_secret(stripe_sub):
     if stripe_sub.id:
         try:
             expanded = stripe.Subscription.retrieve(stripe_sub.id, expand=["latest_invoice.payments"])
-            inv = getattr(expanded, "latest_invoice", None) or (expanded.get("latest_invoice") if hasattr(expanded, "get") else None)
+            inv = getattr(expanded, "latest_invoice", None) or _obj_get(expanded, "latest_invoice")
             if inv is not None and not isinstance(inv, str):
                 secret = _subscription_client_secret_from_invoice(inv)
                 if secret:
                     return secret
         except stripe.StripeError:
             pass
-    latest_invoice = getattr(stripe_sub, "latest_invoice", None) or (stripe_sub.get("latest_invoice") if hasattr(stripe_sub, "get") else None)
+    latest_invoice = getattr(stripe_sub, "latest_invoice", None) or _obj_get(stripe_sub, "latest_invoice")
     invoice_id = getattr(latest_invoice, "id", None) if latest_invoice is not None and not isinstance(latest_invoice, str) else latest_invoice
     if invoice_id:
         try:
@@ -204,6 +212,26 @@ class WidgetConfigManagementView(APIView):
             }
         else:
             response_data["widget_subscription"] = None
+
+        # Active membership products for widget customizer subscription copy-paste snippets
+        membership_products = MembershipProduct.objects.filter(
+            business=business, is_active=True
+        ).order_by("price")
+        response_data["membership_products"] = [
+            {
+                "id": str(p.id),
+                "name": p.name,
+                "badge_text": getattr(p, "badge_text", "") or "",
+                "price": str(p.price),
+                "billing_interval": p.billing_interval,
+                "is_active": True,
+                "widget_button_config": getattr(p, "widget_button_config", None) or {},
+                "widget_features": getattr(p, "widget_features", None) or {},
+                "widget_cta_label": getattr(p, "widget_cta_label", "") or "",
+            }
+            for p in membership_products
+        ]
+
         return Response(response_data, status=status.HTTP_200_OK)
 
     def patch(self, request, *args, **kwargs):
@@ -257,7 +285,7 @@ class WidgetConfigManagementView(APIView):
                     },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            data.pop("specificClassId", None)
+            # Allow null/empty specificClassId through so the serializer can clear a stored global pin.
 
         serializer = BusinessWidgetConfigSerializer(
             instance=business, data=data, partial=True
@@ -480,7 +508,7 @@ class CreateWidgetSubscriptionPaymentIntentView(APIView):
 
             client_secret = None
             # 1) From create response (may have no payments expanded)
-            invoice = getattr(stripe_sub, "latest_invoice", None) or (stripe_sub.get("latest_invoice") if hasattr(stripe_sub, "get") else None)
+            invoice = getattr(stripe_sub, "latest_invoice", None) or _obj_get(stripe_sub, "latest_invoice")
             if invoice is not None and not isinstance(invoice, str):
                 client_secret = _client_secret_from_invoice(invoice)
 
@@ -491,9 +519,7 @@ class CreateWidgetSubscriptionPaymentIntentView(APIView):
                         stripe_sub.id,
                         expand=["latest_invoice.payments"],
                     )
-                    inv = getattr(stripe_sub_expanded, "latest_invoice", None)
-                    if inv is None and hasattr(stripe_sub_expanded, "get"):
-                        inv = stripe_sub_expanded.get("latest_invoice")
+                    inv = getattr(stripe_sub_expanded, "latest_invoice", None) or _obj_get(stripe_sub_expanded, "latest_invoice")
                     if inv is not None and not isinstance(inv, str):
                         client_secret = _client_secret_from_invoice(inv)
                 except stripe.StripeError as e:
@@ -501,7 +527,7 @@ class CreateWidgetSubscriptionPaymentIntentView(APIView):
 
             # 3) Fallback: get invoice id and retrieve invoice with payments expanded
             if not client_secret:
-                latest_invoice = getattr(stripe_sub, "latest_invoice", None) or (stripe_sub.get("latest_invoice") if hasattr(stripe_sub, "get") else None)
+                latest_invoice = getattr(stripe_sub, "latest_invoice", None) or _obj_get(stripe_sub, "latest_invoice")
                 invoice_id = getattr(latest_invoice, "id", None) if latest_invoice is not None and not isinstance(latest_invoice, str) else latest_invoice
                 if invoice_id:
                     try:
@@ -516,7 +542,7 @@ class CreateWidgetSubscriptionPaymentIntentView(APIView):
                 # Invoice may already be paid (e.g. default payment method charged immediately)
                 try:
                     stripe_sub_fresh = stripe.Subscription.retrieve(stripe_sub.id)
-                    if (stripe_sub_fresh.get("status") or "").strip().lower() in ("active", "trialing"):
+                    if (_obj_get(stripe_sub_fresh, "status", "") or "").strip().lower() in ("active", "trialing"):
                         synced, _ = sync_widget_subscription_from_stripe(
                             stripe_sub.id, subscription_obj=stripe_sub_fresh
                         )
@@ -542,8 +568,12 @@ class CreateWidgetSubscriptionPaymentIntentView(APIView):
 
             # Attach new Stripe subscription to the single row for this business (one per business)
             stripe_price_id = None
-            if stripe_sub.get("items") and stripe_sub["items"].get("data"):
-                stripe_price_id = stripe_sub["items"]["data"][0].get("price", {}).get("id")
+            items = _obj_get(stripe_sub, "items", {}) or {}
+            items_data = _obj_get(items, "data", []) or []
+            if items_data:
+                first_item = items_data[0]
+                price_obj = _obj_get(first_item, "price", {}) or {}
+                stripe_price_id = price_obj if isinstance(price_obj, str) else _obj_get(price_obj, "id")
 
             widget_sub, _ = WidgetSubscription.objects.get_or_create(
                 business=business,
@@ -632,7 +662,7 @@ def _create_stripe_subscription_for_plan(business, plan_id, price_id):
     )
 
     client_secret = _client_secret_from_stripe_invoice(
-        getattr(stripe_sub, "latest_invoice", None) or stripe_sub.get("latest_invoice")
+        getattr(stripe_sub, "latest_invoice", None) or _obj_get(stripe_sub, "latest_invoice")
     )
     if not client_secret and stripe_sub.id:
         try:
@@ -640,12 +670,12 @@ def _create_stripe_subscription_for_plan(business, plan_id, price_id):
                 stripe_sub.id,
                 expand=["latest_invoice.payments"],
             )
-            inv = getattr(expanded, "latest_invoice", None) or expanded.get("latest_invoice")
+            inv = getattr(expanded, "latest_invoice", None) or _obj_get(expanded, "latest_invoice")
             client_secret = _client_secret_from_stripe_invoice(inv)
         except stripe.StripeError:
             pass
     if not client_secret:
-        latest_inv = getattr(stripe_sub, "latest_invoice", None) or stripe_sub.get("latest_invoice")
+        latest_inv = getattr(stripe_sub, "latest_invoice", None) or _obj_get(stripe_sub, "latest_invoice")
         inv_id = getattr(latest_inv, "id", None) if latest_inv and not isinstance(latest_inv, str) else (latest_inv if isinstance(latest_inv, str) else None)
         if inv_id:
             try:
@@ -768,14 +798,18 @@ class WidgetSubscriptionView(APIView):
                     "widget_subscription_required": subscription_required,
                     "has_stripe_subscription": False,
                     "has_widget_access": has_widget_access,
+                    "has_membership_access": False,
                 },
                 status=status.HTTP_200_OK,
             )
+        plan_id = (sub.plan_id or "").strip().lower()
+        has_membership_access = has_widget_access and plan_id in ("growth", "advanced")
         payload = {
             "subscription": _subscription_response_from_sub(sub),
             "widget_subscription_required": subscription_required,
             "has_stripe_subscription": bool(sub.stripe_subscription_id),
             "has_widget_access": has_widget_access,
+            "has_membership_access": has_membership_access,
         }
         # Optional: scheduled downgrade from Stripe subscription schedule
         if sub.stripe_subscription_id:
@@ -784,7 +818,7 @@ class WidgetSubscriptionView(APIView):
                     sub.stripe_subscription_id,
                     expand=["schedule"],
                 )
-                sched = stripe_sub.get("schedule")
+                sched = _obj_get(stripe_sub, "schedule")
                 schedule_id = None
                 if isinstance(sched, str):
                     schedule_id = sched
@@ -792,7 +826,7 @@ class WidgetSubscriptionView(APIView):
                     schedule_id = sched.get("id") if isinstance(sched, dict) else getattr(sched, "id", None)
                 if schedule_id:
                     schedule = stripe.SubscriptionSchedule.retrieve(schedule_id, expand=["phases"])
-                    phases = getattr(schedule, "phases", None) or schedule.get("phases") or []
+                    phases = getattr(schedule, "phases", None) or _obj_get(schedule, "phases", []) or []
                     if len(phases) >= 2:
                         next_phase = phases[1]
                         next_items = (next_phase.get("items") or []) if isinstance(next_phase, dict) else getattr(next_phase, "items", []) or []
@@ -853,7 +887,7 @@ class WidgetSubscriptionView(APIView):
                 if not client_secret:
                     try:
                         stripe_sub_fresh = stripe.Subscription.retrieve(stripe_sub.id)
-                        if (stripe_sub_fresh.get("status") or "").strip().lower() in ("active", "trialing"):
+                        if (_obj_get(stripe_sub_fresh, "status", "") or "").strip().lower() in ("active", "trialing"):
                             synced, _ = sync_widget_subscription_from_stripe(
                                 stripe_sub.id, subscription_obj=stripe_sub_fresh
                             )
@@ -894,14 +928,15 @@ class WidgetSubscriptionView(APIView):
                     {"error": "Could not load subscription. Please try again."},
                     status=status.HTTP_502_BAD_GATEWAY,
                 )
-            items_data = stripe_sub.get("items") or {}
-            item_list = (items_data.get("data") or []) if isinstance(items_data, dict) else []
+            items_data = _obj_get(stripe_sub, "items", {}) or {}
+            item_list = _obj_get(items_data, "data", []) or []
             if not item_list:
                 return Response(
                     {"error": "Invalid subscription state. Please contact support."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            current_price_id = (item_list[0].get("price") or {}).get("id") if item_list else None
+            current_price = _obj_get(item_list[0], "price", {}) if item_list else {}
+            current_price_id = current_price if isinstance(current_price, str) else _obj_get(current_price, "id")
 
             if current_price_id == price_id:
                 req_pay, client_secret, sub_resp = same_price_open_invoice(sub, plan_id, price_id)
@@ -1059,8 +1094,8 @@ class WidgetSubscriptionInvoicesView(APIView):
                     limit=50,
                     expand=["data.charge", "data.lines.data"],
                 )
-                for inv in stripe_invoices.get("data", []):
-                    inv_id = inv.get("id")
+                for inv in _obj_get(stripe_invoices, "data", []) or []:
+                    inv_id = _obj_get(inv, "id")
                     if inv_id:
                         invoices_by_id[inv_id] = inv
             except stripe.StripeError as e:
@@ -1068,50 +1103,50 @@ class WidgetSubscriptionInvoicesView(APIView):
 
         invoices = []
         for inv in invoices_by_id.values():
-            amount = (inv.get("amount_paid") or 0) / 100.0
+            amount = (_obj_get(inv, "amount_paid") or 0) / 100.0
             # For open/draft invoices amount_paid can be 0; use amount_due for visibility.
             if amount <= 0:
-                amount = (inv.get("amount_due") or 0) / 100.0
+                amount = (_obj_get(inv, "amount_due") or 0) / 100.0
             # Ignore zero-value invoices (free/fully credited), they are noise in billing UI.
             if amount <= 0:
                 continue
-            currency = (inv.get("currency") or "usd").upper()
-            created = inv.get("created")
+            currency = (_obj_get(inv, "currency") or "usd").upper()
+            created = _obj_get(inv, "created")
             if created:
                 from datetime import datetime
                 if isinstance(created, (int, float)):
                     created = datetime.utcfromtimestamp(created).isoformat() + "Z"
             # Card used to pay (from charge.payment_method_details)
             payment_method = None
-            charge = inv.get("charge")
-            if isinstance(charge, dict):
-                card = (charge.get("payment_method_details") or {}).get("card") or {}
-                if card.get("last4") or card.get("brand"):
+            charge = _obj_get(inv, "charge")
+            if charge:
+                payment_details = _obj_get(charge, "payment_method_details", {}) or {}
+                card = _obj_get(payment_details, "card", {}) or {}
+                if _obj_get(card, "last4") or _obj_get(card, "brand"):
                     payment_method = {
-                        "brand": (card.get("brand") or "card").capitalize(),
-                        "last4": card.get("last4") or "****",
+                        "brand": (_obj_get(card, "brand") or "card").capitalize(),
+                        "last4": _obj_get(card, "last4") or "****",
                     }
             # Line items breakdown
-            lines_data = (inv.get("lines") or {}).get("data") if isinstance(inv.get("lines"), dict) else []
-            if not lines_data and hasattr(inv.get("lines"), "data"):
-                lines_data = inv["lines"].data or []
+            inv_lines = _obj_get(inv, "lines")
+            lines_data = _obj_get(inv_lines, "data", []) or []
             lines = []
             for line in (lines_data or []):
-                line_amount = (line.get("amount") or 0) / 100.0
-                line_currency = (line.get("currency") or inv.get("currency") or "usd").upper()
+                line_amount = (_obj_get(line, "amount") or 0) / 100.0
+                line_currency = (_obj_get(line, "currency") or _obj_get(inv, "currency") or "usd").upper()
                 lines.append({
-                    "description": line.get("description") or "Charge",
+                    "description": _obj_get(line, "description") or "Charge",
                     "amount": line_amount,
                     "currency": line_currency,
                 })
             invoices.append({
-                "id": inv.get("id"),
-                "number": inv.get("number") or inv.get("id"),
+                "id": _obj_get(inv, "id"),
+                "number": _obj_get(inv, "number") or _obj_get(inv, "id"),
                 "created": created,
                 "amount_paid": amount,
                 "currency": currency,
-                "status": inv.get("status"),
-                "invoice_pdf": inv.get("invoice_pdf"),
+                "status": _obj_get(inv, "status"),
+                "invoice_pdf": _obj_get(inv, "invoice_pdf"),
                 "payment_method": payment_method,
                 "lines": lines,
             })
@@ -1483,8 +1518,12 @@ class CreateMarketplaceEmailAddonPaymentIntentView(APIView):
                 )
 
             stripe_price_id = None
-            if stripe_sub.get("items") and stripe_sub["items"].get("data"):
-                stripe_price_id = stripe_sub["items"]["data"][0].get("price", {}).get("id")
+            items = _obj_get(stripe_sub, "items", {}) or {}
+            items_data = _obj_get(items, "data", []) or []
+            if items_data:
+                first_item = items_data[0]
+                price_obj = _obj_get(first_item, "price", {}) or {}
+                stripe_price_id = price_obj if isinstance(price_obj, str) else _obj_get(price_obj, "id")
 
             BusinessAddonSubscription.objects.update_or_create(
                 stripe_subscription_id=stripe_sub.id,

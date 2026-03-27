@@ -126,6 +126,7 @@ class PublicBusinessDetailSerializer(PublicBusinessInfoSerializer):
     class Meta(PublicBusinessInfoSerializer.Meta):
         fields = PublicBusinessInfoSerializer.Meta.fields + [
             "classes",
+            "widget_api_key",  # for hosted join page widget embed
         ]
 
     def get_google_reviews(self, obj):

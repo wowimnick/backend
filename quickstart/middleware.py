@@ -20,12 +20,15 @@ def get_business(request):
     if hasattr(request, "_cached_business"):
         return request._cached_business
 
-    business_key = request.headers.get("X-Business-ID")
-    if not business_key:
+    raw_key = request.headers.get("X-Business-ID")
+    if not raw_key:
         request._cached_business = None
         return None
 
-    if business_key.strip() == WIDGET_DEMO_KEY:
+    # Use only the key part; ignore any query string (e.g. "demo?ce_plan=uuid")
+    business_key = raw_key.split("?")[0].strip()
+
+    if business_key == WIDGET_DEMO_KEY:
         request._cached_business = DemoBusinessContext()
         return request._cached_business
 
@@ -69,12 +72,45 @@ def _is_classeasily_domain(origin):
     return domain == "classeasily.com" or domain.endswith(".classeasily.com")
 
 
+# Website builders that host embed content on a different origin than the customer's site URL.
+# When a business has Allowed Domains set (e.g. their Wix/Squarespace site), we allow requests from these
+# embed host suffixes so the widget works when embedded. Each suffix is the trailing part of the host
+# (e.g. ".filesusr.com" matches "6c3e658f-7198-48d1-9d02-32dcf9b6a3d7.filesusr.com").
+# Use lowercase, include leading dot so we match subdomains only (e.g. ".carrd.co" not "carrd.co").
+WIDGET_EMBED_HOST_SUFFIXES = (
+    ".filesusr.com",        # Wix: embeds run from *.filesusr.com, not wixsite.com
+    ".webflow.io",          # Webflow: published sites
+    ".canvas.webflow.com",  # Webflow: preview/editor
+    ".squarespace.com",     # Squarespace: code blocks / embed run on site origin
+    ".mystrikingly.com",    # Strikingly: embed content (e.g. embed.mystrikingly.com)
+    ".weebly.com",          # Weebly
+    ".square.site",         # Square Online (Weebly successor)
+    ".carrd.co",            # Carrd
+    ".sites.google.com",    # Google Sites
+)
+
+
+def _is_known_embed_host(origin):
+    """
+    True if origin is a known website-builder embed host (e.g. Wix filesusr.com, Webflow, Squarespace).
+    These hosts serve embedded widget content from their domain instead of the customer's site URL.
+    """
+    if not origin:
+        return False
+    domain = _normalize_origin_domain(origin)
+    if not domain:
+        return False
+    domain_lower = domain.lower()
+    return any(domain_lower.endswith(suffix) for suffix in WIDGET_EMBED_HOST_SUFFIXES)
+
+
 def _origin_allowed_for_business(origin, business):
     """
     Return True if this Origin is allowed for this business.
     - localhost/127.0.0.1: allowed (dev).
     - classeasily.com or *.classeasily.com: allowed (our app/widget-demo).
     - Demo key: only localhost and classeasily domains (no customer domains).
+    - Known embed hosts (Wix, Webflow, Squarespace, etc.): allowed if business has any Allowed Domains.
     - Any other domain: allowed only if listed in this business's Allowed Domains (allowed_widget_origins).
     """
     if not origin:
@@ -88,6 +124,10 @@ def _origin_allowed_for_business(origin, business):
         return False  # demo key only allowed from our app / localhost
     if not business or not business.allowed_widget_origins:
         return False
+    # Website builders often serve embeds from their CDN (e.g. Wix filesusr.com); allow when business
+    # has configured allowed domains (e.g. their Wix/Squarespace site URL).
+    if _is_known_embed_host(origin):
+        return True
     normalized_allowed = [
         o.replace("https://", "").replace("http://", "").rstrip("/").split(":")[0].lower()
         for o in business.allowed_widget_origins

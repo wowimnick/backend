@@ -3064,6 +3064,274 @@ class BusinessAddonSubscription(models.Model):
         return f"Addon {self.addon_type} ({self.business.businessName})"
 
 
+class MembershipProduct(models.Model):
+    """
+    A membership tier offered by a business (e.g. Potters Club - Adelaide).
+    One per business per membership tier.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        BusinessInfo,
+        on_delete=models.CASCADE,
+        related_name="membership_products",
+    )
+    name = models.CharField(max_length=200)
+    badge_text = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+        help_text="Optional short label on pricing cards (e.g. Popular).",
+    )
+    description = models.TextField(blank=True)
+    price = models.DecimalField(
+        max_digits=10, decimal_places=2, validators=[MinValueValidator(0)]
+    )
+    currency = models.CharField(max_length=3, default="CAD")
+    billing_interval = models.CharField(
+        max_length=10,
+        choices=[("month", "Month"), ("year", "Year")],
+        default="month",
+    )
+    access_type = models.CharField(
+        max_length=20,
+        choices=[("unlimited", "Unlimited"), ("credits", "Credits")],
+        default="unlimited",
+    )
+    credit_allowance = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="e.g. 15; only used when access_type=credits",
+    )
+    credit_unit = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text="e.g. '2-hour sessions'",
+    )
+    applicable_classes = models.ManyToManyField(
+        ClassesMain,
+        blank=True,
+        related_name="membership_products",
+        help_text="Empty = all classes",
+    )
+    is_active = models.BooleanField(default=True)
+    requires_approval = models.BooleanField(
+        default=False,
+        help_text="If True, show application form link",
+    )
+    confirmation_message = models.TextField(
+        blank=True,
+        help_text="Shown to the member after they subscribe. Leave blank for default.",
+    )
+    welcome_url = models.CharField(
+        max_length=500,
+        blank=True,
+        help_text="e.g. https://yoursite.com/members — shown as 'Access member portal' on success screen",
+    )
+    application_instructions = models.TextField(
+        blank=True,
+        help_text="Shown above the signup form when requires_approval=True.",
+    )
+    signup_fields = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Array of { key, label, type, required, options? } for custom signup form fields",
+    )
+    max_members = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Cap on active members; null = unlimited",
+    )
+    trial_period_days = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Free trial days before first charge; passed to Stripe",
+    )
+    widget_button_config = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Optional: open_class_id, button_label, button_background, button_text_color, button_radius_px for website embed snippet.",
+    )
+    widget_features = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Optional feature flags / config for widget membership UI (e.g. display options).",
+    )
+    widget_cta_label = models.CharField(
+        max_length=200,
+        blank=True,
+        default="",
+        help_text="Optional CTA label override for the membership widget (e.g. Subscribe).",
+    )
+    stripe_price_id = models.CharField(max_length=255, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "membership_products"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.name} ({self.business.businessName})"
+
+
+class CustomerMembership(models.Model):
+    """
+    A customer's subscription to a membership product.
+    One per (contact or user) per product.
+    """
+
+    STATUS_CHOICES = [
+        ("active", "Active"),
+        ("trialing", "Trialing"),
+        ("past_due", "Past Due"),
+        ("canceled", "Canceled"),
+        ("paused", "Paused"),
+        ("pending_approval", "Pending Approval"),
+        ("approved_pending_payment", "Approved (pending payment)"),
+        ("incomplete", "Incomplete"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    product = models.ForeignKey(
+        MembershipProduct,
+        on_delete=models.CASCADE,
+        related_name="memberships",
+    )
+    contact = models.ForeignKey(
+        Contact,
+        on_delete=models.CASCADE,
+        related_name="memberships",
+        null=True,
+        blank=True,
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="customer_memberships",
+    )
+    stripe_subscription_id = models.CharField(
+        max_length=255, unique=True, db_index=True, null=True, blank=True
+    )
+    stripe_customer_id = models.CharField(max_length=255, null=True, blank=True)
+    status = models.CharField(
+        max_length=30,
+        choices=STATUS_CHOICES,
+        default="active",
+        db_index=True,
+    )
+    current_period_start = models.DateTimeField(null=True, blank=True)
+    current_period_end = models.DateTimeField(null=True, blank=True)
+    cancel_at_period_end = models.BooleanField(default=False)
+    source = models.CharField(
+        max_length=50,
+        help_text="e.g. widget, manual, import",
+    )
+    custom_data = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Submitted signup field values from widget (key: value)",
+    )
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "customer_memberships"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["product", "status"]),
+        ]
+
+    def __str__(self):
+        contact_str = (
+            f"{self.contact.first_name} {self.contact.last_name}"
+            if self.contact
+            else (self.user.email if self.user else str(self.id))
+        )
+        return f"{contact_str} — {self.product.name}"
+
+
+class MembershipCreditLedger(models.Model):
+    """
+    Tracks credit usage per billing period (only for access_type=credits).
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    membership = models.ForeignKey(
+        CustomerMembership,
+        on_delete=models.CASCADE,
+        related_name="ledger_entries",
+    )
+    booking = models.ForeignKey(
+        "Booking",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="membership_credit_entries",
+    )
+    period_start = models.DateField()
+    credits_used = models.PositiveIntegerField(default=1)
+    action = models.CharField(
+        max_length=20,
+        choices=[
+            ("consumed", "Consumed"),
+            ("refunded", "Refunded"),
+            ("reset", "Reset"),
+            ("manual", "Manual"),
+        ],
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "membership_credit_ledger"
+        ordering = ["-created_at"]
+
+
+class MembershipPayment(models.Model):
+    """
+    Tracks a subscription renewal payment (mirrors Payment for membership invoices).
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    membership = models.ForeignKey(
+        CustomerMembership,
+        on_delete=models.CASCADE,
+        related_name="payments",
+    )
+    stripe_invoice_id = models.CharField(max_length=255, unique=True, db_index=True)
+    stripe_payment_intent_id = models.CharField(
+        max_length=255, null=True, blank=True
+    )
+    amount = models.DecimalField(
+        max_digits=10, decimal_places=2, validators=[MinValueValidator(0)]
+    )
+    platform_fee_amount = models.DecimalField(
+        max_digits=10, decimal_places=2, default=Decimal("0.00")
+    )
+    net_payout_amount = models.DecimalField(
+        max_digits=10, decimal_places=2, validators=[MinValueValidator(0)]
+    )
+    status = models.CharField(
+        max_length=30,
+        choices=[
+            ("paid", "Paid"),
+            ("failed", "Failed"),
+            ("refunded", "Refunded"),
+        ],
+        default="paid",
+    )
+    period_start = models.DateTimeField(null=True, blank=True)
+    period_end = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "membership_payments"
+        ordering = ["-created_at"]
+
+
 class Reviews(models.Model):
     reviewId = models.AutoField(primary_key=True)
     userId = models.ForeignKey(

@@ -27,6 +27,21 @@ from quickstart.views.widget.widget_config_views import (
     CancelMarketplaceEmailAddonView,
     ReactivateMarketplaceEmailAddonView,
 )
+from quickstart.views.business.membership_views import (
+    MembershipProductListCreateView,
+    MembershipProductDetailView,
+    MembershipProductSyncStripeView,
+    MemberListView,
+    MemberDetailView,
+    MemberCancelView,
+    MemberManualAddView,
+    MemberApproveView,
+    MemberDeclineView,
+)
+from quickstart.views.business.contact_views import (
+    ContactListView,
+    ContactDetailView,
+)
 from quickstart.views.admin.payout_management.admin_payout_views import (
     AdminPayoutViewSet,
 )
@@ -164,6 +179,9 @@ from quickstart.views.widget.widget_views import (
     GuestBookingCreateView,
     GuestFreeBookingCreateView,
     WidgetEventsView,
+    WidgetMembershipProductsView,
+    WidgetMembershipSubscribeView,
+    WidgetMembershipStatusView,
 )
 
 # =============================================================================
@@ -351,6 +369,9 @@ widget_urlpatterns = [
     path("bookings/free/", GuestFreeBookingCreateView.as_view(), name="widget-create-free-booking"),
     path("bookings/", GuestBookingCreateView.as_view(), name="widget-create-booking"),
     path("events/", WidgetEventsView.as_view(), name="widget-events"),
+    path("membership-products/", WidgetMembershipProductsView.as_view(), name="widget-membership-products"),
+    path("membership-subscribe/", WidgetMembershipSubscribeView.as_view(), name="widget-membership-subscribe"),
+    path("membership-status/", WidgetMembershipStatusView.as_view(), name="widget-membership-status"),
 ]
 
 urlpatterns = [
@@ -666,6 +687,61 @@ urlpatterns = [
         "my-business/addons/marketplace-email/reactivate/",
         ReactivateMarketplaceEmailAddonView.as_view(),
         name="my-business-addon-marketplace-email-reactivate",
+    ),
+    path(
+        "my-business/membership-products/",
+        MembershipProductListCreateView.as_view(),
+        name="my-business-membership-products",
+    ),
+    path(
+        "my-business/membership-products/<uuid:product_id>/",
+        MembershipProductDetailView.as_view(),
+        name="my-business-membership-product-detail",
+    ),
+    path(
+        "my-business/membership-products/<uuid:product_id>/sync-stripe/",
+        MembershipProductSyncStripeView.as_view(),
+        name="my-business-membership-product-sync-stripe",
+    ),
+    path(
+        "my-business/members/",
+        MemberListView.as_view(),
+        name="my-business-members",
+    ),
+    path(
+        "my-business/members/manual-add/",
+        MemberManualAddView.as_view(),
+        name="my-business-members-manual-add",
+    ),
+    path(
+        "my-business/members/<uuid:member_id>/",
+        MemberDetailView.as_view(),
+        name="my-business-member-detail",
+    ),
+    path(
+        "my-business/members/<uuid:member_id>/cancel/",
+        MemberCancelView.as_view(),
+        name="my-business-member-cancel",
+    ),
+    path(
+        "my-business/members/<uuid:pk>/approve/",
+        MemberApproveView.as_view(),
+        name="my-business-member-approve",
+    ),
+    path(
+        "my-business/members/<uuid:pk>/decline/",
+        MemberDeclineView.as_view(),
+        name="my-business-member-decline",
+    ),
+    path(
+        "my-business/contacts/",
+        ContactListView.as_view(),
+        name="my-business-contacts",
+    ),
+    path(
+        "my-business/contacts/<uuid:contact_id>/",
+        ContactDetailView.as_view(),
+        name="my-business-contact-detail",
     ),
     path(
         "my-business/profile/",

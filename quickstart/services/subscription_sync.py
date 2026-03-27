@@ -23,6 +23,13 @@ logger = logging.getLogger(__name__)
 VALID_PLAN_IDS = {"basic", "growth", "advanced"}
 
 
+def _obj_get(obj, key, default=None):
+    """Read a field from dict-like or StripeObject without calling .get on StripeObject."""
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
 def _widget_price_to_plan_id(stripe_price_id):
     """Map Stripe price ID to plan_id. Returns None if unknown."""
     if not stripe_price_id:
@@ -37,7 +44,7 @@ def _widget_price_to_plan_id(stripe_price_id):
 
 def _subscription_to_period_end(sub):
     """Extract current_period_end datetime from Stripe subscription object."""
-    raw = sub.get("current_period_end") if isinstance(sub, dict) else getattr(sub, "current_period_end", None)
+    raw = _obj_get(sub, "current_period_end")
     if raw is None:
         return None
     if isinstance(raw, (int, float)):
@@ -64,7 +71,7 @@ def sync_widget_subscription_from_stripe(stripe_subscription_id, subscription_ob
         logger.warning("subscription_sync: Stripe retrieve failed sub_id=%s err=%s", stripe_subscription_id, e)
         return None, str(e)
 
-    meta = subscription_obj.get("metadata") if isinstance(subscription_obj, dict) else getattr(subscription_obj, "metadata", None) or {}
+    meta = _obj_get(subscription_obj, "metadata", {}) or {}
     business_id_str = meta.get("business_id")
     if not business_id_str:
         logger.warning("subscription_sync: No business_id in metadata sub_id=%s", stripe_subscription_id)
@@ -75,28 +82,28 @@ def sync_widget_subscription_from_stripe(stripe_subscription_id, subscription_ob
         logger.warning("subscription_sync: Business not found business_id=%s", business_id_str)
         return None, "Business not found"
 
-    status = (subscription_obj.get("status") or "").strip().lower() or "incomplete"
+    status = (_obj_get(subscription_obj, "status", "") or "").strip().lower() or "incomplete"
     current_period_end = _subscription_to_period_end(subscription_obj)
-    cancel_at_period_end = bool(subscription_obj.get("cancel_at_period_end") or getattr(subscription_obj, "cancel_at_period_end", False))
+    cancel_at_period_end = bool(_obj_get(subscription_obj, "cancel_at_period_end", False))
     # When cancellation is driven by a schedule (end_behavior=cancel), Stripe may not set cancel_at_period_end on the subscription; derive it from the schedule.
-    schedule_ref = subscription_obj.get("schedule") if isinstance(subscription_obj, dict) else getattr(subscription_obj, "schedule", None)
+    schedule_ref = _obj_get(subscription_obj, "schedule")
     if schedule_ref is not None:
         end_behavior = None
         phases = []
         if isinstance(schedule_ref, str):
             try:
                 schedule = stripe.SubscriptionSchedule.retrieve(schedule_ref, expand=["phases"])
-                end_behavior = schedule.get("end_behavior") if isinstance(schedule, dict) else getattr(schedule, "end_behavior", None)
-                phases = schedule.get("phases") if isinstance(schedule, dict) else getattr(schedule, "phases", None) or []
+                end_behavior = _obj_get(schedule, "end_behavior")
+                phases = _obj_get(schedule, "phases", []) or []
             except stripe.StripeError:
                 pass
         else:
-            end_behavior = schedule_ref.get("end_behavior") if isinstance(schedule_ref, dict) else getattr(schedule_ref, "end_behavior", None)
-            phases = schedule_ref.get("phases") if isinstance(schedule_ref, dict) else getattr(schedule_ref, "phases", None) or []
+            end_behavior = _obj_get(schedule_ref, "end_behavior")
+            phases = _obj_get(schedule_ref, "phases", []) or []
         if end_behavior == "cancel" and phases and len(phases) == 1:
             cancel_at_period_end = True
 
-    items = (subscription_obj.get("items") or {}).get("data") or []
+    items = _obj_get(_obj_get(subscription_obj, "items", {}) or {}, "data", []) or []
     stripe_price_id = None
     if items and items[0]:
         price = items[0].get("price") if isinstance(items[0], dict) else getattr(items[0], "price", None)
@@ -112,7 +119,7 @@ def sync_widget_subscription_from_stripe(stripe_subscription_id, subscription_ob
     if plan_id not in VALID_PLAN_IDS:
         plan_id = "growth"
 
-    customer_id = subscription_obj.get("customer") or getattr(subscription_obj, "customer", None)
+    customer_id = _obj_get(subscription_obj, "customer")
     stripe_customer_id = str(customer_id) if customer_id else ""
 
     defaults = {
@@ -180,7 +187,7 @@ def sync_addon_subscription_from_stripe(stripe_subscription_id, subscription_obj
         logger.warning("subscription_sync: Stripe retrieve addon failed sub_id=%s err=%s", stripe_subscription_id, e)
         return None, str(e)
 
-    meta = subscription_obj.get("metadata") if isinstance(subscription_obj, dict) else getattr(subscription_obj, "metadata", None) or {}
+    meta = _obj_get(subscription_obj, "metadata", {}) or {}
     business_id_str = meta.get("business_id")
     if not business_id_str:
         return None, "Missing business_id in subscription metadata"
@@ -189,11 +196,11 @@ def sync_addon_subscription_from_stripe(stripe_subscription_id, subscription_obj
     except (BusinessInfo.DoesNotExist, ValueError):
         return None, "Business not found"
 
-    status = (subscription_obj.get("status") or "").strip().lower() or "incomplete"
+    status = (_obj_get(subscription_obj, "status", "") or "").strip().lower() or "incomplete"
     current_period_end = _subscription_to_period_end(subscription_obj)
-    cancel_at_period_end = bool(subscription_obj.get("cancel_at_period_end") or getattr(subscription_obj, "cancel_at_period_end", False))
+    cancel_at_period_end = bool(_obj_get(subscription_obj, "cancel_at_period_end", False))
 
-    items = (subscription_obj.get("items") or {}).get("data") or []
+    items = _obj_get(_obj_get(subscription_obj, "items", {}) or {}, "data", []) or []
     stripe_price_id = None
     if items and items[0]:
         price = items[0].get("price") if isinstance(items[0], dict) else getattr(items[0], "price", None)
@@ -203,7 +210,7 @@ def sync_addon_subscription_from_stripe(stripe_subscription_id, subscription_obj
                 (price.get("id") if isinstance(price, dict) else getattr(price, "id", None))
             )
 
-    customer_id = subscription_obj.get("customer") or getattr(subscription_obj, "customer", None)
+    customer_id = _obj_get(subscription_obj, "customer")
     stripe_customer_id = str(customer_id) if customer_id else ""
 
     defaults = {

@@ -46,6 +46,9 @@ from quickstart.services.subscription_sync import (
     mark_widget_subscription_canceled,
     mark_addon_subscription_canceled,
 )
+from quickstart.services.membership_sync import (
+    sync_customer_membership_from_stripe,
+)
 from quickstart.serializers.public.public_booking_serializers import (
     BookingCreateSerializer,
 )
@@ -1557,6 +1560,12 @@ class ProcessBookingWebhook(APIView):
                     meta = getattr(stripe_sub, "metadata", None) or stripe_sub.get("metadata") or {}
                     if meta.get("addon_type") == ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING:
                         sync_addon_subscription_from_stripe(sub_id, subscription_obj=stripe_sub)
+                    elif meta.get("membership_product_id"):
+                        sync_customer_membership_from_stripe(
+                            sub_id,
+                            subscription_obj=stripe_sub,
+                            invoice_obj=invoice,
+                        )
                     elif meta.get("business_id"):
                         sync_widget_subscription_from_stripe(sub_id, subscription_obj=stripe_sub)
                 except (stripe.StripeError, Exception) as e:
@@ -1596,6 +1605,23 @@ class ProcessBookingWebhook(APIView):
                         subscription.id,
                         subscription_obj=subscription,
                         addon_type=addon_type,
+                    )
+                return Response(status=status.HTTP_200_OK)
+
+            # Customer membership subscription (end-customer pays business)
+            if metadata.get("membership_product_id"):
+                if event.type == "customer.subscription.deleted":
+                    from quickstart.models import CustomerMembership
+                    try:
+                        cm = CustomerMembership.objects.get(stripe_subscription_id=subscription.id)
+                        cm.status = "canceled"
+                        cm.save(update_fields=["status"])
+                    except CustomerMembership.DoesNotExist:
+                        pass
+                else:
+                    sync_customer_membership_from_stripe(
+                        subscription.id,
+                        subscription_obj=subscription,
                     )
                 return Response(status=status.HTTP_200_OK)
 

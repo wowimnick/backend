@@ -45,6 +45,7 @@ from quickstart.models import (
     ClassOption,
     ClassesMain,
     CustomUser,
+    MembershipPayment,
     PartnerTier,
     Payment,
 )
@@ -151,7 +152,47 @@ class RevenueAnalyticsView(views.APIView):
             )
             return Decimal("0.13")
 
+    def _get_membership_payment_aggregates(self, business, start_date, end_date):
+        """Aggregate MembershipPayment for the business in the date range (status=paid)."""
+        qs = MembershipPayment.objects.filter(
+            membership__product__business=business,
+            status="paid",
+            created_at__range=[start_date, end_date],
+        )
+        return qs.aggregate(
+            total_amount=Coalesce(Sum("amount"), Value(Decimal("0.0")), output_field=DecimalField()),
+            total_net=Coalesce(Sum("net_payout_amount"), Value(Decimal("0.0")), output_field=DecimalField()),
+        )
+
     def calculate_metrics(self, business, start_date, end_date, class_id=None, source="all"):
+        if source == "membership":
+            curr = self._get_membership_payment_aggregates(business, start_date, end_date)
+            period_length_timedelta = end_date - start_date
+            if period_length_timedelta < timedelta(days=1):
+                period_length_timedelta = timedelta(days=1)
+            previous_end_date = start_date - timedelta.resolution
+            previous_start_date = previous_end_date - period_length_timedelta + timedelta.resolution
+            prev = self._get_membership_payment_aggregates(business, previous_start_date, previous_end_date)
+            current_total_gross_revenue = float(curr["total_amount"])
+            current_total_net_payout = float(curr["total_net"])
+            previous_total_gross_revenue = float(prev["total_amount"])
+            platform_fees_actual = current_total_gross_revenue - current_total_net_payout
+            revenue_growth = 0.0
+            if previous_total_gross_revenue > 0:
+                revenue_growth = ((current_total_gross_revenue - previous_total_gross_revenue) / previous_total_gross_revenue) * 100.0
+            elif current_total_gross_revenue > 0:
+                revenue_growth = 100.0
+            return {
+                "total_gross_revenue": round(current_total_gross_revenue, 2),
+                "estimated_platform_fees": round(platform_fees_actual, 2),
+                "estimated_net_revenue": round(current_total_net_payout, 2),
+                "average_order_value": 0.0,
+                "revenue_per_booker": 0.0,
+                "revenue_growth": round(revenue_growth, 1),
+                "revenue_per_spot": 0.0,
+                "recurring_revenue": round(current_total_gross_revenue, 2),
+            }
+
         current_period_qs = self.get_valid_bookings_queryset(
             business, start_date, end_date, class_id, source
         )
@@ -193,6 +234,12 @@ class RevenueAnalyticsView(views.APIView):
             current_aggregates["total_participant_spots_decimal"]
         )
 
+        # Include membership payments when source is "all"
+        if source == "all":
+            mem_curr = self._get_membership_payment_aggregates(business, start_date, end_date)
+            current_total_gross_revenue += float(mem_curr["total_amount"])
+            current_total_net_payout += float(mem_curr["total_net"])
+
         previous_aggregates = previous_period_qs.aggregate(
             prev_gross_revenue_decimal=Coalesce(
                 Sum("amount_paid"), Value(Decimal("0.0")), output_field=DecimalField()
@@ -201,6 +248,11 @@ class RevenueAnalyticsView(views.APIView):
         previous_total_gross_revenue = float(
             previous_aggregates["prev_gross_revenue_decimal"]
         )
+        if source == "all":
+            mem_prev = self._get_membership_payment_aggregates(
+                business, previous_start_date, previous_end_date
+            )
+            previous_total_gross_revenue += float(mem_prev["total_amount"])
 
         average_order_value = (
             (current_total_gross_revenue / current_total_bookings)
@@ -221,8 +273,6 @@ class RevenueAnalyticsView(views.APIView):
         elif current_total_gross_revenue > 0 and previous_total_gross_revenue == 0:
             revenue_growth = 100.0
 
-        # Use actual payout and platform take (matches payment webhook logic: global
-        # discount does not reduce business payout; partner tier fee is on subtotal_for_payout).
         platform_fees_actual = current_total_gross_revenue - current_total_net_payout
         estimated_platform_fees = round(platform_fees_actual, 2)
         estimated_net_revenue = round(current_total_net_payout, 2)
@@ -241,15 +291,51 @@ class RevenueAnalyticsView(views.APIView):
             "revenue_per_booker": round(revenue_per_booker, 2),
             "revenue_growth": round(revenue_growth, 1),
             "revenue_per_spot": round(revenue_per_spot, 2),
-            "recurring_revenue": 0.0,  # Placeholder
+            "recurring_revenue": 0.0,
         }
 
+    def _get_membership_trends_by_date(self, business, start_date, end_date, business_pytz):
+        """Daily membership payment totals in business timezone."""
+        qs = MembershipPayment.objects.filter(
+            membership__product__business=business,
+            status="paid",
+            created_at__range=[start_date, end_date],
+        ).annotate(
+            local_date=TruncDate(F("created_at"), tzinfo=business_pytz),
+        ).values("local_date").annotate(
+            gross_revenue_decimal=Coalesce(Sum("amount"), Value(Decimal("0.0")), output_field=DecimalField()),
+            net_payout_decimal=Coalesce(Sum("net_payout_amount"), Value(Decimal("0.0")), output_field=DecimalField()),
+        ).order_by("local_date")
+        return {entry["local_date"].isoformat(): {"gross": float(entry["gross_revenue_decimal"]), "net": float(entry["net_payout_decimal"])} for entry in qs if entry["local_date"]}
+
     def get_revenue_trends(self, business, start_date, end_date, class_id=None, source="all"):
+        business_pytz = pytz.timezone(business.business_timezone)
+        all_dates_in_range_local = {}
+        current_scan_local_date = start_date.astimezone(business_pytz).date()
+        end_scan_local_date = end_date.astimezone(business_pytz).date()
+        while current_scan_local_date <= end_scan_local_date:
+            all_dates_in_range_local[current_scan_local_date.isoformat()] = {
+                "gross_revenue": 0.0,
+                "net_revenue": 0.0,
+                "platform_fees": 0.0,
+            }
+            current_scan_local_date += timedelta(days=1)
+
+        if source == "membership":
+            membership_by_date = self._get_membership_trends_by_date(business, start_date, end_date, business_pytz)
+            for date_iso, data in membership_by_date.items():
+                if date_iso in all_dates_in_range_local:
+                    all_dates_in_range_local[date_iso]["gross_revenue"] = data["gross"]
+                    all_dates_in_range_local[date_iso]["net_revenue"] = data["net"]
+                    all_dates_in_range_local[date_iso]["platform_fees"] = data["gross"] - data["net"]
+            return [
+                {"date": date_str, **rev_data}
+                for date_str, rev_data in sorted(all_dates_in_range_local.items())
+            ]
+
         valid_bookings_qs = self.get_valid_bookings_queryset(
             business, start_date, end_date, class_id, source
         )
-        business_pytz = pytz.timezone(business.business_timezone)
-
         trends_qs = (
             valid_bookings_qs.annotate(
                 local_booking_date_trunc=TruncDate(
@@ -272,17 +358,6 @@ class RevenueAnalyticsView(views.APIView):
             .order_by("local_booking_date_trunc")
         )
 
-        all_dates_in_range_local = {}
-        current_scan_local_date = start_date.astimezone(business_pytz).date()
-        end_scan_local_date = end_date.astimezone(business_pytz).date()
-        while current_scan_local_date <= end_scan_local_date:
-            all_dates_in_range_local[current_scan_local_date.isoformat()] = {
-                "gross_revenue": 0.0,
-                "net_revenue": 0.0,
-                "platform_fees": 0.0,
-            }
-            current_scan_local_date += timedelta(days=1)
-
         for entry in trends_qs:
             date_iso = entry["local_booking_date_trunc"].isoformat()
             gross_rev = entry["gross_revenue_decimal"]
@@ -294,6 +369,14 @@ class RevenueAnalyticsView(views.APIView):
                 all_dates_in_range_local[date_iso]["net_revenue"] = net_f
                 all_dates_in_range_local[date_iso]["platform_fees"] = gross_f - net_f
 
+        if source == "all":
+            membership_by_date = self._get_membership_trends_by_date(business, start_date, end_date, business_pytz)
+            for date_iso, data in membership_by_date.items():
+                if date_iso in all_dates_in_range_local:
+                    all_dates_in_range_local[date_iso]["gross_revenue"] += data["gross"]
+                    all_dates_in_range_local[date_iso]["net_revenue"] += data["net"]
+                    all_dates_in_range_local[date_iso]["platform_fees"] += data["gross"] - data["net"]
+
         formatted_trends = [
             {"date": date_str, **rev_data}
             for date_str, rev_data in sorted(all_dates_in_range_local.items())
@@ -301,6 +384,8 @@ class RevenueAnalyticsView(views.APIView):
         return formatted_trends
 
     def get_class_revenue(self, business, start_date, end_date, class_id_filter=None, source="all"):
+        if source == "membership":
+            return []
         valid_bookings_qs = self.get_valid_bookings_queryset(
             business, start_date, end_date, class_id_filter, source
         )
@@ -403,6 +488,12 @@ class RevenueAnalyticsView(views.APIView):
     def get_revenue_by_booking_type(
         self, business, start_date, end_date, class_id=None, source="all"
     ):
+        if source == "membership":
+            agg = self._get_membership_payment_aggregates(business, start_date, end_date)
+            total = float(agg["total_amount"])
+            if total == 0:
+                return []
+            return [{"name": "Membership Payments", "value": total}]
         valid_bookings_qs = self.get_valid_bookings_queryset(
             business, start_date, end_date, class_id, source
         )
@@ -428,6 +519,12 @@ class RevenueAnalyticsView(views.APIView):
             {"name": entry["booking_type_category"], "value": float(entry["value"])}
             for entry in revenue_by_type_data
         ]
+        if source == "all":
+            mem_agg = self._get_membership_payment_aggregates(business, start_date, end_date)
+            mem_total = float(mem_agg["total_amount"])
+            if mem_total > 0:
+                revenue_by_booking_type.append({"name": "Membership Payments", "value": mem_total})
+                revenue_by_booking_type.sort(key=lambda x: -x["value"])
         return revenue_by_booking_type
 
     def get(self, request):
@@ -448,7 +545,7 @@ class RevenueAnalyticsView(views.APIView):
             class_id_filter = int(class_id_filter) if class_id_filter else None
 
             source_filter = request.query_params.get("source", "all")
-            if source_filter not in ("widget", "marketplace", "all"):
+            if source_filter not in ("widget", "marketplace", "all", "membership"):
                 source_filter = "all"
 
             metrics = self.calculate_metrics(
