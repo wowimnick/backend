@@ -16,7 +16,10 @@ from quickstart.models import (
     BusinessInfo,
     WidgetSubscription,
 )
-from quickstart.models import ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING
+from quickstart.models import (
+    ADDON_TYPE_EMAIL_MARKETING,
+    ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +28,16 @@ VALID_PLAN_IDS = {"basic", "growth", "advanced"}
 
 def _obj_get(obj, key, default=None):
     """Read a field from dict-like or StripeObject without calling .get on StripeObject."""
+    if obj is None:
+        return default
     if isinstance(obj, dict):
         return obj.get(key, default)
     return getattr(obj, key, default)
+
+
+def _subscription_metadata(subscription_obj):
+    """Stripe subscription.metadata is a StripeObject; dict .get() breaks (looks up key 'get')."""
+    return _obj_get(subscription_obj, "metadata", None)
 
 
 def _widget_price_to_plan_id(stripe_price_id):
@@ -45,6 +55,15 @@ def _widget_price_to_plan_id(stripe_price_id):
 def _subscription_to_period_end(sub):
     """Extract current_period_end datetime from Stripe subscription object."""
     raw = _obj_get(sub, "current_period_end")
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        return datetime.fromtimestamp(raw, tz=pytz.UTC)
+    return raw
+
+
+def _subscription_to_period_start(sub):
+    raw = _obj_get(sub, "current_period_start")
     if raw is None:
         return None
     if isinstance(raw, (int, float)):
@@ -71,8 +90,8 @@ def sync_widget_subscription_from_stripe(stripe_subscription_id, subscription_ob
         logger.warning("subscription_sync: Stripe retrieve failed sub_id=%s err=%s", stripe_subscription_id, e)
         return None, str(e)
 
-    meta = _obj_get(subscription_obj, "metadata", {}) or {}
-    business_id_str = meta.get("business_id")
+    meta = _subscription_metadata(subscription_obj)
+    business_id_str = _obj_get(meta, "business_id")
     if not business_id_str:
         logger.warning("subscription_sync: No business_id in metadata sub_id=%s", stripe_subscription_id)
         return None, "Missing business_id in subscription metadata"
@@ -115,7 +134,8 @@ def sync_widget_subscription_from_stripe(stripe_subscription_id, subscription_ob
 
     plan_id = _widget_price_to_plan_id(stripe_price_id)
     if not plan_id:
-        plan_id = (meta.get("plan_id") or "growth").strip().lower()
+        raw_plan = _obj_get(meta, "plan_id") or "growth"
+        plan_id = raw_plan.strip().lower() if isinstance(raw_plan, str) else "growth"
     if plan_id not in VALID_PLAN_IDS:
         plan_id = "growth"
 
@@ -187,8 +207,8 @@ def sync_addon_subscription_from_stripe(stripe_subscription_id, subscription_obj
         logger.warning("subscription_sync: Stripe retrieve addon failed sub_id=%s err=%s", stripe_subscription_id, e)
         return None, str(e)
 
-    meta = _obj_get(subscription_obj, "metadata", {}) or {}
-    business_id_str = meta.get("business_id")
+    meta = _subscription_metadata(subscription_obj)
+    business_id_str = _obj_get(meta, "business_id")
     if not business_id_str:
         return None, "Missing business_id in subscription metadata"
     try:
@@ -197,6 +217,7 @@ def sync_addon_subscription_from_stripe(stripe_subscription_id, subscription_obj
         return None, "Business not found"
 
     status = (_obj_get(subscription_obj, "status", "") or "").strip().lower() or "incomplete"
+    current_period_start = _subscription_to_period_start(subscription_obj)
     current_period_end = _subscription_to_period_end(subscription_obj)
     cancel_at_period_end = bool(_obj_get(subscription_obj, "cancel_at_period_end", False))
 
@@ -219,6 +240,7 @@ def sync_addon_subscription_from_stripe(stripe_subscription_id, subscription_obj
         "stripe_customer_id": stripe_customer_id,
         "stripe_price_id": stripe_price_id,
         "status": status,
+        "current_period_start": current_period_start,
         "current_period_end": current_period_end,
         "cancel_at_period_end": cancel_at_period_end,
     }
@@ -231,6 +253,9 @@ def sync_addon_subscription_from_stripe(stripe_subscription_id, subscription_obj
     if addon_type == ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING:
         business.marketplace_email_branding_enabled = status in ("active", "trialing")
         business.save(update_fields=["marketplace_email_branding_enabled"])
+    elif addon_type == ADDON_TYPE_EMAIL_MARKETING:
+        business.email_marketing_enabled = status in ("active", "trialing")
+        business.save(update_fields=["email_marketing_enabled"])
 
     logger.info(
         "subscription_sync: Addon sub_id=%s business_id=%s addon_type=%s status=%s",
@@ -247,14 +272,18 @@ def mark_widget_subscription_canceled(stripe_subscription_id):
     return updated
 
 
-def mark_addon_subscription_canceled(stripe_subscription_id, addon_type=ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING):
+def mark_addon_subscription_canceled(stripe_subscription_id, addon_type=None):
     """Mark BusinessAddonSubscription as canceled and disable addon on business."""
     sub = BusinessAddonSubscription.objects.filter(stripe_subscription_id=stripe_subscription_id).first()
     if not sub:
         return 0
+    atype = addon_type or sub.addon_type
     sub.status = "canceled"
     sub.save(update_fields=["status"])
-    if addon_type == ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING and sub.business_id:
-        BusinessInfo.objects.filter(pk=sub.business_id).update(marketplace_email_branding_enabled=False)
+    if sub.business_id:
+        if atype == ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING:
+            BusinessInfo.objects.filter(pk=sub.business_id).update(marketplace_email_branding_enabled=False)
+        elif atype == ADDON_TYPE_EMAIL_MARKETING:
+            BusinessInfo.objects.filter(pk=sub.business_id).update(email_marketing_enabled=False)
     logger.info("subscription_sync: Marked addon sub_id=%s as canceled", stripe_subscription_id)
     return 1

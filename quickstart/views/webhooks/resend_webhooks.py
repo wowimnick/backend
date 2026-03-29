@@ -10,7 +10,9 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from django.db.models import F
 from django.conf import settings
-from ...models import NotificationCampaign
+from django.utils import timezone
+
+from ...models import CampaignEmailSend, NotificationCampaign
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +22,9 @@ def verify_resend_webhook(request):
     Manually verifies the Resend webhook signature.
     Returns the parsed event payload if valid, otherwise raises an exception.
     """
+    if not getattr(settings, "RESEND_WEBHOOK_SECRET", None):
+        raise ValueError("RESEND_WEBHOOK_SECRET is not configured")
+
     signature_header = request.headers.get('Resend-Signature')
     if not signature_header:
         raise ValueError("Signature header missing")
@@ -72,9 +77,41 @@ def resend_webhook_receiver(request):
         
         logger.info(f"Resend webhook verified. Type: {event_type}")
 
-        # Extract campaign_id from headers
-        headers = {h['name']: h['value'] for h in data.get('headers', [])}
-        campaign_id = headers.get('X-Campaign-ID')
+        email_id = data.get("email_id")
+        if email_id:
+            send_row = (
+                CampaignEmailSend.objects.filter(resend_email_id=email_id)
+                .select_related("contact", "campaign")
+                .first()
+            )
+            if send_row:
+                now = timezone.now()
+                status_by_type = {
+                    "email.sent": "sent",
+                    "email.delivered": "delivered",
+                    "email.bounced": "bounced",
+                    "email.opened": "opened",
+                    "email.clicked": "clicked",
+                    "email.complained": "complained",
+                    "email.delivery_delayed": "deferred",
+                }
+                new_status = status_by_type.get(event_type)
+                if new_status:
+                    send_row.status = new_status
+                    send_row.last_event_at = now
+                    send_row.save(update_fields=["status", "last_event_at"])
+                if event_type in ("email.bounced", "email.complained") and send_row.contact_id:
+                    c = send_row.contact
+                    c.marketing_unsubscribed = True
+                    c.marketing_unsubscribed_at = now
+                    c.save(
+                        update_fields=["marketing_unsubscribed", "marketing_unsubscribed_at"]
+                    )
+                return JsonResponse({"status": "ok"})
+
+        # Platform admin NotificationCampaign (legacy header)
+        headers = {h["name"]: h["value"] for h in data.get("headers", [])}
+        campaign_id = headers.get("X-Campaign-ID")
 
         if not campaign_id:
             logger.warning(f"Webhook event '{event_type}' received without a Campaign ID. Skipping.")

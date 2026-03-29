@@ -703,6 +703,11 @@ class BusinessInfo(models.Model):
         help_text="Branding for marketplace booking emails when addon is enabled: logo_url, primary_color, footer_text, confirmation_message.",
     )
 
+    email_marketing_enabled = models.BooleanField(
+        default=False,
+        help_text="When True, business has an active email marketing addon (campaign sends).",
+    )
+
     def _generate_unique_slug(self):
         """Generates a unique slug from the business name."""
         if self.slug:  # Do not regenerate if a slug already exists and is being saved
@@ -1025,6 +1030,12 @@ class Contact(models.Model):
     tags = models.JSONField(
         default=list, blank=True, help_text="List of tags for segmentation"
     )
+
+    marketing_unsubscribed = models.BooleanField(
+        default=False,
+        help_text="Opted out of this business's marketing emails (per-tenant CAN-SPAM).",
+    )
+    marketing_unsubscribed_at = models.DateTimeField(null=True, blank=True)
 
     notes = GenericRelation(
         "StudentNote",
@@ -3048,6 +3059,7 @@ class BusinessAddonSubscription(models.Model):
         default="incomplete",
         db_index=True,
     )
+    current_period_start = models.DateTimeField(null=True, blank=True)
     current_period_end = models.DateTimeField(null=True, blank=True)
     cancel_at_period_end = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -3062,6 +3074,213 @@ class BusinessAddonSubscription(models.Model):
 
     def __str__(self):
         return f"Addon {self.addon_type} ({self.business.businessName})"
+
+
+ADDON_TYPE_EMAIL_MARKETING = "email_marketing"
+
+
+class BusinessMarketingSettings(models.Model):
+    """Defaults and compliance footer for tenant email marketing."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.OneToOneField(
+        BusinessInfo,
+        on_delete=models.CASCADE,
+        related_name="marketing_settings",
+    )
+    physical_address_footer = models.TextField(
+        blank=True,
+        default="",
+        help_text="Shown in marketing footer (CAN-SPAM). Defaults to business address if empty at send time.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "business_marketing_settings"
+
+
+class MarketingSendingDomain(models.Model):
+    """Resend-verified domain for branded From addresses (higher tiers)."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        BusinessInfo,
+        on_delete=models.CASCADE,
+        related_name="marketing_sending_domains",
+    )
+    domain = models.CharField(max_length=255, db_index=True)
+    resend_domain_id = models.CharField(max_length=255, blank=True, default="")
+    status = models.CharField(
+        max_length=32,
+        default="pending",
+        help_text="pending | verified | failed",
+    )
+    dns_records = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "marketing_sending_domains"
+        constraints = [
+            models.UniqueConstraint(fields=["domain"], name="uniq_marketing_sending_domain_name"),
+        ]
+
+
+class MarketingSenderProfile(models.Model):
+    """Display name + From / Reply-To for campaigns."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        BusinessInfo,
+        on_delete=models.CASCADE,
+        related_name="marketing_sender_profiles",
+    )
+    display_name = models.CharField(max_length=200)
+    from_email = models.EmailField(
+        help_text="Must match a verified sending domain for higher tiers; starter may use platform From.",
+    )
+    reply_to = models.EmailField(blank=True, null=True)
+    is_default = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "marketing_sender_profiles"
+
+
+class EmailMarketingTemplate(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        BusinessInfo,
+        on_delete=models.CASCADE,
+        related_name="email_marketing_templates",
+    )
+    name = models.CharField(max_length=200)
+    subject = models.CharField(max_length=255, blank=True, default="")
+    content_type = models.CharField(
+        max_length=32,
+        default="html",
+        help_text="html | builder_json",
+    )
+    html_body = models.TextField(blank=True, default="")
+    builder_json = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "email_marketing_templates"
+        ordering = ["-updated_at"]
+
+
+class BusinessEmailCampaign(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        BusinessInfo,
+        on_delete=models.CASCADE,
+        related_name="email_campaigns",
+    )
+    name = models.CharField(max_length=255)
+    status = models.CharField(
+        max_length=32,
+        default="draft",
+        help_text="draft | scheduled | sending | sent | failed | cancelled",
+    )
+    subject = models.CharField(max_length=255, blank=True, default="")
+    html_body = models.TextField(blank=True, default="")
+    builder_json = models.JSONField(default=dict, blank=True)
+    content_type = models.CharField(max_length=32, default="html")
+    template = models.ForeignKey(
+        EmailMarketingTemplate,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="campaigns",
+    )
+    sender_profile = models.ForeignKey(
+        MarketingSenderProfile,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="campaigns",
+    )
+    audience_type = models.CharField(
+        max_length=64,
+        default="all_contacts",
+        help_text="all_contacts | tags | contact_ids",
+    )
+    audience_filter = models.JSONField(default=dict, blank=True)
+    scheduled_at = models.DateTimeField(null=True, blank=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    recipient_count = models.PositiveIntegerField(default=0)
+    error_message = models.TextField(blank=True, default="")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_email_campaigns",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "business_email_campaigns"
+        ordering = ["-created_at"]
+
+
+class CampaignEmailSend(models.Model):
+    """Per-recipient marketing send row (analytics + idempotency)."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    campaign = models.ForeignKey(
+        BusinessEmailCampaign,
+        on_delete=models.CASCADE,
+        related_name="sends",
+    )
+    contact = models.ForeignKey(
+        "Contact",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="campaign_sends",
+    )
+    to_email = models.EmailField()
+    resend_email_id = models.CharField(max_length=255, blank=True, default="")
+    status = models.CharField(max_length=32, default="queued")
+    last_event_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "campaign_email_sends"
+        indexes = [
+            models.Index(fields=["campaign", "to_email"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["campaign", "to_email"],
+                name="uniq_campaign_email_send_recipient",
+            )
+        ]
+
+
+class BusinessMarketingUsage(models.Model):
+    """Marketing sends only; transactional emails never increment this counter."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        BusinessInfo,
+        on_delete=models.CASCADE,
+        related_name="marketing_usage_periods",
+    )
+    period_start = models.DateTimeField()
+    period_end = models.DateTimeField()
+    marketing_emails_sent = models.PositiveIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "business_marketing_usage"
+        unique_together = (("business", "period_start", "period_end"),)
 
 
 class MembershipProduct(models.Model):

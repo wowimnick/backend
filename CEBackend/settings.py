@@ -145,6 +145,12 @@ if IS_DEPLOYED_ENV and os.environ.get("SENTRY_DSN"):
     )
 # --- API & Service Keys ---
 RESEND_API_KEY = os.environ["RESEND_API_KEY"]
+# HMAC signing secret for POST /api/webhooks/resend/ (Resend dashboard → Webhooks).
+# Use one webhook URL per deployed API (e.g. staging vs prod), each with its own secret
+# if Resend requires it, or share one secret if you use a single Resend project.
+# Recommended event types: email.sent, email.delivered, email.delivery_delayed,
+# email.bounced, email.complained, email.opened, email.clicked.
+RESEND_WEBHOOK_SECRET = os.environ.get("RESEND_WEBHOOK_SECRET", "")
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
 GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
 STRIPE_PUBLIC_KEY = os.environ["STRIPE_PUBLIC_KEY"]
@@ -168,6 +174,12 @@ WIDGET_SUBSCRIPTION_REQUIRED = os.environ.get("WIDGET_SUBSCRIPTION_REQUIRED", "t
 
 # Marketplace email branding addon — $7/mo. Set MARKETPLACE_EMAIL_ADDON_PRICE_ID to Stripe Price ID.
 MARKETPLACE_EMAIL_ADDON_PRICE_ID = os.environ.get("MARKETPLACE_EMAIL_ADDON_PRICE_ID")
+
+# Email marketing addon ladder (recurring Price IDs; unset tier is omitted from checkout UI).
+EMAIL_MARKETING_STARTER_PRICE_ID = os.environ.get("EMAIL_MARKETING_STARTER_PRICE_ID", "")
+EMAIL_MARKETING_GROWTH_PRICE_ID = os.environ.get("EMAIL_MARKETING_GROWTH_PRICE_ID", "")
+EMAIL_MARKETING_BUSINESS_PRICE_ID = os.environ.get("EMAIL_MARKETING_BUSINESS_PRICE_ID", "")
+EMAIL_MARKETING_SCALE_PRICE_ID = os.environ.get("EMAIL_MARKETING_SCALE_PRICE_ID", "")
 
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
 VERCEL_AUTOMATION_BYPASS_SECRET = os.environ["VERCEL_AUTOMATION_BYPASS_SECRET"]
@@ -456,6 +468,8 @@ SIMPLE_JWT = {
 # a different host, set FRONTEND_URL to a URL reachable from the backend (e.g. your staging/prod
 # frontend). Otherwise revalidation and other callbacks will try localhost:3000 and fail.
 FRONTEND_BASE_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+# Absolute base for marketing unsubscribe links (defaults to this backend origin).
+DJANGO_PUBLIC_URL = os.environ.get("DJANGO_PUBLIC_URL", "http://127.0.0.1:8000")
 
 # Meta Conversions API (CAPI) - server-side events with Pixel deduplication
 # Only sends in production (DJANGO_ENV=prod). Set META_CAPI_ENABLED=true to override.

@@ -39,8 +39,10 @@ from quickstart.models import (
     GiftCardTransaction,
     WidgetSubscription,
 )
-from quickstart.models import ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING
+from quickstart.models import ADDON_TYPE_EMAIL_MARKETING, ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING
 from quickstart.services.subscription_sync import (
+    _obj_get,
+    _subscription_metadata,
     sync_widget_subscription_from_stripe,
     sync_addon_subscription_from_stripe,
     mark_widget_subscription_canceled,
@@ -1505,9 +1507,9 @@ class ProcessBookingWebhook(APIView):
                 else:
                     try:
                         stripe_sub = stripe.Subscription.retrieve(sub_id)
-                        meta = getattr(stripe_sub, "metadata", None) or stripe_sub.get("metadata") or {}
-                        if meta.get("business_id") and not meta.get("addon_type"):
-                            business_id = meta.get("business_id")
+                        meta = _subscription_metadata(stripe_sub)
+                        if _obj_get(meta, "business_id") and not _obj_get(meta, "addon_type"):
+                            business_id = _obj_get(meta, "business_id")
                             try:
                                 business = BusinessInfo.objects.get(businessId=int(business_id))
                             except (BusinessInfo.DoesNotExist, ValueError):
@@ -1523,7 +1525,12 @@ class ProcessBookingWebhook(APIView):
                                         webhook_id, business.businessId,
                                     )
                                 else:
-                                    plan_id = (meta.get("plan_id") or "growth").strip().lower()
+                                    raw_pid = _obj_get(meta, "plan_id") or "growth"
+                                    plan_id = (
+                                        raw_pid.strip().lower()
+                                        if isinstance(raw_pid, str)
+                                        else "growth"
+                                    )
                                     if plan_id not in ("basic", "growth", "advanced"):
                                         plan_id = "growth"
                                     plan_display = plan_id.capitalize()
@@ -1557,16 +1564,23 @@ class ProcessBookingWebhook(APIView):
             if sub_id:
                 try:
                     stripe_sub = stripe.Subscription.retrieve(sub_id)
-                    meta = getattr(stripe_sub, "metadata", None) or stripe_sub.get("metadata") or {}
-                    if meta.get("addon_type") == ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING:
-                        sync_addon_subscription_from_stripe(sub_id, subscription_obj=stripe_sub)
-                    elif meta.get("membership_product_id"):
+                    meta = _subscription_metadata(stripe_sub)
+                    at = _obj_get(meta, "addon_type")
+                    if at == ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING:
+                        sync_addon_subscription_from_stripe(
+                            sub_id, subscription_obj=stripe_sub, addon_type=ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING
+                        )
+                    elif at == ADDON_TYPE_EMAIL_MARKETING:
+                        sync_addon_subscription_from_stripe(
+                            sub_id, subscription_obj=stripe_sub, addon_type=ADDON_TYPE_EMAIL_MARKETING
+                        )
+                    elif _obj_get(meta, "membership_product_id"):
                         sync_customer_membership_from_stripe(
                             sub_id,
                             subscription_obj=stripe_sub,
                             invoice_obj=invoice,
                         )
-                    elif meta.get("business_id"):
+                    elif _obj_get(meta, "business_id"):
                         sync_widget_subscription_from_stripe(sub_id, subscription_obj=stripe_sub)
                 except (stripe.StripeError, Exception) as e:
                     logger.warning(
@@ -1581,8 +1595,8 @@ class ProcessBookingWebhook(APIView):
         ):
             logger.info("[%s] Subscription event: %s", webhook_id, event.type)
             subscription = event.data.object
-            metadata = getattr(subscription, "metadata", None) or subscription.get("metadata") or {}
-            business_id = metadata.get("business_id")
+            metadata = _subscription_metadata(subscription)
+            business_id = _obj_get(metadata, "business_id")
             if not business_id:
                 logger.warning(
                     f"[{webhook_id}] Subscription {subscription.id} has no business_id in metadata; skipping."
@@ -1596,8 +1610,8 @@ class ProcessBookingWebhook(APIView):
                 )
                 return Response(status=status.HTTP_200_OK)
 
-            addon_type = metadata.get("addon_type")
-            if addon_type == ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING:
+            addon_type = _obj_get(metadata, "addon_type")
+            if addon_type in (ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING, ADDON_TYPE_EMAIL_MARKETING):
                 if event.type == "customer.subscription.deleted":
                     mark_addon_subscription_canceled(subscription.id, addon_type=addon_type)
                 else:
@@ -1609,7 +1623,7 @@ class ProcessBookingWebhook(APIView):
                 return Response(status=status.HTTP_200_OK)
 
             # Customer membership subscription (end-customer pays business)
-            if metadata.get("membership_product_id"):
+            if _obj_get(metadata, "membership_product_id"):
                 if event.type == "customer.subscription.deleted":
                     from quickstart.models import CustomerMembership
                     try:

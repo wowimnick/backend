@@ -20,6 +20,7 @@ from quickstart.views.widget.widget_config_views import (
     CreateUpdatePaymentMethodSetupIntentView,
     SetDefaultPaymentMethodView,
     DefaultPaymentMethodView,
+    DetachBusinessPaymentMethodView,
     BusinessAddonsView,
     CreateMarketplaceEmailAddonCheckoutView,
     CreateMarketplaceEmailAddonPaymentIntentView,
@@ -41,6 +42,31 @@ from quickstart.views.business.membership_views import (
 from quickstart.views.business.contact_views import (
     ContactListView,
     ContactDetailView,
+)
+from quickstart.views.business.email_marketing_addon_views import (
+    CancelEmailMarketingAddonView,
+    ChangeEmailMarketingTierView,
+    CreateEmailMarketingAddonCheckoutView,
+    CreateEmailMarketingAddonPaymentIntentView,
+    InstantSubscribeEmailMarketingAddonView,
+    ReactivateEmailMarketingAddonView,
+)
+from quickstart.views.webhooks.resend_webhooks import resend_webhook_receiver
+from quickstart.views.business.email_marketing_views import (
+    MarketingAccountView,
+    MarketingCampaignDetailView,
+    MarketingCampaignListCreateView,
+    MarketingCampaignSendView,
+    MarketingCampaignTestSendView,
+    MarketingDomainDeleteView,
+    MarketingDomainListCreateView,
+    MarketingDomainVerifyView,
+    MarketingEmailUnsubscribeView,
+    MarketingSenderDetailView,
+    MarketingSenderListCreateView,
+    MarketingSettingsDetailView,
+    MarketingTemplateDetailView,
+    MarketingTemplateListCreateView,
 )
 from quickstart.views.admin.payout_management.admin_payout_views import (
     AdminPayoutViewSet,
@@ -606,6 +632,11 @@ urlpatterns = [
         stripe_connect_webhook,
         name="stripe-connect-webhook",
     ),
+    path(
+        "webhooks/resend/",
+        resend_webhook_receiver,
+        name="resend-webhook",
+    ),
     path("business/register/", register_business, name="business-register"),
     path("my-businesses/", get_user_businesses, name="my-businesses"),
     path(
@@ -657,6 +688,11 @@ urlpatterns = [
         "my-business/widget-subscription/default-payment-method/",
         DefaultPaymentMethodView.as_view(),
         name="my-business-widget-subscription-default-payment-method",
+    ),
+    path(
+        "my-business/widget-subscription/detach-payment-method/",
+        DetachBusinessPaymentMethodView.as_view(),
+        name="my-business-widget-subscription-detach-payment-method",
     ),
     path(
         "my-business/addons/",
@@ -742,6 +778,106 @@ urlpatterns = [
         "my-business/contacts/<uuid:contact_id>/",
         ContactDetailView.as_view(),
         name="my-business-contact-detail",
+    ),
+    path(
+        "my-business/marketing/account/",
+        MarketingAccountView.as_view(),
+        name="my-business-marketing-account",
+    ),
+    path(
+        "my-business/marketing/settings/",
+        MarketingSettingsDetailView.as_view(),
+        name="my-business-marketing-settings",
+    ),
+    path(
+        "my-business/marketing/templates/",
+        MarketingTemplateListCreateView.as_view(),
+        name="my-business-marketing-templates",
+    ),
+    path(
+        "my-business/marketing/templates/<uuid:template_id>/",
+        MarketingTemplateDetailView.as_view(),
+        name="my-business-marketing-template-detail",
+    ),
+    path(
+        "my-business/marketing/senders/",
+        MarketingSenderListCreateView.as_view(),
+        name="my-business-marketing-senders",
+    ),
+    path(
+        "my-business/marketing/senders/<uuid:sender_id>/",
+        MarketingSenderDetailView.as_view(),
+        name="my-business-marketing-sender-detail",
+    ),
+    path(
+        "my-business/marketing/domains/",
+        MarketingDomainListCreateView.as_view(),
+        name="my-business-marketing-domains",
+    ),
+    path(
+        "my-business/marketing/domains/<uuid:domain_id>/verify/",
+        MarketingDomainVerifyView.as_view(),
+        name="my-business-marketing-domain-verify",
+    ),
+    path(
+        "my-business/marketing/domains/<uuid:domain_id>/",
+        MarketingDomainDeleteView.as_view(),
+        name="my-business-marketing-domain-detail",
+    ),
+    path(
+        "my-business/marketing/campaigns/",
+        MarketingCampaignListCreateView.as_view(),
+        name="my-business-marketing-campaigns",
+    ),
+    path(
+        "my-business/marketing/campaigns/<uuid:campaign_id>/",
+        MarketingCampaignDetailView.as_view(),
+        name="my-business-marketing-campaign-detail",
+    ),
+    path(
+        "my-business/marketing/campaigns/<uuid:campaign_id>/send/",
+        MarketingCampaignSendView.as_view(),
+        name="my-business-marketing-campaign-send",
+    ),
+    path(
+        "my-business/marketing/campaigns/<uuid:campaign_id>/test-send/",
+        MarketingCampaignTestSendView.as_view(),
+        name="my-business-marketing-campaign-test-send",
+    ),
+    path(
+        "my-business/addons/email-marketing/checkout/",
+        CreateEmailMarketingAddonCheckoutView.as_view(),
+        name="my-business-addon-email-marketing-checkout",
+    ),
+    path(
+        "my-business/addons/email-marketing/payment-intent/",
+        CreateEmailMarketingAddonPaymentIntentView.as_view(),
+        name="my-business-addon-email-marketing-payment-intent",
+    ),
+    path(
+        "my-business/addons/email-marketing/instant-subscribe/",
+        InstantSubscribeEmailMarketingAddonView.as_view(),
+        name="my-business-addon-email-marketing-instant-subscribe",
+    ),
+    path(
+        "my-business/addons/email-marketing/change-tier/",
+        ChangeEmailMarketingTierView.as_view(),
+        name="my-business-addon-email-marketing-change-tier",
+    ),
+    path(
+        "my-business/addons/email-marketing/cancel/",
+        CancelEmailMarketingAddonView.as_view(),
+        name="my-business-addon-email-marketing-cancel",
+    ),
+    path(
+        "my-business/addons/email-marketing/reactivate/",
+        ReactivateEmailMarketingAddonView.as_view(),
+        name="my-business-addon-email-marketing-reactivate",
+    ),
+    path(
+        "public/marketing-email/unsubscribe/<str:token>/",
+        MarketingEmailUnsubscribeView.as_view(),
+        name="public-marketing-email-unsubscribe",
     ),
     path(
         "my-business/profile/",

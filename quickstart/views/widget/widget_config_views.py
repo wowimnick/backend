@@ -22,7 +22,9 @@ from quickstart.models import (
     MembershipProduct,
     WidgetSubscription,
 )
-from quickstart.models import ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING
+from quickstart.models import ADDON_TYPE_EMAIL_MARKETING, ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING
+from quickstart.services.email_marketing_config import list_public_tiers, price_id_to_tier
+from quickstart.services.email_marketing_usage import usage_snapshot
 from quickstart.serializers.widget.widget_config_serializer import (
     BusinessWidgetConfigSerializer,
     WidgetSubscriptionSerializer,
@@ -1317,35 +1319,163 @@ class SetDefaultPaymentMethodView(APIView):
             )
 
 
+def _serialize_stripe_card_payment_method(pm):
+    """Build a dict for API from a Stripe PaymentMethod with type card."""
+    if not pm:
+        return None
+    pm_id = getattr(pm, "id", None) or (pm.get("id") if isinstance(pm, dict) else None)
+    card = getattr(pm, "card", None) or (pm.get("card") if isinstance(pm, dict) else None)
+    if not card:
+        return None
+    brand = getattr(card, "brand", None) or (card.get("brand") if isinstance(card, dict) else None)
+    last4 = getattr(card, "last4", None) or (card.get("last4") if isinstance(card, dict) else None)
+    exp_month = getattr(card, "exp_month", None) or (card.get("exp_month") if isinstance(card, dict) else None)
+    exp_year = getattr(card, "exp_year", None) or (card.get("exp_year") if isinstance(card, dict) else None)
+    return {
+        "id": pm_id,
+        "brand": (brand or "card").lower() if brand else "card",
+        "last4": last4 or "",
+        "exp_month": int(exp_month) if exp_month is not None else None,
+        "exp_year": int(exp_year) if exp_year is not None else None,
+    }
+
+
 class DefaultPaymentMethodView(APIView):
-    """GET: Return masked default payment method (brand, last4) for UI, or null if none."""
+    """
+    GET: Return saved card payment methods for the business Stripe customer, plus default id.
+    Includes backward-compatible `payment_method` (the default card, same shape as before plus id/exp).
+    """
 
     permission_classes = [IsAuthenticated, CanManageOwnClasses]
 
     def get(self, request, *args, **kwargs):
         business = _get_business_for_subscription(request.user)
-        pm_id = _get_business_default_payment_method_id(business)
-        if not pm_id:
-            return Response({"payment_method": None}, status=status.HTTP_200_OK)
-        try:
-            pm = stripe.PaymentMethod.retrieve(pm_id)
-            card = getattr(pm, "card", None) or (pm.get("card") if isinstance(pm, dict) else None)
-            if not card:
-                return Response({"payment_method": None}, status=status.HTTP_200_OK)
-            brand = getattr(card, "brand", None) or (card.get("brand") if isinstance(card, dict) else None)
-            last4 = getattr(card, "last4", None) or (card.get("last4") if isinstance(card, dict) else None)
+        default_id = _get_business_default_payment_method_id(business)
+        methods_out = []
+        seen_ids = set()
+
+        if business.stripe_customer_id:
+            try:
+                pms = stripe.PaymentMethod.list(
+                    customer=business.stripe_customer_id,
+                    type="card",
+                    limit=100,
+                )
+                for pm in pms.data:
+                    row = _serialize_stripe_card_payment_method(pm)
+                    if row and row.get("id"):
+                        methods_out.append(row)
+                        seen_ids.add(row["id"])
+            except stripe.StripeError as e:
+                logger.warning(
+                    "PaymentMethod.list failed customer=%s: %s",
+                    business.stripe_customer_id,
+                    e,
+                )
+
+        if default_id and default_id not in seen_ids:
+            try:
+                pm = stripe.PaymentMethod.retrieve(default_id)
+                row = _serialize_stripe_card_payment_method(pm)
+                if row and row.get("id"):
+                    methods_out.insert(0, row)
+                    seen_ids.add(row["id"])
+            except stripe.StripeError as e:
+                logger.warning("PaymentMethod.retrieve failed pm_id=%s: %s", default_id, e)
+
+        methods_out.sort(
+            key=lambda m: (0 if m.get("id") == default_id else 1, m.get("last4") or ""),
+        )
+
+        default_row = next((m for m in methods_out if m.get("id") == default_id), None)
+
+        return Response(
+            {
+                "default_payment_method_id": default_id,
+                "payment_methods": methods_out,
+                "payment_method": default_row,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class DetachBusinessPaymentMethodView(APIView):
+    """
+    POST: Detach a saved card from the business Stripe customer.
+    At least one card must remain attached.
+    """
+
+    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+
+    def post(self, request, *args, **kwargs):
+        business = _get_business_for_subscription(request.user)
+        if not business.stripe_customer_id:
             return Response(
-                {
-                    "payment_method": {
-                        "brand": (brand or "card").lower() if brand else "card",
-                        "last4": last4 or "",
-                    }
-                },
-                status=status.HTTP_200_OK,
+                {"error": "No billing account found."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
+        payment_method = (request.data.get("payment_method") or "").strip()
+        if not payment_method:
+            return Response(
+                {"error": "payment_method is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            pms = stripe.PaymentMethod.list(
+                customer=business.stripe_customer_id,
+                type="card",
+                limit=100,
+            )
+            attached_ids = [pm.id for pm in pms.data if getattr(pm, "id", None)]
+            if payment_method not in attached_ids:
+                return Response(
+                    {"error": "Invalid payment method."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if len(attached_ids) <= 1:
+                return Response(
+                    {"error": "You must keep at least one payment method on file."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            default_id = _get_business_default_payment_method_id(business)
+            if default_id == payment_method:
+                other = next((pid for pid in attached_ids if pid != payment_method), None)
+                if not other:
+                    return Response(
+                        {"error": "You must keep at least one payment method on file."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                stripe.Customer.modify(
+                    business.stripe_customer_id,
+                    invoice_settings={"default_payment_method": other},
+                )
+                sub = get_widget_subscription(business)
+                if sub and sub.stripe_subscription_id:
+                    try:
+                        stripe.Subscription.modify(
+                            sub.stripe_subscription_id,
+                            default_payment_method=other,
+                        )
+                    except stripe.StripeError as e:
+                        logger.warning(
+                            "Subscription.modify default_payment_method after detach prep failed sub_id=%s: %s",
+                            sub.stripe_subscription_id,
+                            e,
+                        )
+
+            stripe.PaymentMethod.detach(payment_method)
+            return Response({"success": True}, status=status.HTTP_200_OK)
         except stripe.StripeError as e:
-            logger.warning("PaymentMethod.retrieve failed pm_id=%s: %s", pm_id, e)
-            return Response({"payment_method": None}, status=status.HTTP_200_OK)
+            logger.warning(
+                "DetachBusinessPaymentMethod failed for business %s: %s",
+                business.businessId,
+                e,
+            )
+            return Response(
+                {"error": "Could not remove payment method. Please try again."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
 
 
 class BusinessAddonsView(APIView):
@@ -1387,6 +1517,38 @@ class BusinessAddonsView(APIView):
             addon is None
             and _business_can_instant_subscribe(business)
         )
+        # --- Email marketing addon (ladder tiers) ---
+        em_addon = _get_current_addon_subscription(business, ADDON_TYPE_EMAIL_MARKETING)
+        if em_addon and em_addon.stripe_subscription_id:
+            synced_em, _ = sync_addon_subscription_from_stripe(
+                em_addon.stripe_subscription_id,
+                addon_type=ADDON_TYPE_EMAIL_MARKETING,
+            )
+            if synced_em:
+                em_addon = synced_em
+        elif em_addon is None:
+            latest_em = (
+                BusinessAddonSubscription.objects.filter(
+                    business=business,
+                    addon_type=ADDON_TYPE_EMAIL_MARKETING,
+                )
+                .exclude(stripe_subscription_id__isnull=True)
+                .exclude(stripe_subscription_id="")
+                .order_by("-created_at")
+                .first()
+            )
+            if latest_em and latest_em.stripe_subscription_id:
+                synced_em, _ = sync_addon_subscription_from_stripe(
+                    latest_em.stripe_subscription_id,
+                    addon_type=ADDON_TYPE_EMAIL_MARKETING,
+                )
+                if synced_em and synced_em.status in ("active", "trialing"):
+                    em_addon = synced_em
+        em_usage = usage_snapshot(business, em_addon) if em_addon else None
+        em_can_instant = em_addon is None and _business_can_instant_subscribe(business)
+        em_current_price_id = (em_addon.stripe_price_id or "") if em_addon else ""
+        em_tier_info = price_id_to_tier(em_current_price_id) if em_current_price_id else None
+
         data = {
             "marketplace_email_branding": {
                 "active": addon is not None,
@@ -1395,7 +1557,20 @@ class BusinessAddonsView(APIView):
                 ),
                 "cancelAtPeriodEnd": addon.cancel_at_period_end if addon else False,
                 "canInstantSubscribe": can_instant,
-            }
+            },
+            "email_marketing": {
+                "active": em_addon is not None,
+                "currentPeriodEnd": (
+                    em_addon.current_period_end.isoformat() if em_addon and em_addon.current_period_end else None
+                ),
+                "cancelAtPeriodEnd": em_addon.cancel_at_period_end if em_addon else False,
+                "canInstantSubscribe": em_can_instant,
+                "usage": em_usage,
+                "current_price_id": em_current_price_id or None,
+                "current_tier_key": em_tier_info["tier_key"] if em_tier_info else None,
+                "tiers": list_public_tiers(),
+                "transactional_emails_excluded_from_quota": True,
+            },
         }
         return Response(data, status=status.HTTP_200_OK)
 
