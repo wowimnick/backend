@@ -5,8 +5,10 @@ import re
 import resend
 from django.conf import settings
 from django.core.signing import BadSignature, Signer
+from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -16,11 +18,19 @@ from quickstart.models import (
     ADDON_TYPE_EMAIL_MARKETING,
     BusinessEmailCampaign,
     BusinessMarketingSettings,
+    CampaignEmailSend,
     EmailMarketingTemplate,
+    MarketingSavedSegment,
     MarketingSenderProfile,
     MarketingSendingDomain,
 )
 from quickstart.services.email_marketing_config import price_id_to_tier
+from quickstart.services.marketing_audience import (
+    audience_tier_error,
+    build_contact_queryset,
+    serialize_contact_sample,
+)
+from quickstart.services.marketing_builder import resolve_campaign_html_body
 from quickstart.services.email_marketing_usage import (
     MarketingQuotaExceeded,
     assert_can_send,
@@ -40,10 +50,10 @@ from quickstart.tasks.email_marketing_tasks import (
 )
 from quickstart.tasks.email_tasks import rate_limiter
 from quickstart.utils.marketing_html import sanitize_marketing_html
-from quickstart.utils.permissions import CanManageOwnClasses
+from quickstart.utils.permissions import CanManageEmailMarketing
 from quickstart.views.widget.widget_config_views import (
     _get_business_for_subscription,
-    _get_current_addon_subscription,
+    resolve_email_marketing_addon_subscription,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,13 +68,12 @@ def _email_domain(email):
 
 
 def _active_addon(business):
-    sub = _get_current_addon_subscription(business, ADDON_TYPE_EMAIL_MARKETING)
-    if sub and sub.stripe_subscription_id:
-        synced, _ = sync_addon_subscription_from_stripe(
-            sub.stripe_subscription_id, addon_type=ADDON_TYPE_EMAIL_MARKETING
-        )
-        if synced:
-            sub = synced
+    """
+    Resolve addon the same way as BusinessAddonsView, then refresh business so
+    email_marketing_enabled matches what Stripe sync wrote (avoids stale ORM).
+    """
+    sub = resolve_email_marketing_addon_subscription(business)
+    business.refresh_from_db(fields=["email_marketing_enabled"])
     return sub
 
 
@@ -86,23 +95,29 @@ def _require_marketing(request):
 
 
 class MarketingAccountView(APIView):
-    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+    permission_classes = [IsAuthenticated, CanManageEmailMarketing]
 
     def get(self, request):
         business = _get_business_for_subscription(request.user)
         addon = _active_addon(business)
         snap = usage_snapshot(business, addon) if addon else None
+        tier_api = None
+        if addon and business.email_marketing_enabled:
+            raw_tier = price_id_to_tier(addon.stripe_price_id)
+            if raw_tier:
+                tier_api = {k: v for k, v in raw_tier.items() if k != "price_id"}
         return Response(
             {
                 "active": addon is not None and business.email_marketing_enabled,
                 "usage": snap,
+                "tier": tier_api,
                 "transactional_emails_excluded_from_quota": True,
             }
         )
 
 
 class MarketingSettingsDetailView(APIView):
-    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+    permission_classes = [IsAuthenticated, CanManageEmailMarketing]
 
     def get(self, request):
         business = _get_business_for_subscription(request.user)
@@ -126,7 +141,7 @@ class MarketingSettingsDetailView(APIView):
 
 
 class MarketingTemplateListCreateView(APIView):
-    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+    permission_classes = [IsAuthenticated, CanManageEmailMarketing]
 
     def get(self, request):
         business, addon, err = _require_marketing(request)
@@ -180,7 +195,7 @@ class MarketingTemplateListCreateView(APIView):
 
 
 class MarketingTemplateDetailView(APIView):
-    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+    permission_classes = [IsAuthenticated, CanManageEmailMarketing]
 
     def get(self, request, template_id):
         business, _, err = _require_marketing(request)
@@ -231,7 +246,7 @@ class MarketingTemplateDetailView(APIView):
 
 
 class MarketingSenderListCreateView(APIView):
-    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+    permission_classes = [IsAuthenticated, CanManageEmailMarketing]
 
     def get(self, request):
         business, _, err = _require_marketing(request)
@@ -286,7 +301,7 @@ class MarketingSenderListCreateView(APIView):
 
 
 class MarketingSenderDetailView(APIView):
-    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+    permission_classes = [IsAuthenticated, CanManageEmailMarketing]
 
     def delete(self, request, sender_id):
         business, _, err = _require_marketing(request)
@@ -298,7 +313,7 @@ class MarketingSenderDetailView(APIView):
 
 
 class MarketingDomainListCreateView(APIView):
-    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+    permission_classes = [IsAuthenticated, CanManageEmailMarketing]
 
     def get(self, request):
         business, _, err = _require_marketing(request)
@@ -361,7 +376,7 @@ class MarketingDomainListCreateView(APIView):
 
 
 class MarketingDomainVerifyView(APIView):
-    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+    permission_classes = [IsAuthenticated, CanManageEmailMarketing]
 
     def post(self, request, domain_id):
         business, _, err = _require_marketing(request)
@@ -382,7 +397,7 @@ class MarketingDomainVerifyView(APIView):
 
 
 class MarketingDomainDeleteView(APIView):
-    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+    permission_classes = [IsAuthenticated, CanManageEmailMarketing]
 
     def delete(self, request, domain_id):
         business, _, err = _require_marketing(request)
@@ -399,13 +414,20 @@ class MarketingDomainDeleteView(APIView):
 
 
 class MarketingCampaignListCreateView(APIView):
-    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+    permission_classes = [IsAuthenticated, CanManageEmailMarketing]
 
     def get(self, request):
         business, _, err = _require_marketing(request)
         if err:
             return err
-        qs = BusinessEmailCampaign.objects.filter(business=business)
+        qs = (
+            BusinessEmailCampaign.objects.filter(business=business)
+            .annotate(
+                sends_sent=Count("sends", filter=Q(sends__status="sent")),
+                sends_failed=Count("sends", filter=Q(sends__status="failed")),
+            )
+            .order_by("-created_at")
+        )
         return Response(
             [
                 {
@@ -413,9 +435,13 @@ class MarketingCampaignListCreateView(APIView):
                     "name": c.name,
                     "status": c.status,
                     "subject": c.subject,
+                    "content_type": c.content_type,
                     "recipient_count": c.recipient_count,
+                    "scheduled_at": c.scheduled_at.isoformat() if c.scheduled_at else None,
                     "sent_at": c.sent_at.isoformat() if c.sent_at else None,
                     "updated_at": c.updated_at.isoformat(),
+                    "sends_sent": c.sends_sent,
+                    "sends_failed": c.sends_failed,
                 }
                 for c in qs
             ]
@@ -435,13 +461,19 @@ class MarketingCampaignListCreateView(APIView):
 
 
 class MarketingCampaignDetailView(APIView):
-    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+    permission_classes = [IsAuthenticated, CanManageEmailMarketing]
 
     def get(self, request, campaign_id):
         business, _, err = _require_marketing(request)
         if err:
             return err
         c = get_object_or_404(BusinessEmailCampaign, id=campaign_id, business=business)
+        sends_sent = CampaignEmailSend.objects.filter(
+            campaign=c, status="sent"
+        ).count()
+        sends_failed = CampaignEmailSend.objects.filter(
+            campaign=c, status="failed"
+        ).count()
         return Response(
             {
                 "id": str(c.id),
@@ -455,7 +487,11 @@ class MarketingCampaignDetailView(APIView):
                 "audience_filter": c.audience_filter,
                 "sender_profile": str(c.sender_profile_id) if c.sender_profile_id else None,
                 "recipient_count": c.recipient_count,
+                "scheduled_at": c.scheduled_at.isoformat() if c.scheduled_at else None,
+                "sent_at": c.sent_at.isoformat() if c.sent_at else None,
                 "error_message": c.error_message,
+                "sends_sent": sends_sent,
+                "sends_failed": sends_failed,
             }
         )
 
@@ -465,7 +501,7 @@ class MarketingCampaignDetailView(APIView):
             return err
         tier = price_id_to_tier(addon.stripe_price_id)
         c = get_object_or_404(BusinessEmailCampaign, id=campaign_id, business=business)
-        if c.status not in ("draft", "failed"):
+        if c.status not in ("draft", "failed", "scheduled"):
             return Response({"error": "Campaign is not editable."}, status=400)
         if request.data.get("name") is not None:
             c.name = str(request.data.get("name"))[:255]
@@ -490,6 +526,24 @@ class MarketingCampaignDetailView(APIView):
             c.sender_profile = get_object_or_404(
                 MarketingSenderProfile, id=sp, business=business
             )
+        if request.data.get("scheduled_at") is not None:
+            raw_sa = request.data.get("scheduled_at")
+            if raw_sa in ("", None, False):
+                c.scheduled_at = None
+                if c.status == "scheduled":
+                    c.status = "draft"
+            else:
+                if not tier.get("scheduling_enabled"):
+                    return Response(
+                        {"error": "Scheduled sending requires Growth or higher email marketing."},
+                        status=403,
+                    )
+                parsed = parse_datetime(str(raw_sa))
+                if not parsed:
+                    return Response({"error": "Invalid scheduled_at."}, status=400)
+                if timezone.is_naive(parsed):
+                    parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+                c.scheduled_at = parsed
         if c.content_type == "html" and not tier.get("raw_html_allowed", True):
             return Response({"error": "HTML not allowed on this tier."}, status=400)
         c.save()
@@ -506,19 +560,247 @@ class MarketingCampaignDetailView(APIView):
         return Response(status=204)
 
 
+class MarketingAudiencePreviewView(APIView):
+    permission_classes = [IsAuthenticated, CanManageEmailMarketing]
+
+    def post(self, request):
+        business, addon, err = _require_marketing(request)
+        if err:
+            return err
+        tier = price_id_to_tier(addon.stripe_price_id)
+        at = (request.data.get("audience_type") or "all_contacts").strip()
+        flt = request.data.get("audience_filter") or {}
+        if not isinstance(flt, dict):
+            flt = {}
+        tier_err = audience_tier_error(tier, at, flt)
+        if tier_err:
+            return Response({"error": tier_err}, status=403)
+        qs, meta = build_contact_queryset(business, at, flt)
+        count = qs.count()
+        sample_qs = qs[:8]
+        return Response(
+            {
+                "count": count,
+                "sample": [serialize_contact_sample(x) for x in sample_qs],
+                "meta": meta,
+            }
+        )
+
+
+class MarketingAudienceFacetsView(APIView):
+    """Return selectable values for audience filters: contact tags and classes."""
+
+    permission_classes = [IsAuthenticated, CanManageEmailMarketing]
+
+    def get(self, request):
+        business, _, err = _require_marketing(request)
+        if err:
+            return err
+
+        from quickstart.models import Contact, ClassesMain
+
+        # Distinct tags used across this business's contacts (cap at 300)
+        contacts_with_tags = (
+            Contact.objects.filter(business=business)
+            .exclude(tags=[])
+            .values_list("tags", flat=True)[:2000]
+        )
+        tag_set = set()
+        for tag_list in contacts_with_tags:
+            if isinstance(tag_list, list):
+                for t in tag_list:
+                    if t and isinstance(t, str):
+                        tag_set.add(t.lower().strip())
+        tags = sorted(tag_set)[:300]
+
+        # Distinct contact sources used by this business
+        sources = sorted(
+            Contact.objects.filter(business=business)
+            .exclude(source__isnull=True)
+            .exclude(source="")
+            .values_list("source", flat=True)
+            .distinct()[:100]
+        )
+
+        # Classes offered by this business (id + title)
+        classes = list(
+            ClassesMain.objects.filter(businessId=business, status="active")
+            .order_by("title")
+            .values("classId", "title")[:200]
+        )
+
+        return Response(
+            {
+                "tags": tags,
+                "sources": sources,
+                "classes": [{"id": c["classId"], "title": c["title"]} for c in classes],
+            }
+        )
+
+
+class MarketingSavedSegmentListCreateView(APIView):
+    permission_classes = [IsAuthenticated, CanManageEmailMarketing]
+
+    def get(self, request):
+        business, addon, err = _require_marketing(request)
+        if err:
+            return err
+        tier = price_id_to_tier(addon.stripe_price_id)
+        if not tier.get("saved_segments_enabled"):
+            return Response({"error": "Saved audiences require Growth or higher."}, status=403)
+        qs = MarketingSavedSegment.objects.filter(business=business)
+        return Response(
+            [
+                {
+                    "id": str(s.id),
+                    "name": s.name,
+                    "audience_type": s.audience_type,
+                    "audience_filter": s.audience_filter,
+                    "updated_at": s.updated_at.isoformat(),
+                }
+                for s in qs
+            ]
+        )
+
+    def post(self, request):
+        business, addon, err = _require_marketing(request)
+        if err:
+            return err
+        tier = price_id_to_tier(addon.stripe_price_id)
+        if not tier.get("saved_segments_enabled"):
+            return Response({"error": "Saved audiences require Growth or higher."}, status=403)
+        name = (request.data.get("name") or "").strip() or "Untitled audience"
+        at = (request.data.get("audience_type") or "all_contacts").strip()
+        flt = request.data.get("audience_filter") or {}
+        if not isinstance(flt, dict):
+            flt = {}
+        tier_err = audience_tier_error(tier, at, flt)
+        if tier_err:
+            return Response({"error": tier_err}, status=403)
+        seg = MarketingSavedSegment.objects.create(
+            business=business,
+            name=name[:255],
+            audience_type=at[:64],
+            audience_filter=flt,
+        )
+        return Response({"id": str(seg.id)}, status=201)
+
+
+class MarketingSavedSegmentDetailView(APIView):
+    permission_classes = [IsAuthenticated, CanManageEmailMarketing]
+
+    def put(self, request, segment_id):
+        business, addon, err = _require_marketing(request)
+        if err:
+            return err
+        tier = price_id_to_tier(addon.stripe_price_id)
+        if not tier.get("saved_segments_enabled"):
+            return Response({"error": "Saved audiences require Growth or higher."}, status=403)
+        seg = get_object_or_404(MarketingSavedSegment, id=segment_id, business=business)
+        if request.data.get("name") is not None:
+            seg.name = str(request.data.get("name"))[:255]
+        if request.data.get("audience_type") is not None:
+            seg.audience_type = str(request.data.get("audience_type"))[:64]
+        if request.data.get("audience_filter") is not None and isinstance(
+            request.data.get("audience_filter"), dict
+        ):
+            seg.audience_filter = request.data.get("audience_filter")
+        tier_err = audience_tier_error(tier, seg.audience_type, seg.audience_filter or {})
+        if tier_err:
+            return Response({"error": tier_err}, status=403)
+        seg.save()
+        return Response({"id": str(seg.id)})
+
+    def delete(self, request, segment_id):
+        business, _, err = _require_marketing(request)
+        if err:
+            return err
+        seg = get_object_or_404(MarketingSavedSegment, id=segment_id, business=business)
+        seg.delete()
+        return Response(status=204)
+
+
+class MarketingCampaignScheduleView(APIView):
+    """Set status=scheduled with future scheduled_at, or cancel schedule."""
+
+    permission_classes = [IsAuthenticated, CanManageEmailMarketing]
+
+    def post(self, request, campaign_id):
+        business, addon, err = _require_marketing(request)
+        if err:
+            return err
+        tier = price_id_to_tier(addon.stripe_price_id)
+        if not tier.get("scheduling_enabled"):
+            return Response(
+                {"error": "Scheduled sending requires Growth or higher email marketing."},
+                status=403,
+            )
+        c = get_object_or_404(BusinessEmailCampaign, id=campaign_id, business=business)
+        if c.status not in ("draft", "failed", "scheduled"):
+            return Response({"error": "Campaign cannot be scheduled."}, status=400)
+        if request.data.get("cancel"):
+            c.scheduled_at = None
+            if c.status == "scheduled":
+                c.status = "draft"
+            c.save(update_fields=["scheduled_at", "status", "updated_at"])
+            return Response({"status": c.status})
+
+        if not (c.subject or "").strip():
+            return Response({"error": "Subject is required."}, status=400)
+        if not (resolve_campaign_html_body(c) or "").strip():
+            return Response({"error": "Email body is required."}, status=400)
+
+        raw_sa = request.data.get("scheduled_at")
+        parsed = parse_datetime(str(raw_sa)) if raw_sa else None
+        if not parsed:
+            return Response({"error": "scheduled_at is required (ISO 8601)."}, status=400)
+        if timezone.is_naive(parsed):
+            parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+        now = timezone.now()
+        if parsed <= now:
+            return Response({"error": "scheduled_at must be in the future."}, status=400)
+
+        at = (c.audience_type or "all_contacts").strip()
+        flt = c.audience_filter or {}
+        tier_err = audience_tier_error(tier, at, flt)
+        if tier_err:
+            return Response({"error": tier_err}, status=403)
+        qs, _ = build_contact_queryset(business, at, flt)
+        n = qs.count()
+        try:
+            assert_can_send(business, addon, n)
+        except MarketingQuotaExceeded as e:
+            return Response(
+                {"error": str(e), "used": e.used, "limit": e.limit},
+                status=status.HTTP_402_PAYMENT_REQUIRED,
+            )
+
+        c.scheduled_at = parsed
+        c.status = "scheduled"
+        c.error_message = ""
+        c.save(update_fields=["scheduled_at", "status", "error_message", "updated_at"])
+        return Response(
+            {"status": "scheduled", "scheduled_at": c.scheduled_at.isoformat(), "recipient_count": n}
+        )
+
+
 class MarketingCampaignSendView(APIView):
-    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+    permission_classes = [IsAuthenticated, CanManageEmailMarketing]
 
     def post(self, request, campaign_id):
         business, addon, err = _require_marketing(request)
         if err:
             return err
         c = get_object_or_404(BusinessEmailCampaign, id=campaign_id, business=business)
+        if c.status == "scheduled":
+            c.scheduled_at = None
+            c.status = "draft"
+            c.save(update_fields=["scheduled_at", "status", "updated_at"])
         if c.status not in ("draft", "failed"):
             return Response({"error": "Campaign already sent or in progress."}, status=400)
         if not (c.subject or "").strip():
             return Response({"error": "Subject is required."}, status=400)
-        if not (c.html_body or "").strip():
+        if not (resolve_campaign_html_body(c) or "").strip():
             return Response({"error": "Email body is required."}, status=400)
 
         if (
@@ -531,21 +813,14 @@ class MarketingCampaignSendView(APIView):
             )
             addon.refresh_from_db()
 
-        from quickstart.models import Contact
-
-        qs = Contact.objects.filter(business=business).exclude(email__isnull=True).exclude(email="")
-        qs = qs.filter(marketing_unsubscribed=False)
+        tier = price_id_to_tier(addon.stripe_price_id)
         at = (c.audience_type or "all_contacts").strip()
         flt = c.audience_filter or {}
-        if at == "tags" and flt.get("tags"):
-            tags = flt["tags"]
-            if not isinstance(tags, list):
-                tags = [tags]
-            for t in tags:
-                qs = qs.filter(tags__contains=[t])
-        elif at == "contact_ids" and flt.get("contact_ids"):
-            qs = qs.filter(id__in=flt["contact_ids"])
-        n = qs.distinct().count()
+        tier_err = audience_tier_error(tier, at, flt)
+        if tier_err:
+            return Response({"error": tier_err}, status=403)
+        qs, _ = build_contact_queryset(business, at, flt)
+        n = qs.count()
         try:
             assert_can_send(business, addon, n)
         except MarketingQuotaExceeded as e:
@@ -564,7 +839,7 @@ class MarketingCampaignSendView(APIView):
 class MarketingCampaignTestSendView(APIView):
     """Sends one preview to the authenticated user; does not count toward marketing quota."""
 
-    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+    permission_classes = [IsAuthenticated, CanManageEmailMarketing]
 
     def post(self, request, campaign_id):
         business, addon, err = _require_marketing(request)
@@ -586,7 +861,7 @@ class MarketingCampaignTestSendView(APIView):
                 email=to,
             )
         subject = _merge_fields(c.subject or "Test", contact, business)
-        body = _merge_fields(c.html_body or "", contact, business)
+        body = _merge_fields(resolve_campaign_html_body(c), contact, business)
         if contact.id:
             body += _footer_html(business, contact)
         else:

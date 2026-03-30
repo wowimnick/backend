@@ -109,6 +109,24 @@ class IsBusinessMember(BasePermission):
         ).exists()
 
 
+class CanManageEmailMarketing(BasePermission):
+    """
+    Allows access if user has 'manage_email_marketing' OR 'manage_own_classes'
+    permission (the latter is the legacy gate; the new codename allows granting
+    email marketing access independently of class management).
+    """
+
+    message = "You do not have permission to manage email marketing for this business."
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not (user and user.is_authenticated):
+            return False
+        return user.has_perm("quickstart.manage_email_marketing") or user.has_perm(
+            "quickstart.manage_own_classes"
+        )
+
+
 class CanManageOwnClasses(BasePermission):
     """
     Allows access if user has 'manage_own_classes' permission AND

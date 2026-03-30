@@ -832,6 +832,10 @@ class BusinessInfo(models.Model):
                 "receive_booking_notifications",
                 "Can receive business notifications for new bookings and cancellations",
             ),
+            (
+                "manage_email_marketing",
+                "Can create and send email marketing campaigns for own business",
+            ),
         ]
 
 
@@ -904,7 +908,7 @@ class BusinessRole(models.Model):
         # IMPORTANT: Limit choices to only business-relevant permissions
         limit_choices_to={
             "content_type__app_label": "quickstart",
-            "codename__in": [
+                "codename__in": [
                 "manage_own_classes",
                 "manage_own_schedule_instances",
                 "view_own_business_bookings",
@@ -923,6 +927,7 @@ class BusinessRole(models.Model):
                 "manage_own_business_discounts",
                 "access_business_dashboard",
                 "receive_booking_notifications",
+                "manage_email_marketing",
             ],
         },
     )
@@ -3260,6 +3265,105 @@ class CampaignEmailSend(models.Model):
             models.UniqueConstraint(
                 fields=["campaign", "to_email"],
                 name="uniq_campaign_email_send_recipient",
+            )
+        ]
+
+
+class MarketingSavedSegment(models.Model):
+    """Reusable audience definition for campaigns (Growth+)."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        BusinessInfo,
+        on_delete=models.CASCADE,
+        related_name="marketing_saved_segments",
+    )
+    name = models.CharField(max_length=255)
+    audience_type = models.CharField(max_length=64, default="all_contacts")
+    audience_filter = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "marketing_saved_segments"
+        ordering = ["-updated_at"]
+
+
+class MarketingWorkflow(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        BusinessInfo,
+        on_delete=models.CASCADE,
+        related_name="marketing_workflows",
+    )
+    name = models.CharField(max_length=255)
+    status = models.CharField(
+        max_length=32,
+        default="draft",
+        help_text="draft | active | paused",
+    )
+    trigger_type = models.CharField(
+        max_length=64,
+        default="manual",
+        help_text="manual | tag_added | booking_completed",
+    )
+    trigger_config = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "marketing_workflows"
+        ordering = ["-updated_at"]
+
+
+class MarketingWorkflowStep(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workflow = models.ForeignKey(
+        MarketingWorkflow,
+        on_delete=models.CASCADE,
+        related_name="steps",
+    )
+    order = models.PositiveIntegerField(default=0)
+    step_type = models.CharField(
+        max_length=32,
+        help_text="delay | send_email",
+    )
+    config = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        db_table = "marketing_workflow_steps"
+        ordering = ["workflow", "order"]
+
+
+class MarketingWorkflowEnrollment(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workflow = models.ForeignKey(
+        MarketingWorkflow,
+        on_delete=models.CASCADE,
+        related_name="enrollments",
+    )
+    contact = models.ForeignKey(
+        "Contact",
+        on_delete=models.CASCADE,
+        related_name="workflow_enrollments",
+    )
+    current_step_index = models.PositiveIntegerField(default=0)
+    next_run_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(
+        max_length=32,
+        default="active",
+        help_text="active | completed | cancelled",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "marketing_workflow_enrollments"
+        ordering = ["next_run_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["workflow", "contact"],
+                name="uniq_workflow_enrollment_contact",
             )
         ]
 

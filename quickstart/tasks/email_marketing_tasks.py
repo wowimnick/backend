@@ -15,7 +15,13 @@ from quickstart.models import (
     Contact,
 )
 from quickstart.services.email_marketing_config import price_id_to_tier
-from quickstart.services.email_marketing_usage import increment_marketing_sent
+from quickstart.services.marketing_audience import build_contact_queryset
+from quickstart.services.marketing_builder import resolve_campaign_html_body
+from quickstart.services.email_marketing_usage import (
+    MarketingQuotaExceeded,
+    assert_can_send,
+    increment_marketing_sent,
+)
 from quickstart.tasks.email_tasks import rate_limiter
 
 logger = logging.getLogger(__name__)
@@ -114,23 +120,19 @@ def send_business_marketing_campaign_task(self, campaign_id):
         campaign.save(update_fields=["status", "error_message"])
         return
 
-    qs = Contact.objects.filter(business=business).exclude(email__isnull=True).exclude(email="")
-    qs = qs.filter(marketing_unsubscribed=False)
     at = (campaign.audience_type or "all_contacts").strip()
     flt = campaign.audience_filter or {}
-    if at == "tags" and flt.get("tags"):
-        tags = flt["tags"]
-        if not isinstance(tags, list):
-            tags = [tags]
-        for t in tags:
-            qs = qs.filter(tags__contains=[t])
-    elif at == "contact_ids" and flt.get("contact_ids"):
-        ids = flt["contact_ids"]
-        qs = qs.filter(id__in=ids)
-
-    contacts = list(qs.distinct())
+    qs, _ = build_contact_queryset(business, at, flt)
+    contacts = list(qs)
+    try:
+        assert_can_send(business, addon, len(contacts))
+    except MarketingQuotaExceeded as e:
+        campaign.status = "failed"
+        campaign.error_message = str(e)
+        campaign.save(update_fields=["status", "error_message"])
+        return
     subject_base = campaign.subject or "Message from " + business.businessName
-    html_base = campaign.html_body or ""
+    html_base = resolve_campaign_html_body(campaign)
 
     from_header, from_email, reply_to = _resolve_from_header(
         business, campaign.sender_profile, tier
@@ -237,5 +239,31 @@ def send_business_marketing_campaign_task(self, campaign_id):
     campaign.status = "sent"
     campaign.sent_at = timezone.now()
     campaign.recipient_count = sent_ok
-    campaign.save(update_fields=["status", "sent_at", "recipient_count"])
+    campaign.scheduled_at = None
+    campaign.save(
+        update_fields=["status", "sent_at", "recipient_count", "scheduled_at"]
+    )
     logger.info("send_business_marketing_campaign_task campaign=%s sent=%s", campaign_id, sent_ok)
+
+
+@shared_task
+def dispatch_due_scheduled_marketing_campaigns():
+    """Beat task: move due scheduled campaigns to sending and queue Celery send."""
+    from django.db import transaction
+
+    now = timezone.now()
+    due_ids = list(
+        BusinessEmailCampaign.objects.filter(
+            status="scheduled",
+            scheduled_at__isnull=False,
+            scheduled_at__lte=now,
+        ).values_list("id", flat=True)[:40]
+    )
+    for cid in due_ids:
+        with transaction.atomic():
+            n = BusinessEmailCampaign.objects.filter(pk=cid, status="scheduled").update(
+                status="sending",
+                error_message="",
+            )
+        if n:
+            send_business_marketing_campaign_task.delay(str(cid))

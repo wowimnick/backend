@@ -54,19 +54,30 @@ from quickstart.views.business.email_marketing_addon_views import (
 from quickstart.views.webhooks.resend_webhooks import resend_webhook_receiver
 from quickstart.views.business.email_marketing_views import (
     MarketingAccountView,
+    MarketingAudienceFacetsView,
+    MarketingAudiencePreviewView,
     MarketingCampaignDetailView,
     MarketingCampaignListCreateView,
+    MarketingCampaignScheduleView,
     MarketingCampaignSendView,
     MarketingCampaignTestSendView,
     MarketingDomainDeleteView,
     MarketingDomainListCreateView,
     MarketingDomainVerifyView,
     MarketingEmailUnsubscribeView,
+    MarketingSavedSegmentDetailView,
+    MarketingSavedSegmentListCreateView,
     MarketingSenderDetailView,
     MarketingSenderListCreateView,
     MarketingSettingsDetailView,
     MarketingTemplateDetailView,
     MarketingTemplateListCreateView,
+)
+from quickstart.views.business.email_marketing_workflow_views import (
+    MarketingWorkflowDetailView,
+    MarketingWorkflowEnrollmentListView,
+    MarketingWorkflowEnrollView,
+    MarketingWorkflowListCreateView,
 )
 from quickstart.views.admin.payout_management.admin_payout_views import (
     AdminPayoutViewSet,
@@ -843,6 +854,51 @@ urlpatterns = [
         "my-business/marketing/campaigns/<uuid:campaign_id>/test-send/",
         MarketingCampaignTestSendView.as_view(),
         name="my-business-marketing-campaign-test-send",
+    ),
+    path(
+        "my-business/marketing/campaigns/<uuid:campaign_id>/schedule/",
+        MarketingCampaignScheduleView.as_view(),
+        name="my-business-marketing-campaign-schedule",
+    ),
+    path(
+        "my-business/marketing/audience/preview/",
+        MarketingAudiencePreviewView.as_view(),
+        name="my-business-marketing-audience-preview",
+    ),
+    path(
+        "my-business/marketing/audience/facets/",
+        MarketingAudienceFacetsView.as_view(),
+        name="my-business-marketing-audience-facets",
+    ),
+    path(
+        "my-business/marketing/segments/",
+        MarketingSavedSegmentListCreateView.as_view(),
+        name="my-business-marketing-segments",
+    ),
+    path(
+        "my-business/marketing/segments/<uuid:segment_id>/",
+        MarketingSavedSegmentDetailView.as_view(),
+        name="my-business-marketing-segment-detail",
+    ),
+    path(
+        "my-business/marketing/workflows/",
+        MarketingWorkflowListCreateView.as_view(),
+        name="my-business-marketing-workflows",
+    ),
+    path(
+        "my-business/marketing/workflows/<uuid:workflow_id>/",
+        MarketingWorkflowDetailView.as_view(),
+        name="my-business-marketing-workflow-detail",
+    ),
+    path(
+        "my-business/marketing/workflows/<uuid:workflow_id>/enroll/",
+        MarketingWorkflowEnrollView.as_view(),
+        name="my-business-marketing-workflow-enroll",
+    ),
+    path(
+        "my-business/marketing/workflow-enrollments/",
+        MarketingWorkflowEnrollmentListView.as_view(),
+        name="my-business-marketing-workflow-enrollments",
     ),
     path(
         "my-business/addons/email-marketing/checkout/",

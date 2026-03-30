@@ -388,6 +388,14 @@ CELERY_BEAT_SCHEDULE = {
         "task": "quickstart.tasks.business_tasks.generate_weekly_blog_draft_task",
         "schedule": crontab(day_of_week=1, hour=10, minute=0),  # Monday 10:00 AM
     },
+    "dispatch-due-scheduled-marketing-campaigns": {
+        "task": "quickstart.tasks.email_marketing_tasks.dispatch_due_scheduled_marketing_campaigns",
+        "schedule": crontab(minute="*"),
+    },
+    "process-due-marketing-workflow-enrollments": {
+        "task": "quickstart.tasks.email_marketing_workflow_tasks.process_due_workflow_enrollments",
+        "schedule": crontab(minute="*"),
+    },
 }
 
 # Celery Worker Settings - Prevent prefetch issues

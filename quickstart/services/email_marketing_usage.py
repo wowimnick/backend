@@ -45,6 +45,12 @@ def usage_snapshot(business, addon_sub):
         "max_saved_templates": tier["max_saved_templates"],
         "custom_domain_allowed": tier["custom_domain_allowed"],
         "raw_html_allowed": tier["raw_html_allowed"],
+        "advanced_segmentation": tier.get("advanced_segmentation", True),
+        "scheduling_enabled": tier.get("scheduling_enabled", True),
+        "saved_segments_enabled": tier.get("saved_segments_enabled", True),
+        "automation_enabled": tier.get("automation_enabled", False),
+        "max_active_workflows": tier.get("max_active_workflows", 0),
+        "max_workflow_steps": tier.get("max_workflow_steps", 0),
     }
 
 

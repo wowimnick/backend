@@ -23,6 +23,12 @@ def _tier_defs():
             "max_saved_templates": 5,
             "custom_domain_allowed": False,
             "raw_html_allowed": True,
+            "advanced_segmentation": False,
+            "scheduling_enabled": False,
+            "saved_segments_enabled": False,
+            "automation_enabled": False,
+            "max_active_workflows": 0,
+            "max_workflow_steps": 0,
         },
         {
             "tier_key": TIER_GROWTH_KEY,
@@ -34,6 +40,12 @@ def _tier_defs():
             "max_saved_templates": 25,
             "custom_domain_allowed": True,
             "raw_html_allowed": True,
+            "advanced_segmentation": True,
+            "scheduling_enabled": True,
+            "saved_segments_enabled": True,
+            "automation_enabled": False,
+            "max_active_workflows": 0,
+            "max_workflow_steps": 0,
         },
         {
             "tier_key": TIER_BUSINESS_KEY,
@@ -45,6 +57,12 @@ def _tier_defs():
             "max_saved_templates": 75,
             "custom_domain_allowed": True,
             "raw_html_allowed": True,
+            "advanced_segmentation": True,
+            "scheduling_enabled": True,
+            "saved_segments_enabled": True,
+            "automation_enabled": True,
+            "max_active_workflows": 5,
+            "max_workflow_steps": 15,
         },
         {
             "tier_key": TIER_SCALE_KEY,
@@ -56,6 +74,12 @@ def _tier_defs():
             "max_saved_templates": 150,
             "custom_domain_allowed": True,
             "raw_html_allowed": True,
+            "advanced_segmentation": True,
+            "scheduling_enabled": True,
+            "saved_segments_enabled": True,
+            "automation_enabled": True,
+            "max_active_workflows": 15,
+            "max_workflow_steps": 40,
         },
     ]
 
@@ -86,6 +110,12 @@ def list_public_tiers():
                 "max_saved_templates": t["max_saved_templates"],
                 "custom_domain_allowed": t["custom_domain_allowed"],
                 "raw_html_allowed": t["raw_html_allowed"],
+                "advanced_segmentation": t.get("advanced_segmentation", True),
+                "scheduling_enabled": t.get("scheduling_enabled", True),
+                "saved_segments_enabled": t.get("saved_segments_enabled", True),
+                "automation_enabled": t.get("automation_enabled", False),
+                "max_active_workflows": t.get("max_active_workflows", 0),
+                "max_workflow_steps": t.get("max_workflow_steps", 0),
             }
         )
     return out

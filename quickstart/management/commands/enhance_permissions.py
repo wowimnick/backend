@@ -688,6 +688,10 @@ class Command(BaseCommand):
                     "group": biz_student_engagement_group,
                     "description": "Staff with this permission will receive email notifications for new bookings and cancellations.",
                 },
+                "manage_email_marketing": {
+                    "group": biz_student_engagement_group,
+                    "description": "Allows user to create, edit, schedule, and send email marketing campaigns for their business. Grants access to the Email Campaigns tab independently of class management.",
+                },
             }
 
             # --- Enhance Permissions ---

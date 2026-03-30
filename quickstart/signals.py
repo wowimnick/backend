@@ -788,6 +788,7 @@ def create_default_business_role(sender, instance, created, **kwargs):
             "add_business_review_response",
             "manage_own_business_discounts",
             "receive_booking_notifications",
+            "manage_email_marketing",
         ]
 
         # Fetch all the relevant permission objects in one query
@@ -930,6 +931,19 @@ def delete_contact_notes(sender, instance, **kwargs):
         content_type=content_type, object_id=instance.pk
     ).delete()
     logger.info(f"Deleted all notes associated with Contact ID {instance.pk}.")
+
+
+@receiver(post_save, sender=Booking)
+def marketing_workflow_on_booking_completed(sender, instance, **kwargs):
+    """HubSpot-style: optional automation when a class booking is completed."""
+    try:
+        from quickstart.services.marketing_workflow_triggers import (
+            try_auto_enroll_booking_completed,
+        )
+
+        try_auto_enroll_booking_completed(instance)
+    except Exception as e:
+        logger.warning("marketing_workflow_on_booking_completed: %s", e, exc_info=True)
 
 
 @receiver(post_save, sender=Booking)

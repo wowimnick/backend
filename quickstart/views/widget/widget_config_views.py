@@ -1174,6 +1174,44 @@ def _get_current_addon_subscription(business, addon_type):
     )
 
 
+def resolve_email_marketing_addon_subscription(business):
+    """
+    Effective email-marketing addon row for this business.
+
+    Matches BusinessAddonsView: prefer in-period active/trialing subscription; if none
+    (e.g. stale current_period_end in DB), fall back to latest row with a Stripe id and
+    sync from Stripe. Keeps marketing API routes aligned with what the dashboard shows
+    as subscribed.
+    """
+    em_addon = _get_current_addon_subscription(business, ADDON_TYPE_EMAIL_MARKETING)
+    if em_addon and em_addon.stripe_subscription_id:
+        synced_em, _ = sync_addon_subscription_from_stripe(
+            em_addon.stripe_subscription_id,
+            addon_type=ADDON_TYPE_EMAIL_MARKETING,
+        )
+        if synced_em:
+            em_addon = synced_em
+    elif em_addon is None:
+        latest_em = (
+            BusinessAddonSubscription.objects.filter(
+                business=business,
+                addon_type=ADDON_TYPE_EMAIL_MARKETING,
+            )
+            .exclude(stripe_subscription_id__isnull=True)
+            .exclude(stripe_subscription_id="")
+            .order_by("-created_at")
+            .first()
+        )
+        if latest_em and latest_em.stripe_subscription_id:
+            synced_em, _ = sync_addon_subscription_from_stripe(
+                latest_em.stripe_subscription_id,
+                addon_type=ADDON_TYPE_EMAIL_MARKETING,
+            )
+            if synced_em and synced_em.status in ("active", "trialing"):
+                em_addon = synced_em
+    return em_addon
+
+
 def _normalize_payment_method_id(pm):
     """Extract payment method id from Stripe object (string or expanded)."""
     if pm is None:
@@ -1518,32 +1556,7 @@ class BusinessAddonsView(APIView):
             and _business_can_instant_subscribe(business)
         )
         # --- Email marketing addon (ladder tiers) ---
-        em_addon = _get_current_addon_subscription(business, ADDON_TYPE_EMAIL_MARKETING)
-        if em_addon and em_addon.stripe_subscription_id:
-            synced_em, _ = sync_addon_subscription_from_stripe(
-                em_addon.stripe_subscription_id,
-                addon_type=ADDON_TYPE_EMAIL_MARKETING,
-            )
-            if synced_em:
-                em_addon = synced_em
-        elif em_addon is None:
-            latest_em = (
-                BusinessAddonSubscription.objects.filter(
-                    business=business,
-                    addon_type=ADDON_TYPE_EMAIL_MARKETING,
-                )
-                .exclude(stripe_subscription_id__isnull=True)
-                .exclude(stripe_subscription_id="")
-                .order_by("-created_at")
-                .first()
-            )
-            if latest_em and latest_em.stripe_subscription_id:
-                synced_em, _ = sync_addon_subscription_from_stripe(
-                    latest_em.stripe_subscription_id,
-                    addon_type=ADDON_TYPE_EMAIL_MARKETING,
-                )
-                if synced_em and synced_em.status in ("active", "trialing"):
-                    em_addon = synced_em
+        em_addon = resolve_email_marketing_addon_subscription(business)
         em_usage = usage_snapshot(business, em_addon) if em_addon else None
         em_can_instant = em_addon is None and _business_can_instant_subscribe(business)
         em_current_price_id = (em_addon.stripe_price_id or "") if em_addon else ""
