@@ -22,6 +22,15 @@ VALID_PLAN_IDS = {"basic", "growth", "advanced"}
 PLAN_ORDER = ["basic", "growth", "advanced"]
 
 
+def _stripe_attr(obj, key, default=None):
+    """StripeObject has no dict-like .get(); use this for dict-or-Stripe reads."""
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
 def get_widget_subscription(business):
     """Return the single WidgetSubscription for the business, or None."""
     return getattr(business, "widget_subscription", None)
@@ -54,7 +63,9 @@ def _client_secret_from_stripe_invoice(invoice):
     if pi is None:
         payments = getattr(invoice, "payments", None) or (invoice.get("payments") if isinstance(invoice, dict) else None)
         if payments:
-            data = getattr(payments, "data", None) or payments.get("data")
+            data = getattr(payments, "data", None) or (
+                payments.get("data") if isinstance(payments, dict) else None
+            )
             if data and len(data):
                 first = data[0]
                 payment = getattr(first, "payment", None) or (first.get("payment") if isinstance(first, dict) else None)
@@ -146,17 +157,17 @@ def create_subscription(business, plan_id):
     stripe_sub = stripe.Subscription.create(**create_params)
 
     client_secret = _client_secret_from_stripe_invoice(
-        getattr(stripe_sub, "latest_invoice", None) or stripe_sub.get("latest_invoice")
+        getattr(stripe_sub, "latest_invoice", None)
     )
     if not client_secret and stripe_sub.id:
         try:
             expanded = stripe.Subscription.retrieve(stripe_sub.id, expand=["latest_invoice.payments"])
-            inv = getattr(expanded, "latest_invoice", None) or expanded.get("latest_invoice")
+            inv = getattr(expanded, "latest_invoice", None)
             client_secret = _client_secret_from_stripe_invoice(inv)
         except stripe.StripeError:
             pass
     if not client_secret:
-        latest_inv = getattr(stripe_sub, "latest_invoice", None) or stripe_sub.get("latest_invoice")
+        latest_inv = getattr(stripe_sub, "latest_invoice", None)
         inv_id = getattr(latest_inv, "id", None) if latest_inv and not isinstance(latest_inv, str) else (latest_inv if isinstance(latest_inv, str) else None)
         if inv_id:
             try:
@@ -166,8 +177,17 @@ def create_subscription(business, plan_id):
                 pass
 
     stripe_price_id = None
-    if stripe_sub.get("items") and stripe_sub["items"].get("data"):
-        stripe_price_id = stripe_sub["items"]["data"][0].get("price", {}).get("id")
+    items_obj = _stripe_attr(stripe_sub, "items")
+    data = _stripe_attr(items_obj, "data") if items_obj is not None else None
+    if data:
+        first = data[0]
+        price = _stripe_attr(first, "price")
+        if isinstance(price, str):
+            stripe_price_id = price
+        elif price is not None:
+            stripe_price_id = _stripe_attr(price, "id")
+
+    sub_status = _stripe_attr(stripe_sub, "status") or "incomplete"
 
     row, _ = WidgetSubscription.objects.get_or_create(
         business=business,
@@ -175,7 +195,7 @@ def create_subscription(business, plan_id):
             "stripe_subscription_id": stripe_sub.id,
             "stripe_customer_id": business.stripe_customer_id or "",
             "stripe_price_id": stripe_price_id,
-            "status": stripe_sub.get("status", "incomplete"),
+            "status": sub_status,
             "plan_id": plan_id,
         },
     )
@@ -183,7 +203,7 @@ def create_subscription(business, plan_id):
         row.stripe_subscription_id = stripe_sub.id
         row.stripe_customer_id = business.stripe_customer_id or ""
         row.stripe_price_id = stripe_price_id
-        row.status = stripe_sub.get("status", "incomplete")
+        row.status = sub_status
         row.save(update_fields=["stripe_subscription_id", "stripe_customer_id", "stripe_price_id", "status"])
 
     return stripe_sub, client_secret, row
@@ -198,7 +218,7 @@ def same_price_open_invoice(sub, plan_id, price_id):
     """
     try:
         open_list = stripe.Invoice.list(subscription=sub.stripe_subscription_id, status="open", limit=1)
-        open_data = open_list.get("data") or []
+        open_data = getattr(open_list, "data", None) or []
     except stripe.StripeError as e:
         logger.warning("widget_subscription_service: open invoice check failed: %s", e)
         return False, None, sub
@@ -229,19 +249,24 @@ def downgrade_subscription(sub, plan_id, business):
     except stripe.StripeError as e:
         logger.warning("widget_subscription_service: Stripe retrieve failed: %s", e)
         return None, str(e)
-    items_data = stripe_sub.get("items") or {}
-    item_list = (items_data.get("data") or []) if isinstance(items_data, dict) else []
+    items_data = _stripe_attr(stripe_sub, "items") or {}
+    item_list = _stripe_attr(items_data, "data") or []
     if not item_list:
         return None, "Invalid subscription state."
     first_item = item_list[0] if item_list else None
-    current_price_id = (first_item.get("price") or {}).get("id") if first_item else None
+    price_obj = _stripe_attr(first_item, "price") if first_item else None
+    if isinstance(price_obj, str):
+        current_price_id = price_obj
+    elif price_obj is not None:
+        current_price_id = _stripe_attr(price_obj, "id")
+    else:
+        current_price_id = None
     # Stripe API: current_period_end is on each Subscription Item, not on the Subscription object
     period_end_ts = (
         getattr(first_item, "current_period_end", None)
-        or (first_item.get("current_period_end") if first_item else None)
-        or getattr(stripe_sub, "current_period_end", None)
-        or stripe_sub.get("current_period_end")
-    )
+        if first_item
+        else None
+    ) or getattr(stripe_sub, "current_period_end", None)
     if not period_end_ts:
         logger.warning(
             "widget_subscription_service: downgrade sub_id=%s missing current_period_end on sub and first item",
@@ -258,7 +283,7 @@ def downgrade_subscription(sub, plan_id, business):
 
     metadata_payload = {"business_id": str(business.businessId), "plan_id": plan_id}
 
-    existing_schedule = stripe_sub.get("schedule")
+    existing_schedule = _stripe_attr(stripe_sub, "schedule")
     schedule_id = (
         existing_schedule
         if isinstance(existing_schedule, str)
@@ -274,7 +299,7 @@ def downgrade_subscription(sub, plan_id, business):
     if schedule_id:
         try:
             schedule = stripe.SubscriptionSchedule.retrieve(schedule_id, expand=["phases"])
-            phases = getattr(schedule, "phases", None) or schedule.get("phases") or []
+            phases = getattr(schedule, "phases", None) or _stripe_attr(schedule, "phases") or []
             logger.info(
                 "widget_subscription_service: downgrade existing schedule id=%s phases_count=%s",
                 schedule_id,
@@ -331,7 +356,7 @@ def downgrade_subscription(sub, plan_id, business):
                 from_subscription=sub.stripe_subscription_id,
                 expand=["phases"],
             )
-            created_phases = getattr(schedule, "phases", None) or schedule.get("phases") or []
+            created_phases = getattr(schedule, "phases", None) or _stripe_attr(schedule, "phases") or []
             first_start = _first_phase_start(created_phases)
             if not first_start:
                 return None, "Could not schedule downgrade. Please try again."
@@ -382,7 +407,7 @@ def cancel_at_period_end(sub):
     except stripe.StripeError as e:
         logger.warning("widget_subscription_service: cancel retrieve failed: %s", e)
         return None, str(e)
-    schedule_ref = stripe_sub.get("schedule")
+    schedule_ref = _stripe_attr(stripe_sub, "schedule")
     schedule_id = (
         schedule_ref
         if isinstance(schedule_ref, str)
@@ -397,24 +422,29 @@ def cancel_at_period_end(sub):
         synced, _ = sync_widget_subscription_from_stripe(sub.stripe_subscription_id)
         return synced or sub, None
     # Subscription has a schedule: update schedule to single phase ending at period end with end_behavior=cancel.
-    items_data = stripe_sub.get("items") or {}
-    item_list = (items_data.get("data") or []) if isinstance(items_data, dict) else []
+    items_data = _stripe_attr(stripe_sub, "items") or {}
+    item_list = _stripe_attr(items_data, "data") or []
     if not item_list:
         return None, "Invalid subscription state."
     first_item = item_list[0]
-    current_price_id = (first_item.get("price") or {}).get("id") if isinstance(first_item.get("price"), dict) else getattr(first_item.get("price"), "id", None)
-    period_end_ts = (
-        first_item.get("current_period_end")
-        or getattr(first_item, "current_period_end", None)
-        or stripe_sub.get("current_period_end")
-        or getattr(stripe_sub, "current_period_end", None)
+    price_obj = _stripe_attr(first_item, "price")
+    if isinstance(price_obj, str):
+        current_price_id = price_obj
+    elif price_obj is not None:
+        current_price_id = _stripe_attr(price_obj, "id")
+    else:
+        current_price_id = None
+    period_end_ts = getattr(first_item, "current_period_end", None) or getattr(
+        stripe_sub, "current_period_end", None
     )
     if not current_price_id or not period_end_ts:
         return None, "Could not schedule cancellation. Please try again."
     try:
         schedule = stripe.SubscriptionSchedule.retrieve(schedule_id, expand=["phases"])
-        phases = getattr(schedule, "phases", None) or schedule.get("phases") or []
-        first_start = phases[0].get("start_date") if phases and isinstance(phases[0], dict) else (getattr(phases[0], "start_date", None) if phases else None)
+        phases = getattr(schedule, "phases", None) or _stripe_attr(schedule, "phases") or []
+        first_start = (
+            _stripe_attr(phases[0], "start_date") if phases else None
+        )
         if not first_start:
             return None, "Could not schedule cancellation. Please try again."
         stripe.SubscriptionSchedule.modify(
@@ -445,7 +475,7 @@ def reactivate(sub):
     except stripe.StripeError as e:
         logger.warning("widget_subscription_service: reactivate retrieve failed: %s", e)
         return None, str(e)
-    schedule_ref = stripe_sub.get("schedule")
+    schedule_ref = _stripe_attr(stripe_sub, "schedule")
     schedule_id = (
         schedule_ref
         if isinstance(schedule_ref, str)
@@ -483,11 +513,11 @@ def upgrade_subscription(sub, plan_id, business):
     except stripe.StripeError as e:
         logger.warning("widget_subscription_service: Stripe retrieve failed: %s", e)
         return None, None, None, str(e)
-    items_data = stripe_sub.get("items") or {}
-    item_list = (items_data.get("data") or []) if isinstance(items_data, dict) else []
+    items_data = _stripe_attr(stripe_sub, "items") or {}
+    item_list = _stripe_attr(items_data, "data") or []
     if not item_list:
         return None, None, None, "Invalid subscription state."
-    subscription_item_id = item_list[0].get("id")
+    subscription_item_id = _stripe_attr(item_list[0], "id")
     if not subscription_item_id:
         return None, None, None, "Invalid subscription state."
 
@@ -514,7 +544,7 @@ def upgrade_subscription(sub, plan_id, business):
     except stripe.StripeError:
         pass
 
-    latest_invoice = getattr(stripe_sub, "latest_invoice", None) or stripe_sub.get("latest_invoice")
+    latest_invoice = getattr(stripe_sub, "latest_invoice", None)
     latest_inv_id = None
     latest_inv_status = None
     if latest_invoice:
@@ -537,7 +567,7 @@ def upgrade_subscription(sub, plan_id, business):
     if not client_secret and sub.stripe_subscription_id:
         try:
             open_invoices = stripe.Invoice.list(subscription=sub.stripe_subscription_id, status="open", limit=1)
-            open_data = open_invoices.get("data") or []
+            open_data = getattr(open_invoices, "data", None) or []
             if open_data:
                 client_secret = _client_secret_from_stripe_invoice(open_data[0])
                 if client_secret:
@@ -549,7 +579,7 @@ def upgrade_subscription(sub, plan_id, business):
         return None, None, None, "This payment link is no longer valid. Please try switching plan again."
     try:
         open_check = stripe.Invoice.list(subscription=sub.stripe_subscription_id, status="open", limit=1)
-        if open_check.get("data") or []:
+        if getattr(open_check, "data", None):
             return None, None, None, "Payment is required to complete this plan change. Please complete payment when prompted or try again."
     except stripe.StripeError:
         pass
@@ -558,14 +588,17 @@ def upgrade_subscription(sub, plan_id, business):
         stripe_sub = stripe.Subscription.retrieve(sub.stripe_subscription_id, expand=["items.data.price"])
     except stripe.StripeError:
         pass
-    stripe_items = (stripe_sub.get("items") or {}).get("data") or []
+    items_wrap = _stripe_attr(stripe_sub, "items") or {}
+    stripe_items = _stripe_attr(items_wrap, "data") or []
     stripe_price_id_now = None
-    if stripe_items and stripe_items[0].get("price"):
-        stripe_price_id_now = stripe_items[0]["price"].get("id") if isinstance(stripe_items[0]["price"], dict) else getattr(stripe_items[0]["price"], "id", None)
+    if stripe_items:
+        pr = _stripe_attr(stripe_items[0], "price")
+        if pr:
+            stripe_price_id_now = pr if isinstance(pr, str) else _stripe_attr(pr, "id")
     if stripe_price_id_now != price_id:
         return None, None, None, "Payment is required to complete this plan change. Please try again and complete payment when prompted."
 
-    period_end = stripe_sub.get("current_period_end")
+    period_end = getattr(stripe_sub, "current_period_end", None)
     current_period_end = datetime.fromtimestamp(period_end, tz=pytz.UTC) if period_end else None
     now = timezone.now()
     if current_period_end is not None and current_period_end <= now:
@@ -574,7 +607,7 @@ def upgrade_subscription(sub, plan_id, business):
     sub.stripe_price_id = price_id
     if current_period_end is not None:
         sub.current_period_end = current_period_end
-    sub.status = stripe_sub.get("status") or sub.status
-    sub.cancel_at_period_end = bool(stripe_sub.get("cancel_at_period_end"))
+    sub.status = _stripe_attr(stripe_sub, "status") or sub.status
+    sub.cancel_at_period_end = bool(getattr(stripe_sub, "cancel_at_period_end", None))
     sub.save(update_fields=["plan_id", "stripe_price_id", "current_period_end", "status", "cancel_at_period_end"])
     return False, None, sub, None

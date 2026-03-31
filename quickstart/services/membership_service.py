@@ -162,9 +162,7 @@ def create_customer_membership_subscription(
     #   - Classic: invoice.payment_intent (expanded object or id string)
     #   - New (2024+): invoice.payments.data[0].payment.payment_intent
     # We try three passes: create response → re-retrieve sub → retrieve invoice directly.
-    invoice = getattr(stripe_sub, "latest_invoice", None) or (
-        stripe_sub.get("latest_invoice") if hasattr(stripe_sub, "get") else None
-    )
+    invoice = getattr(stripe_sub, "latest_invoice", None)
     client_secret = _client_secret_from_stripe_invoice(invoice)
 
     if not client_secret and stripe_sub.id:
@@ -173,17 +171,13 @@ def create_customer_membership_subscription(
                 stripe_sub.id,
                 expand=["latest_invoice.payments"],
             )
-            inv = getattr(stripe_sub_expanded, "latest_invoice", None) or (
-                stripe_sub_expanded.get("latest_invoice") if hasattr(stripe_sub_expanded, "get") else None
-            )
+            inv = getattr(stripe_sub_expanded, "latest_invoice", None)
             client_secret = _client_secret_from_stripe_invoice(inv)
         except stripe.StripeError as e:
             logger.warning("membership_service: Subscription.retrieve expand failed: %s", e)
 
     if not client_secret:
-        latest_inv = getattr(stripe_sub, "latest_invoice", None) or (
-            stripe_sub.get("latest_invoice") if hasattr(stripe_sub, "get") else None
-        )
+        latest_inv = getattr(stripe_sub, "latest_invoice", None)
         inv_id = (
             getattr(latest_inv, "id", None)
             if latest_inv is not None and not isinstance(latest_inv, str)
@@ -308,9 +302,7 @@ def approve_membership(membership):
         "current_period_start", "current_period_end", "updated_at",
     ])
 
-    invoice = getattr(stripe_sub, "latest_invoice", None) or (
-        stripe_sub.get("latest_invoice") if hasattr(stripe_sub, "get") else None
-    )
+    invoice = getattr(stripe_sub, "latest_invoice", None)
     hosted_invoice_url = None
     if invoice and not isinstance(invoice, str):
         hosted_invoice_url = getattr(invoice, "hosted_invoice_url", None) or (
@@ -321,7 +313,9 @@ def approve_membership(membership):
             inv_id = getattr(invoice, "id", None) if invoice and not isinstance(invoice, str) else None
             if inv_id:
                 inv_obj = stripe.Invoice.retrieve(str(inv_id))
-                hosted_invoice_url = getattr(inv_obj, "hosted_invoice_url", None) or inv_obj.get("hosted_invoice_url")
+                hosted_invoice_url = getattr(inv_obj, "hosted_invoice_url", None) or (
+                    inv_obj.get("hosted_invoice_url") if isinstance(inv_obj, dict) else None
+                )
         except stripe.StripeError as e:
             logger.warning("approve_membership: could not get hosted_invoice_url: %s", e)
 

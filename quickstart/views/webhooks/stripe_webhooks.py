@@ -23,9 +23,14 @@ def _update_business_status_from_stripe_account(stripe_account_obj):
     try:
         business = BusinessInfo.objects.get(stripe_account_id=stripe_account_id)
         previous_status = business.stripe_account_status
-        requirements = stripe_account_obj.get("requirements", {})
-        disabled_reason = stripe_account_obj.get("disabled_reason")
-        currently_due = requirements.get("currently_due", [])
+        # StripeObject supports attributes / [] not dict .get()
+        requirements = getattr(stripe_account_obj, "requirements", None)
+        disabled_reason = getattr(stripe_account_obj, "disabled_reason", None)
+        currently_due = (
+            getattr(requirements, "currently_due", None) or []
+            if requirements is not None
+            else []
+        )
         new_platform_status = "unlinked"
         if (
             stripe_account_obj.charges_enabled
@@ -120,7 +125,10 @@ def stripe_connect_webhook(request):
                     f"Webhook: Payout record for {stripe_transfer_id} did not exist. Creating it now."
                 )
                 created_datetime = datetime.fromtimestamp(transfer.created, tz=pytz.utc)
-                business_id = transfer.metadata.get("business_id")
+                _md = getattr(transfer, "metadata", None)
+                business_id = (
+                    getattr(_md, "business_id", None) if _md is not None else None
+                )
 
                 if business_id:
                     try:

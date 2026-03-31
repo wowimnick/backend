@@ -12,6 +12,23 @@ from django.utils import timezone
 from quickstart.models import Booking, BusinessInfo, Payout, Payment
 
 
+def _stripe_metadata_as_dict(metadata):
+    """Stripe Transfer.metadata is a StripeObject, not a dict (no .get)."""
+    if metadata is None:
+        return {}
+    if isinstance(metadata, dict):
+        return dict(metadata)
+    to_dict = getattr(metadata, "to_dict", None)
+    if callable(to_dict):
+        try:
+            d = to_dict()
+        except Exception:
+            d = None
+        if isinstance(d, dict):
+            return dict(d)
+    return {}
+
+
 class Command(BaseCommand):
     help = "Creates and deletes test payout data for a specific business. Can optionally trigger real Stripe sandbox transfers."
 
@@ -185,7 +202,7 @@ class Command(BaseCommand):
             )
 
             # SUCCESS: Update the payout record with real Stripe transfer ID
-            arrival_timestamp = transfer.get("arrival_date")
+            arrival_timestamp = getattr(transfer, "arrival_date", None)
             arrival_date_obj = (
                 timezone.datetime.fromtimestamp(arrival_timestamp).date()
                 if arrival_timestamp
@@ -193,7 +210,7 @@ class Command(BaseCommand):
             )
 
             # Update metadata to remove temp flag and add real Stripe data
-            updated_metadata = transfer.get("metadata", {})
+            updated_metadata = _stripe_metadata_as_dict(getattr(transfer, "metadata", None))
             updated_metadata.pop("temp_id", None)  # Remove temp flag
 
             payout_record.stripe_transfer_id = (

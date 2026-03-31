@@ -40,8 +40,10 @@ def _void_open_and_delete_draft_invoices(stripe_api, customer_ids, stdout, style
         try:
             # Open invoices: void them (clears pending payment from billing UI)
             open_list = stripe_api.Invoice.list(customer=cid, status="open", limit=100)
-            for inv in open_list.get("data", []):
-                inv_id = inv.get("id")
+            for inv in getattr(open_list, "data", None) or []:
+                inv_id = getattr(inv, "id", None) or (
+                    inv.get("id") if isinstance(inv, dict) else None
+                )
                 try:
                     stripe_api.Invoice.void_invoice(inv_id)
                     stdout.write(f"  Voided open invoice {inv_id} (customer {cid})")
@@ -50,8 +52,10 @@ def _void_open_and_delete_draft_invoices(stripe_api, customer_ids, stdout, style
 
             # Draft invoices: delete them
             draft_list = stripe_api.Invoice.list(customer=cid, status="draft", limit=100)
-            for inv in draft_list.get("data", []):
-                inv_id = inv.get("id")
+            for inv in getattr(draft_list, "data", None) or []:
+                inv_id = getattr(inv, "id", None) or (
+                    inv.get("id") if isinstance(inv, dict) else None
+                )
                 try:
                     stripe_api.Invoice.delete(inv_id)
                     stdout.write(f"  Deleted draft invoice {inv_id} (customer {cid})")

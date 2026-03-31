@@ -1668,8 +1668,9 @@ class ProcessBookingWebhook(APIView):
                     subscription.id,
                     subscription_obj=subscription,
                 )
-                if not business.stripe_customer_id and subscription.get("customer"):
-                    business.stripe_customer_id = subscription["customer"]
+                cust_id = getattr(subscription, "customer", None)
+                if not business.stripe_customer_id and cust_id:
+                    business.stripe_customer_id = cust_id
                     business.save(update_fields=["stripe_customer_id"])
             return Response(status=status.HTTP_200_OK)
 
