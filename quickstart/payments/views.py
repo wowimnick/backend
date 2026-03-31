@@ -989,9 +989,17 @@ class UpdatePaymentIntentView(APIView):
             "notes": new_notes,
         }
 
+        def _pi_metadata_plain(metadata):
+            # Stripe metadata is a StripeObject; dict(metadata) raises KeyError (not a real mapping).
+            if metadata is None:
+                return {}
+            if isinstance(metadata, dict):
+                return dict(metadata)
+            return metadata.to_dict(recursive=False)
+
         def merge_and_modify_metadata():
             intent = stripe.PaymentIntent.retrieve(payment_intent_id)
-            merged = dict(intent.metadata or {})
+            merged = _pi_metadata_plain(intent.metadata)
             for k, v in guest_updates.items():
                 if k == "notes":
                     merged[k] = v if v is not None else ""
@@ -1025,13 +1033,14 @@ class UpdatePaymentIntentView(APIView):
             try:
                 merge_and_modify_metadata()
                 intent_after = stripe.PaymentIntent.retrieve(payment_intent_id)
+                meta_after = _pi_metadata_plain(intent_after.metadata)
                 logger.info(
                     "[%s] UpdatePaymentIntent: Stripe metadata AFTER update for PI %s: guest_email=%s guest_full_name=%s guest_phone=%s",
                     update_id,
                     payment_intent_id,
-                    (intent_after.metadata or {}).get("guest_email"),
-                    (intent_after.metadata or {}).get("guest_full_name"),
-                    (intent_after.metadata or {}).get("guest_phone"),
+                    meta_after.get("guest_email"),
+                    meta_after.get("guest_full_name"),
+                    meta_after.get("guest_phone"),
                 )
                 logger.info("[%s] UpdatePaymentIntent: Stripe metadata updated for PI %s", update_id, payment_intent_id)
                 return Response(
