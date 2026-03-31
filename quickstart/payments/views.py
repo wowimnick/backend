@@ -79,6 +79,23 @@ from quickstart.utils.meta_capi import send_purchase_event_for_booking
 logger = logging.getLogger(__name__)
 
 
+def _stripe_metadata_plain(metadata):
+    """Stripe API returns metadata as StripeObject; dict() and .get() are unsafe."""
+    if metadata is None:
+        return {}
+    if isinstance(metadata, dict):
+        return dict(metadata)
+    return metadata.to_dict(recursive=False)
+
+
+def _stripe_pi_metadata_get(payment_intent, key, default=None):
+    """Read one key from PaymentIntent.metadata (StripeObject or dict)."""
+    meta = _obj_get(payment_intent, "metadata", None)
+    if meta is None:
+        return default
+    return _obj_get(meta, key, default)
+
+
 def _revalidate_for_booking(booking):
     """Trigger Next.js cache revalidation for pages affected by a booking (create/cancel/update)."""
     if not booking:
@@ -989,17 +1006,9 @@ class UpdatePaymentIntentView(APIView):
             "notes": new_notes,
         }
 
-        def _pi_metadata_plain(metadata):
-            # Stripe metadata is a StripeObject; dict(metadata) raises KeyError (not a real mapping).
-            if metadata is None:
-                return {}
-            if isinstance(metadata, dict):
-                return dict(metadata)
-            return metadata.to_dict(recursive=False)
-
         def merge_and_modify_metadata():
             intent = stripe.PaymentIntent.retrieve(payment_intent_id)
-            merged = _pi_metadata_plain(intent.metadata)
+            merged = _stripe_metadata_plain(intent.metadata)
             for k, v in guest_updates.items():
                 if k == "notes":
                     merged[k] = v if v is not None else ""
@@ -1033,7 +1042,7 @@ class UpdatePaymentIntentView(APIView):
             try:
                 merge_and_modify_metadata()
                 intent_after = stripe.PaymentIntent.retrieve(payment_intent_id)
-                meta_after = _pi_metadata_plain(intent_after.metadata)
+                meta_after = _stripe_metadata_plain(intent_after.metadata)
                 logger.info(
                     "[%s] UpdatePaymentIntent: Stripe metadata AFTER update for PI %s: guest_email=%s guest_full_name=%s guest_phone=%s",
                     update_id,
@@ -1296,7 +1305,7 @@ class ProcessBookingWebhook(APIView):
 
     def handle_gift_card_creation(self, payment_intent):
         """Creates the Gift Card after successful payment (Step E)"""
-        meta = payment_intent.metadata
+        meta = _stripe_metadata_plain(payment_intent.metadata)
         amount = Decimal(payment_intent.amount) / 100
 
         # Idempotency check
@@ -1373,7 +1382,7 @@ class ProcessBookingWebhook(APIView):
             )
 
             # 1. CHECK FOR GIFT CARD PURCHASE
-            if payment_intent.metadata.get("type") == "gift_card_purchase":
+            if _stripe_pi_metadata_get(payment_intent, "type") == "gift_card_purchase":
                 logger.info("[%s] Routing to gift card creation for PI %s", webhook_id, payment_intent.id)
                 try:
                     self.handle_gift_card_creation(payment_intent)
@@ -1669,7 +1678,7 @@ class ProcessBookingWebhook(APIView):
         Updates CourseEnrollment and all session Bookings with 1/N payout allocation.
         Redeems discounts if applicable.
         """
-        booking_group_id = payment_intent.metadata.get("booking_group_id")
+        booking_group_id = _stripe_pi_metadata_get(payment_intent, "booking_group_id")
         logger.info(
             "[%s] handle_course_payment_success PI=%s booking_group_id=%s",
             webhook_id,
@@ -1720,7 +1729,7 @@ class ProcessBookingWebhook(APIView):
                 # --- 1/N Calculation Logic ---
 
                 # 1. Retrieve Financials from Metadata (calculated in CreatePaymentIntentView)
-                metadata = payment_intent.metadata
+                metadata = _stripe_metadata_plain(payment_intent.metadata)
                 # Business payout is based on subtotal_for_payout (before global discount) so business never loses
                 subtotal_for_payout = Decimal(
                     metadata.get("subtotal_for_payout")
@@ -2042,8 +2051,8 @@ class ProcessBookingWebhook(APIView):
                         value=float(enrollment.total_amount_paid),
                         currency="CAD",
                         num_items=first_booking.participants or 1,
-                        meta_fbc=payment_intent.metadata.get("meta_fbc") or None,
-                        meta_fbp=payment_intent.metadata.get("meta_fbp") or None,
+                        meta_fbc=_stripe_pi_metadata_get(payment_intent, "meta_fbc") or None,
+                        meta_fbp=_stripe_pi_metadata_get(payment_intent, "meta_fbp") or None,
                     )
                 except Exception as capi_err:
                     logger.warning(
@@ -2055,7 +2064,7 @@ class ProcessBookingWebhook(APIView):
                 try:
                     grand_total = Decimal(payment_intent.amount_received) / 100
                     try_send_first_purchase_gift_card(
-                        dict(payment_intent.metadata),
+                        _stripe_metadata_plain(payment_intent.metadata),
                         grand_total,
                         payment_intent_id=payment_intent.id,
                     )
@@ -2078,7 +2087,7 @@ class ProcessBookingWebhook(APIView):
         Instant flow (no hold): create confirmed booking + payment from PaymentIntent metadata.
         Raises DRFValidationError if slot no longer has capacity (caller will refund).
         """
-        metadata = payment_intent.metadata
+        metadata = _stripe_metadata_plain(payment_intent.metadata)
         logger.info(
             "[%s] WEBHOOK _create_single_booking_from_metadata PI=%s METADATA READ: guest_email=%s guest_full_name=%s guest_phone=%s booking_source=%s is_guest=%s user_id=%s",
             webhook_id,
@@ -2499,7 +2508,7 @@ class ProcessBookingWebhook(APIView):
 
         # 2. Check for Course vs Single Session
         # Use correct metadata key 'booking_type' as sent by CreatePaymentIntentView
-        enrollment_type = payment_intent.metadata.get("booking_type")
+        enrollment_type = _stripe_pi_metadata_get(payment_intent, "booking_type")
         logger.info("[%s] booking_type from metadata: %s", webhook_id, enrollment_type)
 
         if enrollment_type == "Full Course":
@@ -2565,7 +2574,7 @@ class ProcessBookingWebhook(APIView):
                     "Booking record missing in DB. Initiating refund."
                 )
 
-            metadata = payment_intent.metadata
+            metadata = _stripe_metadata_plain(payment_intent.metadata)
             participants = pending_booking.participants
             initial_instance = pending_booking.schedule_instance
 
