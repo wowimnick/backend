@@ -1,5 +1,7 @@
 """Business marketing campaigns — increments quota only here (never transactional)."""
+import html
 import logging
+import re
 
 import resend
 from celery import shared_task
@@ -54,11 +56,21 @@ def _merge_fields(html, contact, business):
     return out
 
 
+_HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{3}$|^#[0-9A-Fa-f]{6}$")
+
+
+def _footer_unsub_color(ms):
+    c = getattr(ms, "unsubscribe_color", None) if ms else None
+    if c and _HEX_COLOR_RE.match(str(c).strip()):
+        return str(c).strip()
+    return "#6366f1"
+
+
 def _footer_html(business, contact):
-    addr = ""
+    addr_raw = ""
     ms = getattr(business, "marketing_settings", None)
     if ms and ms.physical_address_footer:
-        addr = ms.physical_address_footer
+        addr_raw = ms.physical_address_footer
     else:
         parts = [
             getattr(business, "businessAddress", "") or "",
@@ -66,14 +78,40 @@ def _footer_html(business, contact):
             getattr(business, "businessState", "") or "",
             getattr(business, "businessZipCode", "") or "",
         ]
-        addr = ", ".join(p for p in parts if p)
+        addr_raw = ", ".join(p for p in parts if p)
+    addr_html = html.escape(addr_raw or "").replace("\n", "<br/>")
     unsub = build_unsubscribe_url(str(contact.id), str(business.businessId))
+    label = (
+        html.escape((ms.unsubscribe_text or "Unsubscribe").strip()[:50] or "Unsubscribe")
+        if ms
+        else "Unsubscribe"
+    )
+    style = (getattr(ms, "unsubscribe_style", None) or "link").strip().lower() if ms else "link"
+    color = _footer_unsub_color(ms)
+    biz_name = html.escape(getattr(business, "businessName", "") or "")
+    if style == "button":
+        unsub_el = (
+            f'<a href="{unsub}" style="display:inline-block;background-color:{color};color:#ffffff;'
+            f'text-decoration:none;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:600;">'
+            f"{label}</a>"
+        )
+    else:
+        unsub_el = (
+            f'<a href="{unsub}" style="color:{color};text-decoration:underline;">{label}</a>'
+        )
+    align = "left"
+    if ms:
+        a = (getattr(ms, "footer_alignment", None) or "left").strip().lower()
+        if a in ("center", "right"):
+            align = a
     return (
+        f'<div style="text-align:{align};">'
         f'<hr style="border:none;border-top:1px solid #eee;margin:24px 0;" />'
         f'<p style="font-size:12px;color:#666;">'
-        f'<a href="{unsub}">Unsubscribe</a> from marketing emails from {business.businessName}.'
+        f"{unsub_el} from marketing emails from {biz_name}."
         f"</p>"
-        f'<p style="font-size:12px;color:#666;">{addr}</p>'
+        f'<p style="font-size:12px;color:#666;">{addr_html}</p>'
+        f"</div>"
     )
 
 

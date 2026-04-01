@@ -3098,6 +3098,26 @@ class BusinessMarketingSettings(models.Model):
         default="",
         help_text="Shown in marketing footer (CAN-SPAM). Defaults to business address if empty at send time.",
     )
+    unsubscribe_text = models.CharField(
+        max_length=50,
+        default="Unsubscribe",
+        help_text="Label for the marketing unsubscribe control in email footers.",
+    )
+    unsubscribe_style = models.CharField(
+        max_length=16,
+        default="link",
+        help_text="link | button",
+    )
+    unsubscribe_color = models.CharField(
+        max_length=16,
+        default="#6366f1",
+        help_text="Hex color for unsubscribe link or button background.",
+    )
+    footer_alignment = models.CharField(
+        max_length=16,
+        default="left",
+        help_text="left | center | right — alignment for compliance footer block.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

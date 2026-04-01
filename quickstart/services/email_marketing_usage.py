@@ -54,8 +54,11 @@ def usage_snapshot(business, addon_sub):
     }
 
 
-def assert_can_send(business, addon_sub, recipient_count):
-    tier = price_id_to_tier(addon_sub.stripe_price_id)
+def assert_per_campaign_recipient_limit(tier, recipient_count):
+    """
+    Enforce only per-campaign recipient cap (not monthly quota).
+    Use when scheduling: monthly quota is checked again at actual send time.
+    """
     if not tier:
         raise MarketingQuotaExceeded("Unknown email marketing plan.", 0, 0)
     if recipient_count > tier["max_recipients_per_campaign"]:
@@ -64,6 +67,11 @@ def assert_can_send(business, addon_sub, recipient_count):
             0,
             tier["max_recipients_per_campaign"],
         )
+
+
+def assert_can_send(business, addon_sub, recipient_count):
+    tier = price_id_to_tier(addon_sub.stripe_price_id)
+    assert_per_campaign_recipient_limit(tier, recipient_count)
     with transaction.atomic():
         row = get_usage_row(business, addon_sub.current_period_start, addon_sub.current_period_end)
         if row is None:

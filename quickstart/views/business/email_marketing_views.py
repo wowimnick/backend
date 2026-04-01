@@ -34,6 +34,7 @@ from quickstart.services.marketing_builder import resolve_campaign_html_body
 from quickstart.services.email_marketing_usage import (
     MarketingQuotaExceeded,
     assert_can_send,
+    assert_per_campaign_recipient_limit,
     usage_snapshot,
 )
 from quickstart.services.resend_domain_service import (
@@ -65,6 +66,15 @@ def _email_domain(email):
     if not email or "@" not in email:
         return ""
     return email.split("@", 1)[-1].strip().lower()
+
+
+_HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{3}$|^#[0-9A-Fa-f]{6}$")
+
+
+def _sanitize_marketing_hex_color(value):
+    if value and _HEX_COLOR_RE.match(value):
+        return value
+    return "#6366f1"
 
 
 def _active_addon(business):
@@ -125,6 +135,10 @@ class MarketingSettingsDetailView(APIView):
         return Response(
             {
                 "physical_address_footer": obj.physical_address_footer,
+                "unsubscribe_text": obj.unsubscribe_text,
+                "unsubscribe_style": obj.unsubscribe_style,
+                "unsubscribe_color": obj.unsubscribe_color,
+                "footer_alignment": obj.footer_alignment,
             }
         )
 
@@ -133,11 +147,41 @@ class MarketingSettingsDetailView(APIView):
         if err:
             return err
         obj, _ = BusinessMarketingSettings.objects.get_or_create(business=business)
+        update_fields = []
         body = request.data.get("physical_address_footer")
         if body is not None:
             obj.physical_address_footer = str(body)[:2000]
-            obj.save(update_fields=["physical_address_footer"])
-        return Response({"physical_address_footer": obj.physical_address_footer})
+            update_fields.append("physical_address_footer")
+        ut = request.data.get("unsubscribe_text")
+        if ut is not None:
+            t = str(ut).strip()[:50] or "Unsubscribe"
+            obj.unsubscribe_text = t
+            update_fields.append("unsubscribe_text")
+        us = request.data.get("unsubscribe_style")
+        if us is not None:
+            s = str(us).strip().lower()
+            obj.unsubscribe_style = "button" if s == "button" else "link"
+            update_fields.append("unsubscribe_style")
+        uc = request.data.get("unsubscribe_color")
+        if uc is not None:
+            obj.unsubscribe_color = _sanitize_marketing_hex_color(str(uc).strip())
+            update_fields.append("unsubscribe_color")
+        fa = request.data.get("footer_alignment")
+        if fa is not None:
+            a = str(fa).strip().lower()
+            obj.footer_alignment = a if a in ("left", "center", "right") else "left"
+            update_fields.append("footer_alignment")
+        if update_fields:
+            obj.save(update_fields=update_fields)
+        return Response(
+            {
+                "physical_address_footer": obj.physical_address_footer,
+                "unsubscribe_text": obj.unsubscribe_text,
+                "unsubscribe_style": obj.unsubscribe_style,
+                "unsubscribe_color": obj.unsubscribe_color,
+                "footer_alignment": obj.footer_alignment,
+            }
+        )
 
 
 class MarketingTemplateListCreateView(APIView):
@@ -729,6 +773,16 @@ class MarketingCampaignScheduleView(APIView):
         business, addon, err = _require_marketing(request)
         if err:
             return err
+        if (
+            addon.stripe_subscription_id
+            and (addon.current_period_start is None or addon.current_period_end is None)
+        ):
+            sync_addon_subscription_from_stripe(
+                addon.stripe_subscription_id,
+                addon_type=ADDON_TYPE_EMAIL_MARKETING,
+            )
+            addon.refresh_from_db()
+
         tier = price_id_to_tier(addon.stripe_price_id)
         if not tier.get("scheduling_enabled"):
             return Response(
@@ -768,7 +822,7 @@ class MarketingCampaignScheduleView(APIView):
         qs, _ = build_contact_queryset(business, at, flt)
         n = qs.count()
         try:
-            assert_can_send(business, addon, n)
+            assert_per_campaign_recipient_limit(tier, n)
         except MarketingQuotaExceeded as e:
             return Response(
                 {"error": str(e), "used": e.used, "limit": e.limit},
