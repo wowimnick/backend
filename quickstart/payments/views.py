@@ -75,28 +75,17 @@ from quickstart.utils.revalidation import (
     trigger_multiple_revalidations,
 )
 from quickstart.utils.meta_capi import send_purchase_event_for_booking
+from quickstart.utils.stripe_metadata import stripe_metadata_to_dict
 
 logger = logging.getLogger(__name__)
 
 
 def _stripe_metadata_dict(metadata):
     """
-    PaymentIntent.metadata from the Stripe API or webhooks is a StripeObject, not a dict.
-    Calling .get() or dict(metadata) on it raises (Stripe resolves unknown attrs as keys).
+    PaymentIntent.metadata from the Stripe API or webhooks is a StripeObject.
+    Use the shared normalizer (to_dict / .items()) — never dict(metadata) first.
     """
-    if metadata is None:
-        return {}
-    if isinstance(metadata, dict):
-        return dict(metadata)
-    to_dict = getattr(metadata, "to_dict", None)
-    if callable(to_dict):
-        try:
-            d = to_dict()
-        except Exception:
-            d = None
-        if isinstance(d, dict):
-            return dict(d)
-    return {}
+    return stripe_metadata_to_dict(metadata)
 
 
 def _revalidate_for_booking(booking):

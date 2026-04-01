@@ -10,23 +10,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from quickstart.models import Booking, BusinessInfo, Payout, Payment
-
-
-def _stripe_metadata_as_dict(metadata):
-    """Stripe Transfer.metadata is a StripeObject, not a dict (no .get)."""
-    if metadata is None:
-        return {}
-    if isinstance(metadata, dict):
-        return dict(metadata)
-    to_dict = getattr(metadata, "to_dict", None)
-    if callable(to_dict):
-        try:
-            d = to_dict()
-        except Exception:
-            d = None
-        if isinstance(d, dict):
-            return dict(d)
-    return {}
+from quickstart.utils.stripe_metadata import stripe_metadata_to_dict
 
 
 class Command(BaseCommand):
@@ -209,9 +193,15 @@ class Command(BaseCommand):
                 else timezone.now().date() + timedelta(days=3)
             )
 
-            # Update metadata to remove temp flag and add real Stripe data
-            updated_metadata = _stripe_metadata_as_dict(getattr(transfer, "metadata", None))
-            updated_metadata.pop("temp_id", None)  # Remove temp flag
+            # Merge DB metadata with Stripe transfer metadata (same as daily payout task)
+            base_meta = payout_record.metadata
+            if not isinstance(base_meta, dict):
+                base_meta = {}
+            updated_metadata = dict(base_meta)
+            updated_metadata.update(
+                stripe_metadata_to_dict(getattr(transfer, "metadata", None))
+            )
+            updated_metadata.pop("temp_id", None)
 
             payout_record.stripe_transfer_id = (
                 transfer.id

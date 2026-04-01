@@ -10,6 +10,7 @@ import pytz
 import random
 
 from quickstart.models import Booking, Payout, Payment, PartnerTier
+from quickstart.utils.stripe_metadata import stripe_metadata_to_dict
 
 # Define HST Rate for Ontario directly in the command for consistency
 HST_RATE = Decimal("0.13")
@@ -224,7 +225,11 @@ class Command(BaseCommand):
                     payout_record.stripe_transfer_id = transfer.id
                     payout_record.arrival_date = arrival_date
                     payout_record.status = "paid"
-                    payout_record.metadata.update(transfer.metadata)
+                    merged = dict(payout_record.metadata or {})
+                    merged.update(
+                        stripe_metadata_to_dict(getattr(transfer, "metadata", None))
+                    )
+                    payout_record.metadata = merged
                     payout_record.save()
 
                     bookings = Booking.objects.filter(id__in=booking_ids)

@@ -10,6 +10,7 @@ import pytz
 from decimal import Decimal
 
 from quickstart.models import BusinessInfo, Payout
+from quickstart.utils.stripe_metadata import stripe_metadata_to_dict
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +142,9 @@ def stripe_connect_webhook(request):
                             arrival_date=created_datetime.date(),
                             status="paid",  # Hardcode to success since webhook fired
                             created_at=created_datetime,
-                            metadata=transfer.metadata,
+                            metadata=stripe_metadata_to_dict(
+                                getattr(transfer, "metadata", None)
+                            ),
                         )
                         logger.info(
                             f"Webhook safety net CREATED 'paid' Payout for {stripe_transfer_id}."

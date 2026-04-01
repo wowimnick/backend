@@ -11,6 +11,7 @@ import pytz
 import random
 
 from quickstart.models import Booking, Payout, BusinessInfo, Payment
+from quickstart.utils.stripe_metadata import stripe_metadata_to_dict
 
 logger = logging.getLogger(__name__)
 
@@ -299,8 +300,13 @@ def process_daily_payouts():
 
                 arrival_date = timezone.now().date()
 
-                updated_metadata = payout_record.metadata.copy()
-                updated_metadata.update(transfer.metadata or {})
+                base_meta = payout_record.metadata
+                if not isinstance(base_meta, dict):
+                    base_meta = {}
+                updated_metadata = dict(base_meta)
+                updated_metadata.update(
+                    stripe_metadata_to_dict(getattr(transfer, "metadata", None))
+                )
                 updated_metadata.pop("temp_id", None)
 
                 payout_record.stripe_transfer_id = transfer.id
@@ -334,22 +340,32 @@ def process_daily_payouts():
             failed_payouts += 1
             logger.error(f"✗ STRIPE ERROR for Business {business_id}: {e}")
             try:
-                business = BusinessInfo.objects.get(pk=business_id)
-                from quickstart.utils.email_utils import send_payout_failed_email
-                send_payout_failed_email(business, str(e))
+                business = BusinessInfo.objects.filter(pk=business_id).first()
+                from quickstart.utils.email_utils import send_super_admin_payout_failed_email
+
+                send_super_admin_payout_failed_email(
+                    business_id, str(e), business=business, stripe_error=True
+                )
             except Exception as email_err:
-                logger.warning("Could not send payout failed email to Host: %s", email_err)
+                logger.warning(
+                    "Could not send Super Admin payout failure email: %s", email_err
+                )
             # Note: Transaction rollback will occur automatically, keeping bookings as 'pending'
 
         except Exception as e:
             failed_payouts += 1
             logger.error(f"✗ ERROR processing payout for Business {business_id}: {e}", exc_info=True)
             try:
-                business = BusinessInfo.objects.get(pk=business_id)
-                from quickstart.utils.email_utils import send_payout_failed_email
-                send_payout_failed_email(business, str(e))
+                business = BusinessInfo.objects.filter(pk=business_id).first()
+                from quickstart.utils.email_utils import send_super_admin_payout_failed_email
+
+                send_super_admin_payout_failed_email(
+                    business_id, str(e), business=business, stripe_error=False
+                )
             except Exception as email_err:
-                logger.warning("Could not send payout failed email to Host: %s", email_err)
+                logger.warning(
+                    "Could not send Super Admin payout failure email: %s", email_err
+                )
 
     logger.info("=" * 80)
     logger.info(f"TASK END: process_daily_payouts")

@@ -36,6 +36,7 @@ from quickstart.services.membership_service import (
     get_credits_remaining,
     consume_credit,
 )
+from quickstart.utils.stripe_metadata import stripe_metadata_to_dict
 from quickstart.serializers.widget.widget_serializers import (
     WidgetBusinessConfigSerializer,
     WidgetClassSerializer,
@@ -806,7 +807,7 @@ class GuestBookingCreateView(generics.CreateAPIView):
                     f"Payment was not successful. Status: {pi.status}"
                 )
 
-            metadata = pi.metadata
+            metadata = stripe_metadata_to_dict(pi.metadata)
             instance_id = int(metadata["schedule_instance_id"])
             participants = int(metadata["participants"])
 

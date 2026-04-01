@@ -1124,6 +1124,53 @@ def send_super_admin_booking_created_email(booking: Booking):
     )
 
 
+def send_super_admin_payout_failed_email(
+    business_id: int,
+    error_message: str,
+    business: Optional[BusinessInfo] = None,
+    *,
+    stripe_error: bool = False,
+):
+    """
+    Email all Super Admins when daily payout processing fails for a business.
+    The business is not notified (ops handles Stripe / reconciliation).
+    """
+    recipient_list = get_super_admin_emails()
+    if not recipient_list:
+        logger.debug(
+            "No Super Admin recipients for payout failure notification; skipping email."
+        )
+        return
+    business_name = (
+        getattr(business, "businessName", None) if business else None
+    ) or f"Business ID {business_id}"
+    stripe_account_id = (
+        getattr(business, "stripe_account_id", None) if business else None
+    ) or "—"
+    admin_url = f"{settings.FRONTEND_BASE_URL}/admin"
+    error_kind = "Stripe API error" if stripe_error else "Processing error"
+    context = {
+        "business_id": business_id,
+        "business_name": business_name,
+        "stripe_account_id": stripe_account_id,
+        "error_message": error_message or "Unknown error",
+        "error_kind": error_kind,
+        "admin_url": admin_url,
+        "recipient_email": ", ".join(recipient_list),
+    }
+    send_templated_email(
+        recipient_list=recipient_list,
+        template_name="emails/super_admin_payout_failed.html",
+        context=context,
+        subject=f"[ClassEasily] Payout failed ({error_kind}): {business_name} (ID {business_id})",
+    )
+    logger.info(
+        "Super Admin payout-failure email queued for business_id=%s to %s recipient(s).",
+        business_id,
+        len(recipient_list),
+    )
+
+
 def send_super_admin_booking_cancelled_email(booking: Booking):
     """Email all Super Admins when a booking is cancelled. Includes booking and booker info."""
     recipient_list = get_super_admin_emails()
@@ -1591,8 +1638,8 @@ def send_payout_connect_required_email(
 
 def send_payout_failed_email(business: BusinessInfo, error_message: str):
     """
-    Notify the business owner that a payout could not be completed (e.g. Stripe error,
-    Connect account issue). Ask them to check their Stripe Connect account.
+    Notify the business owner that a payout could not be completed.
+    Not used by the daily payout task (that emails Super Admins only); kept for optional manual use.
     """
     if not business:
         logger.warning("Attempted to send payout failed email with no business.")

@@ -676,10 +676,15 @@ def trigger_reclassification_on_collection_change(sender, instance, created, upd
 def send_payout_notification(sender, instance: Payout, created, **kwargs):
     """
     Sends a notification to business owner/managers when a Payout record is created.
+    Skipped when metadata contains skip_payout_notification (e.g. DB backfill of an existing Stripe transfer).
     """
     if not created:
         return
-    
+
+    meta = instance.metadata if isinstance(instance.metadata, dict) else {}
+    if meta.get("skip_payout_notification"):
+        return
+
     from .utils.email_utils import send_payout_initiated_email 
 
     try:
