@@ -26,7 +26,10 @@ def default_builder_document() -> JsonDict:
                 "id": str(uuid.uuid4()),
                 "type": "text",
                 "props": {
-                    "content": "<p>Hi {{first_name}},</p><p>Your message here.</p>",
+                    "content": (
+                        "<p>Hi {{first_name}},</p><p>Your message here.</p>"
+                        '<p><a href="{{unsubscribe_url}}">Unsubscribe</a></p>'
+                    ),
                     "align": "left",
                     "fontSize": 16,
                     "color": "#333333",
@@ -132,6 +135,27 @@ def _render_block(block: Union[Block, None]) -> str:
             height = 24
         return f'<div class="ce-mk-block ce-mk-spacer" style="height:{height}px;line-height:{height}px;">&nbsp;</div>'
 
+    if btype == "unsubscribe":
+        label = props.get("label") or "Unsubscribe"
+        style_btn = (props.get("style") or "link").strip().lower() == "button"
+        align = _esc(props.get("align") or "center")
+        color = _esc(str(props.get("color") or "#6366f1"))
+        href = "{{unsubscribe_url}}"
+        if style_btn:
+            btn_style = (
+                f"display:inline-block;background-color:{color};color:#ffffff;"
+                f"text-decoration:none;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:600;"
+            )
+            return (
+                f'<div class="ce-mk-block ce-mk-unsubscribe" style="text-align:{align};margin:16px 0;">'
+                f'<a href="{href}" style="{btn_style}">{_esc(str(label))}</a></div>'
+            )
+        link_style = f"color:{color};text-decoration:underline;font-size:14px;font-weight:500;"
+        return (
+            f'<div class="ce-mk-block ce-mk-unsubscribe" style="text-align:{align};margin:12px 0;">'
+            f'<a href="{href}" style="{link_style}">{_esc(str(label))}</a></div>'
+        )
+
     if btype == "section":
         bg = props.get("backgroundColor") or "#ffffff"
         py = props.get("paddingY", 24)
@@ -209,6 +233,15 @@ def render_builder_to_html(builder_json: Any) -> str:
         f'<div class="ce-marketing-email" style="font-family:system-ui,-apple-system,BlinkMacSystemFont,'
         f'"Segoe UI",sans-serif;line-height:1.5;color:#333;max-width:600px;margin:0 auto;">{inner}</div>'
     )
+
+
+MARKETING_UNSUB_MERGE_TAG = "{{unsubscribe_url}}"
+
+
+def marketing_body_contains_unsubscribe_merge_field(campaign) -> bool:
+    """True if rendered body still contains the per-recipient unsubscribe placeholder."""
+    body = resolve_campaign_html_body(campaign)
+    return MARKETING_UNSUB_MERGE_TAG in (body or "")
 
 
 def resolve_campaign_html_body(campaign) -> str:

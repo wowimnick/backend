@@ -12,22 +12,49 @@ STARTER_AUDIENCE_TYPES = frozenset(
     {"all_contacts", "tags", "contact_ids", "booking_channel"}
 )
 
+MULTI_AUDIENCE_TYPE = "multi"
 
-def audience_tier_error(tier: Optional[dict], audience_type: str, audience_filter: dict) -> Optional[str]:
-    """Return user-facing error message if this audience is not allowed for the tier."""
+
+def _tier_error_single_rule(tier: Optional[dict], audience_type: str, audience_filter: dict) -> Optional[str]:
+    """Validate one audience rule (not multi)."""
     if not tier:
         return "Unknown email marketing plan."
     at = (audience_type or "all_contacts").strip()
     flt = audience_filter if isinstance(audience_filter, dict) else {}
+    if at == MULTI_AUDIENCE_TYPE:
+        return "Invalid nested multi audience rule."
     if at == "saved_segment":
         if not tier.get("saved_segments_enabled"):
             return "Saved audiences require Growth or higher email marketing."
+        sids = flt.get("segment_ids")
+        if sids and isinstance(sids, list) and len(sids) > 0:
+            return None
         if not flt.get("segment_id"):
-            return "segment_id is required for saved_segment audience."
+            return "Select at least one saved audience, or segment_id is required."
         return None
     if not tier.get("advanced_segmentation") and at not in STARTER_AUDIENCE_TYPES:
         return "This audience target requires Growth or higher email marketing."
     return None
+
+
+def audience_tier_error(tier: Optional[dict], audience_type: str, audience_filter: dict) -> Optional[str]:
+    """Return user-facing error message if this audience is not allowed for the tier."""
+    at = (audience_type or "all_contacts").strip()
+    flt = audience_filter if isinstance(audience_filter, dict) else {}
+    if at == MULTI_AUDIENCE_TYPE:
+        rules = flt.get("rules")
+        if not isinstance(rules, list) or len(rules) == 0:
+            return "Add at least one audience rule."
+        for r in rules:
+            if not isinstance(r, dict):
+                return "Invalid audience rules."
+            t = (r.get("type") or "all_contacts").strip()
+            f = r.get("filter") if isinstance(r.get("filter"), dict) else {}
+            err = _tier_error_single_rule(tier, t, f)
+            if err:
+                return err
+        return None
+    return _tier_error_single_rule(tier, at, flt)
 
 
 def _base_contacts(business) -> QuerySet:
@@ -56,12 +83,29 @@ def build_contact_queryset(
     """
     Returns (queryset, meta) where meta may include notes for debugging.
     audience_filter is a JSON dict; shapes depend on audience_type.
+    For MULTI_AUDIENCE_TYPE, audience_filter must contain rules: [{type, filter}, ...].
     """
     at = (audience_type or "all_contacts").strip()
     flt: Dict[str, Any] = audience_filter if isinstance(audience_filter, dict) else {}
     meta: Dict[str, Any] = {"audience_type": at}
 
     qs = _base_contacts(business)
+
+    if at == MULTI_AUDIENCE_TYPE:
+        rules = flt.get("rules")
+        if not isinstance(rules, list) or len(rules) == 0:
+            return qs.none(), meta
+        combined: Optional[QuerySet] = None
+        for r in rules:
+            if not isinstance(r, dict):
+                continue
+            t = (r.get("type") or "all_contacts").strip()
+            f = r.get("filter") if isinstance(r.get("filter"), dict) else {}
+            part, _ = build_contact_queryset(business, t, f)
+            combined = part if combined is None else combined | part
+        if combined is None:
+            return qs.none(), meta
+        return combined.distinct(), meta
 
     if at == "all_contacts":
         return qs, meta
@@ -137,6 +181,21 @@ def build_contact_queryset(
 
     if at == "saved_segment":
         from quickstart.models import MarketingSavedSegment
+
+        sids = flt.get("segment_ids")
+        if sids and isinstance(sids, list) and len(sids) > 0:
+            combined_ss: Optional[QuerySet] = None
+            for sid in sids:
+                seg = MarketingSavedSegment.objects.filter(id=sid, business=business).first()
+                if not seg:
+                    continue
+                part, _ = build_contact_queryset(
+                    business, seg.audience_type, seg.audience_filter or {}
+                )
+                combined_ss = part if combined_ss is None else combined_ss | part
+            if combined_ss is None:
+                return qs.none(), meta
+            return combined_ss.distinct(), meta
 
         sid = flt.get("segment_id")
         if not sid:

@@ -30,7 +30,10 @@ from quickstart.services.marketing_audience import (
     build_contact_queryset,
     serialize_contact_sample,
 )
-from quickstart.services.marketing_builder import resolve_campaign_html_body
+from quickstart.services.marketing_builder import (
+    marketing_body_contains_unsubscribe_merge_field,
+    resolve_campaign_html_body,
+)
 from quickstart.services.email_marketing_usage import (
     MarketingQuotaExceeded,
     assert_can_send,
@@ -590,6 +593,16 @@ class MarketingCampaignDetailView(APIView):
                 c.scheduled_at = parsed
         if c.content_type == "html" and not tier.get("raw_html_allowed", True):
             return Response({"error": "HTML not allowed on this tier."}, status=400)
+        if not marketing_body_contains_unsubscribe_merge_field(c):
+            return Response(
+                {
+                    "error": (
+                        "Your email must include {{unsubscribe_url}} in the body "
+                        "(for example a link, or the Unsubscribe block in the visual builder)."
+                    )
+                },
+                status=400,
+            )
         c.save()
         return Response({"id": str(c.id)})
 
@@ -803,6 +816,15 @@ class MarketingCampaignScheduleView(APIView):
             return Response({"error": "Subject is required."}, status=400)
         if not (resolve_campaign_html_body(c) or "").strip():
             return Response({"error": "Email body is required."}, status=400)
+        if not marketing_body_contains_unsubscribe_merge_field(c):
+            return Response(
+                {
+                    "error": (
+                        "Your email must include {{unsubscribe_url}} in the body before scheduling."
+                    )
+                },
+                status=400,
+            )
 
         raw_sa = request.data.get("scheduled_at")
         parsed = parse_datetime(str(raw_sa)) if raw_sa else None
@@ -856,6 +878,15 @@ class MarketingCampaignSendView(APIView):
             return Response({"error": "Subject is required."}, status=400)
         if not (resolve_campaign_html_body(c) or "").strip():
             return Response({"error": "Email body is required."}, status=400)
+        if not marketing_body_contains_unsubscribe_merge_field(c):
+            return Response(
+                {
+                    "error": (
+                        "Your email must include {{unsubscribe_url}} in the body before sending."
+                    )
+                },
+                status=400,
+            )
 
         if (
             addon.stripe_subscription_id
@@ -906,6 +937,15 @@ class MarketingCampaignTestSendView(APIView):
             return Response({"error": "No email on account."}, status=400)
         from quickstart.models import Contact
 
+        if not marketing_body_contains_unsubscribe_merge_field(c):
+            return Response(
+                {
+                    "error": (
+                        "Your email must include {{unsubscribe_url}} in the body before sending a test."
+                    )
+                },
+                status=400,
+            )
         contact = Contact.objects.filter(business=business, user=request.user).first()
         if not contact:
             contact = Contact(

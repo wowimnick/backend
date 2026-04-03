@@ -18,7 +18,10 @@ from quickstart.models import (
 )
 from quickstart.services.email_marketing_config import price_id_to_tier
 from quickstart.services.marketing_audience import build_contact_queryset
-from quickstart.services.marketing_builder import resolve_campaign_html_body
+from quickstart.services.marketing_builder import (
+    marketing_body_contains_unsubscribe_merge_field,
+    resolve_campaign_html_body,
+)
 from quickstart.services.email_marketing_usage import (
     MarketingQuotaExceeded,
     assert_can_send,
@@ -45,10 +48,17 @@ def _merge_fields(html, contact, business):
         return ""
     fn = (contact.first_name or "").strip() if contact else ""
     ln = (contact.last_name or "").strip() if contact else ""
+    cid = getattr(contact, "id", None) if contact else None
+    unsub = (
+        build_unsubscribe_url(str(cid), str(business.businessId))
+        if cid and business
+        else "#"
+    )
     rep = {
         "{{first_name}}": fn,
         "{{last_name}}": ln,
         "{{business_name}}": getattr(business, "businessName", "") or "",
+        "{{unsubscribe_url}}": unsub,
     }
     out = html
     for k, v in rep.items():
@@ -56,17 +66,8 @@ def _merge_fields(html, contact, business):
     return out
 
 
-_HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{3}$|^#[0-9A-Fa-f]{6}$")
-
-
-def _footer_unsub_color(ms):
-    c = getattr(ms, "unsubscribe_color", None) if ms else None
-    if c and _HEX_COLOR_RE.match(str(c).strip()):
-        return str(c).strip()
-    return "#6366f1"
-
-
 def _footer_html(business, contact):
+    """Physical address only; unsubscribe must appear in body via {{unsubscribe_url}}."""
     addr_raw = ""
     ms = getattr(business, "marketing_settings", None)
     if ms and ms.physical_address_footer:
@@ -80,36 +81,16 @@ def _footer_html(business, contact):
         ]
         addr_raw = ", ".join(p for p in parts if p)
     addr_html = html.escape(addr_raw or "").replace("\n", "<br/>")
-    unsub = build_unsubscribe_url(str(contact.id), str(business.businessId))
-    label = (
-        html.escape((ms.unsubscribe_text or "Unsubscribe").strip()[:50] or "Unsubscribe")
-        if ms
-        else "Unsubscribe"
-    )
-    style = (getattr(ms, "unsubscribe_style", None) or "link").strip().lower() if ms else "link"
-    color = _footer_unsub_color(ms)
-    biz_name = html.escape(getattr(business, "businessName", "") or "")
-    if style == "button":
-        unsub_el = (
-            f'<a href="{unsub}" style="display:inline-block;background-color:{color};color:#ffffff;'
-            f'text-decoration:none;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:600;">'
-            f"{label}</a>"
-        )
-    else:
-        unsub_el = (
-            f'<a href="{unsub}" style="color:{color};text-decoration:underline;">{label}</a>'
-        )
     align = "left"
     if ms:
         a = (getattr(ms, "footer_alignment", None) or "left").strip().lower()
         if a in ("center", "right"):
             align = a
+    if not addr_html.strip():
+        return ""
     return (
         f'<div style="text-align:{align};">'
         f'<hr style="border:none;border-top:1px solid #eee;margin:24px 0;" />'
-        f'<p style="font-size:12px;color:#666;">'
-        f"{unsub_el} from marketing emails from {biz_name}."
-        f"</p>"
         f'<p style="font-size:12px;color:#666;">{addr_html}</p>'
         f"</div>"
     )
@@ -171,6 +152,14 @@ def send_business_marketing_campaign_task(self, campaign_id):
         return
     subject_base = campaign.subject or "Message from " + business.businessName
     html_base = resolve_campaign_html_body(campaign)
+    if not marketing_body_contains_unsubscribe_merge_field(campaign):
+        campaign.status = "failed"
+        campaign.error_message = (
+            "Your email must include the merge tag {{unsubscribe_url}} (for example in a link or "
+            "button). Add it in the visual builder or HTML editor."
+        )
+        campaign.save(update_fields=["status", "error_message"])
+        return
 
     from_header, from_email, reply_to = _resolve_from_header(
         business, campaign.sender_profile, tier
