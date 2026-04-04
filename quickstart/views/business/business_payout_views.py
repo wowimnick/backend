@@ -1,6 +1,15 @@
 from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
+
+
+def _payout_payment_meta_source(meta):
+    if not meta or not isinstance(meta, dict):
+        return {}
+    inner = meta.get("original_stripe_metadata")
+    if isinstance(inner, dict):
+        return inner
+    return meta
 from django.db.models import Q, Sum, Value, Count
 from django.db.models.functions import Coalesce
 from django.utils import timezone
@@ -263,9 +272,13 @@ class BusinessPayoutViewSet(viewsets.ReadOnlyModelViewSet):
                 "Class Name",
                 "Booker Name",
                 "Total Amount Paid by Customer",
+                "Tax Collected",
                 "Platform Fee (Pre-tax)",
                 "HST on Platform Fee",
                 "Net Payout for this Booking",
+                "Business Discount ($)",
+                "Global Discount ($)",
+                "Gift Card Applied ($)",
             ]
         )
 
@@ -278,6 +291,10 @@ class BusinessPayoutViewSet(viewsets.ReadOnlyModelViewSet):
                 "booking__user",
                 "booking__contact",
                 "booking__schedule_instance__schedule__option__classId",
+            )
+            .prefetch_related(
+                "booking__applieddiscount_set",
+                "booking__applied_global_discounts",
             )
             .order_by("booking__booking_date")
         )
@@ -297,19 +314,65 @@ class BusinessPayoutViewSet(viewsets.ReadOnlyModelViewSet):
                     f"{booking.contact.first_name} {booking.contact.last_name}".strip()
                 )
 
+            biz_disc = sum(
+                (ad.amount_saved for ad in booking.applieddiscount_set.all()),
+                start=Decimal("0.00"),
+            )
+            glob_disc = sum(
+                (a.amount_saved for a in booking.applied_global_discounts.all()),
+                start=Decimal("0.00"),
+            )
+            src = _payout_payment_meta_source(payment.metadata)
+            try:
+                gc_raw = Decimal(str(src.get("gift_card_amount_to_deduct") or "0"))
+            except Exception:
+                gc_raw = Decimal("0.00")
+            if not src.get("paid_via_giftcard") and gc_raw == 0:
+                gift_amt = Decimal("0.00")
+            elif payment.amount and payment.amount > 0:
+                gift_amt = (
+                    gc_raw * (booking.amount_paid / payment.amount)
+                ).quantize(Decimal("0.01"))
+            else:
+                gift_amt = gc_raw.quantize(Decimal("0.01"))
+
+            if payment.amount and payment.amount > 0:
+                pay_share = (booking.amount_paid / payment.amount).quantize(
+                    Decimal("0.0001")
+                )
+                tax_shown = (payment.tax_amount * pay_share).quantize(Decimal("0.01"))
+                fee_shown = (payment.platform_fee_amount * pay_share).quantize(
+                    Decimal("0.01")
+                )
+                fee_tax_shown = (payment.platform_fee_tax * pay_share).quantize(
+                    Decimal("0.01")
+                )
+                net_shown = (payment.net_payout_amount * pay_share).quantize(
+                    Decimal("0.01")
+                )
+            else:
+                tax_shown = payment.tax_amount
+                fee_shown = payment.platform_fee_amount
+                fee_tax_shown = payment.platform_fee_tax
+                net_shown = payment.net_payout_amount
+
             writer.writerow(
                 [
                     booking.user_facing_reference or f"ID-{booking.id}",
                     booking.booking_date.strftime("%Y-%m-%d"),
                     booking.schedule_instance.schedule.option.classId.title,
                     booker_name,
-                    f"${payment.amount:.2f}",
-                    f"${payment.platform_fee_amount:.2f}",
-                    f"${payment.platform_fee_tax:.2f}",
-                    f"${payment.net_payout_amount:.2f}",
+                    f"${booking.amount_paid:.2f}",
+                    f"${tax_shown:.2f}",
+                    f"${fee_shown:.2f}",
+                    f"${fee_tax_shown:.2f}",
+                    f"${net_shown:.2f}",
+                    f"${biz_disc:.2f}",
+                    f"${glob_disc:.2f}",
+                    f"${gift_amt:.2f}",
                 ]
             )
-            total_payout_from_bookings += payment.net_payout_amount
+            total_payout_from_bookings += net_shown
 
         # --- Footer for Reconciliation ---
         writer.writerow([])  # Spacer
@@ -321,12 +384,29 @@ class BusinessPayoutViewSet(viewsets.ReadOnlyModelViewSet):
                 "",
                 "",
                 "",
+                "",
+                "",
+                "",
+                "",
                 "Total from Bookings:",
                 f"${total_payout_from_bookings:.2f}",
             ]
         )
         writer.writerow(
-            ["", "", "", "", "", "", "Total Payout Amount:", f"${payout.amount:.2f}"]
+            [
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "Total Payout Amount:",
+                f"${payout.amount:.2f}",
+            ]
         )
 
         # Check if the sum matches the payout total
@@ -336,7 +416,9 @@ class BusinessPayoutViewSet(viewsets.ReadOnlyModelViewSet):
             status_text = "Reconciled"
         else:
             status_text = "Discrepancy Found"
-        writer.writerow(["", "", "", "", "", "", "Status:", status_text])
+        writer.writerow(
+            ["", "", "", "", "", "", "", "", "", "", "Status:", status_text]
+        )
 
         logger.info(
             f"Payout report {payout.id} exported for Business '{business.businessName}' by {request.user.email}"

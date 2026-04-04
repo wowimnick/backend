@@ -567,6 +567,10 @@ class BusinessInfo(models.Model):
 
     # --- Simplified Booking Settings ---
     businessHours = JSONField(default=list, blank=True)
+    require_participant_names = models.BooleanField(
+        default=False,
+        help_text="When True, checkout must collect a distinct name for each participant when booking more than one spot.",
+    )
 
     # Notification fields
     newBookingNotification = models.BooleanField(default=True)

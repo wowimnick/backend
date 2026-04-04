@@ -152,6 +152,50 @@ class RevenueAnalyticsView(views.APIView):
             )
             return Decimal("0.13")
 
+    def _widget_fee_rate_decimal(self, plan_id):
+        key = (plan_id or "basic").lower()
+        pct = {
+            "basic": Decimal("4"),
+            "growth": Decimal("3"),
+            "advanced": Decimal("2"),
+        }.get(key, Decimal("4"))
+        return pct / Decimal("100.0")
+
+    def _stripe_meta_dict(self, meta):
+        if not meta or not isinstance(meta, dict):
+            return {}
+        inner = meta.get("original_stripe_metadata")
+        if isinstance(inner, dict):
+            return inner
+        return meta
+
+    def _platform_fee_rate_for_booking(self, booking, business):
+        pay = None
+        for p in booking.payments.all():
+            if p.status == "succeeded":
+                pay = p
+                break
+        if pay:
+            src = self._stripe_meta_dict(pay.metadata)
+            if src.get("booking_source") == "widget":
+                return self._widget_fee_rate_decimal(src.get("plan_id"))
+        return self._get_fee_rate_for_business(business)
+
+    def _gift_card_amount_from_payment(self, pay, booking_amount_paid):
+        if not pay or not pay.metadata:
+            return Decimal("0.00")
+        src = self._stripe_meta_dict(pay.metadata)
+        raw = src.get("gift_card_amount_to_deduct")
+        if not raw and not src.get("paid_via_giftcard"):
+            return Decimal("0.00")
+        try:
+            gc = Decimal(str(raw or "0"))
+        except Exception:
+            gc = Decimal("0.00")
+        if pay.amount and pay.amount > 0 and booking_amount_paid:
+            return (gc * (booking_amount_paid / pay.amount)).quantize(Decimal("0.01"))
+        return gc.quantize(Decimal("0.01"))
+
     def _get_membership_payment_aggregates(self, business, start_date, end_date):
         """Aggregate MembershipPayment for the business in the date range (status=paid)."""
         qs = MembershipPayment.objects.filter(
@@ -682,8 +726,6 @@ class RevenueAnalyticsView(views.APIView):
             writer.writerow([])
 
             # --- 4. Detailed Transaction Report ---
-            platform_fee_rate = self._get_fee_rate_for_business(business)
-            fee_percentage_text = f"{float(platform_fee_rate * 100):.0f}%"
             writer.writerow(["Detailed Transaction Report for Accounting"])
             writer.writerow(
                 [
@@ -695,14 +737,16 @@ class RevenueAnalyticsView(views.APIView):
                     "Booker Email",
                     "Participants",
                     "Subtotal (Pre-Tax)",
-                    "Tax Collected from Student (HST)",
+                    "Tax Collected from Student",
                     "Total Amount Paid",
-                    f"Platform Fee (est. {fee_percentage_text}, Pre-tax)",
-                    "HST on Platform Fee (ITC for Business)",
+                    "Platform Fee (Pre-tax)",
+                    "Tax on Platform Fee (ITC for Business)",
                     "Net Payout to Business",
-                    "Business Discount/Coupon",
-                    "Global Discount",
-                    "Gift Card Used",
+                    "Business Discount (codes)",
+                    "Business Discount ($)",
+                    "Global Discount (names)",
+                    "Global Discount ($)",
+                    "Gift Card Applied ($)",
                     "Payment Status",
                     "Booking Status",
                 ]
@@ -719,6 +763,7 @@ class RevenueAnalyticsView(views.APIView):
                     "payments",
                     "applied_global_discounts__global_discount",
                     "discounts",
+                    "applieddiscount_set",
                 )
                 .order_by("booking_date")
             )
@@ -735,36 +780,58 @@ class RevenueAnalyticsView(views.APIView):
                     booker_name = f"{booking.contact.first_name} {booking.contact.last_name}".strip()
                     booker_email = booking.contact.email
 
-                # --- CRITICAL FIX: Use Booking values, NOT Payment values ---
-                # This ensures course sessions show $113 each, not $565 each.
                 total_paid = booking.amount_paid
                 net_payout = booking.allocated_net_payout
-                
-                # Calculate breakdowns based on the SPLIT booking amount
-                subtotal = total_paid / (Decimal("1.0") + HST_RATE)
-                tax_collected = total_paid - subtotal
-                
-                # Calculate fees based on the SPLIT amount
-                platform_fee_pre_tax = subtotal * platform_fee_rate
-                hst_on_fee = platform_fee_pre_tax * HST_RATE
 
-                # Fallback for older data where allocated_net_payout might be 0
+                pay = None
+                for p in booking.payments.all():
+                    if p.status == "succeeded":
+                        pay = p
+                        break
+
+                if pay and pay.amount and pay.amount > 0:
+                    share = (total_paid / pay.amount).quantize(Decimal("0.0001"))
+                    tax_collected = (pay.tax_amount * share).quantize(Decimal("0.01"))
+                    platform_fee_pre_tax = (pay.platform_fee_amount * share).quantize(
+                        Decimal("0.01")
+                    )
+                    hst_on_fee = (pay.platform_fee_tax * share).quantize(Decimal("0.01"))
+                else:
+                    subtotal_est = total_paid / (Decimal("1.0") + HST_RATE)
+                    tax_collected = (total_paid - subtotal_est).quantize(Decimal("0.01"))
+                    fee_rate = self._platform_fee_rate_for_booking(booking, business)
+                    platform_fee_pre_tax = (subtotal_est * fee_rate).quantize(
+                        Decimal("0.01")
+                    )
+                    hst_on_fee = (platform_fee_pre_tax * HST_RATE).quantize(Decimal("0.01"))
+
+                subtotal = (total_paid - tax_collected).quantize(Decimal("0.01"))
+
                 if net_payout == Decimal("0.00") and total_paid > 0:
-                     net_payout = total_paid - (platform_fee_pre_tax + hst_on_fee + tax_collected)
+                    net_payout = (
+                        subtotal - platform_fee_pre_tax + (tax_collected - hst_on_fee)
+                    ).quantize(Decimal("0.01"))
 
-                business_discount = "—"
+                business_discount_names = "—"
+                business_discount_amt = Decimal("0.00")
                 if booking.discounts.exists():
                     names = [d.name or (d.code or "—") for d in booking.discounts.all()]
-                    business_discount = ", ".join(names) if names else "—"
-                global_discount = "—"
+                    business_discount_names = ", ".join(names) if names else "—"
+                for ad in booking.applieddiscount_set.all():
+                    business_discount_amt += ad.amount_saved
+
+                global_discount_names = "—"
+                global_discount_amt = Decimal("0.00")
                 if booking.applied_global_discounts.exists():
-                    names = [a.global_discount.name for a in booking.applied_global_discounts.all()]
-                    global_discount = ", ".join(names) if names else "—"
-                gift_card_used = "No"
-                for pay in booking.payments.filter(status="succeeded"):
-                    if pay.metadata and pay.metadata.get("paid_via_giftcard"):
-                        gift_card_used = "Yes"
-                        break
+                    names = [
+                        a.global_discount.name
+                        for a in booking.applied_global_discounts.all()
+                    ]
+                    global_discount_names = ", ".join(names) if names else "—"
+                    for a in booking.applied_global_discounts.all():
+                        global_discount_amt += a.amount_saved
+
+                gift_card_amt = self._gift_card_amount_from_payment(pay, total_paid)
 
                 writer.writerow(
                     [
@@ -781,11 +848,46 @@ class RevenueAnalyticsView(views.APIView):
                         f"${platform_fee_pre_tax:.2f}",
                         f"${hst_on_fee:.2f}",
                         f"${net_payout:.2f}",
-                        business_discount,
-                        global_discount,
-                        gift_card_used,
+                        business_discount_names,
+                        f"${business_discount_amt:.2f}",
+                        global_discount_names,
+                        f"${global_discount_amt:.2f}",
+                        f"${gift_card_amt:.2f}",
                         booking.get_payment_status_display(),
                         booking.get_status_display(),
+                    ]
+                )
+
+            writer.writerow([])
+            writer.writerow(["Membership payment detail"])
+            writer.writerow(
+                [
+                    "Payment ID",
+                    "Paid At (UTC)",
+                    "Amount (gross)",
+                    "Platform Fee (pre-tax)",
+                    "Net Payout to Business",
+                    "Status",
+                ]
+            )
+            membership_rows = (
+                MembershipPayment.objects.filter(
+                    membership__product__business=business,
+                    status="paid",
+                    created_at__range=[start_date_utc, end_date_utc],
+                )
+                .select_related("membership", "membership__product")
+                .order_by("created_at")
+            )
+            for mp in membership_rows:
+                writer.writerow(
+                    [
+                        str(mp.id),
+                        mp.created_at.strftime("%Y-%m-%d %H:%M"),
+                        f"${mp.amount:.2f}",
+                        f"${mp.platform_fee_amount:.2f}",
+                        f"${mp.net_payout_amount:.2f}",
+                        mp.get_status_display(),
                     ]
                 )
 

@@ -230,6 +230,11 @@ class PublicClassSerializer(serializers.ModelSerializer):
     soonest_next_week = serializers.SerializerMethodField()
     student_contact_email = serializers.SerializerMethodField(read_only=True)
     student_contact_phone = serializers.SerializerMethodField(read_only=True)
+    require_participant_names = serializers.BooleanField(
+        source="businessId.require_participant_names",
+        read_only=True,
+        default=False,
+    )
 
     class Meta:
         model = ClassesMain
@@ -260,6 +265,7 @@ class PublicClassSerializer(serializers.ModelSerializer):
             "soonest_next_week",
             "student_contact_email",
             "student_contact_phone",
+            "require_participant_names",
         ]
         read_only_fields = fields
 

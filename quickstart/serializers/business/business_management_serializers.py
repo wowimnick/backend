@@ -500,6 +500,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "reminderNotification",
             "scheduleExpiryNotification",
             "smsNotifications",
+            "require_participant_names",
             "classFormats",
             "skillLevels",
             "ageGroups",

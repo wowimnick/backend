@@ -793,6 +793,11 @@ class WidgetSubscriptionView(APIView):
         sub = get_widget_subscription(business)
         subscription_required = getattr(settings, "WIDGET_SUBSCRIPTION_REQUIRED", False)
         has_widget_access = _business_has_active_widget_subscription(business)
+        business.refresh_from_db(fields=["email_marketing_enabled"])
+        em_addon = _get_current_addon_subscription(business, ADDON_TYPE_EMAIL_MARKETING)
+        has_email_marketing_access = bool(
+            em_addon and getattr(business, "email_marketing_enabled", False)
+        )
         if not sub:
             return Response(
                 {
@@ -801,6 +806,7 @@ class WidgetSubscriptionView(APIView):
                     "has_stripe_subscription": False,
                     "has_widget_access": has_widget_access,
                     "has_membership_access": False,
+                    "has_email_marketing_access": has_email_marketing_access,
                 },
                 status=status.HTTP_200_OK,
             )
@@ -812,6 +818,7 @@ class WidgetSubscriptionView(APIView):
             "has_stripe_subscription": bool(sub.stripe_subscription_id),
             "has_widget_access": has_widget_access,
             "has_membership_access": has_membership_access,
+            "has_email_marketing_access": has_email_marketing_access,
         }
         # Optional: scheduled downgrade from Stripe subscription schedule
         if sub.stripe_subscription_id:

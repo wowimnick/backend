@@ -1485,7 +1485,7 @@ def send_business_new_booking_email(business_user: CustomUser, booking: Booking)
     )
 
     dashboard_booking_url = (
-        f"{settings.FRONTEND_BASE_URL}/business/dashboard/bookings/active"
+        f"{settings.FRONTEND_BASE_URL}/business/dashboard/bookings/active?bookingId={booking.id}"
     )
 
     formatted_time_range = "N/A"
@@ -1550,7 +1550,7 @@ def send_business_student_cancellation_email(
     )
 
     dashboard_booking_url = (
-        f"{settings.FRONTEND_BASE_URL}/business/dashboard/bookings/history"
+        f"{settings.FRONTEND_BASE_URL}/business/dashboard/bookings/history?bookingId={booking.id}"
     )
 
     context = {
