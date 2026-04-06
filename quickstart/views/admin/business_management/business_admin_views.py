@@ -1,3 +1,4 @@
+from collections import defaultdict
 from decimal import Decimal
 from django.db.models import (
     Count,
@@ -44,6 +45,8 @@ from quickstart.utils.permissions import (
 from quickstart.models import (
     AuditLog,
     BusinessInfo,
+    BusinessStaff,
+    ClassCollection,
     ClassOption,
     Booking,
     ClassesMain,
@@ -52,6 +55,7 @@ from quickstart.models import (
     ImportedGoogleReview,
     GeographicBoundary,
     Role,
+    SearchLog,
 )
 from quickstart.serializers.admin.business_management.admin_business_serializers import (
     AdminBusinessDetailSerializer,
@@ -59,8 +63,15 @@ from quickstart.serializers.admin.business_management.admin_business_serializers
     GeographicBoundaryDataSerializer,
 )
 from quickstart.views.admin.metrics_time_windows import get_admin_metrics_window
+from quickstart.constants.search_location_presets import EXPLORE_LOCATION_PRESET_LABELS
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_search_location_key(value):
+    if not value:
+        return ""
+    return " ".join(str(value).strip().lower().split())
 
 
 class AdminBusinessPagination(PageNumberPagination):
@@ -200,6 +211,24 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
         if featured is not None:
             is_featured = str(featured).lower() in ["true", "1", "yes"]
             queryset = queryset.filter(featured=is_featured)
+
+        province_param = (self.request.query_params.get("province") or "").strip()
+        if province_param:
+            queryset = queryset.filter(businessState__iexact=province_param)
+
+        verification_status = (
+            self.request.query_params.get("verification_status") or ""
+        ).strip()
+        if verification_status:
+            queryset = queryset.filter(verificationStatus=verification_status)
+
+        revenue_tier = (self.request.query_params.get("revenue_tier") or "").strip()
+        if revenue_tier == "under_1k":
+            queryset = queryset.filter(revenue__lt=1000)
+        elif revenue_tier == "1k_10k":
+            queryset = queryset.filter(revenue__gte=1000, revenue__lt=10000)
+        elif revenue_tier == "10k_plus":
+            queryset = queryset.filter(revenue__gte=10000)
 
         return queryset
 
@@ -500,16 +529,48 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
             ),
         )
 
-        previous_period_businesses = BusinessInfo.objects.filter(
-            createdAt__gte=window.previous_start_dt,
-            createdAt__lt=window.previous_end_dt_exclusive,
-        ).count()
-        total_business_growth = 0
-        if previous_period_businesses > 0:
-            total_business_growth = (
-                (business_counts["new_businesses_30d"] - previous_period_businesses)
-                / previous_period_businesses
-            ) * 100
+        if window.all_time:
+            total_business_growth = 0.0
+        else:
+            previous_period_businesses = BusinessInfo.objects.filter(
+                createdAt__gte=window.previous_start_dt,
+                createdAt__lt=window.previous_end_dt_exclusive,
+            ).count()
+            total_business_growth = 0
+            if previous_period_businesses > 0:
+                total_business_growth = (
+                    (
+                        business_counts["new_businesses_30d"]
+                        - previous_period_businesses
+                    )
+                    / previous_period_businesses
+                ) * 100
+
+        login_user_ids = list(
+            AuditLog.objects.filter(
+                action="login",
+                timestamp__gte=window.start_dt,
+                timestamp__lt=window.end_dt_exclusive,
+                user_id__isnull=False,
+            )
+            .values_list("user_id", flat=True)
+            .distinct()
+        )
+        if not login_user_ids:
+            active_businesses_in_period = 0
+        else:
+            owner_biz_ids = set(
+                BusinessInfo.objects.filter(
+                    owner_id__in=login_user_ids
+                ).values_list("pk", flat=True)
+            )
+            staff_biz_ids = set(
+                BusinessStaff.objects.filter(
+                    user_id__in=login_user_ids,
+                    status=BusinessStaff.StaffStatus.ACCEPTED,
+                ).values_list("business_id", flat=True)
+            )
+            active_businesses_in_period = len(owner_biz_ids | staff_biz_ids)
 
         total_gross_revenue = Booking.objects.filter(
             status__in=["confirmed", "completed"],
@@ -542,8 +603,89 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
         total_platform_revenue = total_platform_revenue_agg["total"]
 
         # Category distribution deprecated (ClassesMain no longer has category FK).
-        # Use empty list; consider collection_distribution if needed.
         category_distribution = []
+
+        pie_palette = [
+            "#3b82f6",
+            "#8b5cf6",
+            "#ec4899",
+            "#10b981",
+            "#f59e0b",
+            "#ef4444",
+            "#06b6d4",
+            "#6366f1",
+            "#84cc16",
+            "#f97316",
+        ]
+        coll_qs = (
+            ClassCollection.objects.filter(is_active=True)
+            .annotate(class_count=Count("classes", distinct=True))
+            .order_by("-class_count")[:15]
+        )
+        collection_distribution = [
+            {
+                "name": c.name,
+                "value": c.class_count,
+                "color": pie_palette[i % len(pie_palette)],
+            }
+            for i, c in enumerate(coll_qs)
+        ]
+
+        ca_codes = (
+            "AB",
+            "BC",
+            "MB",
+            "NB",
+            "NL",
+            "NS",
+            "ON",
+            "PE",
+            "QC",
+            "SK",
+            "NT",
+            "NU",
+            "YT",
+        )
+        ca_set = set(ca_codes)
+        count_by_prov = defaultdict(int)
+        bids_by_prov = defaultdict(list)
+        for bid, st in BusinessInfo.objects.values_list("businessId", "businessState"):
+            if not st:
+                continue
+            code = self.get_province_code(st)
+            if code not in ca_set:
+                cand = str(st).strip().upper()[:2]
+                code = cand if cand in ca_set else ""
+            if not code:
+                continue
+            count_by_prov[code] += 1
+            bids_by_prov[code].append(bid)
+
+        province_distribution = []
+        for code in ca_codes:
+            bids = bids_by_prov.get(code, [])
+            prov_rev = Decimal("0.00")
+            if bids:
+                prov_rev = (
+                    Booking.objects.filter(
+                        status__in=["confirmed", "completed"],
+                        schedule_instance__schedule__option__classId__businessId__in=bids,
+                    ).aggregate(
+                        total=Coalesce(
+                            Sum("amount_paid"),
+                            Value(0),
+                            output_field=DecimalField(max_digits=12, decimal_places=2),
+                        )
+                    )["total"]
+                    or Decimal("0.00")
+                )
+            province_distribution.append(
+                {
+                    "province": code,
+                    "count": count_by_prov.get(code, 0),
+                    "revenue": float(prov_rev),
+                }
+            )
 
         monthly_growth_data = self._get_growth_data("month", 6)
 
@@ -562,6 +704,90 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
             for loc in location_distribution_qs
         ]
 
+        top_cities = []
+        city_rows = list(
+            BusinessInfo.objects.exclude(businessCity__isnull=True)
+            .exclude(businessCity="")
+            .values("businessCity", "businessState")
+            .annotate(count=Count("pk"))
+            .order_by("-count")[:15]
+        )
+        for row in city_rows:
+            bids = list(
+                BusinessInfo.objects.filter(
+                    businessCity=row["businessCity"],
+                    businessState=row["businessState"],
+                ).values_list("businessId", flat=True)
+            )
+            cls_n = ClassesMain.objects.filter(businessId__in=bids).count()
+            city_rev = (
+                Booking.objects.filter(
+                    status__in=["confirmed", "completed"],
+                    schedule_instance__schedule__option__classId__businessId__in=bids,
+                ).aggregate(
+                    total=Coalesce(
+                        Sum("amount_paid"),
+                        Value(0),
+                        output_field=DecimalField(max_digits=12, decimal_places=2),
+                    )
+                )["total"]
+                or Decimal("0.00")
+            )
+            top_cities.append(
+                {
+                    "city": row["businessCity"],
+                    "state": row["businessState"],
+                    "count": row["count"],
+                    "classes_count": cls_n,
+                    "revenue": float(city_rev),
+                    "region": self.get_region_for_province(row["businessState"]),
+                }
+            )
+
+        preset_norm_keys = {
+            _normalize_search_location_key(p) for p in EXPLORE_LOCATION_PRESET_LABELS
+        }
+        loc_counts = defaultdict(int)
+        loc_display = {}
+        for raw_loc in SearchLog.objects.exclude(location__isnull=True).exclude(
+            location=""
+        ).values_list("location", flat=True):
+            s = (raw_loc or "").strip()
+            if not s:
+                continue
+            k = _normalize_search_location_key(s)
+            loc_counts[k] += 1
+            if k not in loc_display or len(s) > len(loc_display[k]):
+                loc_display[k] = s
+
+        search_preset_demand = [
+            {
+                "label": preset_label,
+                "count": loc_counts.get(_normalize_search_location_key(preset_label), 0),
+            }
+            for preset_label in EXPLORE_LOCATION_PRESET_LABELS
+        ]
+        custom_entries = []
+        for k, cnt in loc_counts.items():
+            if not k or k in preset_norm_keys:
+                continue
+            custom_entries.append(
+                {"label": loc_display.get(k, k), "count": cnt}
+            )
+        custom_entries.sort(key=lambda x: -x["count"])
+        search_custom_top = custom_entries[:10]
+
+        search_location_top = [
+            {
+                "label": loc_display[k],
+                "location": loc_display[k],
+                "province": "",
+                "count": loc_counts[k],
+            }
+            for k in sorted(loc_counts.keys(), key=lambda x: -loc_counts[x])[:10]
+            if k
+        ]
+
         top_businesses_queryset = self.filter_queryset(self.get_queryset()).order_by(
             "-revenue"
         )[:5]
@@ -573,6 +799,7 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
             {
                 "total_businesses": business_counts["total_businesses"],
                 "active_businesses": business_counts["active_businesses"],
+                "active_businesses_in_period": active_businesses_in_period,
                 "total_business_growth": round(total_business_growth, 2),
                 "featured_businesses": business_counts["featured_businesses"],
                 "new_businesses_30d": business_counts["new_businesses_30d"],
@@ -581,6 +808,12 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
                     total_platform_revenue
                 ),  # This now uses the corrected value
                 "category_distribution": category_distribution,
+                "collection_distribution": collection_distribution,
+                "province_distribution": province_distribution,
+                "top_cities": top_cities,
+                "search_location_top": search_location_top,
+                "search_preset_demand": search_preset_demand,
+                "search_custom_top": search_custom_top,
                 "growth_trend": monthly_growth_data,
                 "location_distribution": location_distribution,
                 "top_businesses": top_businesses_data,

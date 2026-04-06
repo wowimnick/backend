@@ -147,6 +147,7 @@ from quickstart.views.admin.widget_subscription_admin_views import (
 from quickstart.views.public.public_global_discount_views import (
     ActiveGlobalDiscountView,
 )
+from quickstart.views.public.search_log_views import SearchLogCreateView
 
 from quickstart.views import (
     CustomTokenObtainPairView,
@@ -413,6 +414,7 @@ widget_urlpatterns = [
 
 urlpatterns = [
     path("", health_check, name="api-root-health"),
+    path("search-log/", SearchLogCreateView.as_view(), name="search-log-create"),
     # --- Django Admin & 3rd Party Libs ---
     path("admin/panel/", admin.site.urls),
     path(

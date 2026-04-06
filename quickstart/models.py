@@ -4485,3 +4485,33 @@ class ConversationEmailLog(models.Model):
         indexes = [
             models.Index(fields=["conversation", "recipient_side"]),
         ]
+
+
+class SearchLog(models.Model):
+    """Anonymous or authenticated class/location searches for demand analytics."""
+
+    query = models.CharField(max_length=255, blank=True)
+    location = models.CharField(max_length=255, blank=True)
+    province = models.CharField(max_length=50, blank=True)
+    latitude = models.FloatField(null=True, blank=True)
+    longitude = models.FloatField(null=True, blank=True)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="search_logs",
+    )
+    session_id = models.CharField(max_length=100, blank=True)
+    results_count = models.IntegerField(default=0)
+    timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        db_table = "search_logs"
+        ordering = ["-timestamp"]
+        indexes = [
+            models.Index(fields=["location", "province"]),
+        ]
+
+    def __str__(self):
+        return f"{self.query or self.location or 'search'} @ {self.timestamp}"

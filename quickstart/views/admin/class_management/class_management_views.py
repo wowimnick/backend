@@ -278,6 +278,13 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 if status_filter in valid_statuses:
                     queryset = queryset.filter(status=status_filter)
 
+            business_id = self.request.query_params.get("business_id")
+            if business_id:
+                try:
+                    queryset = queryset.filter(businessId_id=int(business_id))
+                except (TypeError, ValueError):
+                    pass
+
             return queryset
 
         except Exception as e:
@@ -1208,6 +1215,17 @@ class AdminReviewViewSet(viewsets.ModelViewSet):
             rating_val = int(rating_filter)
             if 1 <= rating_val <= 5:
                 queryset = queryset.filter(rating=rating_val)
+
+        business_id = self.request.query_params.get("business_id")
+        if business_id:
+            try:
+                bid = int(business_id)
+                queryset = queryset.filter(
+                    Q(classId__businessId_id=bid) | Q(businessId_id=bid)
+                )
+            except (TypeError, ValueError):
+                pass
+
         return queryset
 
     def list(self, request, *args, **kwargs):

@@ -6,6 +6,9 @@ from django.conf import settings
 from django.utils import timezone
 
 
+ALL_TIME_START = date(2020, 1, 1)
+
+
 @dataclass(frozen=True)
 class AdminMetricsWindow:
     start_date: date
@@ -17,6 +20,7 @@ class AdminMetricsWindow:
     previous_start_dt: datetime
     previous_end_dt_exclusive: datetime
     period_days: int
+    all_time: bool = False
 
 
 def get_admin_metrics_timezone():
@@ -33,11 +37,20 @@ def get_admin_metrics_local_now():
     return timezone.now().astimezone(get_admin_metrics_timezone())
 
 
+def _parse_all_time(query_params) -> bool:
+    v = query_params.get("all_time")
+    if v is None:
+        return False
+    return str(v).lower() in ("true", "1", "yes")
+
+
 def get_admin_metrics_window(
     query_params, default_days=30, logger=None
 ) -> AdminMetricsWindow:
     tz = get_admin_metrics_timezone()
     local_today = timezone.now().astimezone(tz).date()
+
+    all_time = _parse_all_time(query_params)
 
     start_param = query_params.get("start_date")
     end_param = query_params.get("end_date")
@@ -48,25 +61,29 @@ def get_admin_metrics_window(
     start_date = default_start
     end_date = default_end
 
-    try:
-        if start_param and end_param:
-            start_date = datetime.strptime(start_param, "%Y-%m-%d").date()
-            end_date = datetime.strptime(end_param, "%Y-%m-%d").date()
-        elif start_param:
-            start_date = datetime.strptime(start_param, "%Y-%m-%d").date()
-        elif end_param:
-            end_date = datetime.strptime(end_param, "%Y-%m-%d").date()
-            start_date = end_date - timedelta(days=max(default_days - 1, 0))
-    except (TypeError, ValueError):
-        if logger:
-            logger.warning(
-                "Invalid admin metrics date params: start='%s', end='%s'. Falling back to default %s-day window.",
-                start_param,
-                end_param,
-                default_days,
-            )
-        start_date = default_start
-        end_date = default_end
+    if all_time:
+        start_date = ALL_TIME_START
+        end_date = local_today
+    else:
+        try:
+            if start_param and end_param:
+                start_date = datetime.strptime(start_param, "%Y-%m-%d").date()
+                end_date = datetime.strptime(end_param, "%Y-%m-%d").date()
+            elif start_param:
+                start_date = datetime.strptime(start_param, "%Y-%m-%d").date()
+            elif end_param:
+                end_date = datetime.strptime(end_param, "%Y-%m-%d").date()
+                start_date = end_date - timedelta(days=max(default_days - 1, 0))
+        except (TypeError, ValueError):
+            if logger:
+                logger.warning(
+                    "Invalid admin metrics date params: start='%s', end='%s'. Falling back to default %s-day window.",
+                    start_param,
+                    end_param,
+                    default_days,
+                )
+            start_date = default_start
+            end_date = default_end
 
     if start_date > end_date:
         start_date, end_date = end_date, start_date
@@ -93,4 +110,5 @@ def get_admin_metrics_window(
         previous_start_dt=previous_start_dt,
         previous_end_dt_exclusive=previous_end_dt_exclusive,
         period_days=period_days,
+        all_time=all_time,
     )

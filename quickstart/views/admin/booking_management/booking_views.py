@@ -403,17 +403,20 @@ class AdminBookingViewSet(viewsets.ModelViewSet):
                 else 0
             )
 
-            previous_period_bookings_count = Booking.objects.filter(
-                booking_date__gte=window.previous_start_dt,
-                booking_date__lt=window.previous_end_dt_exclusive,
-            ).count()
+            if window.all_time:
+                booking_growth = 0.0
+            else:
+                previous_period_bookings_count = Booking.objects.filter(
+                    booking_date__gte=window.previous_start_dt,
+                    booking_date__lt=window.previous_end_dt_exclusive,
+                ).count()
 
-            booking_growth = 0
-            if previous_period_bookings_count > 0:
-                booking_growth = (
-                    (total_bookings - previous_period_bookings_count)
-                    / previous_period_bookings_count
-                ) * 100
+                booking_growth = 0
+                if previous_period_bookings_count > 0:
+                    booking_growth = (
+                        (total_bookings - previous_period_bookings_count)
+                        / previous_period_bookings_count
+                    ) * 100
 
             total_confirmed_revenue = float(aggregates["_total_revenue_for_avg"])
 
@@ -454,6 +457,7 @@ class AdminBookingViewSet(viewsets.ModelViewSet):
                 "total_stripe_fees": total_stripe_fees,
                 "start_date": window.start_date.strftime("%Y-%m-%d"),
                 "end_date": window.end_date.strftime("%Y-%m-%d"),
+                "all_time": window.all_time,
             }
 
             return Response(response_data)

@@ -4,6 +4,8 @@ from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.contrib.auth import get_user_model
 from django.db.models import Count, Q
+from datetime import timedelta
+
 from django.utils import timezone
 from django.db.models.functions import TruncDay
 import logging
@@ -77,6 +79,33 @@ class UserAdminViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(is_active=True, last_login__isnull=True)
 
         queryset = queryset.annotate(bookings_count=Count("bookings", distinct=True))
+
+        booking_count_filter = self.request.query_params.get("booking_count")
+        if booking_count_filter == "none":
+            queryset = queryset.filter(bookings_count=0)
+        elif booking_count_filter == "1_5":
+            queryset = queryset.filter(
+                bookings_count__gte=1, bookings_count__lte=5
+            )
+        elif booking_count_filter == "5_plus":
+            queryset = queryset.filter(bookings_count__gte=5)
+        elif booking_count_filter == "10_plus":
+            queryset = queryset.filter(bookings_count__gte=10)
+
+        last_active = self.request.query_params.get("last_active")
+        now = timezone.now()
+        if last_active == "7d":
+            queryset = queryset.filter(last_login__gte=now - timedelta(days=7))
+        elif last_active == "30d":
+            queryset = queryset.filter(last_login__gte=now - timedelta(days=30))
+        elif last_active == "90d_inactive":
+            queryset = queryset.filter(
+                last_login__isnull=False,
+                last_login__lt=now - timedelta(days=90),
+            )
+        elif last_active == "never":
+            queryset = queryset.filter(last_login__isnull=True)
+
         return queryset
 
     def get_serializer_class(self):
@@ -198,7 +227,17 @@ class UserAdminViewSet(viewsets.ModelViewSet):
         Uses query parameters to open the frontend Auth Drawer in 'claim' mode.
         """
         user = self.get_object()
-        
+
+        is_business_owner = (
+            getattr(user, "role", None)
+            and user.role.name == "Business Owner"
+        ) or user.owned_businesses.exists()
+        if not is_business_owner:
+            return Response(
+                {"detail": "Handover is only available for business owners."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         try:
             from django.contrib.auth.tokens import default_token_generator
             from quickstart.utils.email_utils import send_concierge_handover_email

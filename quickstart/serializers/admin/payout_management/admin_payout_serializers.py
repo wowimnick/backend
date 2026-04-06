@@ -12,6 +12,10 @@ class AdminPayoutBookingSerializer(serializers.ModelSerializer):
         source="schedule_instance.schedule.option.classId.title", read_only=True
     )
     net_amount = serializers.SerializerMethodField()
+    booker_name = serializers.SerializerMethodField()
+    session_date = serializers.DateField(
+        source="schedule_instance.date", read_only=True, allow_null=True
+    )
 
     class Meta:
         model = Booking
@@ -19,6 +23,8 @@ class AdminPayoutBookingSerializer(serializers.ModelSerializer):
             "id",
             "user_facing_reference",
             "class_name",
+            "booker_name",
+            "session_date",
             "amount_paid",
             "net_amount",
             "status",
@@ -39,6 +45,13 @@ class AdminPayoutBookingSerializer(serializers.ModelSerializer):
 
         # Fallback for older data or if payment somehow isn't found
         return obj.amount_paid
+
+    def get_booker_name(self, obj):
+        user = getattr(obj, "user", None)
+        if not user:
+            return ""
+        name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+        return name or (user.email or "")
 
 
 class AdminPayoutListSerializer(serializers.ModelSerializer):

@@ -179,17 +179,20 @@ class AdminPaymentViewSet(viewsets.ModelViewSet):
                 total=Coalesce(Sum("amount"), Decimal(0))  # Use Coalesce for Sum
             )["total"]
 
-            previous_revenue = Payment.objects.filter(
-                booking__booking_date__gte=window.previous_start_dt,
-                booking__booking_date__lt=window.previous_end_dt_exclusive,
-                status="succeeded",
-            ).aggregate(total=Coalesce(Sum("amount"), Decimal(0)))["total"]
+            if window.all_time:
+                revenue_growth = 0.0
+            else:
+                previous_revenue = Payment.objects.filter(
+                    booking__booking_date__gte=window.previous_start_dt,
+                    booking__booking_date__lt=window.previous_end_dt_exclusive,
+                    status="succeeded",
+                ).aggregate(total=Coalesce(Sum("amount"), Decimal(0)))["total"]
 
-            revenue_growth = 0
-            if previous_revenue > 0:
-                revenue_growth = (
-                    (total_revenue - previous_revenue) / previous_revenue
-                ) * 100
+                revenue_growth = 0
+                if previous_revenue > 0:
+                    revenue_growth = (
+                        (total_revenue - previous_revenue) / previous_revenue
+                    ) * 100
 
             # Keep all counters in the same selected period.
             pending_payments = payments.filter(status="pending").count()
@@ -227,6 +230,7 @@ class AdminPaymentViewSet(viewsets.ModelViewSet):
                     "platform_fees": float(total_platform_fees),
                     "stripe_fees": float(total_stripe_fees),
                     "period_days": window.period_days,
+                    "all_time": window.all_time,
                 }
             )
         except Exception as e:

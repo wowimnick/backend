@@ -2,7 +2,7 @@ from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
-from django.db.models import Sum, Count, Q, F, Avg
+from django.db.models import Sum, Count, Q, F, Avg, Prefetch
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from decimal import Decimal
@@ -11,7 +11,7 @@ import csv
 from django.http import HttpResponse
 
 from quickstart.utils.permissions import IsAuthenticated, BasePermission, CanAccessPayoutAdmin
-from quickstart.models import Payout
+from quickstart.models import Payout, Booking
 from quickstart.serializers.admin.payout_management.admin_payout_serializers import (
     AdminPayoutListSerializer,
     AdminPayoutDetailSerializer,
@@ -49,9 +49,13 @@ class AdminPayoutViewSet(viewsets.ReadOnlyModelViewSet):
         return AdminPayoutListSerializer
 
     def get_queryset(self):
+        booking_qs = Booking.objects.select_related(
+            "user",
+            "schedule_instance__schedule__option__classId",
+        ).prefetch_related("payments")
         return (
             Payout.objects.select_related("business")
-            .prefetch_related("bookings__payments")
+            .prefetch_related(Prefetch("bookings", queryset=booking_qs))
             .all()
         )
 

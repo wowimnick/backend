@@ -49,8 +49,12 @@ class AdminBusinessListSerializer(serializers.ModelSerializer):
     owner_email = serializers.EmailField(
         source="owner.email", read_only=True, allow_null=True
     )
+    owner_id = serializers.IntegerField(
+        source="owner.userId", read_only=True, allow_null=True
+    )
 
     # --- Annotated Fields (Read-Only - Expected from ViewSet's get_queryset) ---
+    has_active_schedules = serializers.BooleanField(read_only=True, default=False)
     status = serializers.CharField(read_only=True, default="unknown")
     rating = serializers.FloatField(read_only=True, default=0.0)
     revenue = serializers.DecimalField(
@@ -77,6 +81,8 @@ class AdminBusinessListSerializer(serializers.ModelSerializer):
             "featured",
             "createdAt",
             "owner_email",
+            "owner_id",
+            "has_active_schedules",
             "status",
             "rating",
             "revenue",
@@ -111,6 +117,11 @@ class AdminBusinessDetailSerializer(serializers.ModelSerializer):
     owner_email = serializers.EmailField(
         source="owner.email", read_only=True, allow_null=True
     )
+    owner_id = serializers.IntegerField(
+        source="owner.userId", read_only=True, allow_null=True
+    )
+    has_active_schedules = serializers.BooleanField(read_only=True, default=False)
+    google_review_count = serializers.IntegerField(read_only=True, default=0)
     managers_emails = serializers.SerializerMethodField(read_only=True)
     status = serializers.CharField(read_only=True, default="unknown")
     average_rating = serializers.FloatField(
@@ -159,6 +170,8 @@ class AdminBusinessDetailSerializer(serializers.ModelSerializer):
             "isActive",
             "verificationStatus",
             "owner_email",
+            "owner_id",
+            "has_active_schedules",
             "managers_emails",
             "status",
             "average_rating",
@@ -166,6 +179,7 @@ class AdminBusinessDetailSerializer(serializers.ModelSerializer):
             "classes_count",
             "bookings_count",
             "review_count",
+            "google_review_count",
             "classFormats_list",
             "skillLevels_list",
             "ageGroups_list",
@@ -174,6 +188,9 @@ class AdminBusinessDetailSerializer(serializers.ModelSerializer):
             "businessId",
             "createdAt",
             "owner_email",
+            "owner_id",
+            "has_active_schedules",
+            "google_review_count",
             "managers_emails",
             "status",
             "average_rating",

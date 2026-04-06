@@ -126,6 +126,12 @@ class ResolveTicketSerializer(serializers.Serializer):
     resolution_notes = serializers.CharField(min_length=10, max_length=5000)
 
 
+class SetPrioritySerializer(serializers.Serializer):
+    priority = serializers.ChoiceField(
+        choices=[c[0] for c in SupportTicket.PRIORITY_CHOICES]
+    )
+
+
 # --- PAGINATION ---
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 10
@@ -287,6 +293,24 @@ class AdminSupportTicketViewSet(viewsets.ReadOnlyModelViewSet):
                 e,
             )
 
+        return Response(AdminSupportTicketDetailSerializer(ticket).data)
+
+    @action(detail=True, methods=["post"], serializer_class=SetPrioritySerializer)
+    def set_priority(self, request, pk=None):
+        ticket = self.get_object()
+        serializer = SetPrioritySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        new_priority = serializer.validated_data["priority"]
+        if ticket.priority != new_priority:
+            old_label = ticket.get_priority_display()
+            ticket.priority = new_priority
+            ticket.save(update_fields=["priority"])
+            TicketHistoryLog.objects.create(
+                ticket=ticket,
+                user=request.user,
+                user_email=request.user.email,
+                details=f"Priority changed from '{old_label}' to '{ticket.get_priority_display()}'.",
+            )
         return Response(AdminSupportTicketDetailSerializer(ticket).data)
 
     @action(detail=True, methods=["get"])
