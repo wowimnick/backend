@@ -11,20 +11,39 @@ import factory
 from factory.django import DjangoModelFactory
 
 from quickstart.models import (
-    CustomUser,
-    BusinessInfo,
-    Contact,
-    ClassCategory,
-    ClassSubcategory,
-    ClassesMain,
-    ClassOption,
-    Schedule,
-    ScheduleInstance,
-    Booking,
-    GiftCard,
     BlogCategory,
     BlogPost,
+    Booking,
+    BusinessAddonSubscription,
+    BusinessEmailCampaign,
+    BusinessInfo,
+    BusinessMarketingSettings,
+    BusinessRole,
+    BusinessStaff,
+    ClassCategory,
+    ClassOption,
+    ClassesMain,
+    ClassSubcategory,
+    Contact,
+    Conversation,
+    ConversationMessage,
+    CustomUser,
+    CustomerMembership,
+    Discount,
+    EmailMarketingTemplate,
+    GiftCard,
+    MembershipProduct,
+    NotificationCampaign,
     PartnerTier,
+    Payment,
+    Payout,
+    Reviews,
+    Role,
+    Schedule,
+    ScheduleInstance,
+    SupportTicket,
+    TicketMessage,
+    WidgetSubscription,
 )
 
 
@@ -232,3 +251,211 @@ class BlogPostFactory(DjangoModelFactory):
     category = factory.SubFactory(BlogCategoryFactory)
     status = "published"
     tags = []
+
+
+class RoleFactory(DjangoModelFactory):
+    class Meta:
+        model = Role
+        django_get_or_create = ("name",)
+
+    name = factory.Sequence(lambda n: f"test-role-{n}")
+    is_system = False
+    is_default = False
+    hierarchy_level = 0
+
+
+class BusinessRoleFactory(DjangoModelFactory):
+    class Meta:
+        model = BusinessRole
+
+    business = factory.SubFactory(BusinessFactory)
+    name = factory.Sequence(lambda n: f"Business Role {n}")
+    description = ""
+
+
+class BusinessStaffFactory(DjangoModelFactory):
+    class Meta:
+        model = BusinessStaff
+
+    business = factory.SubFactory(BusinessFactory)
+    role = factory.LazyAttribute(lambda o: BusinessRoleFactory(business=o.business))
+    user = factory.SubFactory(UserFactory)
+    invited_email = factory.LazyAttribute(lambda o: o.user.email)
+    status = BusinessStaff.StaffStatus.ACCEPTED
+    invited_by = factory.LazyAttribute(lambda o: o.business.owner)
+
+
+class DiscountFactory(DjangoModelFactory):
+    class Meta:
+        model = Discount
+
+    business = factory.SubFactory(BusinessFactory)
+    name = factory.Sequence(lambda n: f"Discount {n}")
+    code = factory.Sequence(lambda n: f"SAVE{n}")
+    discount_type = Discount.DiscountType.PERCENTAGE
+    value = Decimal("10.00")
+    scope = Discount.DiscountScope.BUSINESS
+    is_active = True
+
+
+class PaymentFactory(DjangoModelFactory):
+    class Meta:
+        model = Payment
+
+    booking = factory.SubFactory(BookingFactory)
+    stripe_payment_intent_id = factory.Sequence(lambda n: f"pi_test_{n}_{uuid.uuid4().hex[:8]}")
+    amount = Decimal("25.00")
+    status = "succeeded"
+    currency = "CAD"
+
+
+class PayoutFactory(DjangoModelFactory):
+    class Meta:
+        model = Payout
+
+    business = factory.SubFactory(BusinessFactory)
+    stripe_transfer_id = factory.Sequence(lambda n: f"tr_test_{n}_{uuid.uuid4().hex[:8]}")
+    amount = Decimal("100.00")
+    currency = "CAD"
+    status = "pending"
+
+
+class WidgetSubscriptionFactory(DjangoModelFactory):
+    class Meta:
+        model = WidgetSubscription
+
+    business = factory.SubFactory(BusinessFactory)
+    plan_id = "basic"
+    status = "active"
+    stripe_subscription_id = factory.Sequence(lambda n: f"sub_widget_{n}_{uuid.uuid4().hex[:8]}")
+
+
+class BusinessAddonSubscriptionFactory(DjangoModelFactory):
+    class Meta:
+        model = BusinessAddonSubscription
+
+    business = factory.SubFactory(BusinessFactory)
+    addon_type = "marketplace_email_branding"
+    status = "active"
+    stripe_subscription_id = factory.Sequence(
+        lambda n: f"sub_addon_{n}_{uuid.uuid4().hex[:8]}"
+    )
+
+
+class BusinessMarketingSettingsFactory(DjangoModelFactory):
+    class Meta:
+        model = BusinessMarketingSettings
+
+    business = factory.SubFactory(BusinessFactory)
+
+
+class EmailMarketingTemplateFactory(DjangoModelFactory):
+    class Meta:
+        model = EmailMarketingTemplate
+
+    business = factory.SubFactory(BusinessFactory)
+    name = factory.Sequence(lambda n: f"Template {n}")
+    subject = "Hello"
+    html_body = "<p>Test</p>"
+
+
+class BusinessEmailCampaignFactory(DjangoModelFactory):
+    class Meta:
+        model = BusinessEmailCampaign
+
+    business = factory.SubFactory(BusinessFactory)
+    name = factory.Sequence(lambda n: f"Campaign {n}")
+    status = "draft"
+    subject = "Subject"
+    html_body = "<p>Body</p>"
+
+
+class NotificationCampaignFactory(DjangoModelFactory):
+    class Meta:
+        model = NotificationCampaign
+
+    title = factory.Sequence(lambda n: f"Notif Campaign {n}")
+    notification_type = "email"
+    subject = "Subject"
+    content = "Content"
+    audience_type = "all_users"
+    status = "draft"
+    created_by = factory.SubFactory(UserFactory)
+
+
+class MembershipProductFactory(DjangoModelFactory):
+    class Meta:
+        model = MembershipProduct
+
+    business = factory.SubFactory(BusinessFactory)
+    name = factory.Sequence(lambda n: f"Membership {n}")
+    price = Decimal("29.99")
+    currency = "CAD"
+    billing_interval = "month"
+    access_type = "unlimited"
+    is_active = True
+
+
+class CustomerMembershipFactory(DjangoModelFactory):
+    class Meta:
+        model = CustomerMembership
+
+    product = factory.SubFactory(MembershipProductFactory)
+    contact = factory.LazyAttribute(
+        lambda o: ContactFactory(business=o.product.business)
+    )
+    status = "active"
+    source = "manual"
+
+
+class ReviewsFactory(DjangoModelFactory):
+    class Meta:
+        model = Reviews
+
+    userId = factory.SubFactory(UserFactory)
+    businessId = factory.LazyAttribute(lambda o: o.classId.businessId)
+    classId = factory.SubFactory(ClassMainFactory)
+    rating = 5
+    comment = "Great class!"
+    status = "approved"
+
+
+class SupportTicketFactory(DjangoModelFactory):
+    class Meta:
+        model = SupportTicket
+
+    user = factory.SubFactory(UserFactory)
+    subject = factory.Sequence(lambda n: f"Support issue {n}")
+    description = "Need help"
+    category = "other"
+    status = "open"
+    priority = "medium"
+
+
+class TicketMessageFactory(DjangoModelFactory):
+    class Meta:
+        model = TicketMessage
+
+    ticket = factory.SubFactory(SupportTicketFactory)
+    sender = factory.LazyAttribute(lambda o: o.ticket.user)
+    sender_type = "user"
+    text = "Follow-up message"
+
+
+class ConversationFactory(DjangoModelFactory):
+    class Meta:
+        model = Conversation
+
+    business = factory.SubFactory(BusinessFactory)
+    booker_user = factory.SubFactory(UserFactory)
+    booker_contact = None
+
+
+class ConversationMessageFactory(DjangoModelFactory):
+    class Meta:
+        model = ConversationMessage
+
+    conversation = factory.SubFactory(ConversationFactory)
+    sender_type = ConversationMessage.SENDER_BOOKER
+    sender_user = factory.LazyAttribute(lambda o: o.conversation.booker_user)
+    text = "Hello from guest"

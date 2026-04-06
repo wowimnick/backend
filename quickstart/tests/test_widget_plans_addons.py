@@ -19,15 +19,8 @@ API = "/api"
 
 
 # -----------------------------------------------------------------------------
-# Fixtures
+# Fixtures (business_owner_client lives in conftest.py)
 # -----------------------------------------------------------------------------
-
-
-@pytest.fixture
-def business_owner_client(api_client, business):
-    """API client authenticated as the business owner."""
-    api_client.force_authenticate(user=business.owner)
-    return api_client
 
 
 @pytest.fixture

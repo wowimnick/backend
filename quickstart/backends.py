@@ -62,20 +62,22 @@ class RolePermissionBackend(ModelBackend):
 
     def get_all_permissions(self, user_obj, obj=None):
         """
-        MODIFIED: Returns a set of all permissions from the user's global role
-        AND their active business staff role.
+        MODIFIED: Django user/group/superuser perms (via ModelBackend) plus global
+        role and active business staff role permissions.
+
+        ModelBackend.has_perm() ends up calling self.get_all_permissions() on this
+        backend, so we must include super().get_all_permissions() or superusers
+        and direct user_permissions / groups would be ignored.
         """
         if not user_obj.is_active or user_obj.is_anonymous:
             return set()
 
-        perms = set()
+        perms = set(super().get_all_permissions(user_obj, obj=obj))
 
-        # Get perms from the global role
         if hasattr(user_obj, "role") and user_obj.role:
             for p in user_obj.role.permissions.select_related("content_type"):
                 perms.add(f"{p.content_type.app_label}.{p.codename}")
 
-        # MODIFIED: Get perms from the active business role and add them to the set
         try:
             staff_entry = (
                 BusinessStaff.objects.select_related("role")

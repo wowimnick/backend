@@ -10,12 +10,14 @@ Run with: pytest quickstart/tests/test_public_endpoints.py -v
 To see print/debug output if tests hang: add -s (e.g. pytest ... -v -s)
 """
 import uuid
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
-from datetime import date, time, timedelta
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
+import pytz
 from django.urls import reverse
+from django.utils import timezone as django_timezone
 
 from quickstart.models import Booking, GiftCard
 
@@ -362,6 +364,119 @@ class TestGuestBookingCancellation:
         booking.refresh_from_db()
         assert booking.status == "cancelled"
         assert booking.cancellation_token is None
+
+    @patch("quickstart.views.public.guest_booking_views.send_booking_cancellation_user_email")
+    @patch("quickstart.views.public.guest_booking_views.send_business_student_cancellation_email")
+    def test_guest_cancel_post_strict_policy_rejected(
+        self, mock_business_email, mock_user_email, api_client
+    ):
+        business = BusinessFactory(
+            isActive=True,
+            verificationStatus="verified",
+            cancellationNotification=False,
+        )
+        klass = ClassMainFactory(businessId=business, status="active")
+        option = ClassOptionFactory(classId=klass, cancellationPolicy="strict")
+        schedule = ScheduleFactory(option=option)
+        instance = ScheduleInstanceFactory(
+            schedule=schedule,
+            date=date.today() + timedelta(days=14),
+            time=time(10, 0),
+            status="scheduled",
+        )
+        contact = ContactFactory(business=business)
+        token = uuid.uuid4()
+        Booking.objects.create(
+            schedule_instance=instance,
+            contact=contact,
+            user=None,
+            participants=1,
+            amount_paid=Decimal("25.00"),
+            payment_status="paid",
+            status="confirmed",
+            enrollment_type="Single Session",
+            cancellation_policy="strict",
+            cancellation_token=token,
+        )
+        response = api_client.post(f"{API}/bookings/guest-cancel/{token}/")
+        assert response.status_code == 400
+
+    @patch("quickstart.views.public.guest_booking_views.send_booking_cancellation_user_email")
+    @patch("quickstart.views.public.guest_booking_views.send_business_student_cancellation_email")
+    @patch("quickstart.views.public.guest_booking_views.timezone.now")
+    def test_guest_cancel_post_24h_policy_insufficient_notice(
+        self, mock_now, mock_business_email, mock_user_email, api_client
+    ):
+        mock_now.return_value = django_timezone.make_aware(
+            datetime(2030, 6, 1, 14, 0), timezone=pytz.UTC
+        )
+        business = BusinessFactory(
+            isActive=True,
+            verificationStatus="verified",
+            business_timezone="America/Toronto",
+            cancellationNotification=False,
+        )
+        klass = ClassMainFactory(businessId=business, status="active")
+        option = ClassOptionFactory(classId=klass, cancellationPolicy="24h")
+        schedule = ScheduleFactory(option=option)
+        instance = ScheduleInstanceFactory(
+            schedule=schedule,
+            date=date(2030, 6, 1),
+            time=time(20, 0),
+            status="scheduled",
+        )
+        contact = ContactFactory(business=business)
+        token = uuid.uuid4()
+        Booking.objects.create(
+            schedule_instance=instance,
+            contact=contact,
+            user=None,
+            participants=1,
+            amount_paid=Decimal("25.00"),
+            payment_status="paid",
+            status="confirmed",
+            enrollment_type="Single Session",
+            cancellation_policy="24h",
+            cancellation_token=token,
+        )
+        response = api_client.post(f"{API}/bookings/guest-cancel/{token}/")
+        assert response.status_code == 400
+
+    @patch("quickstart.views.public.guest_booking_views.send_booking_cancellation_user_email")
+    @patch("quickstart.views.public.guest_booking_views.send_business_student_cancellation_email")
+    def test_guest_cancel_post_class_already_started(
+        self, mock_business_email, mock_user_email, api_client
+    ):
+        business = BusinessFactory(
+            isActive=True,
+            verificationStatus="verified",
+            cancellationNotification=False,
+        )
+        klass = ClassMainFactory(businessId=business, status="active")
+        option = ClassOptionFactory(classId=klass, cancellationPolicy="flexible")
+        schedule = ScheduleFactory(option=option)
+        instance = ScheduleInstanceFactory(
+            schedule=schedule,
+            date=date.today() - timedelta(days=1),
+            time=time(10, 0),
+            status="scheduled",
+        )
+        contact = ContactFactory(business=business)
+        token = uuid.uuid4()
+        Booking.objects.create(
+            schedule_instance=instance,
+            contact=contact,
+            user=None,
+            participants=1,
+            amount_paid=Decimal("25.00"),
+            payment_status="paid",
+            status="confirmed",
+            enrollment_type="Single Session",
+            cancellation_policy="flexible",
+            cancellation_token=token,
+        )
+        response = api_client.post(f"{API}/bookings/guest-cancel/{token}/")
+        assert response.status_code == 400
 
 
 # -----------------------------------------------------------------------------

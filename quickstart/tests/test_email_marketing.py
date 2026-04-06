@@ -20,22 +20,10 @@ from quickstart.models import (
     BusinessEmailCampaign,
     CampaignEmailSend,
 )
-from quickstart.tests.factories import BusinessFactory, ContactFactory, UserFactory
+from quickstart.tests.factories import BusinessFactory, ContactFactory
 from quickstart.utils.marketing_html import sanitize_marketing_html
 
 API = "/api"
-
-
-@pytest.fixture
-def business_owner_client(api_client, business):
-    api_client.force_authenticate(user=business.owner)
-    return api_client
-
-
-@pytest.fixture
-def other_business():
-    owner = UserFactory()
-    return BusinessFactory(owner=owner)
 
 
 def _enable_email_marketing(business, price_id="price_em_test"):
