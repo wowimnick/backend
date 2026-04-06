@@ -793,8 +793,9 @@ class WidgetSubscriptionView(APIView):
         sub = get_widget_subscription(business)
         subscription_required = getattr(settings, "WIDGET_SUBSCRIPTION_REQUIRED", False)
         has_widget_access = _business_has_active_widget_subscription(business)
+        # Same resolver as BusinessAddonsView / email marketing APIs (Stripe sync, stale period_end).
+        em_addon = resolve_email_marketing_addon_subscription(business)
         business.refresh_from_db(fields=["email_marketing_enabled"])
-        em_addon = _get_current_addon_subscription(business, ADDON_TYPE_EMAIL_MARKETING)
         has_email_marketing_access = bool(
             em_addon and getattr(business, "email_marketing_enabled", False)
         )
