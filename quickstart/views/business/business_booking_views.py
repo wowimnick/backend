@@ -74,9 +74,15 @@ from quickstart.services.reschedule_payout import (
 )
 from quickstart.utils.sms_utils import normalize_phone_for_sns, business_sms_enabled
 from quickstart.tasks.notification_tasks import send_sms_task
+from quickstart.utils.widget_booking_source import (
+    WIDGET_BOOKING_SOURCES,
+    business_has_growth_or_advanced_widget_plan,
+)
 import logging
 
 logger = logging.getLogger(__name__)
+
+_WIDGET_SOURCE_LIST = list(WIDGET_BOOKING_SOURCES)
 
 
 class BusinessBookingPagination(PageNumberPagination):
@@ -703,10 +709,16 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
             source_filter = request.query_params.get("source", "all")
             if source_filter not in ("widget", "marketplace", "all"):
                 source_filter = "all"
+            if source_filter == "widget" and not business_has_growth_or_advanced_widget_plan(
+                business
+            ):
+                raise PermissionDenied(
+                    "Widget-specific booking analytics require a Growth or Advanced widget plan."
+                )
             _widget_payment_exists = Payment.objects.filter(
                 booking=OuterRef("pk"),
                 status="succeeded",
-                metadata__original_stripe_metadata__booking_source="widget",
+                metadata__original_stripe_metadata__booking_source__in=_WIDGET_SOURCE_LIST,
             )
             if source_filter == "widget":
                 bookings_qs_base = bookings_qs_base.filter(Exists(_widget_payment_exists))

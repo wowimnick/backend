@@ -4,6 +4,7 @@ from datetime import timedelta
 from django.core.cache import cache
 from django.db.models import Exists, OuterRef
 from quickstart.models import Booking, Payment, Reviews
+from quickstart.utils.widget_booking_source import WIDGET_BOOKING_SOURCES
 import logging
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,9 @@ def send_pending_review_requests():
             Exists(
                 Payment.objects.filter(
                     booking=OuterRef("pk"),
-                    metadata__original_stripe_metadata__booking_source="widget",
+                    metadata__original_stripe_metadata__booking_source__in=list(
+                        WIDGET_BOOKING_SOURCES
+                    ),
                 )
             )
         )

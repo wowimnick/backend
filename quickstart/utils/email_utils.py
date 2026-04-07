@@ -12,6 +12,11 @@ import pytz
 
 from CEBackend.celery import app as celery_app
 
+from quickstart.utils.widget_booking_source import (
+    business_has_growth_or_advanced_widget_plan,
+    is_widget_booking_source,
+)
+
 from ..models import (
     Booking,
     BusinessStaff,
@@ -341,8 +346,8 @@ def send_booking_confirmation_email(user, booking: Booking, booking_source=None,
     """
     Sends a booking confirmation email to either a registered user (CustomUser)
     or a guest (Contact).
-    booking_source: optional "widget" | "marketplace". When "widget", uses business
-    widget_email_branding (logo, colors, footer) if set.
+    booking_source: optional "widget" | "member_widget" | "marketplace". Widget-sourced
+    bookings use widget_email_branding when the business has Growth/Advanced and branding is set.
     override_recipient_list: optional list of email addresses to send to instead of recipient.email (e.g. for resend).
     """
     logger.info(
@@ -439,7 +444,9 @@ def send_booking_confirmation_email(user, booking: Booking, booking_source=None,
             business = (
                 booking.schedule_instance.schedule.option.classId.businessId
             )
-            if booking_source == "widget":
+            if is_widget_booking_source(booking_source) and business_has_growth_or_advanced_widget_plan(
+                business
+            ):
                 branding = getattr(business, "widget_email_branding", None) or {}
                 if branding:
                     context["email_branding"] = branding
@@ -864,8 +871,8 @@ def send_booking_cancelled_by_other_email(
 def send_booking_reminder_email(user, booking: Booking, booking_source=None):
     """
     Sends a reminder email to a user about an upcoming class.
-    booking_source: optional "widget" | "marketplace". When "widget", uses business
-    widget_email_branding if set (Growth/Advanced).
+    booking_source: optional "widget" | "member_widget" | "marketplace". Widget-sourced
+    reminders use widget_email_branding when the business has Growth/Advanced and branding is set.
     """
     if not user or not user.email or not booking:
         logger.warning(
@@ -926,7 +933,9 @@ def send_booking_reminder_email(user, booking: Booking, booking_source=None):
             business = (
                 booking.schedule_instance.schedule.option.classId.businessId
             )
-            if booking_source == "widget":
+            if is_widget_booking_source(booking_source) and business_has_growth_or_advanced_widget_plan(
+                business
+            ):
                 branding = getattr(business, "widget_email_branding", None) or {}
                 if branding:
                     context["email_branding"] = branding

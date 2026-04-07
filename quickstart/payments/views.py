@@ -76,6 +76,7 @@ from quickstart.utils.revalidation import (
 )
 from quickstart.utils.meta_capi import send_purchase_event_for_booking
 from quickstart.utils.stripe_metadata import stripe_metadata_to_dict
+from quickstart.utils.widget_booking_source import is_widget_booking_source
 
 logger = logging.getLogger(__name__)
 
@@ -1735,7 +1736,7 @@ class ProcessBookingWebhook(APIView):
 
                 # 2. Calculate Business Net Revenue (Total Net Payout) from subtotal_for_payout
                 business = enrollment.schedule.option.classId.businessId
-                if metadata.get("booking_source") == "widget":
+                if is_widget_booking_source(metadata.get("booking_source")):
                     plan_id = (metadata.get("plan_id") or "basic").lower()
                     fee_percentage = {
                         "basic": Decimal("4.00"),
@@ -2128,7 +2129,7 @@ class ProcessBookingWebhook(APIView):
         guest_email = metadata.get("guest_email") or ""
         guest_full_name = (metadata.get("guest_full_name") or "").strip()
         guest_phone = metadata.get("guest_phone") or ""
-        is_widget_guest = metadata.get("booking_source") == "widget" or (
+        is_widget_guest = is_widget_booking_source(metadata.get("booking_source")) or (
             not metadata.get("user_id") and (guest_email or guest_full_name)
         )
         if is_widget_guest:
@@ -2603,7 +2604,7 @@ class ProcessBookingWebhook(APIView):
             )
             business = initial_instance.schedule.option.classId.businessId
 
-            if metadata.get("booking_source") == "widget":
+            if is_widget_booking_source(metadata.get("booking_source")):
                 plan_id = (metadata.get("plan_id") or "basic").lower()
                 fee_percentage = {
                     "basic": Decimal("4.00"),

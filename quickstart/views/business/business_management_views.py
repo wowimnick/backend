@@ -57,7 +57,9 @@ from quickstart.models import (
     Payment,
     Discount,
     ImportedGoogleReview,
-    WidgetSubscription,
+)
+from quickstart.utils.widget_booking_source import (
+    business_has_growth_or_advanced_widget_plan as _business_has_growth_or_advanced_widget_plan,
 )
 
 from .revenue_analytics_views import RevenueAnalyticsView
@@ -79,24 +81,6 @@ from quickstart.utils.permissions import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _business_has_growth_or_advanced_widget_plan(business):
-    """True if business has an active Growth or Advanced widget subscription."""
-    from django.utils import timezone as tz
-    now = tz.now()
-    sub = (
-        WidgetSubscription.objects.filter(
-            business=business,
-            status__in=["active", "trialing"],
-            current_period_end__gt=now,
-        )
-        .order_by("-current_period_end")
-        .first()
-    )
-    if not sub or not sub.plan_id:
-        return False
-    return (sub.plan_id or "").lower() in ("growth", "advanced")
 
 
 @api_view(["POST"])

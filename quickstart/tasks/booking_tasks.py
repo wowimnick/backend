@@ -4,7 +4,11 @@ from django.utils import timezone
 from datetime import timedelta
 import stripe
 from django.core.cache import cache
-from quickstart.models import Booking, CourseEnrollment, Payment, WidgetSubscription
+from quickstart.models import Booking, CourseEnrollment, Payment
+from quickstart.utils.widget_booking_source import (
+    WIDGET_BOOKING_SOURCES,
+    business_has_growth_or_advanced_widget_plan,
+)
 from django.db import transaction
 from django.conf import settings
 from quickstart.utils.email_utils import send_booking_reminder_email
@@ -14,23 +18,6 @@ import logging
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 logger = logging.getLogger(__name__)
-
-
-def _business_has_growth_or_advanced_widget_plan(business):
-    """True if business has an active Growth or Advanced widget subscription (used for widget-only features)."""
-    now = timezone.now()
-    sub = (
-        WidgetSubscription.objects.filter(
-            business=business,
-            status__in=["active", "trialing"],
-            current_period_end__gt=now,
-        )
-        .order_by("-current_period_end")
-        .first()
-    )
-    if not sub or not sub.plan_id:
-        return False
-    return (sub.plan_id or "").lower() in ("growth", "advanced")
 
 
 @shared_task  
@@ -161,12 +148,14 @@ def send_upcoming_booking_reminders():
                 continue
 
             is_widget_booking = booking.payments.filter(
-                metadata__original_stripe_metadata__booking_source="widget"
+                metadata__original_stripe_metadata__booking_source__in=list(
+                    WIDGET_BOOKING_SOURCES
+                )
             ).exists()
             # Automated pre-class reminders for widget bookings are Growth/Advanced only; marketplace reminders unchanged.
             if is_widget_booking:
                 business = booking.schedule_instance.schedule.option.classId.businessId
-                if not _business_has_growth_or_advanced_widget_plan(business):
+                if not business_has_growth_or_advanced_widget_plan(business):
                     continue
             send_booking_reminder_email(
                 user=recipient,

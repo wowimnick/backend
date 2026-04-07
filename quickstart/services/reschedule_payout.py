@@ -9,6 +9,7 @@ from decimal import Decimal, ROUND_HALF_UP
 import logging
 
 from quickstart.models import PartnerTier
+from quickstart.utils.widget_booking_source import is_widget_booking_source
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ def _service_fee_rate(payment, business) -> Decimal:
         except (ArithmeticError, ValueError, TypeError):
             pass
 
-    if orig.get("booking_source") == "widget":
+    if is_widget_booking_source(orig.get("booking_source")):
         plan_id = (orig.get("plan_id") or "basic").lower()
         return _widget_plan_fee_percentage(plan_id) / Decimal("100.0")
 

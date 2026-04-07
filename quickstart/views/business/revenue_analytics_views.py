@@ -50,12 +50,53 @@ from quickstart.models import (
     Payment,
 )
 from quickstart.utils.permissions import IsBusinessMember
+from quickstart.utils.widget_booking_source import (
+    WIDGET_BOOKING_SOURCES,
+    business_has_growth_or_advanced_widget_plan,
+    is_widget_booking_source,
+)
 
 logger = logging.getLogger(__name__)
+
+_WIDGET_SOURCE_LIST = list(WIDGET_BOOKING_SOURCES)
 
 
 class RevenueAnalyticsView(views.APIView):
     permission_classes = [IsAuthenticated, IsBusinessMember]
+
+    @staticmethod
+    def _redact_widget_breakdown_for_basic_plan(class_revenue, revenue_by_booking_type):
+        """
+        Basic plan: hide widget vs platform split in combined (source=all) views.
+        Totals stay the same; widget amounts roll into platform for display only.
+        """
+        redacted_classes = []
+        for row in class_revenue:
+            r = dict(row)
+            w = float(r.get("widget_revenue") or 0)
+            if w:
+                r["platform_revenue"] = float(r.get("platform_revenue") or 0) + w
+                r["widget_revenue"] = 0.0
+            redacted_classes.append(r)
+
+        widget_extra = 0.0
+        rest = []
+        for entry in revenue_by_booking_type:
+            if entry.get("name") == "Widget Booking":
+                widget_extra += float(entry.get("value") or 0)
+            else:
+                rest.append(dict(entry))
+        if widget_extra > 0:
+            merged = False
+            for e in rest:
+                if e.get("name") == "Platform Booking":
+                    e["value"] = float(e.get("value") or 0) + widget_extra
+                    merged = True
+                    break
+            if not merged:
+                rest.append({"name": "Platform Booking", "value": widget_extra})
+            rest.sort(key=lambda x: -float(x.get("value") or 0))
+        return redacted_classes, rest
 
     def get_business(self, user):
         business = (
@@ -125,7 +166,7 @@ class RevenueAnalyticsView(views.APIView):
             _widget_payment_exists = Payment.objects.filter(
                 booking=OuterRef("pk"),
                 status="succeeded",
-                metadata__original_stripe_metadata__booking_source="widget",
+                metadata__original_stripe_metadata__booking_source__in=_WIDGET_SOURCE_LIST,
             )
             if source == "widget":
                 base_bookings = base_bookings.filter(Exists(_widget_payment_exists))
@@ -177,7 +218,7 @@ class RevenueAnalyticsView(views.APIView):
                 break
         if pay:
             src = self._stripe_meta_dict(pay.metadata)
-            if src.get("booking_source") == "widget":
+            if is_widget_booking_source(src.get("booking_source")):
                 return self._widget_fee_rate_decimal(src.get("plan_id"))
         return self._get_fee_rate_for_business(business)
 
@@ -465,7 +506,7 @@ class RevenueAnalyticsView(views.APIView):
                     Sum(
                         "amount",
                         filter=Q(
-                            metadata__original_stripe_metadata__booking_source="widget"
+                            metadata__original_stripe_metadata__booking_source__in=_WIDGET_SOURCE_LIST
                         ),
                     ),
                     Value(Decimal("0.0")),
@@ -474,11 +515,8 @@ class RevenueAnalyticsView(views.APIView):
                 platform_revenue=Coalesce(
                     Sum(
                         "amount",
-                        filter=Q(
-                            metadata__original_stripe_metadata__booking_source__isnull=True
-                        )
-                        | Q(
-                            metadata__original_stripe_metadata__booking_source__ne="widget"
+                        filter=~Q(
+                            metadata__original_stripe_metadata__booking_source__in=_WIDGET_SOURCE_LIST
                         ),
                     ),
                     Value(Decimal("0.0")),
@@ -547,7 +585,7 @@ class RevenueAnalyticsView(views.APIView):
             .annotate(
                 booking_type_category=Case(
                     When(
-                        metadata__original_stripe_metadata__booking_source="widget",
+                        metadata__original_stripe_metadata__booking_source__in=_WIDGET_SOURCE_LIST,
                         then=Value("Widget Booking"),
                     ),
                     default=Value("Platform Booking"),
@@ -592,6 +630,13 @@ class RevenueAnalyticsView(views.APIView):
             if source_filter not in ("widget", "marketplace", "all", "membership"):
                 source_filter = "all"
 
+            if source_filter == "widget" and not business_has_growth_or_advanced_widget_plan(
+                business
+            ):
+                raise PermissionDenied(
+                    "Widget-specific revenue analytics require a Growth or Advanced widget plan."
+                )
+
             metrics = self.calculate_metrics(
                 business, start_date_utc, end_date_utc, class_id_filter, source_filter
             )
@@ -604,6 +649,15 @@ class RevenueAnalyticsView(views.APIView):
             revenue_by_booking_type = self.get_revenue_by_booking_type(
                 business, start_date_utc, end_date_utc, class_id_filter, source_filter
             )
+
+            if source_filter == "all" and not business_has_growth_or_advanced_widget_plan(
+                business
+            ):
+                class_revenue_breakdown, revenue_by_booking_type = (
+                    self._redact_widget_breakdown_for_basic_plan(
+                        class_revenue_breakdown, revenue_by_booking_type
+                    )
+                )
 
             data = {
                 "business_id": business.businessId,
