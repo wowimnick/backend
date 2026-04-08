@@ -1,0 +1,42 @@
+{% extends "emails/base_email.html" %}
+
+{% block title %}
+  {{ event_title }} - ClassEasily
+{% endblock title %}
+
+{% block content %}
+  <h1>{{ event_title }}</h1>
+  <p>
+    Hi {{ member_name|default:"there" }},
+  </p>
+  <p>
+    Your membership <strong>{{ membership_name }}</strong> with
+    <strong>{{ business_name }}</strong> has an update.
+  </p>
+
+  {% if amount %}
+    <p>
+      Amount: <strong>${{ amount }}</strong> {{ currency }}.
+    </p>
+  {% endif %}
+
+  {% if current_period_end %}
+    <p>
+      Current period ends: <strong>{{ current_period_end }}</strong>.
+    </p>
+  {% endif %}
+
+  {% if extra_message %}
+    <p>{{ extra_message }}</p>
+  {% endif %}
+
+  {% if payment_url %}
+    <p style="text-align: center; margin: 28px 0;">
+      <a href="{{ payment_url }}" class="button">Complete payment</a>
+    </p>
+  {% endif %}
+
+  <p>
+    Need help? Reply to this email and our team will assist.
+  </p>
+{% endblock content %}

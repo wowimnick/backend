@@ -38,6 +38,7 @@ from quickstart.models import (
     GiftCard,
     GiftCardTransaction,
     WidgetSubscription,
+    CustomerMembership,
 )
 from quickstart.models import ADDON_TYPE_EMAIL_MARKETING, ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING
 from quickstart.services.subscription_sync import (
@@ -61,6 +62,9 @@ from quickstart.utils.email_utils import (
     send_gift_card_email,
     send_super_admin_booking_created_email,
     send_widget_subscription_payment_failed_email,
+    send_business_subscription_lifecycle_email,
+    send_membership_lifecycle_member_email,
+    send_membership_lifecycle_business_email,
     _is_placeholder_booker_email,
     _is_placeholder_phone,
     is_placeholder_guest_contact,
@@ -989,6 +993,22 @@ class UpdatePaymentIntentView(APIView):
             if isinstance(first_p, dict) and first_p.get("name"):
                 new_name = str(first_p.get("name", "")).strip()
 
+        def normalize_participant_details(raw_details, expected_count):
+            """
+            Ensure participant details always contain exactly expected_count entries,
+            each with a non-empty name. Falls back to the current booker name.
+            """
+            fallback_name = new_name.strip() if new_name else "Guest"
+            details = raw_details if isinstance(raw_details, list) else []
+            normalized = []
+            for i in range(max(0, expected_count)):
+                item = details[i] if i < len(details) else {}
+                raw_name = ""
+                if isinstance(item, dict):
+                    raw_name = str(item.get("name", "")).strip()
+                normalized.append({"name": raw_name or fallback_name})
+            return normalized
+
         # Stripe replaces entire metadata on modify; merge guest fields into existing.
         # Do not overwrite existing non-empty metadata with empty values (e.g. second
         # update_intent from Apple Pay with stale/empty form would otherwise wipe good data).
@@ -1002,6 +1022,11 @@ class UpdatePaymentIntentView(APIView):
         def merge_and_modify_metadata():
             intent = stripe.PaymentIntent.retrieve(payment_intent_id)
             merged = _stripe_metadata_dict(intent.metadata)
+            participants_count = None
+            try:
+                participants_count = int(merged.get("participants") or 0)
+            except (TypeError, ValueError):
+                participants_count = 0
             for k, v in guest_updates.items():
                 if k == "notes":
                     merged[k] = v if v is not None else ""
@@ -1012,6 +1037,12 @@ class UpdatePaymentIntentView(APIView):
                         merged[k] = v
                     elif k not in merged:
                         merged[k] = v if v is not None else ""
+            if new_participants is not None:
+                fallback_count = len(new_participants) if isinstance(new_participants, list) and new_participants else 1
+                expected_count = participants_count if participants_count > 0 else fallback_count
+                merged["participant_details_json"] = json.dumps(
+                    normalize_participant_details(new_participants, expected_count)
+                )
             stripe.PaymentIntent.modify(
                 payment_intent_id,
                 metadata=merged,
@@ -1118,10 +1149,10 @@ class UpdatePaymentIntentView(APIView):
                     update_fields["notes"] = new_notes
                 if new_participants is not None:
                     count = booking.participants or 1
-                    if not new_participants or len(new_participants) != count:
-                        booker_name = new_name.strip() if new_name else "Guest"
-                        new_participants = [{"name": booker_name} for _ in range(count)]
-                    update_fields["participant_details"] = new_participants
+                    update_fields["participant_details"] = normalize_participant_details(
+                        new_participants,
+                        count,
+                    )
                 if updated_contact and updated_contact.id != booking.contact_id:
                     update_fields["contact"] = updated_contact
 
@@ -1504,7 +1535,7 @@ class ProcessBookingWebhook(APIView):
                 )
 
         elif event.type == "invoice.payment_failed":
-            # Widget subscription: notify business owner once per invoice (grace period to update card).
+            # Subscription payment failed: notify relevant parties once per invoice.
             logger.info("[%s] invoice.payment_failed received", webhook_id)
             invoice = event.data.object
             inv_id = getattr(invoice, "id", None) or (invoice.get("id") if isinstance(invoice, dict) else None)
@@ -1559,6 +1590,55 @@ class ProcessBookingWebhook(APIView):
                                         "[%s] Sent widget subscription payment failed email to %s for invoice %s",
                                         webhook_id, owner.email, inv_id,
                                     )
+                        elif _obj_get(meta, "addon_type"):
+                            addon_type = _obj_get(meta, "addon_type")
+                            business_id = _obj_get(meta, "business_id")
+                            try:
+                                business = BusinessInfo.objects.get(businessId=int(business_id))
+                            except (BusinessInfo.DoesNotExist, ValueError):
+                                business = None
+                            owner = getattr(business, "owner", None) if business else None
+                            if owner and owner.email:
+                                addon_name = (
+                                    "Email Marketing Add-on"
+                                    if addon_type == ADDON_TYPE_EMAIL_MARKETING
+                                    else "Marketplace Email Branding Add-on"
+                                )
+                                addon_key = f"{cache_key}:addon:{addon_type}"
+                                if cache.add(addon_key, True, timeout=7 * 24 * 3600):
+                                    send_business_subscription_lifecycle_email(
+                                        owner,
+                                        business_name=getattr(business, "businessName", None) or "Your business",
+                                        subscription_name=addon_name,
+                                        lifecycle_event="payment_failed",
+                                        manage_billing_url=f"{settings.FRONTEND_BASE_URL or ''}/business/dashboard?tab=settings",
+                                        extra_message="We could not process your latest renewal payment. Please update your billing method to avoid service interruption.",
+                                    )
+                        elif _obj_get(meta, "membership_product_id"):
+                            membership = CustomerMembership.objects.filter(
+                                stripe_subscription_id=sub_id
+                            ).select_related(
+                                "product__business__owner",
+                                "contact",
+                                "user",
+                            ).first()
+                            if membership:
+                                payment_url = _obj_get(invoice, "hosted_invoice_url")
+                                member_key = f"{cache_key}:member"
+                                business_key = f"{cache_key}:business"
+                                if cache.add(member_key, True, timeout=7 * 24 * 3600):
+                                    send_membership_lifecycle_member_email(
+                                        membership,
+                                        lifecycle_event="payment_failed",
+                                        payment_url=payment_url,
+                                        extra_message="Your membership payment did not go through. Please complete payment to keep your membership active.",
+                                    )
+                                if cache.add(business_key, True, timeout=7 * 24 * 3600):
+                                    send_membership_lifecycle_business_email(
+                                        membership,
+                                        lifecycle_event="payment_failed",
+                                        extra_message="A member renewal payment failed. Ask the member to update payment details if needed.",
+                                    )
                     except (stripe.StripeError, Exception) as e:
                         logger.warning(
                             "[%s] invoice.payment_failed handling failed: %s", webhook_id, e, exc_info=True,
@@ -1586,11 +1666,32 @@ class ProcessBookingWebhook(APIView):
                             sub_id, subscription_obj=stripe_sub, addon_type=ADDON_TYPE_EMAIL_MARKETING
                         )
                     elif _obj_get(meta, "membership_product_id"):
-                        sync_customer_membership_from_stripe(
+                        membership, _ = sync_customer_membership_from_stripe(
                             sub_id,
                             subscription_obj=stripe_sub,
                             invoice_obj=invoice,
                         )
+                        if membership:
+                            invoice_id = _obj_get(invoice, "id") or ""
+                            if invoice_id:
+                                member_key = f"membership_invoice_paid_member:{invoice_id}"
+                                business_key = f"membership_invoice_paid_business:{invoice_id}"
+                                amount_paid = (_obj_get(invoice, "amount_paid") or 0) / 100
+                                currency = (_obj_get(invoice, "currency") or "cad").upper()
+                                if cache.add(member_key, True, timeout=30 * 24 * 3600):
+                                    send_membership_lifecycle_member_email(
+                                        membership,
+                                        lifecycle_event="renewed",
+                                        amount=amount_paid,
+                                        currency=currency,
+                                    )
+                                if cache.add(business_key, True, timeout=30 * 24 * 3600):
+                                    send_membership_lifecycle_business_email(
+                                        membership,
+                                        lifecycle_event="renewed",
+                                        amount=amount_paid,
+                                        currency=currency,
+                                    )
                     elif _obj_get(meta, "business_id"):
                         sync_widget_subscription_from_stripe(sub_id, subscription_obj=stripe_sub)
                 except (stripe.StripeError, Exception) as e:
@@ -1623,6 +1724,9 @@ class ProcessBookingWebhook(APIView):
 
             addon_type = _obj_get(metadata, "addon_type")
             if addon_type in (ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING, ADDON_TYPE_EMAIL_MARKETING):
+                before_addon = BusinessAddonSubscription.objects.filter(
+                    stripe_subscription_id=subscription.id
+                ).first()
                 if event.type == "customer.subscription.deleted":
                     mark_addon_subscription_canceled(subscription.id, addon_type=addon_type)
                 else:
@@ -1631,12 +1735,87 @@ class ProcessBookingWebhook(APIView):
                         subscription_obj=subscription,
                         addon_type=addon_type,
                     )
+                after_addon = BusinessAddonSubscription.objects.filter(
+                    stripe_subscription_id=subscription.id
+                ).first()
+                owner = getattr(business, "owner", None)
+                if owner and owner.email:
+                    addon_name = (
+                        "Email Marketing Add-on"
+                        if addon_type == ADDON_TYPE_EMAIL_MARKETING
+                        else "Marketplace Email Branding Add-on"
+                    )
+                    if event.type == "customer.subscription.deleted":
+                        if cache.add(
+                            f"sub_lifecycle:addon:deleted:{subscription.id}:{getattr(event, 'id', '')}",
+                            True,
+                            timeout=30 * 24 * 3600,
+                        ):
+                            send_business_subscription_lifecycle_email(
+                                owner,
+                                business_name=getattr(business, "businessName", None) or "Your business",
+                                subscription_name=addon_name,
+                                lifecycle_event="canceled",
+                                manage_billing_url=f"{settings.FRONTEND_BASE_URL or ''}/business/dashboard?tab=settings",
+                            )
+                    elif after_addon:
+                        before_status = (getattr(before_addon, "status", "") or "").lower() if before_addon else ""
+                        after_status = (after_addon.status or "").lower()
+                        before_cancel = bool(getattr(before_addon, "cancel_at_period_end", False)) if before_addon else False
+                        after_cancel = bool(after_addon.cancel_at_period_end)
+                        if after_status in ("active", "trialing") and before_status not in ("active", "trialing"):
+                            if cache.add(
+                                f"sub_lifecycle:addon:activated:{subscription.id}:{getattr(event, 'id', '')}",
+                                True,
+                                timeout=30 * 24 * 3600,
+                            ):
+                                send_business_subscription_lifecycle_email(
+                                    owner,
+                                    business_name=getattr(business, "businessName", None) or "Your business",
+                                    subscription_name=addon_name,
+                                    lifecycle_event="activated",
+                                    current_plan="active",
+                                    manage_billing_url=f"{settings.FRONTEND_BASE_URL or ''}/business/dashboard?tab=settings",
+                                )
+                        if after_cancel and not before_cancel:
+                            if cache.add(
+                                f"sub_lifecycle:addon:cancel_scheduled:{subscription.id}:{getattr(event, 'id', '')}",
+                                True,
+                                timeout=30 * 24 * 3600,
+                            ):
+                                send_business_subscription_lifecycle_email(
+                                    owner,
+                                    business_name=getattr(business, "businessName", None) or "Your business",
+                                    subscription_name=addon_name,
+                                    lifecycle_event="cancellation_scheduled",
+                                    effective_date=after_addon.current_period_end,
+                                    manage_billing_url=f"{settings.FRONTEND_BASE_URL or ''}/business/dashboard?tab=settings",
+                                )
+                        if (not after_cancel) and before_cancel:
+                            if cache.add(
+                                f"sub_lifecycle:addon:reactivated:{subscription.id}:{getattr(event, 'id', '')}",
+                                True,
+                                timeout=30 * 24 * 3600,
+                            ):
+                                send_business_subscription_lifecycle_email(
+                                    owner,
+                                    business_name=getattr(business, "businessName", None) or "Your business",
+                                    subscription_name=addon_name,
+                                    lifecycle_event="reactivated",
+                                    manage_billing_url=f"{settings.FRONTEND_BASE_URL or ''}/business/dashboard?tab=settings",
+                                )
                 return Response(status=status.HTTP_200_OK)
 
             # Customer membership subscription (end-customer pays business)
             if _obj_get(metadata, "membership_product_id"):
+                before_membership = CustomerMembership.objects.filter(
+                    stripe_subscription_id=subscription.id
+                ).select_related(
+                    "product__business__owner",
+                    "contact",
+                    "user",
+                ).first()
                 if event.type == "customer.subscription.deleted":
-                    from quickstart.models import CustomerMembership
                     try:
                         cm = CustomerMembership.objects.get(stripe_subscription_id=subscription.id)
                         cm.status = "canceled"
@@ -1648,9 +1827,80 @@ class ProcessBookingWebhook(APIView):
                         subscription.id,
                         subscription_obj=subscription,
                     )
+                after_membership = CustomerMembership.objects.filter(
+                    stripe_subscription_id=subscription.id
+                ).select_related(
+                    "product__business__owner",
+                    "contact",
+                    "user",
+                ).first()
+                if event.type == "customer.subscription.deleted":
+                    if after_membership and cache.add(
+                        f"membership_lifecycle:deleted:{subscription.id}:{getattr(event, 'id', '')}",
+                        True,
+                        timeout=30 * 24 * 3600,
+                    ):
+                        send_membership_lifecycle_member_email(
+                            after_membership,
+                            lifecycle_event="canceled",
+                        )
+                        send_membership_lifecycle_business_email(
+                            after_membership,
+                            lifecycle_event="canceled",
+                        )
+                elif after_membership:
+                    before_status = (getattr(before_membership, "status", "") or "").lower() if before_membership else ""
+                    after_status = (after_membership.status or "").lower()
+                    before_cancel = bool(getattr(before_membership, "cancel_at_period_end", False)) if before_membership else False
+                    after_cancel = bool(after_membership.cancel_at_period_end)
+                    if after_status in ("active", "trialing") and before_status not in ("active", "trialing"):
+                        if cache.add(
+                            f"membership_lifecycle:activated:{subscription.id}:{getattr(event, 'id', '')}",
+                            True,
+                            timeout=30 * 24 * 3600,
+                        ):
+                            send_membership_lifecycle_member_email(
+                                after_membership,
+                                lifecycle_event="activated",
+                            )
+                            send_membership_lifecycle_business_email(
+                                after_membership,
+                                lifecycle_event="activated",
+                            )
+                    if after_cancel and not before_cancel:
+                        if cache.add(
+                            f"membership_lifecycle:cancel_scheduled:{subscription.id}:{getattr(event, 'id', '')}",
+                            True,
+                            timeout=30 * 24 * 3600,
+                        ):
+                            send_membership_lifecycle_member_email(
+                                after_membership,
+                                lifecycle_event="cancellation_scheduled",
+                            )
+                            send_membership_lifecycle_business_email(
+                                after_membership,
+                                lifecycle_event="cancellation_scheduled",
+                            )
+                    if (not after_cancel) and before_cancel:
+                        if cache.add(
+                            f"membership_lifecycle:reactivated:{subscription.id}:{getattr(event, 'id', '')}",
+                            True,
+                            timeout=30 * 24 * 3600,
+                        ):
+                            send_membership_lifecycle_member_email(
+                                after_membership,
+                                lifecycle_event="reactivated",
+                            )
+                            send_membership_lifecycle_business_email(
+                                after_membership,
+                                lifecycle_event="reactivated",
+                            )
                 return Response(status=status.HTTP_200_OK)
 
             # Widget subscription: single source of truth via sync module
+            before_widget = WidgetSubscription.objects.filter(
+                stripe_subscription_id=subscription.id
+            ).first()
             if event.type == "customer.subscription.deleted":
                 mark_widget_subscription_canceled(subscription.id)
             else:
@@ -1662,6 +1912,89 @@ class ProcessBookingWebhook(APIView):
                 if not business.stripe_customer_id and cust_id:
                     business.stripe_customer_id = cust_id
                     business.save(update_fields=["stripe_customer_id"])
+            after_widget = WidgetSubscription.objects.filter(
+                stripe_subscription_id=subscription.id
+            ).first()
+            owner = getattr(business, "owner", None)
+            if owner and owner.email:
+                if event.type == "customer.subscription.deleted":
+                    if cache.add(
+                        f"sub_lifecycle:widget:deleted:{subscription.id}:{getattr(event, 'id', '')}",
+                        True,
+                        timeout=30 * 24 * 3600,
+                    ):
+                        send_business_subscription_lifecycle_email(
+                            owner,
+                            business_name=getattr(business, "businessName", None) or "Your business",
+                            subscription_name="Booking Widget Subscription",
+                            lifecycle_event="canceled",
+                            manage_billing_url=f"{settings.FRONTEND_BASE_URL or ''}/business/dashboard?tab=settings",
+                        )
+                elif after_widget:
+                    before_status = (getattr(before_widget, "status", "") or "").lower() if before_widget else ""
+                    after_status = (after_widget.status or "").lower()
+                    before_plan = (getattr(before_widget, "plan_id", "") or "").lower() if before_widget else ""
+                    after_plan = (after_widget.plan_id or "").lower()
+                    before_cancel = bool(getattr(before_widget, "cancel_at_period_end", False)) if before_widget else False
+                    after_cancel = bool(after_widget.cancel_at_period_end)
+                    if after_status in ("active", "trialing") and before_status not in ("active", "trialing"):
+                        if cache.add(
+                            f"sub_lifecycle:widget:activated:{subscription.id}:{getattr(event, 'id', '')}",
+                            True,
+                            timeout=30 * 24 * 3600,
+                        ):
+                            send_business_subscription_lifecycle_email(
+                                owner,
+                                business_name=getattr(business, "businessName", None) or "Your business",
+                                subscription_name="Booking Widget Subscription",
+                                lifecycle_event="activated",
+                                current_plan=after_plan,
+                                manage_billing_url=f"{settings.FRONTEND_BASE_URL or ''}/business/dashboard?tab=settings",
+                            )
+                    if before_plan and after_plan and before_plan != after_plan:
+                        if cache.add(
+                            f"sub_lifecycle:widget:plan_changed:{subscription.id}:{getattr(event, 'id', '')}",
+                            True,
+                            timeout=30 * 24 * 3600,
+                        ):
+                            send_business_subscription_lifecycle_email(
+                                owner,
+                                business_name=getattr(business, "businessName", None) or "Your business",
+                                subscription_name="Booking Widget Subscription",
+                                lifecycle_event="plan_changed",
+                                previous_plan=before_plan,
+                                current_plan=after_plan,
+                                manage_billing_url=f"{settings.FRONTEND_BASE_URL or ''}/business/dashboard?tab=settings",
+                            )
+                    if after_cancel and not before_cancel:
+                        if cache.add(
+                            f"sub_lifecycle:widget:cancel_scheduled:{subscription.id}:{getattr(event, 'id', '')}",
+                            True,
+                            timeout=30 * 24 * 3600,
+                        ):
+                            send_business_subscription_lifecycle_email(
+                                owner,
+                                business_name=getattr(business, "businessName", None) or "Your business",
+                                subscription_name="Booking Widget Subscription",
+                                lifecycle_event="cancellation_scheduled",
+                                current_plan=after_plan,
+                                effective_date=after_widget.current_period_end,
+                                manage_billing_url=f"{settings.FRONTEND_BASE_URL or ''}/business/dashboard?tab=settings",
+                            )
+                    if (not after_cancel) and before_cancel:
+                        if cache.add(
+                            f"sub_lifecycle:widget:reactivated:{subscription.id}:{getattr(event, 'id', '')}",
+                            True,
+                            timeout=30 * 24 * 3600,
+                        ):
+                            send_business_subscription_lifecycle_email(
+                                owner,
+                                business_name=getattr(business, "businessName", None) or "Your business",
+                                subscription_name="Booking Widget Subscription",
+                                lifecycle_event="reactivated",
+                                current_plan=after_plan,
+                                manage_billing_url=f"{settings.FRONTEND_BASE_URL or ''}/business/dashboard?tab=settings",
+                            )
             return Response(status=status.HTTP_200_OK)
 
         return Response(status=status.HTTP_200_OK)
@@ -2485,6 +2818,7 @@ class ProcessBookingWebhook(APIView):
 
     def handle_successful_payment(self, payment_intent, webhook_id):
         logger.info("[%s] handle_successful_payment PI=%s", webhook_id, payment_intent.id)
+        metadata = _stripe_metadata_dict(payment_intent.metadata)
 
         # Check if we have ANY record for this Stripe ID that isn't 'pending'.
         # This catches 'refunded', 'failed', and 'succeeded' statuses safely.
@@ -2503,11 +2837,32 @@ class ProcessBookingWebhook(APIView):
             )
             return {"message": "Already processed"}
 
+        # Guardrail: ignore direct/manual PaymentIntents that are not booking-related.
+        # Booking webhooks should include at least one booking marker in metadata.
+        has_booking_marker = any(
+            [
+                metadata.get("schedule_instance_id"),
+                metadata.get("booking_group_id"),
+                metadata.get("payment_db_id"),
+                metadata.get("first_booking_db_id"),
+                metadata.get("booking_type"),
+            ]
+        )
+        if not has_booking_marker:
+            has_pending_payment_record = Payment.objects.filter(
+                stripe_payment_intent_id=payment_intent.id, status="pending"
+            ).exists()
+            if not has_pending_payment_record:
+                logger.warning(
+                    "[%s] Ignoring non-booking PI %s in booking webhook (no booking metadata markers).",
+                    webhook_id,
+                    payment_intent.id,
+                )
+                return {"message": "Ignored non-booking payment intent"}
+
         # 2. Check for Course vs Single Session
         # Use correct metadata key 'booking_type' as sent by CreatePaymentIntentView
-        enrollment_type = _stripe_metadata_dict(payment_intent.metadata).get(
-            "booking_type"
-        )
+        enrollment_type = metadata.get("booking_type")
         logger.info("[%s] booking_type from metadata: %s", webhook_id, enrollment_type)
 
         if enrollment_type == "Full Course":

@@ -8,7 +8,6 @@ from decimal import Decimal
 
 import stripe
 from django.conf import settings
-from django.core.mail import send_mail
 from django.utils import timezone
 
 from django.db.models import Sum
@@ -18,6 +17,10 @@ from quickstart.models import (
     CustomerMembership,
     MembershipCreditLedger,
     MembershipProduct,
+)
+from quickstart.utils.email_utils import (
+    send_membership_lifecycle_member_email,
+    send_membership_lifecycle_business_email,
 )
 
 logger = logging.getLogger(__name__)
@@ -319,23 +322,21 @@ def approve_membership(membership):
         except stripe.StripeError as e:
             logger.warning("approve_membership: could not get hosted_invoice_url: %s", e)
 
-    business_name = getattr(product.business, "businessName", None) or "the business"
-    subject = f"Your {product.name} membership has been approved"
-    body = (
-        f"Hi {first_name or 'there'},\n\n"
-        f"Your application for {product.name} at {business_name} has been approved.\n\n"
-    )
-    if hosted_invoice_url:
-        body += f"Complete your payment here to activate your membership:\n{hosted_invoice_url}\n\n"
-    body += "If you have any questions, please reply to this email or contact the business directly."
-
     try:
-        send_mail(
-            subject=subject,
-            message=body,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[email],
-            fail_silently=False,
+        send_membership_lifecycle_member_email(
+            membership,
+            lifecycle_event="approval_payment_required",
+            payment_url=hosted_invoice_url,
+            extra_message=(
+                "Your application was approved. Please complete payment using the link below to activate your membership."
+            ),
+        )
+        send_membership_lifecycle_business_email(
+            membership,
+            lifecycle_event="approval_payment_required",
+            extra_message=(
+                "This member was approved and is waiting to complete first payment."
+            ),
         )
     except Exception as e:
         logger.exception("approve_membership: failed to send email: %s", e)

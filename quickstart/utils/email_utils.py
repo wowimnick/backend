@@ -35,6 +35,7 @@ from ..models import (
     Conversation,
     ConversationMessage,
     ConversationEmailLog,
+    CustomerMembership,
 )
 
 logger = logging.getLogger(__name__)
@@ -1711,6 +1712,256 @@ def send_widget_subscription_payment_failed_email(
         template_name="emails/business_widget_subscription_payment_failed.html",
         context=context,
         subject="Action required: Update your payment method for your booking widget plan",
+    )
+
+
+def send_business_subscription_lifecycle_email(
+    business_user: CustomUser,
+    *,
+    business_name: str,
+    subscription_name: str,
+    lifecycle_event: str,
+    previous_plan: Optional[str] = None,
+    current_plan: Optional[str] = None,
+    effective_date: Optional[Any] = None,
+    manage_billing_url: Optional[str] = None,
+    extra_message: Optional[str] = None,
+):
+    """
+    Generic lifecycle confirmations for business billing subscriptions (widget/add-ons).
+    lifecycle_event supported values:
+      - activated
+      - plan_changed
+      - cancellation_scheduled
+      - reactivated
+      - canceled
+      - payment_failed
+      - renewed
+    """
+    if not business_user or not business_user.email:
+        logger.warning(
+            "Attempted to send subscription lifecycle email with invalid business user."
+        )
+        return
+
+    event_titles = {
+        "activated": "Subscription Activated",
+        "plan_changed": "Subscription Plan Updated",
+        "cancellation_scheduled": "Subscription Cancellation Scheduled",
+        "reactivated": "Subscription Reactivated",
+        "canceled": "Subscription Ended",
+        "payment_failed": "Subscription Payment Failed",
+        "renewed": "Subscription Renewed",
+    }
+    event_subjects = {
+        "activated": f"{subscription_name} is now active",
+        "plan_changed": f"{subscription_name} plan updated",
+        "cancellation_scheduled": f"{subscription_name} will cancel at period end",
+        "reactivated": f"{subscription_name} has been reactivated",
+        "canceled": f"{subscription_name} has ended",
+        "payment_failed": f"Action required: payment failed for {subscription_name}",
+        "renewed": f"{subscription_name} renewed successfully",
+    }
+
+    event_title = event_titles.get(lifecycle_event, "Subscription Update")
+    subject = event_subjects.get(
+        lifecycle_event, f"{subscription_name} update for {business_name}"
+    )
+    billing_url = manage_billing_url or f"{settings.FRONTEND_BASE_URL}/business/dashboard?tab=settings"
+    effective_date_display = None
+    if effective_date:
+        if hasattr(effective_date, "strftime"):
+            effective_date_display = effective_date.strftime("%b %d, %Y")
+        else:
+            effective_date_display = str(effective_date)
+
+    context = {
+        "user": business_user,
+        "recipient_email": business_user.email,
+        "business_name": business_name or "Your business",
+        "subscription_name": subscription_name,
+        "event_title": event_title,
+        "lifecycle_event": lifecycle_event,
+        "previous_plan": previous_plan,
+        "current_plan": current_plan,
+        "effective_date": effective_date_display,
+        "manage_billing_url": billing_url,
+        "extra_message": extra_message or "",
+    }
+    send_templated_email(
+        recipient_list=[business_user.email],
+        template_name="emails/business_subscription_lifecycle_confirmation.html",
+        context=context,
+        subject=subject,
+    )
+
+
+def _get_membership_member_contact(membership: CustomerMembership):
+    email = None
+    name = "there"
+    if getattr(membership, "contact", None):
+        c = membership.contact
+        email = getattr(c, "email", None)
+        name_parts = [
+            n for n in [getattr(c, "first_name", ""), getattr(c, "last_name", "")]
+            if n
+        ]
+        if name_parts:
+            name = " ".join(name_parts)
+    if (not email) and getattr(membership, "user", None):
+        u = membership.user
+        email = getattr(u, "email", None)
+        full_name = u.get_full_name() if hasattr(u, "get_full_name") else ""
+        name = full_name or email or name
+    return email, name
+
+
+def send_membership_lifecycle_member_email(
+    membership: CustomerMembership,
+    *,
+    lifecycle_event: str,
+    payment_url: Optional[str] = None,
+    amount: Optional[Any] = None,
+    currency: Optional[str] = None,
+    extra_message: Optional[str] = None,
+):
+    """
+    Membership lifecycle email to the member (contact/user).
+    lifecycle_event supported values:
+      - activated
+      - renewed
+      - payment_failed
+      - approval_payment_required
+      - cancellation_scheduled
+      - reactivated
+      - canceled
+    """
+    if not membership or not getattr(membership, "product", None):
+        logger.warning(
+            "Attempted to send membership lifecycle member email with invalid membership."
+        )
+        return
+    to_email, member_name = _get_membership_member_contact(membership)
+    if not to_email:
+        logger.warning(
+            "Membership %s has no member email for lifecycle notification.",
+            getattr(membership, "id", "unknown"),
+        )
+        return
+
+    product = membership.product
+    business = product.business
+    event_titles = {
+        "activated": "Your Membership Is Active",
+        "renewed": "Your Membership Renewed Successfully",
+        "payment_failed": "Action Required: Membership Payment Failed",
+        "approval_payment_required": "Membership Approved - Payment Required",
+        "cancellation_scheduled": "Your Membership Will End at Period End",
+        "reactivated": "Your Membership Has Been Reactivated",
+        "canceled": "Your Membership Has Ended",
+    }
+    subjects = {
+        "activated": f"You're in! {product.name} is active",
+        "renewed": f"{product.name} renewed successfully",
+        "payment_failed": f"Payment failed for {product.name}",
+        "approval_payment_required": f"{product.name} approved - complete payment",
+        "cancellation_scheduled": f"{product.name} will end at period end",
+        "reactivated": f"{product.name} has been reactivated",
+        "canceled": f"{product.name} has ended",
+    }
+
+    context = {
+        "recipient_email": to_email,
+        "member_name": member_name,
+        "business_name": getattr(business, "businessName", "ClassEasily Business"),
+        "membership_name": product.name,
+        "event_title": event_titles.get(lifecycle_event, "Membership Update"),
+        "lifecycle_event": lifecycle_event,
+        "current_period_end": (
+            membership.current_period_end.strftime("%b %d, %Y")
+            if getattr(membership, "current_period_end", None)
+            else None
+        ),
+        "payment_url": payment_url,
+        "amount": amount,
+        "currency": (currency or product.currency or "CAD").upper(),
+        "extra_message": extra_message or "",
+    }
+    send_templated_email(
+        recipient_list=[to_email],
+        template_name="emails/membership_lifecycle_member.html",
+        context=context,
+        subject=subjects.get(lifecycle_event, f"{product.name} membership update"),
+    )
+
+
+def send_membership_lifecycle_business_email(
+    membership: CustomerMembership,
+    *,
+    lifecycle_event: str,
+    amount: Optional[Any] = None,
+    currency: Optional[str] = None,
+    extra_message: Optional[str] = None,
+):
+    """
+    Membership lifecycle email to the business owner.
+    """
+    if not membership or not getattr(membership, "product", None):
+        logger.warning(
+            "Attempted to send membership lifecycle business email with invalid membership."
+        )
+        return
+    business = membership.product.business
+    owner = getattr(business, "owner", None)
+    if not owner or not getattr(owner, "email", None):
+        logger.warning(
+            "Business %s has no owner email for membership lifecycle notification.",
+            getattr(business, "businessId", "unknown"),
+        )
+        return
+    member_email, member_name = _get_membership_member_contact(membership)
+    event_titles = {
+        "activated": "New Membership Activated",
+        "renewed": "Membership Renewed",
+        "payment_failed": "Membership Payment Failed",
+        "approval_payment_required": "Membership Approved (Awaiting Payment)",
+        "cancellation_scheduled": "Member Scheduled Cancellation",
+        "reactivated": "Membership Reactivated",
+        "canceled": "Membership Canceled",
+    }
+    subjects = {
+        "activated": f"New active member: {membership.product.name}",
+        "renewed": f"Membership renewed: {membership.product.name}",
+        "payment_failed": f"Membership payment failed: {membership.product.name}",
+        "approval_payment_required": f"Approved member awaiting payment: {membership.product.name}",
+        "cancellation_scheduled": f"Cancellation scheduled: {membership.product.name}",
+        "reactivated": f"Membership reactivated: {membership.product.name}",
+        "canceled": f"Membership canceled: {membership.product.name}",
+    }
+    context = {
+        "recipient_email": owner.email,
+        "business_user": owner,
+        "business_name": getattr(business, "businessName", "Your business"),
+        "member_name": member_name or "Member",
+        "member_email": member_email or "N/A",
+        "membership_name": membership.product.name,
+        "event_title": event_titles.get(lifecycle_event, "Membership Update"),
+        "lifecycle_event": lifecycle_event,
+        "current_period_end": (
+            membership.current_period_end.strftime("%b %d, %Y")
+            if getattr(membership, "current_period_end", None)
+            else None
+        ),
+        "amount": amount,
+        "currency": (currency or membership.product.currency or "CAD").upper(),
+        "extra_message": extra_message or "",
+        "members_dashboard_url": f"{settings.FRONTEND_BASE_URL}/business/dashboard/memberships",
+    }
+    send_templated_email(
+        recipient_list=[owner.email],
+        template_name="emails/membership_lifecycle_business.html",
+        context=context,
+        subject=subjects.get(lifecycle_event, "Membership lifecycle update"),
     )
 
 

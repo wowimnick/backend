@@ -1,0 +1,44 @@
+{% extends "emails/base_email.html" %}
+
+{% block title %}
+  {{ event_title }} - ClassEasily
+{% endblock title %}
+
+{% block content %}
+  <h1>{{ event_title }}</h1>
+  <p>
+    Hi {{ user.first_name|default:"there" }},
+  </p>
+  <p>
+    This is a confirmation that your <strong>{{ subscription_name }}</strong> for
+    <strong>{{ business_name }}</strong> has been updated.
+  </p>
+
+  {% if previous_plan or current_plan %}
+    <p>
+      {% if previous_plan and current_plan %}
+        Plan change: <strong>{{ previous_plan|title }}</strong> → <strong>{{ current_plan|title }}</strong>.
+      {% elif current_plan %}
+        Current plan: <strong>{{ current_plan|title }}</strong>.
+      {% endif %}
+    </p>
+  {% endif %}
+
+  {% if effective_date %}
+    <p>
+      Effective date: <strong>{{ effective_date }}</strong>.
+    </p>
+  {% endif %}
+
+  {% if extra_message %}
+    <p>{{ extra_message }}</p>
+  {% endif %}
+
+  <p style="text-align: center; margin: 28px 0;">
+    <a href="{{ manage_billing_url }}" class="button">Manage billing</a>
+  </p>
+
+  <p>
+    If you did not expect this change, please contact support.
+  </p>
+{% endblock content %}
