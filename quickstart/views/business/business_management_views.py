@@ -16,7 +16,7 @@ from django.db import transaction
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from django.utils import timezone
-from django.db.models.functions import Coalesce, Cast
+from django.db.models.functions import Coalesce
 from decimal import Decimal
 from django.db.models import (
     Q,
@@ -28,7 +28,6 @@ from django.db.models import (
     IntegerField,
     F,
     Value,
-    CharField,
 )
 from rest_framework.views import APIView
 from datetime import timedelta
@@ -363,42 +362,27 @@ class MyBusinessOverviewView(APIView):
                 monthly_revenue = {"value": 0, "change": 0}
                 revenue_trend_data = []
 
-        # --- PERFORMANCE FIX: More efficient student count (paid bookers only) ---
+        # --- Guest spots this month (paid bookings): sum participants, not booking rows ---
         try:
-            # Subquery to get unique booker identifiers (user_id or contact_id)
-            bookers_in_current_month = (
+            current_students_count = int(
                 Booking.objects.filter(
                     schedule_instance__schedule__option__classId__businessId=business,
                     booking_date__gte=current_month_start_utc,
                     payment_status="paid",
-                )
-                .annotate(
-                    booker_id=Coalesce(
-                        Cast("user_id", output_field=CharField()),
-                        Cast("contact_id", output_field=CharField()),
-                    )
-                )
-                .values("booker_id")
-                .distinct()
+                ).aggregate(
+                    s=Coalesce(Sum("participants"), Value(0), output_field=IntegerField())
+                )["s"]
             )
-            current_students_count = bookers_in_current_month.count()
 
-            bookers_in_previous_month = (
+            previous_students_count = int(
                 Booking.objects.filter(
                     schedule_instance__schedule__option__classId__businessId=business,
                     booking_date__range=(prev_month_start_utc, prev_month_end_utc),
                     payment_status="paid",
-                )
-                .annotate(
-                    booker_id=Coalesce(
-                        Cast("user_id", output_field=CharField()),
-                        Cast("contact_id", output_field=CharField()),
-                    )
-                )
-                .values("booker_id")
-                .distinct()
+                ).aggregate(
+                    s=Coalesce(Sum("participants"), Value(0), output_field=IntegerField())
+                )["s"]
             )
-            previous_students_count = bookers_in_previous_month.count()
 
             student_change = 0.0
             if previous_students_count > 0:
@@ -477,7 +461,7 @@ class MyBusinessOverviewView(APIView):
             today_snapshot_data["today_total_bookings"] = (
                 today_agg["total_bookings"] or 0
             )
-            today_snapshot_data["total_participants"] = (
+            today_snapshot_data["today_total_participants"] = (
                 today_agg["total_participants"] or 0
             )
 

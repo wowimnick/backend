@@ -233,6 +233,16 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                 "total_participant_spots_in_filter": summary_qs.aggregate(
                     total_spots=Coalesce(Sum("participants"), Value(0))
                 )["total_spots"],
+                "completed_participant_spots_in_filter": summary_qs.filter(
+                    status="completed"
+                ).aggregate(
+                    total_spots=Coalesce(Sum("participants"), Value(0))
+                )["total_spots"],
+                "cancelled_participant_spots_in_filter": summary_qs.filter(
+                    status="cancelled"
+                ).aggregate(
+                    total_spots=Coalesce(Sum("participants"), Value(0))
+                )["total_spots"],
             }
             return response
         serializer = self.get_serializer(
@@ -738,6 +748,10 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                 confirmed_transactions=Count("id", filter=Q(status="confirmed")),
                 completed_transactions=Count("id", filter=Q(status="completed")),
                 cancelled_transactions=Count("id", filter=Q(status="cancelled")),
+                cancelled_participant_spots=Coalesce(
+                    Sum("participants", filter=Q(status="cancelled")),
+                    Value(0),
+                ),
                 total_revenue=Coalesce(
                     Sum(
                         "amount_paid",
@@ -751,10 +765,11 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
             )
             total_booking_transactions = total_aggregates["total_booking_transactions"]
             cancelled_transactions = total_aggregates["cancelled_transactions"]
+            total_spots = int(total_aggregates["total_participant_spots"] or 0)
+            cancelled_spots = int(total_aggregates["cancelled_participant_spots"] or 0)
+            # Guest-facing: % of participant spots that sit on cancelled bookings
             cancellation_rate = (
-                (cancelled_transactions / total_booking_transactions * 100)
-                if total_booking_transactions > 0
-                else 0
+                (cancelled_spots / total_spots * 100) if total_spots > 0 else 0
             )
 
             user_bookings_in_business = (
@@ -840,11 +855,11 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                     ] = round(
                         (
                             (
-                                trend["cancelled_booking_transactions"]
-                                / trend["new_booking_transactions"]
+                                trend["cancelled_participant_spots"]
+                                / trend["new_participant_spots"]
                                 * 100
                             )
-                            if trend["new_booking_transactions"] > 0
+                            if trend["new_participant_spots"] > 0
                             else 0
                         ),
                         1,
@@ -913,9 +928,14 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                     )  # Extract hour from the localized timestamp
                 )
                 .annotate(
-                    booking_transactions=Count("id"),
-                    participant_spots=Coalesce(Sum("participants"), Value(0)),
-                    cancelled_transactions=Count("id", filter=Q(status="cancelled")),
+                    active_participant_spots=Coalesce(
+                        Sum("participants", filter=~Q(status="cancelled")),
+                        Value(0),
+                    ),
+                    cancelled_participant_spots=Coalesce(
+                        Sum("participants", filter=Q(status="cancelled")),
+                        Value(0),
+                    ),
                 )
                 .order_by("hour_local")
             )
@@ -923,24 +943,20 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
             time_distribution_local = [
                 {
                     "hour": h,
-                    "booking_transactions": 0,
-                    "participant_spots": 0,
-                    "cancelled_transactions": 0,
+                    "active_participant_spots": 0,
+                    "cancelled_participant_spots": 0,
                 }
                 for h in range(24)
             ]
             for entry in time_dist_data:
                 hour_idx = entry["hour_local"]
                 if 0 <= hour_idx < 24:
-                    time_distribution_local[hour_idx]["booking_transactions"] = entry[
-                        "booking_transactions"
-                    ]
-                    time_distribution_local[hour_idx]["participant_spots"] = entry[
-                        "participant_spots"
-                    ]
-                    time_distribution_local[hour_idx]["cancelled_transactions"] = entry[
-                        "cancelled_transactions"
-                    ]
+                    time_distribution_local[hour_idx]["active_participant_spots"] = (
+                        entry["active_participant_spots"]
+                    )
+                    time_distribution_local[hour_idx][
+                        "cancelled_participant_spots"
+                    ] = entry["cancelled_participant_spots"]
 
             # --- Booking Type Distribution (as before) ---
             type_dist_data = (
@@ -1046,10 +1062,20 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                     returning_booker_q |= Q(contact_id=b["booker_contact_id"])
 
             new_student_bookings = (
-                bookings_qs_base.filter(new_booker_q).count() if new_booker_q else 0
+                int(
+                    bookings_qs_base.filter(new_booker_q).aggregate(
+                        s=Coalesce(Sum("participants"), Value(0))
+                    )["s"]
+                )
+                if new_booker_q
+                else 0
             )
             returning_student_bookings = (
-                bookings_qs_base.filter(returning_booker_q).count()
+                int(
+                    bookings_qs_base.filter(returning_booker_q).aggregate(
+                        s=Coalesce(Sum("participants"), Value(0))
+                    )["s"]
+                )
                 if returning_booker_q
                 else 0
             )
