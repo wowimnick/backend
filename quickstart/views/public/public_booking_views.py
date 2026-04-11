@@ -256,7 +256,7 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
                 "24h": "Full refund if you cancel at least 24 hours before the class starts.",
                 "48h": "Full refund if you cancel at least 48 hours before the class starts.",
                 "72h": "Full refund if you cancel at least 72 hours before the class starts.",
-                "strict": "This booking is non-refundable and cannot be cancelled for a refund.",
+                "strict": "Please note: this booking is final and not eligible for a refund after purchase.",
                 "custom": (
                     f"{get_refund_text(booking.cancellation_refund_percentage)} if you cancel at least {booking.cancellation_custom_hours} hours before the class starts."
                     if booking.cancellation_custom_hours
@@ -325,7 +325,7 @@ class StudentBookingViewSet(viewsets.ModelViewSet):
             if policy == "strict":
                 raise ValidationError(
                     {
-                        "policy": "This booking has a strict policy and cannot be cancelled."
+                        "policy": "This booking follows a strict policy and is not eligible for cancellation."
                     }
                 )
 

@@ -68,7 +68,7 @@ class GuestBookingCancellationView(APIView):
         policy = booking.cancellation_policy
         if policy == "strict":
             raise ValidationError(
-                {"policy": "This booking has a strict policy and cannot be cancelled."}
+                {"policy": "This booking follows a strict policy and is not eligible for cancellation."}
             )
 
         business_tz = pytz.timezone(

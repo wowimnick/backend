@@ -75,7 +75,7 @@ def _cancellation_policy_display(policy_key, refund_pct=None, custom_hours=None)
     if key == "custom" and custom_hours:
         return f"Cancellation: {refund} if you cancel at least {custom_hours} hours before."
     if key == "strict":
-        return "Strict: non-refundable once purchased."
+        return "Please note: this booking is final and not eligible for a refund after purchase."
     return "See cancellation policy in your booking details."
 
 
