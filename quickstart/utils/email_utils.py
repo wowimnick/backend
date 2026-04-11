@@ -16,6 +16,19 @@ from quickstart.utils.widget_booking_source import (
     business_has_growth_or_advanced_widget_plan,
     is_widget_booking_source,
 )
+from quickstart.utils.email_branding_constants import (
+    EMAIL_TYPE_BOOKING_CANCELLATION_CONFIRMED,
+    EMAIL_TYPE_BOOKING_CANCELLED_BY_HOST,
+    EMAIL_TYPE_BOOKING_CONFIRMATION,
+    EMAIL_TYPE_BOOKING_REMINDER,
+    EMAIL_TYPE_BOOKING_RESCHEDULED,
+    BRANDING_MODE_HTML,
+)
+from quickstart.utils.email_branding_html import (
+    render_custom_html_template,
+    wrap_email_html_fragment_if_needed,
+)
+from quickstart.utils.email_branding_placeholders import build_placeholder_map_from_context
 
 from ..models import (
     Booking,
@@ -343,6 +356,118 @@ def send_templated_email(
         return task_result
 
 
+def send_transactional_html_email(
+    recipient_list: List[str],
+    html: str,
+    subject: Optional[str] = None,
+    from_email: Optional[str] = None,
+    attachments: Optional[List[Dict]] = None,
+):
+    """
+    Queue a pre-built HTML transactional email (bypasses Django template rendering).
+    """
+    from quickstart.tasks.email_tasks import send_transactional_email_task
+
+    if not recipient_list or not isinstance(recipient_list, list):
+        logger.error("send_transactional_html_email: invalid recipient_list")
+        return
+    if not html or not str(html).strip():
+        logger.error("send_transactional_html_email: empty html")
+        return
+    subj = subject or "Notification from ClassEasily"
+    max_subject_length = 150
+    if len(subj) > max_subject_length:
+        subj = subj[:max_subject_length] + "..."
+    task_kwargs = {
+        "subject": subj,
+        "html": html,
+        "to": recipient_list,
+        "from_email": from_email or settings.DEFAULT_FROM_EMAIL,
+    }
+    if attachments:
+        task_kwargs["attachments"] = attachments
+    return send_transactional_email_task.delay(**task_kwargs)
+
+
+def _attach_booking_email_branding(context: Dict[str, Any], booking: Booking, booking_source=None):
+    """
+    Attach email_branding, header_logo_* to context when widget or marketplace branding applies.
+    """
+    if not booking or not getattr(booking, "schedule_instance", None):
+        return
+    try:
+        business = (
+            booking.schedule_instance.schedule.option.classId.businessId
+        )
+        if is_widget_booking_source(booking_source) and business_has_growth_or_advanced_widget_plan(
+            business
+        ):
+            branding = getattr(business, "widget_email_branding", None) or {}
+            if branding:
+                context["email_branding"] = branding
+                logo_url = (branding.get("logo_url") or "").strip()
+                if logo_url:
+                    context["header_logo_url"] = logo_url
+                    try:
+                        _w = branding.get("logo_max_width")
+                        _h = branding.get("logo_max_height")
+                        context["header_logo_max_width"] = int(_w) if _w not in (None, "") else 160
+                        context["header_logo_max_height"] = int(_h) if _h not in (None, "") else 60
+                    except (TypeError, ValueError):
+                        context["header_logo_max_width"] = 160
+                        context["header_logo_max_height"] = 60
+        elif getattr(business, "marketplace_email_branding_enabled", False):
+            branding = getattr(business, "marketplace_email_branding", None) or {}
+            if branding:
+                context["email_branding"] = branding
+                logo_url = (branding.get("logo_url") or "").strip()
+                if logo_url:
+                    context["header_logo_url"] = logo_url
+                    try:
+                        _w = branding.get("logo_max_width")
+                        _h = branding.get("logo_max_height")
+                        context["header_logo_max_width"] = int(_w) if _w not in (None, "") else 160
+                        context["header_logo_max_height"] = int(_h) if _h not in (None, "") else 60
+                    except (TypeError, ValueError):
+                        context["header_logo_max_width"] = 160
+                        context["header_logo_max_height"] = 60
+    except Exception as e:
+        logger.warning(
+            "Could not attach email branding for booking %s: %s",
+            getattr(booking, "id", None),
+            e,
+        )
+
+
+def _try_send_custom_branding_html_email(
+    recipient_list: List[str],
+    email_type_key: str,
+    context: Dict[str, Any],
+    subject: str,
+    attachments: Optional[List[Dict]] = None,
+) -> bool:
+    """
+    If branding mode is html and custom_html[email_type_key] is set, send that and return True.
+    """
+    branding = context.get("email_branding") or {}
+    if (branding.get("mode") or "builder") != BRANDING_MODE_HTML:
+        return False
+    custom = branding.get("custom_html") or {}
+    raw = custom.get(email_type_key)
+    if raw is None or not str(raw).strip():
+        return False
+    ph_map = build_placeholder_map_from_context(email_type_key, context)
+    body = render_custom_html_template(str(raw), ph_map)
+    wrapped = wrap_email_html_fragment_if_needed(body, title=subject or "Email")
+    send_transactional_html_email(
+        recipient_list=recipient_list,
+        html=wrapped,
+        subject=subject,
+        attachments=attachments,
+    )
+    return True
+
+
 def send_booking_confirmation_email(user, booking: Booking, booking_source=None, override_recipient_list=None):
     """
     Sends a booking confirmation email to either a registered user (CustomUser)
@@ -441,46 +566,7 @@ def send_booking_confirmation_email(user, booking: Booking, booking_source=None,
         "formatted_duration_minutes": formatted_duration_minutes,
     }
     if booking.schedule_instance:
-        try:
-            business = (
-                booking.schedule_instance.schedule.option.classId.businessId
-            )
-            if is_widget_booking_source(booking_source) and business_has_growth_or_advanced_widget_plan(
-                business
-            ):
-                branding = getattr(business, "widget_email_branding", None) or {}
-                if branding:
-                    context["email_branding"] = branding
-                    logo_url = (branding.get("logo_url") or "").strip()
-                    if logo_url:
-                        context["header_logo_url"] = logo_url
-                        try:
-                            _w = branding.get("logo_max_width")
-                            _h = branding.get("logo_max_height")
-                            context["header_logo_max_width"] = int(_w) if _w not in (None, "") else 160
-                            context["header_logo_max_height"] = int(_h) if _h not in (None, "") else 60
-                        except (TypeError, ValueError):
-                            context["header_logo_max_width"] = 160
-                            context["header_logo_max_height"] = 60
-            elif getattr(business, "marketplace_email_branding_enabled", False):
-                branding = getattr(business, "marketplace_email_branding", None) or {}
-                if branding:
-                    context["email_branding"] = branding
-                    logo_url = (branding.get("logo_url") or "").strip()
-                    if logo_url:
-                        context["header_logo_url"] = logo_url
-                        try:
-                            _w = branding.get("logo_max_width")
-                            _h = branding.get("logo_max_height")
-                            context["header_logo_max_width"] = int(_w) if _w not in (None, "") else 160
-                            context["header_logo_max_height"] = int(_h) if _h not in (None, "") else 60
-                        except (TypeError, ValueError):
-                            context["header_logo_max_width"] = 160
-                            context["header_logo_max_height"] = 60
-        except Exception as e:
-            logger.warning(
-                f"Could not attach email branding for booking {booking.id}: {e}"
-            )
+        _attach_booking_email_branding(context, booking, booking_source)
 
     if context["is_guest"] and booking.cancellation_token:
         guest_cancellation_url = (
@@ -552,6 +638,24 @@ def send_booking_confirmation_email(user, booking: Booking, booking_source=None,
         logger.warning(f"Could not generate ICS attachment for booking {booking.id}")
 
     to_list = override_recipient_list if override_recipient_list is not None else [recipient.email]
+    subject_line = f"{subject_prefix} {related_data.get('class_title', '[Class Title]')}"
+    custom_key = (
+        EMAIL_TYPE_BOOKING_CONFIRMATION
+        if booking.enrollment_type != "Full Course"
+        else None
+    )
+    if custom_key and _try_send_custom_branding_html_email(
+        to_list,
+        custom_key,
+        context,
+        subject_line,
+        attachments=email_attachments,
+    ):
+        logger.info(
+            f"--- send_booking_confirmation_email (custom HTML) finished for Booking ID: {booking.id} ---"
+        )
+        return
+
     logger.info(
         f"Proceeding to call send_templated_email for booking {booking.id} using template '{template_name}' to {to_list}"
     )
@@ -560,7 +664,7 @@ def send_booking_confirmation_email(user, booking: Booking, booking_source=None,
         recipient_list=to_list,
         template_name=template_name,
         context=context,
-        subject=f"{subject_prefix} {related_data.get('class_title', '[Class Title]')}",
+        subject=subject_line,
         attachments=email_attachments,
     )
 
@@ -706,9 +810,12 @@ def send_refund_failed_guest_email(booking: Booking, reason: str):
     )
 
 
-def send_booking_cancellation_user_email(user, booking: Booking, refund_details: str):
+def send_booking_cancellation_user_email(
+    user, booking: Booking, refund_details: str, booking_source=None
+):
     """
     Sends confirmation to a user after they cancelled their booking.
+    booking_source: optional widget / member_widget / marketplace for branding resolution.
     """
     if not user or not user.email or not booking:
         logger.warning(
@@ -737,6 +844,8 @@ def send_booking_cancellation_user_email(user, booking: Booking, refund_details:
         "related_data": related_data,
         "upcoming_sessions": [],
     }
+    if booking.schedule_instance:
+        _attach_booking_email_branding(context, booking, booking_source)
 
     # Choose template and subject based on type
     if booking.enrollment_type == "Full Course":
@@ -785,11 +894,29 @@ def send_booking_cancellation_user_email(user, booking: Booking, refund_details:
             f"Using Single Session Cancellation template for booking {booking.id}"
         )
 
+    subject_line = f"{subject_prefix} {related_data.get('class_title', '[Class Title]')}"
+    custom_key = (
+        EMAIL_TYPE_BOOKING_CANCELLATION_CONFIRMED
+        if booking.enrollment_type != "Full Course"
+        else None
+    )
+    if custom_key and _try_send_custom_branding_html_email(
+        [user.email],
+        custom_key,
+        context,
+        subject_line,
+        attachments=None,
+    ):
+        logger.info(
+            f"User booking cancellation custom HTML email queued for booking {booking.id}"
+        )
+        return
+
     send_templated_email(
         recipient_list=[user.email],
         template_name=template_name,
         context=context,
-        subject=f"{subject_prefix} {related_data.get('class_title', '[Class Title]')}",
+        subject=subject_line,
     )
     logger.info(
         f"User booking cancellation email prepared/queued for booking {booking.id}"
@@ -802,9 +929,11 @@ def send_booking_cancelled_by_other_email(
     cancelled_by: str,
     reason: str,
     contact_info: str,
+    booking_source=None,
 ):
     """
     Sends notification to a user when their booking is cancelled by the business or an admin.
+    booking_source: optional widget / member_widget / marketplace for branding resolution.
     """
     if not user or not user.email or not booking:
         logger.warning(
@@ -860,11 +989,27 @@ def send_booking_cancelled_by_other_email(
                 f"Failed to fetch upcoming sessions for cancellation email: {e}"
             )
 
+    if booking.schedule_instance:
+        _attach_booking_email_branding(context, booking, booking_source)
+
+    subject_line = f"Important: Your Class {related_data.get('class_title', '[Class Title]')} Was Cancelled"
+    if _try_send_custom_branding_html_email(
+        [user.email],
+        EMAIL_TYPE_BOOKING_CANCELLED_BY_HOST,
+        context,
+        subject_line,
+        attachments=None,
+    ):
+        logger.info(
+            f"'Cancelled by other' custom HTML email prepared/queued for booking {booking.id}"
+        )
+        return
+
     send_templated_email(
         recipient_list=[user.email],
         template_name="emails/booking_cancelled_by_other.html",
         context=context,
-        subject=f"Important: Your Class {related_data.get('class_title', '[Class Title]')} Was Cancelled",
+        subject=subject_line,
     )
     logger.info(f"'Cancelled by other' email prepared/queued for booking {booking.id}")
 
@@ -930,46 +1075,7 @@ def send_booking_reminder_email(user, booking: Booking, booking_source=None):
         "formatted_timezone": formatted_timezone,
     }
     if booking.schedule_instance:
-        try:
-            business = (
-                booking.schedule_instance.schedule.option.classId.businessId
-            )
-            if is_widget_booking_source(booking_source) and business_has_growth_or_advanced_widget_plan(
-                business
-            ):
-                branding = getattr(business, "widget_email_branding", None) or {}
-                if branding:
-                    context["email_branding"] = branding
-                    logo_url = (branding.get("logo_url") or "").strip()
-                    if logo_url:
-                        context["header_logo_url"] = logo_url
-                        try:
-                            _w = branding.get("logo_max_width")
-                            _h = branding.get("logo_max_height")
-                            context["header_logo_max_width"] = int(_w) if _w not in (None, "") else 160
-                            context["header_logo_max_height"] = int(_h) if _h not in (None, "") else 60
-                        except (TypeError, ValueError):
-                            context["header_logo_max_width"] = 160
-                            context["header_logo_max_height"] = 60
-            elif getattr(business, "marketplace_email_branding_enabled", False):
-                branding = getattr(business, "marketplace_email_branding", None) or {}
-                if branding:
-                    context["email_branding"] = branding
-                    logo_url = (branding.get("logo_url") or "").strip()
-                    if logo_url:
-                        context["header_logo_url"] = logo_url
-                        try:
-                            _w = branding.get("logo_max_width")
-                            _h = branding.get("logo_max_height")
-                            context["header_logo_max_width"] = int(_w) if _w not in (None, "") else 160
-                            context["header_logo_max_height"] = int(_h) if _h not in (None, "") else 60
-                        except (TypeError, ValueError):
-                            context["header_logo_max_width"] = 160
-                            context["header_logo_max_height"] = 60
-        except Exception as e:
-            logger.warning(
-                f"Could not attach email branding for reminder booking {booking.id}: {e}"
-            )
+        _attach_booking_email_branding(context, booking, booking_source)
 
     # Pass course session context if available
     if booking.enrollment_type == "Full Course" and booking.course_session_number:
@@ -983,11 +1089,24 @@ def send_booking_reminder_email(user, booking: Booking, booking_source=None):
         subject_prefix = "Reminder: Your Class"
         logger.info("Formatting reminder for Single Session")
 
+    subject_line = f"{subject_prefix} {related_data.get('class_title', '[Class Title]')} is Soon!"
+    if _try_send_custom_branding_html_email(
+        [user.email],
+        EMAIL_TYPE_BOOKING_REMINDER,
+        context,
+        subject_line,
+        attachments=None,
+    ):
+        logger.info(
+            f"Booking reminder custom HTML email prepared/queued for booking {booking.id}"
+        )
+        return
+
     send_templated_email(
         recipient_list=[user.email],
         template_name="emails/booking_reminder_user.html",
         context=context,
-        subject=f"{subject_prefix} {related_data.get('class_title', '[Class Title]')} is Soon!",
+        subject=subject_line,
     )
     logger.info(f"Booking reminder email prepared/queued for booking {booking.id}")
 
@@ -2120,9 +2239,11 @@ def send_booking_rescheduled_by_business_email(
     booking: Booking,
     old_instance: ScheduleInstance,
     new_instance: ScheduleInstance,
+    booking_source=None,
 ):
     """
     Notifies a user that their booking was rescheduled by the business.
+    booking_source: optional widget / member_widget / marketplace for branding resolution.
     """
     if not user or not user.email or not booking:
         logger.warning(
@@ -2172,11 +2293,27 @@ def send_booking_rescheduled_by_business_email(
         "related_data": related_data,
     }
 
+    if booking.schedule_instance:
+        _attach_booking_email_branding(context, booking, booking_source)
+
+    subject_line = f"Update: Your Booking for {related_data.get('class_title', '[Class Title]')} Has Been Rescheduled"
+    if _try_send_custom_branding_html_email(
+        [user.email],
+        EMAIL_TYPE_BOOKING_RESCHEDULED,
+        context,
+        subject_line,
+        attachments=None,
+    ):
+        logger.info(
+            f"Booking reschedule custom HTML email prepared/queued for booking {booking.id}"
+        )
+        return
+
     send_templated_email(
         recipient_list=[user.email],
         template_name="emails/booking_rescheduled_by_business.html",
         context=context,
-        subject=f"Update: Your Booking for {related_data.get('class_title', '[Class Title]')} Has Been Rescheduled",
+        subject=subject_line,
     )
     logger.info(f"Booking reschedule email prepared/queued for booking {booking.id}")
 

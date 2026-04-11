@@ -32,6 +32,10 @@ if [ "$CONTAINER_ROLE" = "web" ]; then
     echo "--- [WEB] Clearing public caches (once per build) ---"
     python manage.py clear_public_caches --once-per-build || true
 
+    # Sync EnhancedPermission rows / groups once per deploy (same build id as clear_public_caches).
+    echo "--- [WEB] enhance_permissions (once per build) ---"
+    python manage.py enhance_permissions --once-per-build || true
+
     echo "--- [WEB] Starting Gunicorn server ---"
     # The 'exec "$@"' will run the CMD from the ECS Task Definition (e.g., gunicorn)
     exec "$@"

@@ -1,18 +1,64 @@
 # quickstart/management/commands/enhance_permissions.py
 
 from django.core.management.base import BaseCommand
+from django.core.cache import cache
+from django.conf import settings
 from django.contrib.auth.models import Permission
 from django.db import transaction
 from django.db.models import Q
 from django.contrib.contenttypes.models import ContentType
 from django.apps import apps
+from quickstart.utils.deploy_build_id import get_deploy_build_id
 from ...models import PermissionGroup, EnhancedPermission
+
+_ENHANCE_BUILD_KEY_PREFIX = "enhance_permissions_applied_build"
+_ENHANCE_BUILD_TTL = 30 * 24 * 3600  # 30 days
 
 
 class Command(BaseCommand):
     help = "Enhance ONLY explicitly defined permissions and organize them in groups"
 
+    def add_arguments(self, parser):
+        parser.add_argument(
+            "--once-per-build",
+            action="store_true",
+            help="Run only if not already applied for this deploy (BUILD_ID/IMAGE_TAG/GIT_SHA). "
+            "Use on web startup so scale-out does not repeat work.",
+        )
+
     def handle(self, *args, **options):
+        once_per_build = options.get("once_per_build", False)
+        build_id = None
+        cache_key = None
+        if once_per_build:
+            build_id = get_deploy_build_id()
+            if not build_id:
+                self.stdout.write(
+                    self.style.WARNING(
+                        "Once-per-build requested but no BUILD_ID/IMAGE_TAG/GIT_SHA set; "
+                        "skipping enhance_permissions."
+                    )
+                )
+                return
+            env = getattr(settings, "DJANGO_ENV", "local")
+            cache_key = f"{_ENHANCE_BUILD_KEY_PREFIX}:{env}:{build_id}"
+            try:
+                if cache.get(cache_key):
+                    self.stdout.write(
+                        self.style.SUCCESS(
+                            "enhance_permissions already ran for this build (key=%s); skipping."
+                            % cache_key
+                        )
+                    )
+                    return
+            except Exception as e:
+                self.stdout.write(
+                    self.style.WARNING(
+                        "Could not check enhance_permissions build marker in cache: %s" % e
+                    )
+                )
+                return
+
         self.stdout.write("Enhancing explicitly defined permissions...")
 
         # Define which Django app content types to exclude COMPLETELY
@@ -748,5 +794,20 @@ class Command(BaseCommand):
             self.stdout.write(
                 f"Successfully processed and enhanced {enhanced_count} explicitly defined permissions."
             )
+
+        if once_per_build and build_id and cache_key:
+            try:
+                cache.set(cache_key, "1", timeout=_ENHANCE_BUILD_TTL)
+                self.stdout.write(
+                    self.style.SUCCESS(
+                        "Enhance permissions build marker set (key=%s)." % cache_key
+                    )
+                )
+            except Exception as e:
+                self.stdout.write(
+                    self.style.WARNING(
+                        "Could not set enhance_permissions build marker: %s" % e
+                    )
+                )
 
         self.stdout.write(self.style.SUCCESS("Permission enhancement complete."))

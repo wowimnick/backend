@@ -900,7 +900,7 @@ class MyBusinessProfileView(generics.RetrieveUpdateDestroyAPIView):
                 | Q(staff_members__user=user, staff_members__status="accepted")
             )
             .select_related("owner")
-            .prefetch_related("staff_members__user")  # Updated prefetch
+            .prefetch_related("staff_members__user", "locations")
             .first()
         )
 

@@ -36,6 +36,7 @@ from django.db.models.functions import (
 )
 from django.utils import timezone
 from datetime import datetime, timedelta, date as datetime_date
+from django.contrib.contenttypes.models import ContentType
 from django.shortcuts import get_object_or_404
 from django.core.exceptions import ValidationError as DjangoValidationError
 import pytz
@@ -660,6 +661,31 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                         exc_info=True,
                     )
                 business = booking.schedule_instance.schedule.option.classId.businessId
+                if booking.user_id:
+                    from quickstart.utils.notification_utils import create_notifications_for_users
+
+                    ct = ContentType.objects.get_for_model(Booking)
+                    class_title = getattr(
+                        booking.schedule_instance.schedule.option.classId,
+                        "title",
+                        "your class",
+                    )
+                    date_str = booking.schedule_instance.date.strftime("%b %d")
+                    cancel_msg = (
+                        f"Your booking for '{class_title}' on {date_str} has been "
+                        "cancelled by the business."
+                    )
+                    create_notifications_for_users(
+                        [booking.user],
+                        "booking_cancelled_by_biz",
+                        cancel_msg,
+                        "UserX",
+                        "#ef4444",
+                        "/my-classes?tab=upcoming",
+                        business=business,
+                        content_type=ct,
+                        object_id=str(booking.pk),
+                    )
                 if business_sms_enabled(business) and user_to_notify and booking.schedule_instance:
                     phone = getattr(user_to_notify, "phone_number", None) or (booking.metadata or {}).get("guest_phone") or ""
                     normalized = normalize_phone_for_sns(phone)

@@ -207,6 +207,16 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
             return ClassCreateSerializer
         return ManagedClassSerializer
 
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        user = self.request.user
+        business = BusinessInfo.objects.filter(
+            Q(owner=user)
+            | Q(staff_members__user=user, staff_members__status="accepted")
+        ).first()
+        ctx["business"] = business
+        return ctx
+
     def get_queryset(self):
         """Filter queryset to only classes belonging to the user's associated business."""
         user = self.request.user
@@ -223,7 +233,7 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
         return (
             ClassesMain.objects.filter(businessId=business)
             .exclude(status="suspended")
-            .select_related("businessId")
+            .select_related("businessId", "location_ref")
             .prefetch_related(
                 Prefetch(
                     "images",

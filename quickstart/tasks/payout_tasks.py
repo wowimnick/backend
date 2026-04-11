@@ -1,7 +1,7 @@
 from celery import shared_task
 from django.utils import timezone
 from django.db import transaction
-from django.db.models import Q, Sum
+from django.db.models import Q, Sum, Count
 from django.conf import settings
 from datetime import timedelta, datetime
 from decimal import Decimal
@@ -11,6 +11,7 @@ import pytz
 import random
 
 from quickstart.models import Booking, Payout, BusinessInfo, Payment
+from quickstart.utils.notification_utils import create_notification_for_recipients
 from quickstart.utils.stripe_metadata import stripe_metadata_to_dict
 
 logger = logging.getLogger(__name__)
@@ -134,10 +135,45 @@ def update_completed_booking_status():
     bookings_to_update = Booking.objects.filter(
         instances_to_complete, status="confirmed"
     )
-    
+
     count_to_update = bookings_to_update.count()
     logger.info(f"Found {count_to_update} confirmed bookings to mark as completed")
-    
+
+    try:
+        per_business = (
+            bookings_to_update.values(
+                "schedule_instance__schedule__option__classId__businessId"
+            )
+            .annotate(n=Count("id"))
+            .order_by()
+        )
+        for row in per_business:
+            bid = row["schedule_instance__schedule__option__classId__businessId"]
+            n = row["n"]
+            if not bid or n < 1:
+                continue
+            try:
+                biz = BusinessInfo.objects.get(pk=bid)
+            except BusinessInfo.DoesNotExist:
+                continue
+            done_msg = (
+                f"You have {n} completed class(es) ready for payout."
+                if n != 1
+                else "You have 1 completed class ready for payout."
+            )
+            create_notification_for_recipients(
+                biz,
+                "booking_completed",
+                done_msg,
+                "CheckCircle",
+                "#22c55e",
+                "/business/dashboard?tab=payouts",
+            )
+    except Exception as e:
+        logger.warning(
+            "booking_completed in-app notifications skipped: %s", e, exc_info=True
+        )
+
     updated_count = bookings_to_update.update(status="completed")
     
     logger.info(f"Successfully marked {updated_count} past bookings as 'completed'")

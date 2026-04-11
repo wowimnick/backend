@@ -48,6 +48,7 @@ from quickstart.services.widget_subscription_service import (
     _get_price_id,
     _is_downgrade,
 )
+from quickstart.utils.email_branding_html import normalize_and_validate_branding_payload
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
@@ -262,14 +263,30 @@ class WidgetConfigManagementView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             if isinstance(widget_email_branding, dict):
-                business.widget_email_branding = widget_email_branding
+                ok, err_list, cleaned = normalize_and_validate_branding_payload(
+                    widget_email_branding
+                )
+                if not ok:
+                    return Response(
+                        {"detail": "Invalid email branding.", "errors": err_list},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                business.widget_email_branding = cleaned
                 business.save(update_fields=["widget_email_branding"])
 
         # marketplace_email_branding_enabled is set only by addon subscription webhook; we do not accept it here.
         data.pop("marketplace_email_branding_enabled", None)
         marketplace_branding = data.pop("marketplace_email_branding", None)
         if marketplace_branding is not None and isinstance(marketplace_branding, dict):
-            business.marketplace_email_branding = marketplace_branding
+            ok, err_list, cleaned = normalize_and_validate_branding_payload(
+                marketplace_branding
+            )
+            if not ok:
+                return Response(
+                    {"detail": "Invalid marketplace email branding.", "errors": err_list},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            business.marketplace_email_branding = cleaned
             business.save(update_fields=["marketplace_email_branding"])
 
         # Pin widget to a specific class (specificClassId) is Growth/Advanced only.

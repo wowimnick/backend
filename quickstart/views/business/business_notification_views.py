@@ -2,6 +2,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.pagination import PageNumberPagination
 from django.core.cache import cache  # For Redis
 from django.db.models import Q
 
@@ -11,9 +12,16 @@ from quickstart.serializers import NotificationSerializer  # Adjust import
 from quickstart.utils.permissions import IsBusinessMember
 
 
+class NotificationPagination(PageNumberPagination):
+    page_size = 10
+    page_size_query_param = "page_size"
+    max_page_size = 50
+
+
 class NotificationViewSet(viewsets.ModelViewSet):
     serializer_class = NotificationSerializer
     permission_classes = [IsAuthenticated, IsBusinessMember]
+    pagination_class = NotificationPagination
     http_method_names = ["get", "post", "head", "options"]  # Allow POST for actions
 
     def get_queryset(self):

@@ -111,7 +111,7 @@ class Command(BaseCommand):
         )
 
         # 1C, 2A (+ dashboard), 3C (+ host message if any), 4A, 5A
-        reminder_body = f"Heads up — {class_title} is tomorrow, {date_str} at {time_str}.\n\nNeed to cancel? Do it from your booking.\n\n— {business_name}"
+        reminder_body = f"Heads up — {class_title} is tomorrow, {date_str} at {time_str}.\n\n— {business_name}"
         if host_message and host_message.strip():
             reminder_body = f"{reminder_body}\n\nFrom your host: {host_message.strip()}"
         messages = [

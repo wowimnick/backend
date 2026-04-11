@@ -351,6 +351,10 @@ def _get_demo_classes_payload():
             "images": [],
             "average_rating": 4.5,
             "review_count": 12,
+            "require_participant_names": False,
+            "location": "123 Demo Street",
+            "location_name": "Main studio",
+            "location_address": "123 Demo Street",
         },
     ]
 
@@ -366,11 +370,15 @@ class WidgetClassListView(generics.ListAPIView):
         return super().list(request, *args, **kwargs)
 
     def get_queryset(self):
-        return ClassesMain.objects.filter(
-            businessId=self.request.business_context, status="active"
-        ).prefetch_related(
-            "options__schedules",
-            Prefetch("images", queryset=ClassImage.objects.order_by("-isCover")),
+        return (
+            ClassesMain.objects.filter(
+                businessId=self.request.business_context, status="active"
+            )
+            .select_related("businessId", "location_ref")
+            .prefetch_related(
+                "options__schedules",
+                Prefetch("images", queryset=ClassImage.objects.order_by("-isCover")),
+            )
         )
 
 

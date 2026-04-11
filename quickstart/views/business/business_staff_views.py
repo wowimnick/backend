@@ -216,6 +216,39 @@ class AcceptStaffInvitationView(generics.GenericAPIView):
         invitation.invitation_token = None
         invitation.save()
 
+        try:
+            from quickstart.utils.notification_utils import create_notifications_for_users
+
+            business = invitation.business
+            staff_name = (
+                request.user.get_full_name() or ""
+            ).strip() or request.user.email
+            join_msg = f"{staff_name} has joined your team."
+            notify_staff = []
+            if business.owner_id:
+                notify_staff.append(business.owner)
+            if (
+                invitation.invited_by_id
+                and invitation.invited_by_id != business.owner_id
+                and invitation.invited_by
+            ):
+                notify_staff.append(invitation.invited_by)
+            create_notifications_for_users(
+                notify_staff,
+                "staff_joined",
+                join_msg,
+                "UserPlus",
+                "#10b981",
+                "/business/dashboard?tab=settings",
+                business=business,
+            )
+        except Exception as e:
+            logger.warning(
+                "Could not create staff_joined notification for business %s: %s",
+                getattr(invitation.business, "businessId", ""),
+                e,
+            )
+
         logger.info(
             f"User {request.user.email} accepted invitation to join '{invitation.business.businessName}'"
         )

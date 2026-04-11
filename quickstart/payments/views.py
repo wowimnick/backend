@@ -14,6 +14,7 @@ from decimal import Decimal
 import stripe
 from django.conf import settings
 from django.core.cache import cache
+from django.contrib.contenttypes.models import ContentType
 from django.db.models import Q, F, Sum
 from django.db.models.functions import Coalesce
 
@@ -71,6 +72,10 @@ from quickstart.utils.email_utils import (
 )
 from quickstart.utils.sms_utils import normalize_phone_for_sns, business_sms_enabled
 from quickstart.tasks.notification_tasks import send_sms_task
+from quickstart.utils.notification_utils import (
+    create_notification_for_recipients,
+    create_membership_business_in_app_notifications,
+)
 
 import logging
 
@@ -1518,6 +1523,50 @@ class ProcessBookingWebhook(APIView):
                             payment_intent.id,
                         )
                         _revalidate_for_booking(booking_to_fail)
+                        try:
+                            business = (
+                                booking_to_fail.schedule_instance.schedule.option.classId.businessId
+                            )
+                            booker = booking_to_fail.user or booking_to_fail.contact
+                            if booker and hasattr(booker, "get_full_name"):
+                                customer_name = (
+                                    (booker.get_full_name() or "").strip()
+                                    or getattr(booker, "email", None)
+                                    or "A customer"
+                                )
+                            elif booker:
+                                customer_name = (
+                                    f"{getattr(booker, 'first_name', '')} {getattr(booker, 'last_name', '')}".strip()
+                                    or getattr(booker, "email", None)
+                                    or "A customer"
+                                )
+                            else:
+                                customer_name = "A customer"
+                            class_title = getattr(
+                                booking_to_fail.schedule_instance.schedule.option.classId,
+                                "title",
+                                "a class",
+                            )
+                            ct = ContentType.objects.get_for_model(Booking)
+                            fail_msg = (
+                                f"A payment for '{class_title}' by {customer_name} has failed."
+                            )
+                            create_notification_for_recipients(
+                                business,
+                                "payment_failed",
+                                fail_msg,
+                                "AlertTriangle",
+                                "#ef4444",
+                                "/business/dashboard?tab=bookings",
+                                content_type=ct,
+                                object_id=str(booking_to_fail.pk),
+                            )
+                        except Exception as notif_err:
+                            logger.warning(
+                                "[%s] payment_failed in-app notification: %s",
+                                webhook_id,
+                                notif_err,
+                            )
 
             except Payment.DoesNotExist:
                 logger.warning(
@@ -1639,6 +1688,9 @@ class ProcessBookingWebhook(APIView):
                                         lifecycle_event="payment_failed",
                                         extra_message="A member renewal payment failed. Ask the member to update payment details if needed.",
                                     )
+                                    create_membership_business_in_app_notifications(
+                                        membership, "payment_failed"
+                                    )
                     except (stripe.StripeError, Exception) as e:
                         logger.warning(
                             "[%s] invoice.payment_failed handling failed: %s", webhook_id, e, exc_info=True,
@@ -1691,6 +1743,9 @@ class ProcessBookingWebhook(APIView):
                                         lifecycle_event="renewed",
                                         amount=amount_paid,
                                         currency=currency,
+                                    )
+                                    create_membership_business_in_app_notifications(
+                                        membership, "renewed"
                                     )
                     elif _obj_get(meta, "business_id"):
                         sync_widget_subscription_from_stripe(sub_id, subscription_obj=stripe_sub)
@@ -1848,6 +1903,9 @@ class ProcessBookingWebhook(APIView):
                             after_membership,
                             lifecycle_event="canceled",
                         )
+                        create_membership_business_in_app_notifications(
+                            after_membership, "canceled"
+                        )
                 elif after_membership:
                     before_status = (getattr(before_membership, "status", "") or "").lower() if before_membership else ""
                     after_status = (after_membership.status or "").lower()
@@ -1866,6 +1924,9 @@ class ProcessBookingWebhook(APIView):
                             send_membership_lifecycle_business_email(
                                 after_membership,
                                 lifecycle_event="activated",
+                            )
+                            create_membership_business_in_app_notifications(
+                                after_membership, "activated"
                             )
                     if after_cancel and not before_cancel:
                         if cache.add(

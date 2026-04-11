@@ -12,6 +12,10 @@ from quickstart.utils.widget_booking_source import (
 from django.db import transaction
 from django.conf import settings
 from quickstart.utils.email_utils import send_booking_reminder_email
+from quickstart.utils.notification_utils import (
+    create_notification_for_recipients,
+    create_notifications_for_users,
+)
 from quickstart.utils.sms_utils import normalize_phone_for_sns, business_sms_enabled
 from quickstart.tasks.notification_tasks import send_sms_task
 import logging
@@ -166,6 +170,54 @@ def send_upcoming_booking_reminders():
             logger.info(f"Queued reminder email for booking {booking.id}.")
 
             business = booking.schedule_instance.schedule.option.classId.businessId
+            class_title = getattr(
+                booking.schedule_instance.schedule.option.classId,
+                "title",
+                "your class",
+            )
+            si_id = booking.schedule_instance_id
+            biz_in_app_key = f"in_app_class_reminder_biz:{si_id}"
+            if cache.add(biz_in_app_key, True, timeout=108000):
+                booking_count = Booking.objects.filter(
+                    schedule_instance_id=si_id,
+                    status="confirmed",
+                ).count()
+                biz_msg = (
+                    f"Reminder: '{class_title}' is starting in ~24 hours with "
+                    f"{booking_count} booking(s)."
+                )
+                create_notification_for_recipients(
+                    business,
+                    "class_reminder_biz",
+                    biz_msg,
+                    "Clock",
+                    "#8b5cf6",
+                    "/business/dashboard?tab=bookings",
+                )
+            if booking.user_id:
+                t = booking.schedule_instance.time
+                time_str = (
+                    t.strftime("%I:%M %p").lstrip("0")
+                    if hasattr(t, "strftime")
+                    else str(t)
+                )
+                date_str = (
+                    booking.schedule_instance.date.strftime("%b %d")
+                    if hasattr(booking.schedule_instance.date, "strftime")
+                    else str(booking.schedule_instance.date)
+                )
+                student_msg = (
+                    f"Reminder: Your class '{class_title}' starts on {date_str} at {time_str}."
+                )
+                create_notifications_for_users(
+                    [booking.user],
+                    "class_reminder_student",
+                    student_msg,
+                    "Clock",
+                    "#8b5cf6",
+                    "/my-classes?tab=upcoming",
+                    business=business,
+                )
             if business_sms_enabled(business) and getattr(business, "reminderNotification", True):
                 phone = getattr(recipient, "phone_number", None) or (booking.metadata or {}).get("guest_phone") or ""
                 normalized = normalize_phone_for_sns(phone)
@@ -188,7 +240,7 @@ def send_upcoming_booking_reminders():
                         "reminder_message",
                         "",
                     ) or ""
-                    sms_msg = f"Heads up — {class_title} is tomorrow, {date_str} at {time_str}.\n\nNeed to cancel? Do it from your booking.\n\n— {business_name}"
+                    sms_msg = f"Heads up — {class_title} is tomorrow, {date_str} at {time_str}.\n\n— {business_name}"
                     if host_message and str(host_message).strip():
                         sms_msg = f"{sms_msg}\n\nFrom your host: {str(host_message).strip()}"
                     try:

@@ -348,6 +348,9 @@ class AdminBookingViewSet(viewsets.ModelViewSet):
     def analytics(self, request):
         """
         Provides operational statistics for the Booking Management dashboard.
+
+        Date ranges use the class session date (schedule_instance.date), matching
+        get_queryset() for the list and export — not booking_date (when the row was created).
         """
         if not request.user.has_perm("quickstart.view_booking_analytics"):
             self.permission_denied(
@@ -359,10 +362,14 @@ class AdminBookingViewSet(viewsets.ModelViewSet):
                 request.query_params, default_days=30, logger=logger
             )
 
-            bookings_in_period = Booking.objects.filter(
-                booking_date__gte=window.start_dt,
-                booking_date__lt=window.end_dt_exclusive,
-            )
+            # Align with list/export: filter by session date when a range is implied; all rows for all_time.
+            if window.all_time:
+                bookings_in_period = Booking.objects.all()
+            else:
+                bookings_in_period = Booking.objects.filter(
+                    schedule_instance__date__gte=window.start_date,
+                    schedule_instance__date__lte=window.end_date,
+                )
 
             aggregates = bookings_in_period.aggregate(
                 total_bookings=Count("id"),
@@ -407,8 +414,8 @@ class AdminBookingViewSet(viewsets.ModelViewSet):
                 booking_growth = 0.0
             else:
                 previous_period_bookings_count = Booking.objects.filter(
-                    booking_date__gte=window.previous_start_dt,
-                    booking_date__lt=window.previous_end_dt_exclusive,
+                    schedule_instance__date__gte=window.previous_start_date,
+                    schedule_instance__date__lte=window.previous_end_date,
                 ).count()
 
                 booking_growth = 0
@@ -422,11 +429,14 @@ class AdminBookingViewSet(viewsets.ModelViewSet):
 
             # Platform and Stripe fees from payments for these bookings (succeeded only). Stripe = 2.9% + $0.30 per payment (on the fly).
             payments_for_bookings = Payment.objects.filter(
-                booking__booking_date__gte=window.start_dt,
-                booking__booking_date__lt=window.end_dt_exclusive,
                 booking__status__in=["confirmed", "completed"],
                 status="succeeded",
             )
+            if not window.all_time:
+                payments_for_bookings = payments_for_bookings.filter(
+                    booking__schedule_instance__date__gte=window.start_date,
+                    booking__schedule_instance__date__lte=window.end_date,
+                )
             stripe_fee_expr = ExpressionWrapper(
                 F("amount") * Decimal("0.029") + Value(Decimal("0.30")),
                 output_field=DecimalField(),

@@ -22,6 +22,12 @@ from quickstart.models import (
     Role,
     ImportedGoogleReview,
 )
+from quickstart.serializers.business.business_location_serializers import (
+    BusinessLocationSerializer,
+)
+from quickstart.utils.business_location_utils import (
+    sync_primary_location_from_business_profile,
+)
 from django.db.models import Sum, Count, Avg, Q, Subquery, OuterRef, IntegerField, F, CharField
 from django.db.models.functions import Coalesce, Cast
 from datetime import (
@@ -466,6 +472,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
         required=False, allow_blank=True, allow_null=True
     )
     businessHours = serializers.JSONField(required=False, allow_null=True)
+    locations = BusinessLocationSerializer(many=True, read_only=True)
 
     class Meta:
         model = BusinessInfo
@@ -513,6 +520,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "updatedAt",
             "average_rating",
             "totalReviews",
+            "locations",
         ]
         read_only_fields = (
             "businessId",
@@ -530,6 +538,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "skillLevels",
             "ageGroups",
             "business_image_medium_url",
+            "locations",
         )
         extra_kwargs = {
             "businessName": {"required": False},
@@ -863,6 +872,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             setattr(instance, attr, value)
 
         instance.save()
+        sync_primary_location_from_business_profile(instance)
         return instance
 
 

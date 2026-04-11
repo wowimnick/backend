@@ -89,6 +89,29 @@ from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
+
+def _public_class_options_prefetch_queryset():
+    """
+    Class options as exposed on public list/detail (PublicClassOptionSerializer).
+    Restricting columns reduces prefetch payload vs. SELECT * on class_options
+    (JSON and unused policy fields are heavy at scale).
+    """
+    return ClassOption.objects.only(
+        "optionId",
+        "classId",
+        "title",
+        "description",
+        "booking_type",
+        "level",
+        "equipment",
+        "tags",
+        "cancellationPolicy",
+        "cancellationCustomHours",
+        "cancellationRefundPercentage",
+        "price_type",
+    ).order_by("optionId")
+
+
 # Scope cache keys by environment so staging and prod share Redis without clearing each other's cache
 _CACHE_ENV = getattr(settings, "DJANGO_ENV", "local")
 
@@ -579,14 +602,26 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             output_field=DecimalField(max_digits=10, decimal_places=2),
         )
 
+        options_qs = _public_class_options_prefetch_queryset()
+        if self.action == "retrieve":
+            options_qs = options_qs.prefetch_related(
+                Prefetch(
+                    "schedules",
+                    queryset=Schedule.objects.filter(
+                        Q(date__gte=timezone.now().date())
+                        | Q(end_date__gte=timezone.now().date())
+                    ).order_by("date", "time"),
+                )
+            )
+
         queryset = (
-            ClassesMain.objects.select_related("businessId")
+            ClassesMain.objects.select_related("businessId", "location_ref")
             .prefetch_related(
                 Prefetch(
                     "images",
                     queryset=ClassImage.objects.order_by("-isCover", "createdAt"),
                 ),
-                "options",
+                Prefetch("options", queryset=options_qs),
             )
             .filter(
                 status="active",
@@ -634,18 +669,9 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
 
         # 7. Specific Logic for Retrieve Action (Detail View)
         if self.action == "retrieve":
-            logger.debug("Action is 'retrieve', prefetching schedules for class detail.")
-            queryset = queryset.prefetch_related(
-                Prefetch(
-                    "options__schedules",
-                    queryset=Schedule.objects.filter(
-                        Q(date__gte=timezone.now().date())
-                        | Q(end_date__gte=timezone.now().date())
-                    ).order_by("date", "time"),
-                ),
-                "collections",
-            )
-            
+            logger.debug("Action is 'retrieve', prefetching collections for class detail.")
+            queryset = queryset.prefetch_related("collections")
+
         return queryset.distinct()
     
     @action(detail=False, methods=["get"])

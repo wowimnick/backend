@@ -693,7 +693,9 @@ class BusinessInfo(models.Model):
     widget_email_branding = models.JSONField(
         default=dict,
         blank=True,
-        help_text="Optional branding for widget booking emails: logo_url, primary_color, footer_text, confirmation_message.",
+        help_text="Widget transactional email branding: mode (builder|html), logo_url, primary_color, "
+        "background_color, font_family, button_text, button_style, visible_sections, footer_text, "
+        "confirmation_message, card/logo sizing; html mode adds custom_html per email type with {{placeholders}}.",
     )
 
     # Marketplace email branding addon: when enabled, confirmation/reminder for marketplace bookings use marketplace_email_branding.
@@ -704,7 +706,8 @@ class BusinessInfo(models.Model):
     marketplace_email_branding = models.JSONField(
         default=dict,
         blank=True,
-        help_text="Branding for marketplace booking emails when addon is enabled: logo_url, primary_color, footer_text, confirmation_message.",
+        help_text="Marketplace transactional email branding: same shape as widget_email_branding (builder vs html, "
+        "colors, typography, CTA, visible_sections, custom_html with {{placeholders}} when mode=html).",
     )
 
     email_marketing_enabled = models.BooleanField(
@@ -1283,10 +1286,59 @@ class ClassCollection(models.Model):
         ordering = ["sort_order", "name"]
 
 
+class BusinessLocation(models.Model):
+    """
+    A physical venue belonging to a business. Classes can be assigned to one location.
+    The primary location mirrors the legacy BusinessInfo address fields for backward compatibility.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        "BusinessInfo", on_delete=models.CASCADE, related_name="locations"
+    )
+    name = models.CharField(max_length=150)
+    address = models.CharField(max_length=255)
+    unit = models.CharField(max_length=50, blank=True, null=True)
+    city = models.CharField(max_length=100)
+    state = models.CharField(max_length=100)
+    zip_code = models.CharField(max_length=20, blank=True, default="")
+    latitude = models.DecimalField(
+        max_digits=10, decimal_places=8, null=True, blank=True
+    )
+    longitude = models.DecimalField(
+        max_digits=11, decimal_places=8, null=True, blank=True
+    )
+    point = gis_models.PointField(
+        srid=4326,
+        null=True,
+        blank=True,
+        help_text="Geographic location for spatial queries.",
+    )
+    show_exact_location = models.BooleanField(default=True)
+    is_primary = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.name} ({self.business_id})"
+
+    class Meta:
+        db_table = "business_location"
+        ordering = ["-is_primary", "name"]
+
+
 class ClassesMain(models.Model):
     classId = models.AutoField(primary_key=True)
     businessId = models.ForeignKey(
         "BusinessInfo", on_delete=models.CASCADE, related_name="classes"
+    )
+    location_ref = models.ForeignKey(
+        "BusinessLocation",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="classes",
     )
     collections = models.ManyToManyField(
         ClassCollection,
@@ -4269,7 +4321,11 @@ class Notification(models.Model):
         ("system_announcement", "System Announcement"),
         ("new_message_support", "New Message in Support Ticket"),
         ("new_message_chat", "New Message in Conversation"),
-        # Add more types as needed
+        ("staff_joined", "Staff Member Joined"),
+        ("membership_new", "New Membership"),
+        ("membership_cancelled", "Membership Cancelled"),
+        ("membership_renewed", "Membership Renewed"),
+        ("booking_completed", "Booking Completed"),
     ]
     notification_type = models.CharField(
         max_length=50, choices=NOTIFICATION_TYPE_CHOICES

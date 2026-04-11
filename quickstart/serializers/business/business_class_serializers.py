@@ -7,6 +7,7 @@ from rest_framework.exceptions import PermissionDenied
 from quickstart.utils.url_utils import build_cloudfront_url
 from django.contrib.gis.geos import Point
 from rest_framework import serializers
+from rest_framework.serializers import empty
 from django.db.models.functions import Coalesce
 from django.db.models import Q, Sum
 from django.utils import timezone
@@ -16,6 +17,7 @@ import logging
 from quickstart.models import (
     Booking,
     BusinessInfo,
+    BusinessLocation,
     ClassCategory,
     ClassSubcategory,
     ClassesMain,
@@ -23,6 +25,9 @@ from quickstart.models import (
     ClassOption,
     Schedule,
     ScheduleInstance,
+)
+from quickstart.utils.business_location_utils import (
+    apply_business_location_to_class_instance,
 )
 
 logger = logging.getLogger(__name__)
@@ -610,6 +615,12 @@ class ManagedClassSerializer(serializers.ModelSerializer):
     average_rating = serializers.FloatField(read_only=True)
     review_count = serializers.IntegerField(read_only=True)
     last_schedule_date = serializers.DateField(read_only=True, allow_null=True)
+    location_ref = serializers.PrimaryKeyRelatedField(
+        queryset=BusinessLocation.objects.all(),
+        allow_null=True,
+        required=False,
+    )
+    location_name = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = ClassesMain
@@ -626,6 +637,8 @@ class ManagedClassSerializer(serializers.ModelSerializer):
             "state",
             "coordinates",
             "saltLocation",
+            "location_ref",
+            "location_name",
             "studentContactEmail",
             "studentContactPhone",
             "adminContactEmail",
@@ -650,9 +663,25 @@ class ManagedClassSerializer(serializers.ModelSerializer):
             "average_rating",
             "review_count",
             "last_schedule_date",
+            "location_name",
         ]
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        business = (self.context or {}).get("business")
+        if business is not None:
+            self.fields["location_ref"].queryset = BusinessLocation.objects.filter(
+                business=business
+            )
+        else:
+            self.fields["location_ref"].queryset = BusinessLocation.objects.none()
+
+    def get_location_name(self, obj):
+        ref = getattr(obj, "location_ref", None)
+        return ref.name if ref else None
+
     def update(self, instance, validated_data):
+        location_ref = validated_data.pop("location_ref", empty)
         if "features" in validated_data and isinstance(validated_data["features"], str):
             try:
                 validated_data["features"] = json.loads(validated_data["features"])
@@ -678,7 +707,15 @@ class ManagedClassSerializer(serializers.ModelSerializer):
                     logger.warning(
                         f"During class update (ID: {instance.pk}), could not parse coordinates: '{coordinates_str}'. Error: {e}. Existing coordinates will be preserved."
                     )
-        return super().update(instance, validated_data)
+        instance = super().update(instance, validated_data)
+        if location_ref is not empty:
+            if location_ref is None:
+                instance.location_ref = None
+                instance.save(update_fields=["location_ref"])
+            else:
+                apply_business_location_to_class_instance(instance, location_ref)
+                instance.save()
+        return instance
 
 
 class ClassCreateSerializer(serializers.ModelSerializer):
@@ -686,6 +723,11 @@ class ClassCreateSerializer(serializers.ModelSerializer):
 
     city = serializers.CharField(required=False, allow_blank=True, max_length=100)
     state = serializers.CharField(required=False, allow_blank=True, max_length=100)
+    location_ref = serializers.PrimaryKeyRelatedField(
+        queryset=BusinessLocation.objects.all(),
+        allow_null=True,
+        required=False,
+    )
 
     class Meta:
         model = ClassesMain
@@ -699,17 +741,29 @@ class ClassCreateSerializer(serializers.ModelSerializer):
             "city",
             "state",
             "saltLocation",
+            "location_ref",
             "studentContactEmail",
             "studentContactPhone",
             "adminContactEmail",
             "adminContactPhone",
         ]
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        business = (self.context or {}).get("business")
+        if business is not None:
+            self.fields["location_ref"].queryset = BusinessLocation.objects.filter(
+                business=business, is_active=True
+            )
+        else:
+            self.fields["location_ref"].queryset = BusinessLocation.objects.none()
+
     def validate(self, data):
         # Category/subcategory deprecated; ignore if sent
         return data
 
     def create(self, validated_data):
+        location_ref = validated_data.pop("location_ref", None)
         coordinates_str = validated_data.get("coordinates")
         point = None
         if coordinates_str:
@@ -723,4 +777,7 @@ class ClassCreateSerializer(serializers.ModelSerializer):
         validated_data["point"] = point
 
         instance = ClassesMain.objects.create(**validated_data)
+        if location_ref:
+            apply_business_location_to_class_instance(instance, location_ref)
+            instance.save()
         return instance

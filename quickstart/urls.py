@@ -9,6 +9,13 @@ from django.urls import path
 
 # --- Model import for the new redirect view ---
 from quickstart.views.public.public_class_views import paginated_class_reviews
+from quickstart.views.business.email_branding_preview_views import (
+    EmailBrandingPreviewView,
+)
+from quickstart.views.business.business_location_views import (
+    BusinessLocationListCreateView,
+    BusinessLocationDetailView,
+)
 from quickstart.views.widget.widget_config_views import (
     WidgetConfigManagementView,
     CreateWidgetSubscriptionCheckoutView,
@@ -658,6 +665,11 @@ urlpatterns = [
         name="my-business-widget-config",
     ),
     path(
+        "my-business/email-branding/preview/",
+        EmailBrandingPreviewView.as_view(),
+        name="my-business-email-branding-preview",
+    ),
+    path(
         "my-business/widget-subscription/",
         WidgetSubscriptionView.as_view(),
         name="my-business-widget-subscription",
@@ -936,6 +948,16 @@ urlpatterns = [
         "public/marketing-email/unsubscribe/<str:token>/",
         MarketingEmailUnsubscribeView.as_view(),
         name="public-marketing-email-unsubscribe",
+    ),
+    path(
+        "my-business/locations/",
+        BusinessLocationListCreateView.as_view(),
+        name="my-business-locations",
+    ),
+    path(
+        "my-business/locations/<uuid:pk>/",
+        BusinessLocationDetailView.as_view(),
+        name="my-business-location-detail",
     ),
     path(
         "my-business/profile/",

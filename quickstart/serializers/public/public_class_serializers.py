@@ -235,6 +235,7 @@ class PublicClassSerializer(serializers.ModelSerializer):
         read_only=True,
         default=False,
     )
+    location_name = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = ClassesMain
@@ -248,6 +249,7 @@ class PublicClassSerializer(serializers.ModelSerializer):
             "description",
             "features",
             "location",
+            "location_name",
             "unit_number",
             "coordinates",
             "saltLocation",
@@ -268,6 +270,10 @@ class PublicClassSerializer(serializers.ModelSerializer):
             "require_participant_names",
         ]
         read_only_fields = fields
+
+    def get_location_name(self, obj):
+        ref = getattr(obj, "location_ref", None)
+        return ref.name if ref else None
 
     def _get_business_contact_if_public(self, obj, attr):
         """Expose business contact when contact_privacy is public or public_with_chat (always visible)."""

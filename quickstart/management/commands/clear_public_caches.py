@@ -8,12 +8,12 @@ Use --once-per-build so only the first web container for a given build clears ca
 (avoids clearing cache again when ECS scales out more web tasks with the same image).
 Requires BUILD_ID, IMAGE_TAG, or GIT_SHA in the environment (set in ECS task definition at deploy).
 """
-import os
 from django.core.management.base import BaseCommand
 from django.core.cache import cache
 from django.conf import settings
 
 from quickstart.utils.class_search_cache_flush import flush_all_class_search_cache
+from quickstart.utils.deploy_build_id import get_deploy_build_id
 from quickstart.views.public.public_class_views import (
     HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY,
     PRESET_CACHE_VERSION_KEY,
@@ -22,16 +22,6 @@ from quickstart.views.public.public_class_views import (
 _CACHE_ENV = getattr(settings, "DJANGO_ENV", "local")
 _CACHE_CLEARED_BUILD_KEY_PREFIX = "public_cache_cleared_build"
 _CACHE_CLEARED_BUILD_TTL = 30 * 24 * 3600  # 30 days
-
-
-def _get_build_id():
-    """Build/deploy identifier so we clear cache only once per deploy."""
-    return (
-        os.environ.get("BUILD_ID")
-        or os.environ.get("IMAGE_TAG")
-        or os.environ.get("GIT_SHA")
-        or os.environ.get("CODEBUILD_RESOLVED_SOURCE_VERSION")
-    )
 
 
 class Command(BaseCommand):
@@ -57,7 +47,7 @@ class Command(BaseCommand):
             self.stdout.write("Dry run: no cache changes will be made.")
 
         if once_per_build:
-            build_id = _get_build_id()
+            build_id = get_deploy_build_id()
             if not build_id:
                 self.stdout.write(
                     self.style.WARNING(
@@ -130,7 +120,7 @@ class Command(BaseCommand):
 
             # If once-per-build and all steps succeeded, mark this build as having cleared (so other tasks skip).
             if once_per_build and not dry_run and len(successes) == 3:
-                build_id = _get_build_id()
+                build_id = get_deploy_build_id()
                 if build_id:
                     cache_key = f"{_CACHE_CLEARED_BUILD_KEY_PREFIX}:{_CACHE_ENV}:{build_id}"
                     try:

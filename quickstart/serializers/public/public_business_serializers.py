@@ -3,7 +3,7 @@ from django.conf import settings
 from rest_framework import serializers
 
 from quickstart.utils.url_utils import build_cloudfront_url
-from quickstart.models import BusinessInfo, Reviews, ImportedGoogleReview
+from quickstart.models import BusinessInfo, BusinessLocation, Reviews, ImportedGoogleReview
 from .public_class_serializers import HomepageClassSerializer
 from .public_review_serializers import (
     PublicReviewSerializer,
@@ -26,6 +26,27 @@ class BusinessContactDetailSerializer(serializers.ModelSerializer):
             "studentContactEmail",
             "website",
             "businessUnit",
+        ]
+        read_only_fields = fields
+
+
+class PublicBusinessLocationSerializer(serializers.ModelSerializer):
+    """Active business venues for the public business page."""
+
+    class Meta:
+        model = BusinessLocation
+        fields = [
+            "id",
+            "name",
+            "address",
+            "unit",
+            "city",
+            "state",
+            "zip_code",
+            "latitude",
+            "longitude",
+            "show_exact_location",
+            "is_primary",
         ]
         read_only_fields = fields
 
@@ -114,6 +135,7 @@ class PublicBusinessDetailSerializer(PublicBusinessInfoSerializer):
     """
 
     classes = HomepageClassSerializer(many=True, read_only=True, source="active_classes")
+    locations = serializers.SerializerMethodField()
 
     # Overwrite fields from parent to use combined metrics
     totalReviews = serializers.SerializerMethodField(
@@ -126,8 +148,13 @@ class PublicBusinessDetailSerializer(PublicBusinessInfoSerializer):
     class Meta(PublicBusinessInfoSerializer.Meta):
         fields = PublicBusinessInfoSerializer.Meta.fields + [
             "classes",
+            "locations",
             "widget_api_key",  # for hosted join page widget embed
         ]
+
+    def get_locations(self, obj):
+        qs = obj.locations.filter(is_active=True).order_by("-is_primary", "name")
+        return PublicBusinessLocationSerializer(qs, many=True).data
 
     def get_google_reviews(self, obj):
         # Fetches all imported google reviews for this business

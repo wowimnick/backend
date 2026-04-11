@@ -124,6 +124,8 @@ class WidgetClassSerializer(serializers.ModelSerializer):
         read_only=True,
         default=False,
     )
+    location_name = serializers.SerializerMethodField()
+    location_address = serializers.SerializerMethodField()
 
     class Meta:
         model = ClassesMain
@@ -131,6 +133,9 @@ class WidgetClassSerializer(serializers.ModelSerializer):
             "classId",
             "title",
             "description",
+            "location",
+            "location_name",
+            "location_address",
             "options",
             "images",
             "average_rating",
@@ -138,6 +143,13 @@ class WidgetClassSerializer(serializers.ModelSerializer):
             "require_participant_names",
         ]
         read_only_fields = fields
+
+    def get_location_name(self, obj):
+        ref = getattr(obj, "location_ref", None)
+        return ref.name if ref else None
+
+    def get_location_address(self, obj):
+        return obj.location or ""
 
 
 class WidgetScheduleInstanceSerializer(serializers.ModelSerializer):

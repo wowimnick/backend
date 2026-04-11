@@ -23,6 +23,7 @@ import logging
 from quickstart.models import (
     Booking,
     BusinessInfo,
+    BusinessLocation,
     ClassImage,
     ClassesMain,
     MembershipProduct,
@@ -204,6 +205,7 @@ class PublicBusinessInfoViewSet(viewsets.ReadOnlyModelViewSet):
 
             classes_queryset = (
                 ClassesMain.objects.filter(status="active")
+                .select_related("location_ref")
                 .prefetch_related(
                     Prefetch(
                         "images",
@@ -226,6 +228,12 @@ class PublicBusinessInfoViewSet(viewsets.ReadOnlyModelViewSet):
             # Prefetch google reviews as well
             queryset = queryset.prefetch_related(
                 active_classes_prefetch,
+                Prefetch(
+                    "locations",
+                    queryset=BusinessLocation.objects.filter(is_active=True).order_by(
+                        "-is_primary", "name"
+                    ),
+                ),
                 "imported_google_reviews",  # Prefetch google reviews
                 Prefetch(
                     "reviews_directly_to_business",

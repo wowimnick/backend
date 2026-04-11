@@ -53,6 +53,26 @@ def _update_business_status_from_stripe_account(stripe_account_obj):
             logger.info(
                 f"Webhook Helper: Business {business.businessId} status updated from '{previous_status}' to '{new_platform_status}'."
             )
+            if new_platform_status in ("restricted", "incomplete"):
+                try:
+                    from quickstart.utils.notification_utils import (
+                        create_notification_for_recipients,
+                    )
+
+                    create_notification_for_recipients(
+                        business,
+                        "stripe_action_required",
+                        "Your Stripe payout account requires attention. Please update your information in Settings to continue receiving payouts.",
+                        "AlertTriangle",
+                        "#f59e0b",
+                        "/business/dashboard?tab=settings",
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Could not create stripe_action_required notification for business %s: %s",
+                        business.businessId,
+                        e,
+                    )
         return True
     except BusinessInfo.DoesNotExist:
         logger.error(f"Webhook Helper: Unknown Stripe account ID: {stripe_account_id}")
