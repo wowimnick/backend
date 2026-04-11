@@ -22,8 +22,8 @@ class Command(BaseCommand):
         parser.add_argument(
             "--once-per-build",
             action="store_true",
-            help="Run only if not already applied for this deploy (BUILD_ID/IMAGE_TAG/GIT_SHA). "
-            "Use on web startup so scale-out does not repeat work.",
+            help="If BUILD_ID/IMAGE_TAG/GIT_SHA is set: run at most once per deploy (Redis marker). "
+            "If unset (typical locally): still runs every time — no skip. Use on web startup for ECS.",
         )
 
     def handle(self, *args, **options):
@@ -34,30 +34,31 @@ class Command(BaseCommand):
             build_id = get_deploy_build_id()
             if not build_id:
                 self.stdout.write(
-                    self.style.WARNING(
-                        "Once-per-build requested but no BUILD_ID/IMAGE_TAG/GIT_SHA set; "
-                        "skipping enhance_permissions."
+                    self.style.NOTICE(
+                        "No BUILD_ID/IMAGE_TAG/GIT_SHA — running enhance_permissions without "
+                        "once-per-build deduplication (normal for local). Production tasks should set IMAGE_TAG or GIT_SHA."
                     )
                 )
-                return
-            env = getattr(settings, "DJANGO_ENV", "local")
-            cache_key = f"{_ENHANCE_BUILD_KEY_PREFIX}:{env}:{build_id}"
-            try:
-                if cache.get(cache_key):
+            else:
+                env = getattr(settings, "DJANGO_ENV", "local")
+                cache_key = f"{_ENHANCE_BUILD_KEY_PREFIX}:{env}:{build_id}"
+                try:
+                    if cache.get(cache_key):
+                        self.stdout.write(
+                            self.style.SUCCESS(
+                                "enhance_permissions already ran for this build (key=%s); skipping."
+                                % cache_key
+                            )
+                        )
+                        return
+                except Exception as e:
                     self.stdout.write(
-                        self.style.SUCCESS(
-                            "enhance_permissions already ran for this build (key=%s); skipping."
-                            % cache_key
+                        self.style.WARNING(
+                            "Could not read enhance_permissions build marker (%s); running anyway."
+                            % e
                         )
                     )
-                    return
-            except Exception as e:
-                self.stdout.write(
-                    self.style.WARNING(
-                        "Could not check enhance_permissions build marker in cache: %s" % e
-                    )
-                )
-                return
+                    cache_key = None
 
         self.stdout.write("Enhancing explicitly defined permissions...")
 
