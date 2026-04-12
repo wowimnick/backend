@@ -497,6 +497,82 @@ def reactivate(sub):
     return synced or sub, None
 
 
+def proration_after_subscription_item_modify(stripe_sub, stripe_subscription_id, new_price_id):
+    """
+    After Subscription.modify (single item, always_invoice + pending_if_incomplete), decide next step.
+
+    Returns one of:
+      ("payment", client_secret, None, None) — caller returns client_secret to the client
+      ("success", None, None, stripe_sub_verified) — new price is active on Stripe
+      ("error", None, error_message, None)
+    """
+    latest_invoice = getattr(stripe_sub, "latest_invoice", None)
+    latest_inv_id = None
+    latest_inv_status = None
+    if latest_invoice:
+        if isinstance(latest_invoice, str):
+            latest_inv_id = latest_invoice
+        else:
+            latest_inv_id = getattr(latest_invoice, "id", None) or (latest_invoice.get("id") if isinstance(latest_invoice, dict) else None)
+            latest_inv_status = getattr(latest_invoice, "status", None) or (latest_invoice.get("status") if isinstance(latest_invoice, dict) else None)
+
+    client_secret = _client_secret_from_stripe_invoice(latest_invoice) if latest_invoice and not isinstance(latest_invoice, str) else None
+    if not client_secret and latest_inv_id and isinstance(latest_invoice, str):
+        try:
+            inv_obj = stripe.Invoice.retrieve(latest_inv_id, expand=["payment_intent", "payments"])
+            client_secret = _client_secret_from_stripe_invoice(inv_obj)
+        except stripe.StripeError:
+            pass
+    if client_secret:
+        return "payment", client_secret, None, None
+
+    if stripe_subscription_id:
+        try:
+            open_invoices = stripe.Invoice.list(subscription=stripe_subscription_id, status="open", limit=1)
+            open_data = getattr(open_invoices, "data", None) or []
+            if open_data:
+                client_secret = _client_secret_from_stripe_invoice(open_data[0])
+                if client_secret:
+                    return "payment", client_secret, None, None
+        except stripe.StripeError:
+            pass
+
+    if latest_inv_status == "open":
+        return "error", None, "This payment link is no longer valid. Please try switching plan again.", None
+    try:
+        open_check = stripe.Invoice.list(subscription=stripe_subscription_id, status="open", limit=1)
+        if getattr(open_check, "data", None):
+            return (
+                "error",
+                None,
+                "Payment is required to complete this plan change. Please complete payment when prompted or try again.",
+                None,
+            )
+    except stripe.StripeError:
+        pass
+
+    try:
+        stripe_sub = stripe.Subscription.retrieve(stripe_subscription_id, expand=["items.data.price"])
+    except stripe.StripeError:
+        pass
+    items_wrap = _stripe_attr(stripe_sub, "items") or {}
+    stripe_items = _stripe_attr(items_wrap, "data") or []
+    stripe_price_id_now = None
+    if stripe_items:
+        pr = _stripe_attr(stripe_items[0], "price")
+        if pr:
+            stripe_price_id_now = pr if isinstance(pr, str) else _stripe_attr(pr, "id")
+    if stripe_price_id_now != new_price_id:
+        return (
+            "error",
+            None,
+            "Payment is required to complete this plan change. Please try again and complete payment when prompted.",
+            None,
+        )
+
+    return "success", None, None, stripe_sub
+
+
 def upgrade_subscription(sub, plan_id, business):
     """
     Modify Stripe subscription to new price (proration); use default_payment_method when available.
@@ -544,59 +620,15 @@ def upgrade_subscription(sub, plan_id, business):
     except stripe.StripeError:
         pass
 
-    latest_invoice = getattr(stripe_sub, "latest_invoice", None)
-    latest_inv_id = None
-    latest_inv_status = None
-    if latest_invoice:
-        if isinstance(latest_invoice, str):
-            latest_inv_id = latest_invoice
-        else:
-            latest_inv_id = getattr(latest_invoice, "id", None) or (latest_invoice.get("id") if isinstance(latest_invoice, dict) else None)
-            latest_inv_status = getattr(latest_invoice, "status", None) or (latest_invoice.get("status") if isinstance(latest_invoice, dict) else None)
-
-    client_secret = _client_secret_from_stripe_invoice(latest_invoice) if latest_invoice and not isinstance(latest_invoice, str) else None
-    if not client_secret and latest_inv_id and isinstance(latest_invoice, str):
-        try:
-            inv_obj = stripe.Invoice.retrieve(latest_inv_id, expand=["payment_intent", "payments"])
-            client_secret = _client_secret_from_stripe_invoice(inv_obj)
-        except stripe.StripeError:
-            pass
-    if client_secret:
+    outcome, client_secret, err, verified_sub = proration_after_subscription_item_modify(
+        stripe_sub, sub.stripe_subscription_id, price_id
+    )
+    if outcome == "error":
+        return None, None, None, err
+    if outcome == "payment":
         return True, client_secret, sub, None
 
-    if not client_secret and sub.stripe_subscription_id:
-        try:
-            open_invoices = stripe.Invoice.list(subscription=sub.stripe_subscription_id, status="open", limit=1)
-            open_data = getattr(open_invoices, "data", None) or []
-            if open_data:
-                client_secret = _client_secret_from_stripe_invoice(open_data[0])
-                if client_secret:
-                    return True, client_secret, sub, None
-        except stripe.StripeError:
-            pass
-
-    if latest_inv_status == "open":
-        return None, None, None, "This payment link is no longer valid. Please try switching plan again."
-    try:
-        open_check = stripe.Invoice.list(subscription=sub.stripe_subscription_id, status="open", limit=1)
-        if getattr(open_check, "data", None):
-            return None, None, None, "Payment is required to complete this plan change. Please complete payment when prompted or try again."
-    except stripe.StripeError:
-        pass
-
-    try:
-        stripe_sub = stripe.Subscription.retrieve(sub.stripe_subscription_id, expand=["items.data.price"])
-    except stripe.StripeError:
-        pass
-    items_wrap = _stripe_attr(stripe_sub, "items") or {}
-    stripe_items = _stripe_attr(items_wrap, "data") or []
-    stripe_price_id_now = None
-    if stripe_items:
-        pr = _stripe_attr(stripe_items[0], "price")
-        if pr:
-            stripe_price_id_now = pr if isinstance(pr, str) else _stripe_attr(pr, "id")
-    if stripe_price_id_now != price_id:
-        return None, None, None, "Payment is required to complete this plan change. Please try again and complete payment when prompted."
+    stripe_sub = verified_sub
 
     period_end = getattr(stripe_sub, "current_period_end", None)
     current_period_end = datetime.fromtimestamp(period_end, tz=pytz.UTC) if period_end else None

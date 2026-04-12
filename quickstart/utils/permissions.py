@@ -249,7 +249,10 @@ class CanAccessBusinessDashboard(BasePermission):
 
 class CanManageOwnBusinessProfile(BasePermission):
     """
-    Allows access only if the user is the owner or an accepted staff member of the specific BusinessInfo object.
+    Allows access only if the user is the owner or an accepted staff member of the related BusinessInfo.
+
+    Works for views whose object is BusinessInfo (e.g. MyBusinessProfileView) or a model with a `business`
+    FK to BusinessInfo (e.g. BusinessLocation on PATCH/DELETE detail).
     """
 
     message = "You do not have permission to manage this business profile."
@@ -258,13 +261,17 @@ class CanManageOwnBusinessProfile(BasePermission):
         return request.user and request.user.is_authenticated
 
     def has_object_permission(self, request, view, obj):
-        if not isinstance(obj, BusinessInfo):
+        if isinstance(obj, BusinessInfo):
+            business = obj
+        else:
+            related = getattr(obj, "business", None)
+            business = related if isinstance(related, BusinessInfo) else None
+        if business is None:
             return False
 
         user = request.user
-        # MODIFIED: Check ownership OR if user is an accepted staff member.
-        is_owner = obj.owner == user
-        is_staff = obj.staff_members.filter(user=user, status="accepted").exists()
+        is_owner = business.owner == user
+        is_staff = business.staff_members.filter(user=user, status="accepted").exists()
         return is_owner or is_staff
 
 

@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 from quickstart.models import ADDON_TYPE_EMAIL_MARKETING, BusinessAddonSubscription
 from quickstart.services.email_marketing_config import is_valid_marketing_price_id
 from quickstart.services.subscription_sync import sync_addon_subscription_from_stripe
+from quickstart.services.widget_subscription_service import proration_after_subscription_item_modify
 from quickstart.utils.permissions import CanManageOwnClasses
 from quickstart.views.widget.widget_config_views import (
     _business_can_instant_subscribe,
@@ -291,7 +292,7 @@ class ReactivateEmailMarketingAddonView(APIView):
 
 
 class ChangeEmailMarketingTierView(APIView):
-    """POST body: price_id — swap subscription item (prorated)."""
+    """POST body: price_id — swap subscription item (prorated, same flow as widget plan upgrades)."""
 
     permission_classes = [IsAuthenticated, CanManageOwnClasses]
 
@@ -312,14 +313,35 @@ class ChangeEmailMarketingTierView(APIView):
             if not items:
                 return Response({"error": "Subscription has no items."}, status=400)
             item_id = _obj_get(items[0], "id")
-            stripe.Subscription.modify(
+            stripe_sub = stripe.Subscription.modify(
                 sub.stripe_subscription_id,
                 items=[{"id": item_id, "price": price_id}],
-                proration_behavior="create_prorations",
+                proration_behavior="always_invoice",
+                payment_behavior="pending_if_incomplete",
+                expand=["latest_invoice", "latest_invoice.payment_intent", "latest_invoice.payments"],
             )
         except stripe.StripeError as e:
             return Response({"error": str(e)}, status=502)
+        outcome, client_secret, err, _verified = proration_after_subscription_item_modify(
+            stripe_sub, sub.stripe_subscription_id, price_id
+        )
+        if outcome == "error":
+            return Response({"error": err}, status=status.HTTP_400_BAD_REQUEST)
+        if outcome == "payment":
+            return Response(
+                {
+                    "requires_payment": True,
+                    "client_secret": client_secret,
+                    "subscription_id": sub.stripe_subscription_id,
+                },
+                status=status.HTTP_200_OK,
+            )
         synced, _ = sync_addon_subscription_from_stripe(
             sub.stripe_subscription_id, addon_type=ADDON_TYPE_EMAIL_MARKETING
         )
+        if not synced:
+            return Response(
+                {"error": "Plan change succeeded in Stripe but could not sync. Please refresh."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
         return Response({"success": True, "subscription_id": sub.stripe_subscription_id})

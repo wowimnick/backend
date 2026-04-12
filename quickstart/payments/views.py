@@ -64,6 +64,8 @@ from quickstart.utils.email_utils import (
     send_super_admin_booking_created_email,
     send_widget_subscription_payment_failed_email,
     send_business_subscription_lifecycle_email,
+    format_addon_subscription_display_name,
+    format_addon_price_display,
     send_membership_lifecycle_member_email,
     send_membership_lifecycle_business_email,
     _is_placeholder_booker_email,
@@ -88,6 +90,22 @@ from quickstart.utils.stripe_metadata import stripe_metadata_to_dict
 from quickstart.utils.widget_booking_source import is_widget_booking_source
 
 logger = logging.getLogger(__name__)
+
+
+def _stripe_subscription_first_price_id(subscription_obj):
+    """First subscription item Stripe Price ID, or None."""
+    items = _obj_get(_obj_get(subscription_obj, "items", {}) or {}, "data", []) or []
+    if not items or not items[0]:
+        return None
+    first = items[0]
+    price = first.get("price") if isinstance(first, dict) else getattr(first, "price", None)
+    if price is None:
+        return None
+    if isinstance(price, str):
+        return price
+    if isinstance(price, dict):
+        return price.get("id")
+    return getattr(price, "id", None)
 
 
 def _stripe_metadata_dict(metadata):
@@ -1648,18 +1666,20 @@ class ProcessBookingWebhook(APIView):
                                 business = None
                             owner = getattr(business, "owner", None) if business else None
                             if owner and owner.email:
-                                addon_name = (
-                                    "Email Marketing Add-on"
-                                    if addon_type == ADDON_TYPE_EMAIL_MARKETING
-                                    else "Marketplace Email Branding Add-on"
+                                addon_price_id = _stripe_subscription_first_price_id(stripe_sub)
+                                subscription_name = format_addon_subscription_display_name(
+                                    addon_type, addon_price_id
                                 )
                                 addon_key = f"{cache_key}:addon:{addon_type}"
                                 if cache.add(addon_key, True, timeout=7 * 24 * 3600):
                                     send_business_subscription_lifecycle_email(
                                         owner,
                                         business_name=getattr(business, "businessName", None) or "Your business",
-                                        subscription_name=addon_name,
+                                        subscription_name=subscription_name,
                                         lifecycle_event="payment_failed",
+                                        price_display=format_addon_price_display(
+                                            addon_type, addon_price_id
+                                        ),
                                         manage_billing_url=f"{settings.FRONTEND_BASE_URL or ''}/business/dashboard?tab=settings",
                                         extra_message="We could not process your latest renewal payment. Please update your billing method to avoid service interruption.",
                                     )
@@ -1795,12 +1815,11 @@ class ProcessBookingWebhook(APIView):
                 ).first()
                 owner = getattr(business, "owner", None)
                 if owner and owner.email:
-                    addon_name = (
-                        "Email Marketing Add-on"
-                        if addon_type == ADDON_TYPE_EMAIL_MARKETING
-                        else "Marketplace Email Branding Add-on"
-                    )
                     if event.type == "customer.subscription.deleted":
+                        deleted_price_id = _stripe_subscription_first_price_id(subscription)
+                        subscription_name = format_addon_subscription_display_name(
+                            addon_type, deleted_price_id
+                        )
                         if cache.add(
                             f"sub_lifecycle:addon:deleted:{subscription.id}:{getattr(event, 'id', '')}",
                             True,
@@ -1809,11 +1828,18 @@ class ProcessBookingWebhook(APIView):
                             send_business_subscription_lifecycle_email(
                                 owner,
                                 business_name=getattr(business, "businessName", None) or "Your business",
-                                subscription_name=addon_name,
+                                subscription_name=subscription_name,
                                 lifecycle_event="canceled",
+                                price_display=format_addon_price_display(
+                                    addon_type, deleted_price_id
+                                ),
                                 manage_billing_url=f"{settings.FRONTEND_BASE_URL or ''}/business/dashboard?tab=settings",
                             )
                     elif after_addon:
+                        addon_price_id = getattr(after_addon, "stripe_price_id", None) or None
+                        subscription_name = format_addon_subscription_display_name(
+                            addon_type, addon_price_id
+                        )
                         before_status = (getattr(before_addon, "status", "") or "").lower() if before_addon else ""
                         after_status = (after_addon.status or "").lower()
                         before_cancel = bool(getattr(before_addon, "cancel_at_period_end", False)) if before_addon else False
@@ -1824,12 +1850,19 @@ class ProcessBookingWebhook(APIView):
                                 True,
                                 timeout=30 * 24 * 3600,
                             ):
-                                send_business_subscription_lifecycle_email(
-                                    owner,
-                                    business_name=getattr(business, "businessName", None) or "Your business",
-                                    subscription_name=addon_name,
-                                    lifecycle_event="activated",
-                                    current_plan="active",
+                                addon_current_plan = None
+                                if addon_type == ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING:
+                                    addon_current_plan = "active"
+                            send_business_subscription_lifecycle_email(
+                                owner,
+                                business_name=getattr(business, "businessName", None) or "Your business",
+                                subscription_name=subscription_name,
+                                lifecycle_event="activated",
+                                    current_plan=addon_current_plan,
+                                    next_billing_date=after_addon.current_period_end,
+                                    price_display=format_addon_price_display(
+                                        addon_type, addon_price_id
+                                    ),
                                     manage_billing_url=f"{settings.FRONTEND_BASE_URL or ''}/business/dashboard?tab=settings",
                                 )
                         if after_cancel and not before_cancel:
@@ -1841,9 +1874,12 @@ class ProcessBookingWebhook(APIView):
                                 send_business_subscription_lifecycle_email(
                                     owner,
                                     business_name=getattr(business, "businessName", None) or "Your business",
-                                    subscription_name=addon_name,
+                                    subscription_name=subscription_name,
                                     lifecycle_event="cancellation_scheduled",
                                     effective_date=after_addon.current_period_end,
+                                    price_display=format_addon_price_display(
+                                        addon_type, addon_price_id
+                                    ),
                                     manage_billing_url=f"{settings.FRONTEND_BASE_URL or ''}/business/dashboard?tab=settings",
                                 )
                         if (not after_cancel) and before_cancel:
@@ -1855,8 +1891,12 @@ class ProcessBookingWebhook(APIView):
                                 send_business_subscription_lifecycle_email(
                                     owner,
                                     business_name=getattr(business, "businessName", None) or "Your business",
-                                    subscription_name=addon_name,
+                                    subscription_name=subscription_name,
                                     lifecycle_event="reactivated",
+                                    next_billing_date=after_addon.current_period_end,
+                                    price_display=format_addon_price_display(
+                                        addon_type, addon_price_id
+                                    ),
                                     manage_billing_url=f"{settings.FRONTEND_BASE_URL or ''}/business/dashboard?tab=settings",
                                 )
                 return Response(status=status.HTTP_200_OK)
@@ -2010,6 +2050,7 @@ class ProcessBookingWebhook(APIView):
                                 subscription_name="Booking Widget Subscription",
                                 lifecycle_event="activated",
                                 current_plan=after_plan,
+                                next_billing_date=after_widget.current_period_end,
                                 manage_billing_url=f"{settings.FRONTEND_BASE_URL or ''}/business/dashboard?tab=settings",
                             )
                     if before_plan and after_plan and before_plan != after_plan:
@@ -2025,6 +2066,7 @@ class ProcessBookingWebhook(APIView):
                                 lifecycle_event="plan_changed",
                                 previous_plan=before_plan,
                                 current_plan=after_plan,
+                                next_billing_date=after_widget.current_period_end,
                                 manage_billing_url=f"{settings.FRONTEND_BASE_URL or ''}/business/dashboard?tab=settings",
                             )
                     if after_cancel and not before_cancel:
@@ -2054,6 +2096,7 @@ class ProcessBookingWebhook(APIView):
                                 subscription_name="Booking Widget Subscription",
                                 lifecycle_event="reactivated",
                                 current_plan=after_plan,
+                                next_billing_date=after_widget.current_period_end,
                                 manage_billing_url=f"{settings.FRONTEND_BASE_URL or ''}/business/dashboard?tab=settings",
                             )
             return Response(status=status.HTTP_200_OK)

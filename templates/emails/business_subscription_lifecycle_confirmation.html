@@ -1,44 +1,150 @@
 {% extends "emails/base_email.html" %}
+{# Event-specific billing lifecycle emails (widget + add-ons). Matches booking/payout/payment-failed card patterns. #}
 
 {% block title %}
   {{ event_title }} - ClassEasily
 {% endblock title %}
 
 {% block content %}
-  <h1>{{ event_title }}</h1>
-  <p>
-    Hi {{ user.first_name|default:"there" }},
-  </p>
-  <p>
-    This is a confirmation that your <strong>{{ subscription_name }}</strong> for
-    <strong>{{ business_name }}</strong> has been updated.
-  </p>
+  <div style="text-align: center;">
 
-  {% if previous_plan or current_plan %}
-    <p>
-      {% if previous_plan and current_plan %}
-        Plan change: <strong>{{ previous_plan|title }}</strong> → <strong>{{ current_plan|title }}</strong>.
-      {% elif current_plan %}
-        Current plan: <strong>{{ current_plan|title }}</strong>.
-      {% endif %}
+    {% if lifecycle_event == "activated" %}
+      <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">🚀</div>
+      <h1 style="margin-bottom: 8px;">You're all set.</h1>
+      <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+        Hi {{ user.first_name|default:"there" }},<br>
+        Your <strong>{{ subscription_name }}</strong> for <strong>{{ business_name }}</strong> is now active.
+      </p>
+    {% elif lifecycle_event == "plan_changed" %}
+      <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">⬆️</div>
+      <h1 style="margin-bottom: 8px;">Your plan has been updated.</h1>
+      <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+        Hi {{ user.first_name|default:"there" }},<br>
+        We've updated your <strong>{{ subscription_name }}</strong> for <strong>{{ business_name }}</strong>.
+      </p>
+    {% elif lifecycle_event == "cancellation_scheduled" %}
+      <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">📅</div>
+      <h1 style="margin-bottom: 8px;">Your cancellation is scheduled.</h1>
+      <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 24px;">
+        Hi {{ user.first_name|default:"there" }},<br>
+        We've received your request to cancel <strong>{{ subscription_name }}</strong>.
+      </p>
+      <p style="font-size: 15px; color: #484848; line-height: 1.6; margin-bottom: 16px; max-width: 480px; margin-left: auto; margin-right: auto;">
+        You'll continue to have full access until your billing period ends.
+      </p>
+      <p style="font-size: 14px; color: #86868B; line-height: 1.5; margin-bottom: 32px; max-width: 480px; margin-left: auto; margin-right: auto;">
+        Changed your mind? You can reactivate anytime before the end date from Plan &amp; Billing.
+      </p>
+    {% elif lifecycle_event == "reactivated" %}
+      <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">🎉</div>
+      <h1 style="margin-bottom: 8px;">Welcome back!</h1>
+      <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+        Hi {{ user.first_name|default:"there" }},<br>
+        <strong>{{ subscription_name }}</strong> for <strong>{{ business_name }}</strong> will stay active—your scheduled cancellation has been removed.
+      </p>
+    {% elif lifecycle_event == "canceled" %}
+      <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">👋</div>
+      <h1 style="margin-bottom: 8px;">Your subscription has ended.</h1>
+      <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 24px;">
+        Hi {{ user.first_name|default:"there" }},<br>
+        <strong>{{ subscription_name }}</strong> for <strong>{{ business_name }}</strong> is no longer active.
+      </p>
+      <p style="font-size: 15px; color: #484848; line-height: 1.6; margin-bottom: 32px; max-width: 480px; margin-left: auto; margin-right: auto;">
+        We'd love to have you back. You can resubscribe anytime from Plan &amp; Billing in your dashboard.
+      </p>
+    {% elif lifecycle_event == "payment_failed" %}
+      <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">💳</div>
+      <h1 style="margin-bottom: 8px;">We couldn't process your payment.</h1>
+      <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+        Hi {{ user.first_name|default:"there" }},<br>
+        Something went wrong when we tried to charge your card for <strong>{{ subscription_name }}</strong>.
+      </p>
+    {% elif lifecycle_event == "renewed" %}
+      <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">✅</div>
+      <h1 style="margin-bottom: 8px;">Your subscription has been renewed.</h1>
+      <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+        Hi {{ user.first_name|default:"there" }},<br>
+        <strong>{{ subscription_name }}</strong> for <strong>{{ business_name }}</strong> has renewed successfully.
+      </p>
+    {% else %}
+      <h1 style="margin-bottom: 8px;">{{ event_title }}</h1>
+      <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+        Hi {{ user.first_name|default:"there" }},<br>
+        This is a confirmation that your <strong>{{ subscription_name }}</strong> for <strong>{{ business_name }}</strong> has been updated.
+      </p>
+    {% endif %}
+
+    <!-- Info card -->
+    <div style="background-color: #ffffff;
+                border: 1px solid #E5E7EB;
+                border-radius: 20px;
+                overflow: hidden;
+                margin-bottom: 24px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.03);
+                text-align: left;
+                max-width: 480px;
+                margin-left: auto;
+                margin-right: auto;">
+      <div style="padding: 24px;">
+        <div style="color: #86868B; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">Subscription</div>
+        <div style="color: #1D1D1F; font-size: 18px; font-weight: 600; margin-bottom: 16px;">{{ subscription_name }}</div>
+
+        <div style="color: #86868B; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">Business</div>
+        <div style="color: #1D1D1F; font-size: 16px; font-weight: 600; margin-bottom: 16px;">{{ business_name }}</div>
+
+        {% if lifecycle_event == "plan_changed" and previous_plan and current_plan %}
+          <div style="border-top: 1px dashed #E5E7EB; padding-top: 16px; margin-top: 4px;">
+            <div style="color: #86868B; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">Plan change</div>
+            <div style="color: #1D1D1F; font-size: 17px; font-weight: 700;">
+              {{ previous_plan|title }} <span style="color: #86868B; font-weight: 600;">→</span> {{ current_plan|title }}
+            </div>
+          </div>
+        {% elif current_plan and lifecycle_event != "plan_changed" %}
+          <div style="color: #86868B; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">Plan</div>
+          <div style="color: #1D1D1F; font-size: 16px; font-weight: 600; margin-bottom: 0;">{{ current_plan|title }}</div>
+        {% endif %}
+
+        {% if effective_date %}
+          <div style="margin-top: 16px; padding-top: 16px; border-top: 1px dashed #E5E7EB;">
+            <div style="color: #86868B; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">
+              {% if lifecycle_event == "cancellation_scheduled" %}Access until{% else %}Effective date{% endif %}
+            </div>
+            <div style="color: #1D1D1F; font-size: 16px; font-weight: 600;">{{ effective_date }}</div>
+          </div>
+        {% endif %}
+
+        {% if next_billing_date %}
+          <div style="margin-top: 16px; padding-top: 16px; border-top: 1px dashed #E5E7EB;">
+            <div style="color: #86868B; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">Next billing date</div>
+            <div style="color: #1D1D1F; font-size: 16px; font-weight: 600;">{{ next_billing_date }}</div>
+          </div>
+        {% endif %}
+
+        {% if price_display %}
+          <div style="margin-top: 16px; padding-top: 16px; border-top: 1px dashed #E5E7EB;">
+            <div style="color: #86868B; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">Price</div>
+            <div style="color: #1D1D1F; font-size: 16px; font-weight: 600;">{{ price_display }}</div>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if extra_message %}
+      <p style="font-size: 14px; color: #484848; line-height: 1.55; margin-bottom: 24px; max-width: 480px; margin-left: auto; margin-right: auto;">
+        {{ extra_message }}
+      </p>
+    {% endif %}
+
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+      <tr>
+        <td align="center">
+          <a href="{{ cta_url }}" target="_blank" class="button">{{ cta_label }}</a>
+        </td>
+      </tr>
+    </table>
+
+    <p style="font-size: 13px; color: #86868B; line-height: 1.5; margin-top: 28px; margin-bottom: 0;">
+      If you did not expect this change, please contact support via the Help Center.
     </p>
-  {% endif %}
-
-  {% if effective_date %}
-    <p>
-      Effective date: <strong>{{ effective_date }}</strong>.
-    </p>
-  {% endif %}
-
-  {% if extra_message %}
-    <p>{{ extra_message }}</p>
-  {% endif %}
-
-  <p style="text-align: center; margin: 28px 0;">
-    <a href="{{ manage_billing_url }}" class="button">Manage billing</a>
-  </p>
-
-  <p>
-    If you did not expect this change, please contact support.
-  </p>
+  </div>
 {% endblock content %}

@@ -3,16 +3,23 @@ Pytest configuration and shared fixtures for quickstart tests.
 Uses pytest-django; each test runs in a transaction that is rolled back (default).
 """
 import sys
+from datetime import timedelta
 
 import pytest
+from django.utils import timezone
 from django.test import RequestFactory
 from rest_framework.test import APIClient
 
-from quickstart.models import BusinessStaff
+from quickstart.models import (
+    ADDON_TYPE_EMAIL_MARKETING,
+    ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING,
+    BusinessStaff,
+)
 from quickstart.tests.factories import (
     BlogCategoryFactory,
     BlogPostFactory,
     BookingFactory,
+    BusinessAddonSubscriptionFactory,
     BusinessFactory,
     BusinessRoleFactory,
     BusinessStaffFactory,
@@ -23,6 +30,7 @@ from quickstart.tests.factories import (
     ScheduleFactory,
     ScheduleInstanceFactory,
     UserFactory,
+    WidgetSubscriptionFactory,
 )
 
 
@@ -155,3 +163,41 @@ def contact(business):
 def request_factory():
     """Django RequestFactory for unit-testing views in isolation."""
     return RequestFactory()
+
+
+@pytest.fixture
+def widget_subscription(business):
+    """Active widget subscription row tied to `business` (same owner as business_owner_client)."""
+    return WidgetSubscriptionFactory(
+        business=business,
+        plan_id="basic",
+        status="active",
+        stripe_subscription_id="sub_widget_fixture",
+        stripe_customer_id="cus_fixture",
+        stripe_price_id="price_basic_fixture",
+    )
+
+
+@pytest.fixture
+def addon_subscription(business):
+    """Marketplace email branding addon row for `business`."""
+    return BusinessAddonSubscriptionFactory(
+        business=business,
+        addon_type=ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING,
+        status="active",
+        stripe_subscription_id="sub_addon_mkt_fixture",
+    )
+
+
+@pytest.fixture
+def email_marketing_subscription(business):
+    """Email marketing addon row for `business`."""
+    now = timezone.now()
+    return BusinessAddonSubscriptionFactory(
+        business=business,
+        addon_type=ADDON_TYPE_EMAIL_MARKETING,
+        status="active",
+        stripe_subscription_id="sub_addon_em_fixture",
+        current_period_start=now,
+        current_period_end=now + timedelta(days=30),
+    )

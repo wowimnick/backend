@@ -5,6 +5,8 @@ import hashlib
 import hmac
 import json
 import time
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from django.test import Client, override_settings
@@ -153,3 +155,132 @@ def test_resend_webhook_bounce_suppresses_contact(business):
     assert r.status_code == 200
     contact.refresh_from_db()
     assert contact.marketing_unsubscribed is True
+
+
+# -----------------------------------------------------------------------------
+# Email marketing addon: change-tier / cancel / reactivate (Stripe mocked)
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestEmailMarketingAddonBillingIntegration:
+    @pytest.fixture(autouse=True)
+    def _marketing_prices(self, settings):
+        settings.EMAIL_MARKETING_STARTER_PRICE_ID = "price_em_starter"
+        settings.EMAIL_MARKETING_GROWTH_PRICE_ID = "price_em_growth"
+
+    def test_change_tier_upgrade_200(self, business_owner_client, email_marketing_subscription):
+        sub = email_marketing_subscription
+        sub.stripe_price_id = "price_em_starter"
+        sub.save(update_fields=["stripe_price_id"])
+
+        stripe_sub = SimpleNamespace(
+            items=SimpleNamespace(data=[SimpleNamespace(id="si_em_1")]),
+        )
+        modified = SimpleNamespace(
+            items=stripe_sub.items,
+            latest_invoice={"status": "paid"},
+        )
+        with patch(
+            "quickstart.views.business.email_marketing_addon_views.stripe.Subscription.retrieve",
+            return_value=stripe_sub,
+        ), patch(
+            "quickstart.views.business.email_marketing_addon_views.stripe.Subscription.modify",
+            return_value=modified,
+        ), patch(
+            "quickstart.views.business.email_marketing_addon_views.proration_after_subscription_item_modify",
+            return_value=("success", None, None, None),
+        ), patch(
+            "quickstart.views.business.email_marketing_addon_views.sync_addon_subscription_from_stripe",
+            return_value=(sub, None),
+        ) as mock_sync:
+            r = business_owner_client.post(
+                f"{API}/my-business/addons/email-marketing/change-tier/",
+                {"price_id": "price_em_growth"},
+                format="json",
+            )
+        assert r.status_code == status.HTTP_200_OK
+        assert r.json().get("success") is True
+        mock_sync.assert_called_once()
+
+    def test_change_tier_returns_client_secret_when_proration_needs_payment(
+        self, business_owner_client, email_marketing_subscription
+    ):
+        sub = email_marketing_subscription
+        stripe_sub = SimpleNamespace(
+            items=SimpleNamespace(data=[SimpleNamespace(id="si_em_1")]),
+        )
+        with patch(
+            "quickstart.views.business.email_marketing_addon_views.stripe.Subscription.retrieve",
+            return_value=stripe_sub,
+        ), patch(
+            "quickstart.views.business.email_marketing_addon_views.stripe.Subscription.modify",
+            return_value=stripe_sub,
+        ), patch(
+            "quickstart.views.business.email_marketing_addon_views.proration_after_subscription_item_modify",
+            return_value=("payment", "pi_secret_em", None, None),
+        ):
+            r = business_owner_client.post(
+                f"{API}/my-business/addons/email-marketing/change-tier/",
+                {"price_id": "price_em_growth"},
+                format="json",
+            )
+        assert r.status_code == status.HTTP_200_OK
+        body = r.json()
+        assert body.get("requires_payment") is True
+        assert body.get("client_secret") == "pi_secret_em"
+
+    def test_change_tier_invalid_price_400(self, business_owner_client, email_marketing_subscription):
+        r = business_owner_client.post(
+            f"{API}/my-business/addons/email-marketing/change-tier/",
+            {"price_id": "price_not_configured"},
+            format="json",
+        )
+        assert r.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_change_tier_no_active_sub_404(self, business_owner_client, business):
+        """No addon row → manage helper returns nothing."""
+        r = business_owner_client.post(
+            f"{API}/my-business/addons/email-marketing/change-tier/",
+            {"price_id": "price_em_growth"},
+            format="json",
+        )
+        assert r.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_cancel_email_marketing_200(self, business_owner_client, email_marketing_subscription):
+        sub = email_marketing_subscription
+        sub.cancel_at_period_end = True
+        with patch(
+            "quickstart.views.business.email_marketing_addon_views.stripe.Subscription.modify",
+            return_value=None,
+        ), patch(
+            "quickstart.views.business.email_marketing_addon_views.sync_addon_subscription_from_stripe",
+            return_value=(sub, None),
+        ) as mock_sync:
+            r = business_owner_client.post(
+                f"{API}/my-business/addons/email-marketing/cancel/",
+                {},
+                format="json",
+            )
+        assert r.status_code == status.HTTP_200_OK
+        assert r.json()["email_marketing"]["cancelAtPeriodEnd"] is True
+        mock_sync.assert_called_once()
+
+    def test_reactivate_email_marketing_200(self, business_owner_client, email_marketing_subscription):
+        sub = email_marketing_subscription
+        sub.cancel_at_period_end = False
+        with patch(
+            "quickstart.views.business.email_marketing_addon_views.stripe.Subscription.modify",
+            return_value=None,
+        ), patch(
+            "quickstart.views.business.email_marketing_addon_views.sync_addon_subscription_from_stripe",
+            return_value=(sub, None),
+        ) as mock_sync:
+            r = business_owner_client.post(
+                f"{API}/my-business/addons/email-marketing/reactivate/",
+                {},
+                format="json",
+            )
+        assert r.status_code == status.HTTP_200_OK
+        assert r.json()["email_marketing"]["cancelAtPeriodEnd"] is False
+        mock_sync.assert_called_once()

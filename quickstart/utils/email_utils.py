@@ -31,6 +31,8 @@ from quickstart.utils.email_branding_html import (
 from quickstart.utils.email_branding_placeholders import build_placeholder_map_from_context
 
 from ..models import (
+    ADDON_TYPE_EMAIL_MARKETING,
+    ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING,
     Booking,
     BusinessStaff,
     CustomUser,
@@ -1796,6 +1798,42 @@ def send_payout_failed_email(business: BusinessInfo, error_message: str):
     )
 
 
+def format_addon_subscription_display_name(
+    addon_type: str, stripe_price_id: Optional[str] = None
+) -> str:
+    """
+    User-facing subscription title for billing lifecycle emails (widget add-ons).
+    Email marketing tiers append plan_label from Stripe price when known.
+    """
+    from quickstart.services.email_marketing_config import price_id_to_tier
+
+    if addon_type == ADDON_TYPE_EMAIL_MARKETING:
+        base = "Email Marketing Add-on"
+        tier = price_id_to_tier(stripe_price_id) if stripe_price_id else None
+        label = (tier or {}).get("plan_label")
+        if label:
+            return f"{base} ({label})"
+        return base
+    if addon_type == ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING:
+        return "Marketplace Email Branding Add-on"
+    return "Add-on"
+
+
+def format_addon_price_display(
+    addon_type: str, stripe_price_id: Optional[str] = None
+) -> Optional[str]:
+    """Optional monthly list price line for add-on lifecycle emails (from tier config)."""
+    from quickstart.services.email_marketing_config import price_id_to_tier
+
+    if addon_type == ADDON_TYPE_EMAIL_MARKETING and stripe_price_id:
+        tier = price_id_to_tier(stripe_price_id)
+        if tier:
+            price = tier.get("ui_monthly_price")
+            if price is not None:
+                return f"${price}/mo"
+    return None
+
+
 def send_widget_subscription_payment_failed_email(
     business_user: CustomUser,
     business_name: str,
@@ -1843,8 +1881,12 @@ def send_business_subscription_lifecycle_email(
     previous_plan: Optional[str] = None,
     current_plan: Optional[str] = None,
     effective_date: Optional[Any] = None,
+    next_billing_date: Optional[Any] = None,
     manage_billing_url: Optional[str] = None,
     extra_message: Optional[str] = None,
+    price_display: Optional[str] = None,
+    cta_url: Optional[str] = None,
+    cta_label: Optional[str] = None,
 ):
     """
     Generic lifecycle confirmations for business billing subscriptions (widget/add-ons).
@@ -1886,13 +1928,45 @@ def send_business_subscription_lifecycle_email(
     subject = event_subjects.get(
         lifecycle_event, f"{subscription_name} update for {business_name}"
     )
-    billing_url = manage_billing_url or f"{settings.FRONTEND_BASE_URL}/business/dashboard?tab=settings"
+    base = (settings.FRONTEND_BASE_URL or "").rstrip("/")
+    billing_url = manage_billing_url or f"{base}/business/dashboard?tab=settings"
+    dashboard_url = f"{base}/business/dashboard"
+    default_cta_labels = {
+        "activated": "Go to Dashboard",
+        "plan_changed": "Manage billing",
+        "cancellation_scheduled": "Reactivate subscription",
+        "reactivated": "Go to Dashboard",
+        "canceled": "Resubscribe",
+        "payment_failed": "Update payment method",
+        "renewed": "View billing",
+    }
+    default_cta_urls = {
+        "activated": dashboard_url,
+        "plan_changed": billing_url,
+        "cancellation_scheduled": billing_url,
+        "reactivated": dashboard_url,
+        "canceled": billing_url,
+        "payment_failed": billing_url,
+        "renewed": billing_url,
+    }
+    resolved_cta_url = cta_url or default_cta_urls.get(lifecycle_event, billing_url)
+    resolved_cta_label = cta_label or default_cta_labels.get(
+        lifecycle_event, "Manage billing"
+    )
+
     effective_date_display = None
     if effective_date:
         if hasattr(effective_date, "strftime"):
             effective_date_display = effective_date.strftime("%b %d, %Y")
         else:
             effective_date_display = str(effective_date)
+
+    next_billing_date_display = None
+    if next_billing_date:
+        if hasattr(next_billing_date, "strftime"):
+            next_billing_date_display = next_billing_date.strftime("%b %d, %Y")
+        else:
+            next_billing_date_display = str(next_billing_date)
 
     context = {
         "user": business_user,
@@ -1904,8 +1978,12 @@ def send_business_subscription_lifecycle_email(
         "previous_plan": previous_plan,
         "current_plan": current_plan,
         "effective_date": effective_date_display,
+        "next_billing_date": next_billing_date_display,
         "manage_billing_url": billing_url,
+        "cta_url": resolved_cta_url,
+        "cta_label": resolved_cta_label,
         "extra_message": extra_message or "",
+        "price_display": price_display or "",
     }
     send_templated_email(
         recipient_list=[business_user.email],

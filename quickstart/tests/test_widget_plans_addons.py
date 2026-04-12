@@ -3,6 +3,9 @@ Tests for widget (public v1 with X-Business-ID), widget config (my-business),
 widget subscription (plans), and addons (my-business/addons).
 Run with: pytest quickstart/tests/test_widget_plans_addons.py -v
 """
+from types import SimpleNamespace
+from unittest.mock import patch
+
 import pytest
 from rest_framework import status
 
@@ -375,3 +378,176 @@ class TestMyBusinessAddonMarketplaceEmail:
             f"{API}/my-business/addons/marketplace-email/reactivate/"
         )
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+# -----------------------------------------------------------------------------
+# Widget subscription: mocked Stripe/service integration (POST cancel/reactivate/upgrade/downgrade)
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestWidgetSubscriptionUpgradeIntegration:
+    """POST plan change calls service layer; Stripe mocked at service boundary."""
+
+    @pytest.fixture(autouse=True)
+    def _widget_prices(self, settings):
+        settings.WIDGET_SUBSCRIPTION_PRICE_BASIC = "price_basic"
+        settings.WIDGET_SUBSCRIPTION_PRICE_GROWTH = "price_growth"
+        settings.WIDGET_SUBSCRIPTION_PRICE_ADVANCED = "price_advanced"
+
+    def test_post_upgrade_basic_to_growth_200(self, business_owner_client, widget_subscription):
+        sub = widget_subscription
+        assert sub.plan_id == "basic"
+
+        def _fake_upgrade(s, plan_id, biz):
+            s.plan_id = plan_id
+            s.stripe_price_id = "price_growth"
+            s.save(update_fields=["plan_id", "stripe_price_id"])
+            return False, None, s, None
+
+        stripe_sub = SimpleNamespace(
+            items=SimpleNamespace(
+                data=[SimpleNamespace(price=SimpleNamespace(id="price_basic"))]
+            )
+        )
+        with patch(
+            "quickstart.views.widget.widget_config_views.stripe.Subscription.retrieve",
+            return_value=stripe_sub,
+        ), patch(
+            "quickstart.views.widget.widget_config_views.upgrade_subscription",
+            side_effect=_fake_upgrade,
+        ):
+            response = business_owner_client.post(
+                f"{API}/my-business/widget-subscription/",
+                {"plan_id": "growth"},
+                format="json",
+            )
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert data.get("stripe_updated") is True
+        assert data["subscription"]["planId"] == "growth"
+        sub.refresh_from_db()
+        assert sub.plan_id == "growth"
+
+    def test_post_upgrade_returns_client_secret_when_payment_required(
+        self, business_owner_client, widget_subscription
+    ):
+        sub = widget_subscription
+
+        stripe_sub = SimpleNamespace(
+            items=SimpleNamespace(
+                data=[SimpleNamespace(price=SimpleNamespace(id="price_basic"))]
+            )
+        )
+        with patch(
+            "quickstart.views.widget.widget_config_views.stripe.Subscription.retrieve",
+            return_value=stripe_sub,
+        ), patch(
+            "quickstart.views.widget.widget_config_views.upgrade_subscription",
+            return_value=(True, "pi_secret_xyz", sub, None),
+        ):
+            response = business_owner_client.post(
+                f"{API}/my-business/widget-subscription/",
+                {"plan_id": "growth"},
+                format="json",
+            )
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert data.get("requires_payment") is True
+        assert data.get("client_secret") == "pi_secret_xyz"
+        assert data.get("target_plan_id") == "growth"
+
+
+@pytest.mark.django_db
+class TestWidgetSubscriptionDowngradeIntegration:
+    @pytest.fixture(autouse=True)
+    def _widget_prices(self, settings):
+        settings.WIDGET_SUBSCRIPTION_PRICE_BASIC = "price_basic"
+        settings.WIDGET_SUBSCRIPTION_PRICE_GROWTH = "price_growth"
+        settings.WIDGET_SUBSCRIPTION_PRICE_ADVANCED = "price_advanced"
+
+    def test_post_downgrade_growth_to_basic_200(self, business_owner_client, widget_subscription):
+        sub = widget_subscription
+        sub.plan_id = "growth"
+        sub.stripe_price_id = "price_growth"
+        sub.save(update_fields=["plan_id", "stripe_price_id"])
+
+        stripe_sub = SimpleNamespace(
+            items=SimpleNamespace(
+                data=[SimpleNamespace(price=SimpleNamespace(id="price_growth"))]
+            )
+        )
+        with patch(
+            "quickstart.views.widget.widget_config_views.stripe.Subscription.retrieve",
+            return_value=stripe_sub,
+        ), patch(
+            "quickstart.views.widget.widget_config_views.downgrade_subscription",
+            return_value=(sub, None),
+        ):
+            response = business_owner_client.post(
+                f"{API}/my-business/widget-subscription/",
+                {"plan_id": "basic"},
+                format="json",
+            )
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert data.get("downgrade_scheduled_at_period_end") is True
+        assert data.get("scheduled_plan_id") == "basic"
+        assert data.get("stripe_updated") is True
+
+
+@pytest.mark.django_db
+class TestWidgetSubscriptionCancelReactivateIntegration:
+    @patch("quickstart.views.widget.widget_config_views.service_cancel_at_period_end")
+    def test_cancel_active_subscription_200(self, mock_cancel, business_owner_client, widget_subscription):
+        sub = widget_subscription
+        sub.cancel_at_period_end = True
+        mock_cancel.return_value = (sub, None)
+
+        response = business_owner_client.post(f"{API}/my-business/widget-subscription/cancel/")
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["subscription"]["cancelAtPeriodEnd"] is True
+        mock_cancel.assert_called_once()
+
+    @patch("quickstart.views.widget.widget_config_views.service_reactivate")
+    def test_reactivate_clears_cancel_at_period_end_in_response(
+        self, mock_reactivate, business_owner_client, widget_subscription
+    ):
+        sub = widget_subscription
+        sub.cancel_at_period_end = False
+        mock_reactivate.return_value = (sub, None)
+
+        response = business_owner_client.post(f"{API}/my-business/widget-subscription/reactivate/")
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["subscription"]["cancelAtPeriodEnd"] is False
+        mock_reactivate.assert_called_once()
+
+
+@pytest.mark.django_db
+class TestWidgetSubscriptionGetScheduledDowngrade:
+    @pytest.fixture(autouse=True)
+    def _widget_prices(self, settings):
+        settings.WIDGET_SUBSCRIPTION_PRICE_BASIC = "price_basic"
+        settings.WIDGET_SUBSCRIPTION_PRICE_GROWTH = "price_growth"
+        settings.WIDGET_SUBSCRIPTION_PRICE_ADVANCED = "price_advanced"
+
+    @patch("quickstart.views.widget.widget_config_views.stripe.SubscriptionSchedule.retrieve")
+    @patch("quickstart.views.widget.widget_config_views.stripe.Subscription.retrieve")
+    def test_get_includes_scheduled_downgrade_when_schedule_has_two_phases(
+        self, mock_sub_ret, mock_sched_ret, business_owner_client, widget_subscription
+    ):
+        sub = widget_subscription
+        sub.plan_id = "growth"
+        sub.save(update_fields=["plan_id"])
+        mock_sub_ret.return_value = SimpleNamespace(schedule="sched_1")
+        mock_sched_ret.return_value = SimpleNamespace(
+            phases=[
+                {"start_date": 1_700_000_000, "items": [{"price": "price_growth"}]},
+                {"start_date": 1_800_000_000, "items": [{"price": "price_basic"}]},
+            ]
+        )
+        response = business_owner_client.get(f"{API}/my-business/widget-subscription/")
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert "scheduled_downgrade" in data
+        assert data["scheduled_downgrade"]["planId"] == "basic"
