@@ -1,5 +1,9 @@
 from .payout_tasks import *
 from .email_tasks import *
+# Celery autodiscover_tasks() only imports this package (__init__); submodules are not auto-loaded.
+# These modules define @shared_task handlers used by django-celery-beat / CELERY_BEAT_SCHEDULE.
+from . import email_marketing_tasks  # noqa: F401
+from . import email_marketing_workflow_tasks  # noqa: F401
 from .user_tasks import *
 from .business_tasks import *
 from .booking_tasks import *
