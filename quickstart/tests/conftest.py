@@ -3,7 +3,8 @@ Pytest configuration and shared fixtures for quickstart tests.
 Uses pytest-django; each test runs in a transaction that is rolled back (default).
 """
 import sys
-from datetime import timedelta
+from datetime import date, timedelta
+from decimal import Decimal
 
 import pytest
 from django.utils import timezone
@@ -151,6 +152,36 @@ def booking(business, schedule_instance):
 def gift_card():
     """Standalone gift card row."""
     return GiftCardFactory()
+
+
+@pytest.fixture
+def gift_card_zero_balance():
+    """Gift card with no remaining balance."""
+    return GiftCardFactory(
+        initial_amount=Decimal("50.00"),
+        current_balance=Decimal("0.00"),
+    )
+
+
+@pytest.fixture
+def gift_card_with_balance():
+    """High-balance gift card for full-cover checkout tests."""
+    return GiftCardFactory(
+        initial_amount=Decimal("200.00"),
+        current_balance=Decimal("200.00"),
+    )
+
+
+@pytest.fixture
+def scheduled_gift_card():
+    """Scheduled delivery: due (past date), not yet emailed."""
+    past = date.today() - timedelta(days=1)
+    return GiftCardFactory(
+        is_scheduled=True,
+        scheduled_date=past,
+        email_sent=False,
+        is_active=True,
+    )
 
 
 @pytest.fixture

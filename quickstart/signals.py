@@ -34,6 +34,7 @@ from .models import (
     Notification,
     BusinessInfo,
     CustomUser,
+    BlogPost,
     ClassesMain,
     ClassOption,
     Schedule,
@@ -1011,3 +1012,67 @@ def broadcast_notification_on_create(sender, instance, created, **kwargs):
             broadcast_notification_to_user(instance)
         except Exception as e:
             logger.warning("Failed to broadcast notification to WS: %s", e)
+
+
+# ---------------------------------------------------------------------------
+# Next.js (Cache Components) — on-demand revalidation via /api/revalidate
+# ---------------------------------------------------------------------------
+
+
+def _schedule_next_revalidate(tags):
+    if not tags:
+        return
+
+    def _run():
+        try:
+            from quickstart.utils.next_revalidate import revalidate_next_cache_tags
+
+            revalidate_next_cache_tags(list(tags))
+        except Exception as e:
+            logger.warning("Next.js cache revalidate skipped: %s", e)
+
+    transaction.on_commit(_run)
+
+
+@receiver(post_save, sender=ClassesMain)
+def nextjs_revalidate_on_class_save(sender, instance, **kwargs):
+    slug = getattr(instance, "slug", None) or ""
+    if not slug:
+        return
+    _schedule_next_revalidate(
+        [
+            f"class-{slug}",
+            "classes",
+            "homepage-content",
+            "collections",
+            "classes-search",
+        ]
+    )
+
+
+@receiver(post_save, sender=BusinessInfo)
+def nextjs_revalidate_on_business_save(sender, instance, **kwargs):
+    slug = getattr(instance, "slug", None) or ""
+    if not slug:
+        return
+    _schedule_next_revalidate(
+        [f"business-{slug}", "businesses", "public-businesses"]
+    )
+
+
+@receiver(post_save, sender=BlogPost)
+@receiver(post_delete, sender=BlogPost)
+def nextjs_revalidate_on_blog_post(sender, instance, **kwargs):
+    slug = getattr(instance, "slug", None) or ""
+    tags = ["blog-posts", "blog-categories", "blog-recent"]
+    if slug:
+        tags.append(f"blog-post-{slug}")
+    _schedule_next_revalidate(tags)
+
+
+@receiver(post_save, sender=ClassCollection)
+@receiver(post_delete, sender=ClassCollection)
+def nextjs_revalidate_on_collection(sender, instance, **kwargs):
+    _schedule_next_revalidate(
+        ["collections", "homepage-content", "classes-search"]
+    )

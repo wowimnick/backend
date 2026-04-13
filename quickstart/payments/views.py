@@ -883,6 +883,8 @@ class CreatePaymentIntentView(APIView):
                 response_data = {
                     "clientSecret": intent.client_secret,
                     "amount": float(grand_total),
+                    "subtotal": float(subtotal_after_discount),
+                    "tax_amount": float(tax_amount),
                     "total_sessions": len(all_instances),
                     "booking_type": booking_type,
                 }

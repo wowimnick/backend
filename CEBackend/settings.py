@@ -476,6 +476,8 @@ SIMPLE_JWT = {
 # a different host, set FRONTEND_URL to a URL reachable from the backend (e.g. your staging/prod
 # frontend). Otherwise revalidation and other callbacks will try localhost:3000 and fail.
 FRONTEND_BASE_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+# Next.js App Router on-demand cache revalidation (same host as the marketing app per env).
+NEXT_REVALIDATE_URL = f"{FRONTEND_BASE_URL.rstrip('/')}/api/revalidate"
 # Absolute base for marketing unsubscribe links (defaults to this backend origin).
 DJANGO_PUBLIC_URL = os.environ.get("DJANGO_PUBLIC_URL", "http://127.0.0.1:8000")
 

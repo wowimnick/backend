@@ -1,5 +1,7 @@
 # quickstart/sitemaps.py
 
+import re
+
 from django.contrib.sitemaps import Sitemap
 from django.urls import reverse
 from django.utils.text import slugify
@@ -18,7 +20,7 @@ class StaticViewSitemap(Sitemap):
     changefreq = "monthly"
 
     def items(self):
-        return [
+        named = [
             "homepage",
             "business-welcome",
             "careers",
@@ -27,12 +29,25 @@ class StaticViewSitemap(Sitemap):
             "privacy-policy",
             "blog",
         ]
+        # Next.js routes not in Django url reverse()
+        extra_paths = [
+            "/about",
+            "/giftcards",
+            "/fees",
+            "/cookie-policy",
+            "/content-policy",
+            "/copyright-policy",
+        ]
+        return [("named", n) for n in named] + [("path", p) for p in extra_paths]
 
     def location(self, item):
+        kind, val = item
+        if kind == "path":
+            return val
         try:
-            return reverse(item)
-        except:
-            return f'/{item.replace("-welcome", "")}'
+            return reverse(val)
+        except Exception:
+            return f'/{val.replace("-welcome", "")}'
 
     def lastmod(self, obj):
         return timezone.now()
@@ -239,3 +254,41 @@ class BlogCategorySitemap(Sitemap):
 
     def location(self, obj):
         return f"/blog/category/{obj.slug}"
+
+
+def _blog_tag_url_slug(tag):
+    """Match Next.js blog tag URLs: tagToSlug in blog/tag/[tag]/page.jsx."""
+    return re.sub(r"\s+", "-", str(tag).lower().strip())
+
+
+class BlogTagSitemap(Sitemap):
+    """
+    Sitemap for blog tag archive pages (/blog/tag/{slug}/).
+    """
+
+    changefreq = "weekly"
+    priority = 0.65
+
+    def items(self):
+        slugs = set()
+        for post in BlogPost.objects.filter(status="published").only("tags"):
+            for t in post.tags or []:
+                if t is None or not str(t).strip():
+                    continue
+                slugs.add(_blog_tag_url_slug(t))
+        return sorted(slugs)
+
+    def location(self, tag_slug):
+        return f"/blog/tag/{tag_slug}"
+
+    def lastmod(self, tag_slug):
+        latest = None
+        for post in BlogPost.objects.filter(status="published").only(
+            "tags", "updated_at"
+        ):
+            for t in post.tags or []:
+                if t and _blog_tag_url_slug(t) == tag_slug:
+                    if latest is None or post.updated_at > latest:
+                        latest = post.updated_at
+                    break
+        return latest or timezone.now()

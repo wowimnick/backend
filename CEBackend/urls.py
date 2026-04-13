@@ -12,6 +12,7 @@ from quickstart.sitemaps import (
     BusinessSitemap,
     BlogSitemap,
     BlogCategorySitemap,
+    BlogTagSitemap,
 )
 
 # Define the sitemaps dictionary here, at the project level.
@@ -23,6 +24,7 @@ sitemaps = {
     "explore": ExplorePagesSitemap,
     "blog": BlogSitemap,
     "blog-categories": BlogCategorySitemap,
+    "blog-tags": BlogTagSitemap,
 }
 
 urlpatterns = [
