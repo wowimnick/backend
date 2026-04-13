@@ -43,6 +43,20 @@
     <p style="color: #484848; font-size: 14px;">
       {% trans "Your review will be visible on the experience page shortly." %}
     </p>
+    {% if class_page_url %}
+    <table role="presentation"
+           border="0"
+           cellpadding="0"
+           cellspacing="0"
+           width="100%"
+           style="margin-top: 24px;">
+      <tr>
+        <td align="center">
+          <a href="{{ class_page_url }}" class="button">{% trans "View experience page" %}</a>
+        </td>
+      </tr>
+    </table>
+    {% endif %}
     <p style="margin-top: 32px;">{% trans "The ClassEasily Team" %}</p>
   </div>
 {% endblock content %}

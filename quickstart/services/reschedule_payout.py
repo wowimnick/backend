@@ -10,6 +10,7 @@ import logging
 
 from quickstart.models import PartnerTier
 from quickstart.utils.widget_booking_source import is_widget_booking_source
+from quickstart.utils.stripe_processing_fee import estimate_stripe_processing_fee
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +107,12 @@ def preview_reschedule_payout_adjustment(booking, new_schedule_instance):
     overage = _q2(s_customer - s_new)
     platform_fee_amount = _q2(overage + base_commission)
     platform_fee_tax = _q2(platform_fee_amount * HST_RATE)
-    net_payout = _q2(payment.amount - platform_fee_amount - platform_fee_tax)
+    stripe_fee = payment.stripe_processing_fee or estimate_stripe_processing_fee(
+        payment.amount
+    )
+    net_payout = _q2(
+        payment.amount - platform_fee_amount - platform_fee_tax - stripe_fee
+    )
 
     return {
         "should_apply": True,

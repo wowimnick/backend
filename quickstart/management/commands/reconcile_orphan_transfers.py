@@ -19,6 +19,7 @@ from django.core.management.base import BaseCommand
 
 from quickstart.models import Booking, BusinessInfo, Payout
 from quickstart.utils.stripe_metadata import stripe_metadata_to_dict
+from quickstart.utils.stripe_processing_fee import estimate_stripe_processing_fee
 from quickstart.utils.stripe_transfer_reversal import merge_reversal_into_orphan
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
@@ -26,21 +27,10 @@ stripe.api_key = settings.STRIPE_SECRET_KEY
 MAX_PAGES = 40
 PAGE_SIZE = 100
 
-# Match process_daily_payouts fee estimate (2.9% + $0.30 per charge).
-STRIPE_FEE_PERCENT = Decimal("0.029")
-STRIPE_FEE_FIXED = Decimal("0.30")
-
-
-def _estimate_stripe_processing_fee(charge_amount):
-    if charge_amount is None or charge_amount <= 0:
-        return Decimal("0.00")
-    fee = (charge_amount * STRIPE_FEE_PERCENT + STRIPE_FEE_FIXED).quantize(Decimal("0.01"))
-    return fee
-
 
 def _expected_transfer_for_business(business_id: int):
     """
-    Mirror process_daily_payouts net calculation for pending payout bookings.
+    Mirror process_daily_payouts: sum allocated_net_payout (already net of platform + Stripe).
     Returns (total_transfer, details, zero_dollar_ids).
     """
     qs = (
@@ -67,23 +57,27 @@ def _expected_transfer_for_business(business_id: int):
             (p for p in booking.payments.all() if p.status == "succeeded"),
             None,
         )
-        stripe_fee = Decimal("0.00")
-        if payment and payment.amount:
-            stripe_fee = _estimate_stripe_processing_fee(payment.amount)
-        net_after = (allocated - stripe_fee).quantize(Decimal("0.01"))
+        stripe_fee_info = Decimal("0.00")
+        if payment:
+            stripe_fee_info = (payment.stripe_processing_fee or Decimal("0.00")).quantize(
+                Decimal("0.01")
+            )
+            if stripe_fee_info <= 0 and payment.amount:
+                stripe_fee_info = estimate_stripe_processing_fee(payment.amount)
+        net_transfer = allocated.quantize(Decimal("0.01"))
         row = {
             "booking_id": booking.id,
             "ref": getattr(booking, "user_facing_reference", "") or "",
             "allocated_net_payout": allocated,
-            "stripe_fee_est": stripe_fee,
-            "net_after_fees": net_after,
+            "stripe_fee_est": stripe_fee_info,
+            "net_after_fees": net_transfer,
         }
-        if net_after > 0:
-            total += net_after
+        if net_transfer > 0:
+            total += net_transfer
             details.append(row)
         else:
             zero_ids.append(booking.id)
-            row["note"] = "net_after_fees<=0"
+            row["note"] = "allocated_net_payout<=0"
             details.append(row)
 
     return total, details, zero_ids

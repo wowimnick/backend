@@ -9,7 +9,6 @@ from django.utils import timezone
 
 from quickstart.models import Payment, Payout
 from quickstart.tasks.payout_tasks import (
-    _estimate_stripe_processing_fee,
     process_daily_payouts,
     update_completed_booking_status,
 )
@@ -63,19 +62,25 @@ class Command(BaseCommand):
             price=Decimal("100.00"),
         )
         self.stdout.write(f"  - Created Class Instance for date: {class_instance.date}")
+        fee = (Decimal("100.00") * Decimal("0.029") + Decimal("0.30")).quantize(
+            Decimal("0.01")
+        )
+        net_after_stripe = (Decimal("100.00") - fee).quantize(Decimal("0.01"))
         booking = BookingFactory(
             schedule_instance=class_instance,
             status="confirmed",
             payment_status="paid",
             payout_status="pending",
             amount_paid=Decimal("100.00"),
-            allocated_net_payout=Decimal("100.00"),
+            allocated_net_payout=net_after_stripe,
         )
         Payment.objects.create(
             booking=booking,
             stripe_payment_intent_id="pi_test_payout_flow_unique",
             amount=Decimal("100.00"),
             status="succeeded",
+            stripe_processing_fee=fee,
+            net_payout_amount=net_after_stripe,
         )
         self.stdout.write(
             f"  - Created Booking {booking.id} with payout_status '{booking.payout_status}'"
@@ -92,8 +97,7 @@ class Command(BaseCommand):
             )
         )
 
-        fee = _estimate_stripe_processing_fee(Decimal("100.00"))
-        expected_payout = (Decimal("100.00") - fee).quantize(Decimal("0.01"))
+        expected_payout = net_after_stripe
         expected_payout_cents = int(expected_payout * 100)
 
         def fake_stripe_transfer_create(*args, **kwargs):

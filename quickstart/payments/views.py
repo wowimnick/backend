@@ -88,6 +88,7 @@ from quickstart.utils.revalidation import (
 from quickstart.utils.meta_capi import send_purchase_event_for_booking
 from quickstart.utils.stripe_metadata import stripe_metadata_to_dict
 from quickstart.utils.widget_booking_source import is_widget_booking_source
+from quickstart.utils.stripe_processing_fee import estimate_stripe_processing_fee
 
 logger = logging.getLogger(__name__)
 
@@ -2197,9 +2198,13 @@ class ProcessBookingWebhook(APIView):
                     Decimal("0.01")
                 )
 
+                # Stripe processing (2.9% + fixed) is deducted from the business payout, not platform commission
+                stripe_processing_fee = estimate_stripe_processing_fee(grand_total)
                 # This is the total bucket of money the business is owed for the whole course
                 business_payout_tax = total_tax - platform_fee_tax
-                business_net_revenue = subtotal_for_payout - platform_fee_amount
+                business_net_revenue = (
+                    subtotal_for_payout - platform_fee_amount - stripe_processing_fee
+                )
                 total_net_payout_to_business = (
                     business_net_revenue + business_payout_tax
                 )
@@ -2385,6 +2390,7 @@ class ProcessBookingWebhook(APIView):
                 payment_record.tax_amount = total_tax
                 payment_record.platform_fee_amount = platform_fee_amount
                 payment_record.platform_fee_tax = platform_fee_tax
+                payment_record.stripe_processing_fee = stripe_processing_fee
                 payment_record.net_payout_amount = (
                     total_net_payout_to_business  # Total for the whole course
                 )
@@ -2750,11 +2756,19 @@ class ProcessBookingWebhook(APIView):
                 booking.cancellation_token = uuid.uuid4()
                 booking.save(update_fields=["cancellation_token"])
 
-            fee_percentage = (
-                business.partner_tier.fee_percentage
-                if business.partner_tier
-                else PartnerTier.objects.get(is_default=True).fee_percentage
-            )
+            if is_widget_booking_source(metadata.get("booking_source")):
+                plan_id = (metadata.get("plan_id") or "basic").lower()
+                fee_percentage = {
+                    "basic": Decimal("4.00"),
+                    "growth": Decimal("3.00"),
+                    "advanced": Decimal("2.00"),
+                }.get(plan_id, Decimal("4.00"))
+            else:
+                fee_percentage = (
+                    business.partner_tier.fee_percentage
+                    if business.partner_tier
+                    else PartnerTier.objects.get(is_default=True).fee_percentage
+                )
             service_fee_rate = fee_percentage / Decimal("100.0")
             platform_fee_amount = (
                 subtotal_for_payout * service_fee_rate
@@ -2763,7 +2777,10 @@ class ProcessBookingWebhook(APIView):
                 Decimal("0.01")
             )
             business_payout_tax = total_tax - platform_fee_tax
-            business_net_revenue = subtotal_for_payout - platform_fee_amount
+            stripe_processing_fee = estimate_stripe_processing_fee(grand_total)
+            business_net_revenue = (
+                subtotal_for_payout - platform_fee_amount - stripe_processing_fee
+            )
             net_payout_to_business = business_net_revenue + business_payout_tax
             booking.allocated_net_payout = net_payout_to_business
             booking.save(update_fields=["allocated_net_payout"])
@@ -2778,6 +2795,7 @@ class ProcessBookingWebhook(APIView):
                 status="succeeded",
                 platform_fee_amount=platform_fee_amount,
                 platform_fee_tax=platform_fee_tax,
+                stripe_processing_fee=stripe_processing_fee,
                 net_payout_amount=net_payout_to_business,
                 metadata={"original_stripe_metadata": dict(metadata)},
             )
@@ -3093,7 +3111,10 @@ class ProcessBookingWebhook(APIView):
                 Decimal("0.01")
             )
             business_payout_tax = total_tax - platform_fee_tax
-            business_net_revenue = subtotal_for_payout - platform_fee_amount
+            stripe_processing_fee = estimate_stripe_processing_fee(grand_total)
+            business_net_revenue = (
+                subtotal_for_payout - platform_fee_amount - stripe_processing_fee
+            )
             net_payout_to_business = business_net_revenue + business_payout_tax
 
             # --- UPDATE PENDING BOOKING TO CONFIRMED ---
@@ -3212,6 +3233,7 @@ class ProcessBookingWebhook(APIView):
             payment_record.tax_amount = total_tax
             payment_record.platform_fee_amount = platform_fee_amount
             payment_record.platform_fee_tax = platform_fee_tax
+            payment_record.stripe_processing_fee = stripe_processing_fee
             payment_record.net_payout_amount = net_payout_to_business
             payment_record.metadata = {"original_stripe_metadata": dict(metadata)}
 

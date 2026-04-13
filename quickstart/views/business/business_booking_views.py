@@ -215,6 +215,53 @@ def _build_widget_funnel_payload(business, start_dt, end_dt):
     }
 
 
+GUEST_TYPE_BOOKINGS_CAP = 300
+
+
+def _serialize_booking_for_guest_type_drawer(booking):
+    """Lightweight guest row for business analytics (marketing / follow-up)."""
+    user = booking.user
+    contact = booking.contact
+    if user is not None:
+        name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+        if not name:
+            name = (user.email or "").strip() or "Guest"
+        email = (user.email or "").strip()
+        phone = (getattr(user, "phone_number", None) or "").strip()
+    elif contact is not None:
+        name = f"{contact.first_name or ''} {contact.last_name or ''}".strip()
+        if not name:
+            name = (contact.email or "").strip() or "Guest"
+        email = (contact.email or "").strip()
+        phone = (contact.phone_number or "").strip()
+    else:
+        name, email, phone = "Guest", "", ""
+
+    class_title = ""
+    try:
+        if booking.schedule_instance_id:
+            class_title = (
+                booking.schedule_instance.schedule.option.classId.title or ""
+            )
+    except Exception:
+        class_title = ""
+
+    return {
+        "booking_id": booking.id,
+        "guest_name": name,
+        "email": email,
+        "phone": phone or None,
+        "amount_paid": float(booking.amount_paid or 0),
+        "participants": booking.participants,
+        "class_name": class_title,
+        "booking_date": booking.booking_date.isoformat()
+        if booking.booking_date
+        else None,
+        "status": booking.status,
+        "payment_status": booking.payment_status,
+    }
+
+
 class BusinessBookingPagination(PageNumberPagination):
     page_size = 10
     page_size_query_param = "page_size"
@@ -1026,7 +1073,8 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
             # --- Popular Classes (Added Revenue) ---
             popular_classes_data = (
                 bookings_qs.values(
-                    "schedule_instance__schedule__option__classId__title"
+                    "schedule_instance__schedule__option__classId_id",
+                    "schedule_instance__schedule__option__classId__title",
                 )
                 .annotate(
                     total_booking_transactions=Count("id"),
@@ -1046,6 +1094,9 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
             )
             popular_classes = [
                 {
+                    "class_id": entry[
+                        "schedule_instance__schedule__option__classId_id"
+                    ],
                     "class_name": entry[
                         "schedule_instance__schedule__option__classId__title"
                     ],
@@ -1235,6 +1286,39 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                 else 0
             )
 
+            # Guest rows for dashboard drawer (excludes cancelled/forfeited; capped)
+            _guest_detail_q = ~Q(status__in=["cancelled", "forfeited"])
+            new_guest_bookings = []
+            if new_booker_q:
+                for bk in (
+                    bookings_qs_base.filter(new_booker_q)
+                    .filter(_guest_detail_q)
+                    .select_related(
+                        "user",
+                        "contact",
+                        "schedule_instance__schedule__option__classId",
+                    )
+                    .order_by("-booking_date")[:GUEST_TYPE_BOOKINGS_CAP]
+                ):
+                    new_guest_bookings.append(
+                        _serialize_booking_for_guest_type_drawer(bk)
+                    )
+            returning_guest_bookings = []
+            if returning_booker_q:
+                for bk in (
+                    bookings_qs_base.filter(returning_booker_q)
+                    .filter(_guest_detail_q)
+                    .select_related(
+                        "user",
+                        "contact",
+                        "schedule_instance__schedule__option__classId",
+                    )
+                    .order_by("-booking_date")[:GUEST_TYPE_BOOKINGS_CAP]
+                ):
+                    returning_guest_bookings.append(
+                        _serialize_booking_for_guest_type_drawer(bk)
+                    )
+
             # --- Occupancy Rate Trends ---
             avg_occupancy_data = bookings_qs.filter(
                 schedule_instance__max_participants__gt=0,  # Avoid division by zero
@@ -1350,6 +1434,11 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                 },
                 "upcoming_classes": upcoming_classes_data,
                 "widget_funnel": widget_funnel,
+                "guest_type_bookings": {
+                    "new": new_guest_bookings,
+                    "returning": returning_guest_bookings,
+                    "max_per_segment": GUEST_TYPE_BOOKINGS_CAP,
+                },
             }
             return Response(response_data)
 

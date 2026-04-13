@@ -23,13 +23,12 @@ from django.db import transaction
 from django.utils import timezone
 
 from quickstart.models import Booking, BusinessInfo, Payout
-from quickstart.tasks.payout_tasks import _estimate_stripe_processing_fee
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
 
 def _pending_positive_net_booking_ids(business) -> tuple[list[int], Decimal, Decimal]:
-    """Same net-after-fee rules as process_daily_payouts."""
+    """Same rules as process_daily_payouts (allocated_net_payout includes Stripe fee)."""
     qs = (
         Booking.objects.filter(
             schedule_instance__schedule__option__classId__businessId=business,
@@ -48,14 +47,10 @@ def _pending_positive_net_booking_ids(business) -> tuple[list[int], Decimal, Dec
         if allocated <= 0:
             continue
         payment = next((p for p in booking.payments.all() if p.status == "succeeded"), None)
-        stripe_fee = Decimal("0.00")
-        if payment and payment.amount:
-            stripe_fee = _estimate_stripe_processing_fee(payment.amount)
-        total_stripe_fees += stripe_fee
-        net_after_stripe = (allocated - stripe_fee).quantize(Decimal("0.01"))
-        if net_after_stripe > 0:
-            total_payout += net_after_stripe
-            booking_ids.append(booking.id)
+        if payment and payment.stripe_processing_fee:
+            total_stripe_fees += payment.stripe_processing_fee
+        total_payout += allocated
+        booking_ids.append(booking.id)
     return booking_ids, total_payout, total_stripe_fees
 
 
@@ -142,14 +137,9 @@ class Command(BaseCommand):
                 if allocated <= 0:
                     raise CommandError(f"Booking {booking.id} has non-positive allocated_net_payout.")
                 payment = next((p for p in booking.payments.all() if p.status == "succeeded"), None)
-                stripe_fee = Decimal("0.00")
-                if payment and payment.amount:
-                    stripe_fee = _estimate_stripe_processing_fee(payment.amount)
-                total_stripe_fees += stripe_fee
-                net_after_stripe = (allocated - stripe_fee).quantize(Decimal("0.01"))
-                if net_after_stripe <= 0:
-                    raise CommandError(f"Booking {booking.id} nets to {net_after_stripe} after fees; not payable.")
-                total_payout += net_after_stripe
+                if payment and payment.stripe_processing_fee:
+                    total_stripe_fees += payment.stripe_processing_fee
+                total_payout += allocated
         else:
             booking_ids, total_payout, total_stripe_fees = _pending_positive_net_booking_ids(business)
 

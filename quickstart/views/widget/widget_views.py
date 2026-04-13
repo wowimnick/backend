@@ -14,6 +14,7 @@ from rest_framework.exceptions import ValidationError, NotFound
 from django.db.models import Q, Count, Sum, Subquery, OuterRef, IntegerField, Prefetch
 from django.db.models.functions import Coalesce
 
+from quickstart.utils.stripe_processing_fee import estimate_stripe_processing_fee
 from quickstart.models import (
     BusinessInfo,
     BusinessStaff,
@@ -905,11 +906,21 @@ class GuestBookingCreateView(generics.CreateAPIView):
                 )
 
                 class_option = instance.schedule.option
+                amount_charged = Decimal(pi.amount_received) / 100
+                stripe_processing_fee = estimate_stripe_processing_fee(amount_charged)
+                net_before_stripe = Decimal(metadata.get("net_payout_cents", 0)) / 100
+                net_payout_after_stripe = max(
+                    Decimal("0.00"),
+                    (net_before_stripe - stripe_processing_fee).quantize(
+                        Decimal("0.01"), rounding=ROUND_HALF_UP
+                    ),
+                )
+
                 booking = Booking.objects.create(
                     contact=contact,
                     schedule_instance=instance,
                     participants=participants,
-                    amount_paid=Decimal(pi.amount_received / 100.0),
+                    amount_paid=amount_charged,
                     status="confirmed",
                     payment_status="paid",
                     payout_status="pending",
@@ -918,6 +929,7 @@ class GuestBookingCreateView(generics.CreateAPIView):
                     cancellation_custom_hours=class_option.cancellationCustomHours,
                     cancellation_refund_percentage=class_option.cancellationRefundPercentage,
                     cancellation_token=uuid.uuid4(),
+                    allocated_net_payout=net_payout_after_stripe,
                 )
 
                 Payment.objects.create(
@@ -925,10 +937,11 @@ class GuestBookingCreateView(generics.CreateAPIView):
                     stripe_payment_intent_id=pi.id,
                     stripe_charge_id=pi.latest_charge,
                     status="succeeded",
-                    amount=Decimal(pi.amount_received) / 100,
+                    amount=amount_charged,
                     tax_amount=Decimal(metadata.get("tax_cents", 0)) / 100,
                     platform_fee_amount=Decimal(metadata.get("platform_fee_cents", 0)) / 100,
-                    net_payout_amount=Decimal(metadata.get("net_payout_cents", 0)) / 100,
+                    stripe_processing_fee=stripe_processing_fee,
+                    net_payout_amount=net_payout_after_stripe,
                     currency=business.currency,
                     payment_method_type=(
                         pi.payment_method_types[0]

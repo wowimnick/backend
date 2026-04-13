@@ -13,8 +13,8 @@ from quickstart.tests.factories import BookingFactory, ScheduleInstanceFactory
 from quickstart.tasks.payout_tasks import (
     update_completed_booking_status,
     process_daily_payouts,
-    PLATFORM_FEE_RATE,
 )
+from quickstart.utils.stripe_processing_fee import estimate_stripe_processing_fee
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
@@ -134,14 +134,19 @@ class Command(BaseCommand):
             f"  - Confirmed Payment Intent. Funds are now in platform's test balance."
         )
 
+        proc_fee = estimate_stripe_processing_fee(gross_amount)
+        net_to_business = (gross_amount - proc_fee).quantize(Decimal("0.01"))
         payment_record = Payment.objects.create(
             booking=booking,
             stripe_payment_intent_id=confirmed_intent.id,
             amount=gross_amount,
             status="succeeded",
+            stripe_processing_fee=proc_fee,
+            net_payout_amount=net_to_business,
         )
         booking.payment_status = "paid"
-        booking.save()
+        booking.allocated_net_payout = net_to_business
+        booking.save(update_fields=["payment_status", "allocated_net_payout"])
         self.stdout.write(
             f"  - Created local Payment record {payment_record.id} and updated booking status to 'paid'."
         )
@@ -191,9 +196,7 @@ class Command(BaseCommand):
         retrieved_transfer = stripe.Transfer.retrieve(stripe_transfer_id)
         # --- END OF FIX ---
 
-        expected_payout = (
-            gross_amount * (Decimal("1.0") - PLATFORM_FEE_RATE)
-        ).quantize(Decimal("0.01"))
+        expected_payout = net_to_business
         retrieved_amount_decimal = Decimal(retrieved_transfer.amount) / 100
 
         self.stdout.write(

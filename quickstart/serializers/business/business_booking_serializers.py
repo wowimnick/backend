@@ -120,6 +120,7 @@ class _PaymentDetailSerializerForBusiness(serializers.ModelSerializer):
             "tax_amount",  # Total tax collected
             "platform_fee_amount",  # Replaced service_fee_amount
             "platform_fee_tax",  # Tax collected on the platform fee
+            "stripe_processing_fee",  # Card processing (disclosed; deducted from host net)
             "net_payout_amount",  # Final amount transferred to business
             "currency",
             "payment_method_type",

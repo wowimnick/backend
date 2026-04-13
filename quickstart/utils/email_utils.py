@@ -798,11 +798,14 @@ def send_refund_failed_guest_email(booking: Booking, reason: str):
     if not guest_email:
         logger.warning("Booking %s has no guest email for refund failed notification.", booking.id)
         return
+    base = (getattr(settings, "FRONTEND_BASE_URL", "") or "").rstrip("/")
     context = {
         "user": guest_user,
         "recipient_email": guest_email,
         "booking_id": booking.id,
         "reason": reason or "Unknown error",
+        "my_classes_url": f"{base}/my-classes" if base else "/my-classes",
+        "my_tickets_url": f"{base}/my-tickets" if base else "/my-tickets",
     }
     send_templated_email(
         recipient_list=[guest_email],
@@ -1361,10 +1364,22 @@ def send_review_submission_confirmation_email(user: CustomUser, review: Reviews)
         f"Preparing review submission confirmation email for review {review.reviewId} to user {user.email} with class_name='{class_name}'"
     )
 
+    class_page_url = None
+    try:
+        cm = review.classId
+        if cm:
+            ident = getattr(cm, "slug", None) or getattr(cm, "classId", None)
+            if ident:
+                base = (getattr(settings, "FRONTEND_BASE_URL", "") or "").rstrip("/")
+                class_page_url = f"{base}/classes/{ident}" if base else f"/classes/{ident}"
+    except Exception:
+        class_page_url = None
+
     context = {
         "user": user,
         "review": review,
         "class_name": class_name,
+        "class_page_url": class_page_url,
         "recipient_email": user.email,
     }
 
@@ -1577,6 +1592,12 @@ def send_business_verification_rejected_email(
     contact_email = settings.NOTIFICATION_SETTINGS.get(
         "reply_to", "support@classeasily.com"
     )
+    base = (getattr(settings, "FRONTEND_BASE_URL", "") or "").rstrip("/")
+    verification_settings_url = (
+        f"{base}/business/dashboard/settings?tab=preferences"
+        if base
+        else "/business/dashboard/settings?tab=preferences"
+    )
 
     context = {
         "user": user,
@@ -1584,6 +1605,7 @@ def send_business_verification_rejected_email(
         "verification_request": verification_request,
         "contact_email": contact_email,
         "recipient_email": user.email,
+        "verification_settings_url": verification_settings_url,
     }
     send_templated_email(
         recipient_list=[user.email],

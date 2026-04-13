@@ -13,7 +13,6 @@ import pytest
 from django.utils import timezone
 
 from quickstart.models import Payment, Payout
-from quickstart.tasks.payout_tasks import _estimate_stripe_processing_fee
 from quickstart.tests.factories import (
     BusinessFactory,
     BookingFactory,
@@ -50,23 +49,25 @@ def test_process_daily_payouts_completes_with_stripe_like_metadata():
         schedule__option__classId__businessId=business,
         date=yesterday,
     )
+    # allocated_net_payout already includes Stripe fee deduction at payment time
+    expected_net = Decimal("87.00")
     booking = BookingFactory(
         schedule_instance=inst,
         status="completed",
         payment_status="paid",
         payout_status="pending",
         amount_paid=Decimal("100.00"),
-        allocated_net_payout=Decimal("100.00"),
+        allocated_net_payout=expected_net,
     )
     Payment.objects.create(
         booking=booking,
         stripe_payment_intent_id="pi_test_meta_merge_unique",
         amount=Decimal("100.00"),
         status="succeeded",
+        stripe_processing_fee=Decimal("3.20"),
+        net_payout_amount=expected_net,
     )
 
-    fee = _estimate_stripe_processing_fee(Decimal("100.00"))
-    expected_net = (Decimal("100.00") - fee).quantize(Decimal("0.01"))
     expected_cents = int(expected_net * 100)
 
     class MetaObj:

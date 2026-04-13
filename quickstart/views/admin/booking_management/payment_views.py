@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.utils import timezone
 from django.db import transaction
-from django.db.models import Sum, Count, Avg, Q, F, Value, ExpressionWrapper, DecimalField
+from django.db.models import Sum, Count, Q
 from django.db.models.functions import Coalesce
 from decimal import Decimal
 
@@ -204,17 +204,11 @@ class AdminPaymentViewSet(viewsets.ModelViewSet):
             total_transactions = payments.count()
             successful_transactions = payments.filter(status="succeeded").count()
 
-            # Platform fees: sum of stored platform_fee_amount (respects business tier, discounts at payment time); Stripe: 2.9% + $0.30 per succeeded payment (calculated on the fly)
+            # Platform commission vs Stripe processing (stored on Payment at capture time)
             succeeded_payments = payments.filter(status="succeeded")
-            stripe_fee_expr = ExpressionWrapper(
-                F("amount") * Decimal("0.029") + Value(Decimal("0.30")),
-                output_field=DecimalField(),
-            )
-            fee_agg = succeeded_payments.annotate(
-                _stripe_fee=stripe_fee_expr
-            ).aggregate(
+            fee_agg = succeeded_payments.aggregate(
                 platform_fees=Coalesce(Sum("platform_fee_amount"), Decimal(0)),
-                stripe_fees=Coalesce(Sum("_stripe_fee"), Decimal(0)),
+                stripe_fees=Coalesce(Sum("stripe_processing_fee"), Decimal(0)),
             )
             total_platform_fees = fee_agg["platform_fees"]
             total_stripe_fees = fee_agg["stripe_fees"]
@@ -229,6 +223,7 @@ class AdminPaymentViewSet(viewsets.ModelViewSet):
                     "successful_transactions": successful_transactions,
                     "platform_fees": float(total_platform_fees),
                     "stripe_fees": float(total_stripe_fees),
+                    "net_platform_profit": float(total_platform_fees),
                     "period_days": window.period_days,
                     "all_time": window.all_time,
                 }

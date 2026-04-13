@@ -437,15 +437,9 @@ class AdminBookingViewSet(viewsets.ModelViewSet):
                     booking__schedule_instance__date__gte=window.start_date,
                     booking__schedule_instance__date__lte=window.end_date,
                 )
-            stripe_fee_expr = ExpressionWrapper(
-                F("amount") * Decimal("0.029") + Value(Decimal("0.30")),
-                output_field=DecimalField(),
-            )
-            fee_agg = payments_for_bookings.annotate(
-                _stripe_fee=stripe_fee_expr
-            ).aggregate(
+            fee_agg = payments_for_bookings.aggregate(
                 platform_fees=Coalesce(Sum("platform_fee_amount"), Decimal(0)),
-                stripe_fees=Coalesce(Sum("_stripe_fee"), Decimal(0)),
+                stripe_fees=Coalesce(Sum("stripe_processing_fee"), Decimal(0)),
             )
             total_platform_fees = float(fee_agg["platform_fees"])
             total_stripe_fees = float(fee_agg["stripe_fees"])

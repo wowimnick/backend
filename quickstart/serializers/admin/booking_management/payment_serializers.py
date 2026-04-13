@@ -26,6 +26,10 @@ class AdminPaymentSerializer(serializers.ModelSerializer):
             "stripe_charge_id",
             "amount",
             "platform_fee_amount",  # FIX: Renamed from service_fee_amount
+            "stripe_processing_fee",
+            "net_payout_amount",
+            "platform_fee_tax",
+            "tax_amount",
             "currency",
             "status",
             "formatted_status",
@@ -122,6 +126,7 @@ class AdminBookingPaymentSerializer(serializers.ModelSerializer):
             "stripe_payment_intent_id",
             "amount",
             "platform_fee_amount",
+            "stripe_processing_fee",
             "net_payout_amount",
             "currency",
             "status",

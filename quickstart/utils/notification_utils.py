@@ -159,7 +159,7 @@ def create_membership_business_in_app_notifications(membership, lifecycle_event)
         msg,
         "CreditCard",
         "#6366f1",
-        "/business/dashboard?tab=memberships",
+        "/business/dashboard/memberships",
         content_type=None,
         object_id=str(membership.pk),
     )
@@ -191,7 +191,7 @@ def create_notifications_for_new_chat_message(conversation, message):
     if len((message.text or "").strip()) > 80:
         message_text += "…"
     msg_display = f'{sender_name} sent a message: "{message_text}"'
-    link_web = f"/business/dashboard?tab=messages&conversation_id={conversation.id}"
+    link_web = f"/business/dashboard/messages?conversationId={conversation.id}"
 
     create_notification_for_recipients(
         business,

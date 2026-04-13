@@ -10,23 +10,11 @@ import logging
 import pytz
 import random
 
-from quickstart.models import Booking, Payout, BusinessInfo, Payment
+from quickstart.models import Booking, Payout, BusinessInfo
 from quickstart.utils.notification_utils import create_notification_for_recipients
 from quickstart.utils.stripe_metadata import stripe_metadata_to_dict
 
 logger = logging.getLogger(__name__)
-
-# Stripe standard processing fee (approximate): 2.9% + fixed fee per charge. Deducted from business payout.
-STRIPE_FEE_PERCENT = Decimal("0.029")
-STRIPE_FEE_FIXED = Decimal("0.30")
-
-
-def _estimate_stripe_processing_fee(charge_amount):
-    """Estimate Stripe processing fee for a charge (2.9% + $0.30). charge_amount in dollars."""
-    if charge_amount <= 0:
-        return Decimal("0.00")
-    fee = (charge_amount * STRIPE_FEE_PERCENT + STRIPE_FEE_FIXED).quantize(Decimal("0.01"))
-    return fee
 
 
 def _maybe_send_payout_connect_reminder(business):
@@ -43,7 +31,6 @@ def _maybe_send_payout_connect_reminder(business):
             payment_status="paid",
             payout_status="pending",
         )
-        .prefetch_related("payments")
     )
     if not pending_bookings.exists():
         return
@@ -54,17 +41,8 @@ def _maybe_send_payout_connect_reminder(business):
         allocated = booking.allocated_net_payout or Decimal("0.00")
         if allocated <= 0:
             continue
-        payment = next(
-            (p for p in booking.payments.all() if p.status == "succeeded"),
-            None,
-        )
-        stripe_fee = Decimal("0.00")
-        if payment and payment.amount:
-            stripe_fee = _estimate_stripe_processing_fee(payment.amount)
-        net_after_stripe = (allocated - stripe_fee).quantize(Decimal("0.01"))
-        if net_after_stripe > 0:
-            total_payout += net_after_stripe
-            booking_count += 1
+        total_payout += allocated
+        booking_count += 1
 
     if booking_count == 0:
         return
@@ -248,10 +226,10 @@ def process_daily_payouts():
                     logger.info(f"No bookings remaining after lock acquisition (another worker processing?). Skipping.")
                     continue
 
-                # Prefetch payments for Stripe fee estimation
+                # Prefetch payments for metadata (disclosed stripe_processing_fee per charge)
                 bookings_to_process = bookings_to_process.prefetch_related("payments")
 
-                # Calculate total payout amount (Stripe processing fees deducted from business payout)
+                # allocated_net_payout already includes Stripe processing fee deduction at payment time
                 total_payout = Decimal("0.00")
                 total_stripe_fees = Decimal("0.00")
                 booking_ids = []
@@ -262,21 +240,14 @@ def process_daily_payouts():
                     if allocated <= 0:
                         zero_dollar_bookings.append(booking.id)
                         continue
-                    # Deduct estimated Stripe processing fee from this booking's payout
                     payment = next(
                         (p for p in booking.payments.all() if p.status == "succeeded"),
                         None,
                     )
-                    stripe_fee = Decimal("0.00")
-                    if payment and payment.amount:
-                        stripe_fee = _estimate_stripe_processing_fee(payment.amount)
-                    total_stripe_fees += stripe_fee
-                    net_after_stripe = (allocated - stripe_fee).quantize(Decimal("0.01"))
-                    if net_after_stripe > 0:
-                        total_payout += net_after_stripe
-                        booking_ids.append(booking.id)
-                    else:
-                        zero_dollar_bookings.append(booking.id)
+                    if payment and payment.stripe_processing_fee:
+                        total_stripe_fees += payment.stripe_processing_fee
+                    total_payout += allocated
+                    booking_ids.append(booking.id)
 
                 logger.info(f"Total payout amount calculated: ${total_payout}")
                 logger.info(f"Bookings to pay out: {len(booking_ids)}")

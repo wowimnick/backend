@@ -44,9 +44,16 @@
                cellspacing="0"
                width="100%">
             <tr>
+                <td align="center" style="padding-bottom: 12px;">
+                    {% if verification_settings_url %}
+                    <a href="{{ verification_settings_url }}" class="button">{% trans "Open business settings" %}</a>
+                    {% endif %}
+                </td>
+            </tr>
+            <tr>
                 <td align="center">
                     {% with support_email=contact_email|default:'support@classeasily.com' %}
-                        <a href="mailto:{{ support_email }}" class="button">{% trans 'Contact Support' %}</a>
+                        <a href="mailto:{{ support_email }}" class="button" style="background-color: #6b7280;">{% trans 'Contact Support' %}</a>
                     {% endwith %}
                 </td>
             </tr>

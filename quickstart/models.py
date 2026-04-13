@@ -2900,6 +2900,12 @@ class Payment(models.Model):
         default=Decimal("0.00"),
         help_text="The final net amount to be transferred to the business (their revenue + their share of tax).",
     )
+    stripe_processing_fee = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        help_text="Estimated Stripe card processing fee (2.9% + fixed) deducted from the business payout, not from platform commission.",
+    )
     currency = models.CharField(max_length=3, default="CAD")
 
     # Status tracking
