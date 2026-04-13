@@ -29,6 +29,7 @@ from quickstart.tests.factories import (
     ClassOptionFactory,
     ContactFactory,
     GiftCardFactory,
+    PartnerTierFactory,
     PaymentFactory,
     ScheduleFactory,
     ScheduleInstanceFactory,
@@ -521,6 +522,7 @@ class TestGiftCardCheckoutRedemption:
         _multi_rev,
         api_client,
     ):
+        PartnerTierFactory(is_default=True, name="default-tier-gc-webhook-test")
         business = BusinessFactory(isActive=True, verificationStatus="verified")
         cls = ClassMainFactory(businessId=business, status="active")
         option = ClassOptionFactory(classId=cls, booking_type="Single Session")
