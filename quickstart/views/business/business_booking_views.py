@@ -1,6 +1,7 @@
 from decimal import Decimal
 from django.conf import settings
 from django.db import models, transaction
+from django.db.utils import ProgrammingError
 from django.db.models import (
     Q,
     Sum,
@@ -36,6 +37,8 @@ from django.db.models.functions import (
 )
 from django.utils import timezone
 from datetime import datetime, timedelta, date as datetime_date
+from collections import defaultdict
+import statistics
 from django.contrib.contenttypes.models import ContentType
 from django.shortcuts import get_object_or_404
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -54,6 +57,7 @@ from quickstart.models import (
     CustomUser,
     ClassesMain,
     Payment,
+    WidgetFunnelEvent,
 )
 from quickstart.serializers.business.business_booking_serializers import (
     BusinessBookingListSerializer,
@@ -84,6 +88,131 @@ import logging
 logger = logging.getLogger(__name__)
 
 _WIDGET_SOURCE_LIST = list(WIDGET_BOOKING_SOURCES)
+
+_WIDGET_FUNNEL_ORDER = [
+    "widget_opened",
+    "step_class",
+    "step_option",
+    "step_calendar",
+    "step_checkout",
+    "step_payment_started",
+    "booking_completed",
+]
+
+
+def _widget_funnel_step_label(event_name):
+    return {
+        "widget_opened": "Widget opened",
+        "step_class": "Choose class",
+        "step_option": "Choose option",
+        "step_calendar": "Date & time",
+        "step_checkout": "Checkout",
+        "step_payment_started": "Payment started",
+        "booking_completed": "Booked",
+    }.get(event_name, event_name)
+
+
+def _build_widget_funnel_payload(business, start_dt, end_dt):
+    qs = WidgetFunnelEvent.objects.filter(
+        business=business,
+        created_at__range=[start_dt, end_dt],
+    )
+    counts = {}
+    for ev in _WIDGET_FUNNEL_ORDER:
+        counts[ev] = qs.filter(event=ev).values("session_id").distinct().count()
+
+    steps_out = []
+    for i, ev in enumerate(_WIDGET_FUNNEL_ORDER):
+        c = counts[ev]
+        prev_c = counts[_WIDGET_FUNNEL_ORDER[i - 1]] if i > 0 else None
+        drop = None
+        if prev_c is not None and prev_c > 0:
+            drop = max(0.0, round(100.0 * (1 - c / prev_c), 1))
+        steps_out.append(
+            {
+                "event": ev,
+                "label": _widget_funnel_step_label(ev),
+                "session_count": c,
+                "drop_off_from_prev_pct": drop,
+            }
+        )
+
+    opened = counts.get("widget_opened") or 0
+    completed = counts.get("booking_completed") or 0
+    conversion_pct = round(100.0 * completed / opened, 1) if opened else 0.0
+
+    checkout_sids = set(
+        qs.filter(event="step_checkout").values_list("session_id", flat=True).distinct()
+    )
+    done_sids = set(
+        qs.filter(event="booking_completed").values_list("session_id", flat=True).distinct()
+    )
+    reached_checkout = len(checkout_sids)
+    abandoned = len(checkout_sids - done_sids)
+    checkout_abandon_pct = (
+        round(100.0 * abandoned / reached_checkout, 1) if reached_checkout else 0.0
+    )
+
+    opened_rows = qs.filter(event="widget_opened").values("session_id", "device_type")
+    session_device = {}
+    for row in opened_rows:
+        sid = row["session_id"]
+        if sid not in session_device:
+            dt = (row.get("device_type") or "").strip() or "unknown"
+            session_device[sid] = dt
+
+    dev_open = defaultdict(int)
+    dev_done = defaultdict(int)
+    for sid, dt in session_device.items():
+        dev_open[dt] += 1
+        if sid in done_sids:
+            dev_done[dt] += 1
+
+    device_breakdown = [
+        {
+            "device_type": k,
+            "sessions_opened": v,
+            "sessions_completed": dev_done[k],
+            "conversion_pct": round(100.0 * dev_done[k] / v, 1) if v else 0.0,
+        }
+        for k, v in sorted(dev_open.items(), key=lambda x: -x[1])
+    ]
+
+    durations_sec = []
+    for sid in done_sids:
+        times = list(
+            qs.filter(session_id=sid)
+            .order_by("created_at")
+            .values_list("event", "created_at")
+        )
+        first_open = None
+        last_done = None
+        for e, ts in times:
+            if e == "widget_opened" and first_open is None:
+                first_open = ts
+            if e == "booking_completed":
+                last_done = ts
+        if first_open and last_done:
+            d = (last_done - first_open).total_seconds()
+            if d >= 0:
+                durations_sec.append(d)
+
+    avg_time_to_book_seconds = (
+        round(statistics.mean(durations_sec), 1) if durations_sec else None
+    )
+
+    return {
+        "steps": steps_out,
+        "summary": {
+            "sessions_opened": opened,
+            "sessions_completed": completed,
+            "conversion_pct": conversion_pct,
+            "checkout_abandonment_pct": checkout_abandon_pct,
+            "reached_checkout_sessions": reached_checkout,
+            "avg_time_to_book_seconds": avg_time_to_book_seconds,
+        },
+        "device_breakdown": device_breakdown,
+    }
 
 
 class BusinessBookingPagination(PageNumberPagination):
@@ -745,12 +874,12 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
             source_filter = request.query_params.get("source", "all")
             if source_filter not in ("widget", "marketplace", "all"):
                 source_filter = "all"
+            # Widget-only breakdown and funnel require Growth/Advanced; degrade to "all"
+            # so the dashboard always loads (avoid 500 when PermissionDenied hits broad except).
             if source_filter == "widget" and not business_has_growth_or_advanced_widget_plan(
                 business
             ):
-                raise PermissionDenied(
-                    "Widget-specific booking analytics require a Growth or Advanced widget plan."
-                )
+                source_filter = "all"
             _widget_payment_exists = Payment.objects.filter(
                 booking=OuterRef("pk"),
                 status="succeeded",
@@ -1170,6 +1299,22 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                     }
                 )
 
+            widget_funnel = None
+            if source_filter in ("all", "widget") and business_has_growth_or_advanced_widget_plan(
+                business
+            ):
+                try:
+                    widget_funnel = _build_widget_funnel_payload(
+                        business, start_datetime_utc, end_datetime_utc
+                    )
+                except ProgrammingError as exc:
+                    if "widget_funnel_events" not in str(exc):
+                        raise
+                    logger.warning(
+                        "Booking analytics: widget_funnel_events table missing; run migrations. %s",
+                        exc,
+                    )
+
             response_data = {
                 "business_id": business.businessId,
                 "business_name": business.businessName,
@@ -1204,11 +1349,14 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                     "booking_types": booking_types,
                 },
                 "upcoming_classes": upcoming_classes_data,
+                "widget_funnel": widget_funnel,
             }
             return Response(response_data)
 
         except ValidationError as e:
             return Response({"error": e.detail}, status=status.HTTP_400_BAD_REQUEST)
+        except PermissionDenied as e:
+            return Response({"error": str(e)}, status=status.HTTP_403_FORBIDDEN)
         except Exception as e:
             logger.error(
                 f"Error in booking analytics for business {business.businessId}: {str(e)}",

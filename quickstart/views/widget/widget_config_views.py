@@ -37,6 +37,9 @@ from quickstart.services.subscription_sync import (
     mark_addon_subscription_canceled,
     _widget_price_to_plan_id,
 )
+from quickstart.utils.widget_booking_source import (
+    business_has_growth_or_advanced_widget_plan,
+)
 from quickstart.services.widget_subscription_service import (
     get_widget_subscription,
     create_subscription,
@@ -810,6 +813,7 @@ class WidgetSubscriptionView(APIView):
         sub = get_widget_subscription(business)
         subscription_required = getattr(settings, "WIDGET_SUBSCRIPTION_REQUIRED", False)
         has_widget_access = _business_has_active_widget_subscription(business)
+        has_widget_analytics = business_has_growth_or_advanced_widget_plan(business)
         # Same resolver as BusinessAddonsView / email marketing APIs (Stripe sync, stale period_end).
         em_addon = resolve_email_marketing_addon_subscription(business)
         business.refresh_from_db(fields=["email_marketing_enabled"])
@@ -823,6 +827,7 @@ class WidgetSubscriptionView(APIView):
                     "widget_subscription_required": subscription_required,
                     "has_stripe_subscription": False,
                     "has_widget_access": has_widget_access,
+                    "has_widget_analytics": has_widget_analytics,
                     "has_membership_access": False,
                     "has_email_marketing_access": has_email_marketing_access,
                 },
@@ -835,6 +840,7 @@ class WidgetSubscriptionView(APIView):
             "widget_subscription_required": subscription_required,
             "has_stripe_subscription": bool(sub.stripe_subscription_id),
             "has_widget_access": has_widget_access,
+            "has_widget_analytics": has_widget_analytics,
             "has_membership_access": has_membership_access,
             "has_email_marketing_access": has_email_marketing_access,
         }
@@ -1112,29 +1118,26 @@ class WidgetSubscriptionInvoicesView(APIView):
         if not customer_id:
             return Response({"invoices": []}, status=status.HTTP_200_OK)
 
+        # Billing history: only completed (paid) invoices — not open, draft, or failed attempts.
         invoices_by_id = {}
-        for stripe_status in ("paid", "open", "draft"):
-            try:
-                stripe_invoices = stripe.Invoice.list(
-                    customer=customer_id,
-                    status=stripe_status,
-                    limit=50,
-                    expand=["data.charge", "data.lines.data"],
-                )
-                for inv in _obj_get(stripe_invoices, "data", []) or []:
-                    inv_id = _obj_get(inv, "id")
-                    if inv_id:
-                        invoices_by_id[inv_id] = inv
-            except stripe.StripeError as e:
-                logger.warning("Stripe Invoice.list (customer, status=%s) failed: %s", stripe_status, e)
+        try:
+            stripe_invoices = stripe.Invoice.list(
+                customer=customer_id,
+                status="paid",
+                limit=50,
+                expand=["data.charge", "data.lines.data"],
+            )
+            for inv in _obj_get(stripe_invoices, "data", []) or []:
+                inv_id = _obj_get(inv, "id")
+                if inv_id:
+                    invoices_by_id[inv_id] = inv
+        except stripe.StripeError as e:
+            logger.warning("Stripe Invoice.list (customer, paid) failed: %s", e)
 
         invoices = []
         for inv in invoices_by_id.values():
             amount = (_obj_get(inv, "amount_paid") or 0) / 100.0
-            # For open/draft invoices amount_paid can be 0; use amount_due for visibility.
-            if amount <= 0:
-                amount = (_obj_get(inv, "amount_due") or 0) / 100.0
-            # Ignore zero-value invoices (free/fully credited), they are noise in billing UI.
+            # Ignore zero-value paid invoices (free / fully credited).
             if amount <= 0:
                 continue
             currency = (_obj_get(inv, "currency") or "usd").upper()

@@ -26,9 +26,22 @@ from quickstart.models import (
     ClassImage,
     ClassOption,
     WidgetSubscription,
+    WidgetFunnelEvent,
     Discount,
     AppliedDiscount,
     MembershipProduct,
+)
+
+WIDGET_FUNNEL_PERSIST_EVENTS = frozenset(
+    {
+        "widget_opened",
+        "step_class",
+        "step_option",
+        "step_calendar",
+        "step_checkout",
+        "step_payment_started",
+        "booking_completed",
+    }
 )
 from quickstart.services.membership_service import (
     create_approval_membership,
@@ -74,6 +87,43 @@ def _is_demo(request):
     return getattr(request.business_context, "is_demo", False)
 
 
+def _persist_widget_funnel_event(request, event_name):
+    """Best-effort insert; never raises to the client."""
+    if _is_demo(request):
+        return
+    data = request.data
+    session_id = (data.get("widget_session_id") or "").strip()
+    if not session_id:
+        return
+    session_id = session_id[:64]
+    step_raw = data.get("step") or ""
+    step = str(step_raw)[:30]
+    device_raw = data.get("device_type") or ""
+    device_type = str(device_raw)[:10]
+    class_id = data.get("class_id")
+    cid = None
+    if class_id is not None and str(class_id).strip() != "":
+        try:
+            cid = int(class_id)
+        except (TypeError, ValueError):
+            cid = None
+    try:
+        WidgetFunnelEvent.objects.create(
+            business=request.business_context,
+            session_id=session_id,
+            event=str(event_name)[:50],
+            step=step,
+            device_type=device_type,
+            class_id=cid,
+        )
+    except Exception:
+        logger.warning(
+            "Failed to persist widget funnel event event=%s",
+            event_name,
+            exc_info=True,
+        )
+
+
 def _business_has_active_widget_subscription(business):
     """True if widget subscription is not required, or business has an active subscription."""
     if getattr(business, "is_demo", False):
@@ -92,20 +142,12 @@ def _business_has_active_widget_subscription(business):
 
 
 def _business_has_growth_or_advanced_widget_plan(business):
-    """True if business has an active Growth or Advanced widget subscription."""
-    if getattr(business, "is_demo", False):
-        return True
-    from quickstart.services.widget_subscription_service import get_widget_subscription
+    """Delegate to shared helper (booking analytics, revenue, emails, widget APIs)."""
+    from quickstart.utils.widget_booking_source import (
+        business_has_growth_or_advanced_widget_plan,
+    )
 
-    sub = get_widget_subscription(business)
-    if not sub or not sub.plan_id:
-        return False
-    now = timezone.now()
-    if (sub.status or "").strip().lower() not in ("active", "trialing"):
-        return False
-    if sub.current_period_end is not None and sub.current_period_end <= now:
-        return False
-    return (sub.plan_id or "").lower() in ("growth", "advanced")
+    return business_has_growth_or_advanced_widget_plan(business)
 
 
 # Commission by plan: basic=4%, growth=3%, advanced=2%
@@ -232,6 +274,8 @@ class WidgetEventsView(APIView):
                 message[:500] if message else "",
                 (component_stack[:500] if component_stack else ""),
             )
+        if event in WIDGET_FUNNEL_PERSIST_EVENTS:
+            _persist_widget_funnel_event(request, event)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

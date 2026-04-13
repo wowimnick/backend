@@ -46,7 +46,9 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 # Change ownership of the app directory.
 # Also create log directory and set its permissions.
 RUN mkdir -p /home/django/app/logs && \
-    chown -R django:django /home/django/app
+    mkdir -p /home/django/.gunicorn && \
+    chown -R django:django /home/django/app && \
+    chown django:django /home/django /home/django/.gunicorn
 
 # Switch to the non-root user
 USER django

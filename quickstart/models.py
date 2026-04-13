@@ -3081,6 +3081,36 @@ class WidgetSubscription(models.Model):
         return f"Widget subscription {self.stripe_subscription_id or self.id} ({self.business.businessName})"
 
 
+class WidgetFunnelEvent(models.Model):
+    """
+    Anonymous widget booking funnel events (no PII).
+    Ingested from POST /widget/v1/events/ for Growth/Advanced analytics.
+    """
+
+    business = models.ForeignKey(
+        BusinessInfo,
+        on_delete=models.CASCADE,
+        related_name="widget_funnel_events",
+    )
+    session_id = models.CharField(max_length=64, db_index=True)
+    event = models.CharField(max_length=50, db_index=True)
+    step = models.CharField(max_length=30, blank=True)
+    device_type = models.CharField(max_length=10, blank=True)
+    class_id = models.IntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        db_table = "widget_funnel_events"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["business", "created_at"]),
+            models.Index(fields=["business", "event", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"WidgetFunnelEvent {self.event} biz={self.business_id} session={self.session_id[:8]}…"
+
+
 ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING = "marketplace_email_branding"
 
 

@@ -633,9 +633,7 @@ class RevenueAnalyticsView(views.APIView):
             if source_filter == "widget" and not business_has_growth_or_advanced_widget_plan(
                 business
             ):
-                raise PermissionDenied(
-                    "Widget-specific revenue analytics require a Growth or Advanced widget plan."
-                )
+                source_filter = "all"
 
             metrics = self.calculate_metrics(
                 business, start_date_utc, end_date_utc, class_id_filter, source_filter

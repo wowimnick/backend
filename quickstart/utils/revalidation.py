@@ -69,7 +69,7 @@ def trigger_nextjs_revalidation(
             base_url,
             json=payload,
             headers=headers,
-            timeout=10,
+            timeout=90,
         )
         response.raise_for_status()
 
