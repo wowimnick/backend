@@ -41,9 +41,19 @@ def get_business(request):
         return None
 
 
+_WIDGET_PAYMENT_PATHS = (
+    "/api/payments/update-payment-intent/",
+    "/api/payments/cancel-payment-intent/",
+    "/payments/update-payment-intent/",
+    "/payments/cancel-payment-intent/",
+)
+
+
 def _is_widget_path(path):
-    # Support both /api/widget/v1/ (Django app mounted at root) and /widget/v1/ (e.g. proxy strips /api)
-    return path.startswith("/api/widget/v1/") or path.startswith("/widget/v1/")
+    # Widget API routes + shared payment endpoints the widget calls cross-origin
+    if path.startswith("/api/widget/v1/") or path.startswith("/widget/v1/"):
+        return True
+    return path in _WIDGET_PAYMENT_PATHS
 
 
 def _normalize_origin_domain(origin):
