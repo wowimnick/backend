@@ -3,7 +3,7 @@ import uuid
 import stripe
 import logging
 from datetime import datetime, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
@@ -62,6 +62,7 @@ from quickstart.serializers.widget.widget_serializers import (
 from quickstart.utils.email_utils import (
     send_booking_confirmation_email,
     send_business_new_booking_email,
+    send_super_admin_booking_created_email,
 )
 from quickstart.utils.sms_utils import business_sms_enabled, normalize_phone_for_sns
 from quickstart.tasks.notification_tasks import send_sms_task
@@ -70,6 +71,9 @@ from quickstart.utils.widget_throttle import WidgetRateThrottle
 
 logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
+
+# Match quickstart.payments.views HST for payout splits (platform fee tax vs business tax share)
+HST_RATE = Decimal("0.13")
 
 
 def _get_receipt_url_from_pi(pi):
@@ -164,7 +168,9 @@ def _get_widget_plan_fee_percentage(business):
         WidgetSubscription.objects.filter(
             business=business,
             status__in=["active", "trialing"],
-            current_period_end__gt=now,
+        )
+        .filter(
+            Q(current_period_end__isnull=True) | Q(current_period_end__gt=now)
         )
         .order_by("-current_period_end")
         .first()
@@ -240,12 +246,65 @@ def _get_widget_plan_id(business):
         WidgetSubscription.objects.filter(
             business=business,
             status__in=["active", "trialing"],
-            current_period_end__gt=now,
+        )
+        .filter(
+            Q(current_period_end__isnull=True) | Q(current_period_end__gt=now)
         )
         .order_by("-current_period_end")
         .first()
     )
     return (sub.plan_id or "").lower() if sub else None
+
+
+def _widget_validate_and_cap_discount_for_session(
+    business, instance, participants, applied_discount_id, client_discount_amount
+):
+    """
+    Same validation as CreateGuestPaymentIntentView discount block.
+    Returns capped discount (Decimal) for the session subtotal.
+    """
+    subtotal = instance.price * Decimal(participants)
+    try:
+        discount_amount = Decimal(str(client_discount_amount or 0))
+    except (TypeError, ValueError, InvalidOperation):
+        raise ValidationError("Invalid discount amount.")
+    if not applied_discount_id or discount_amount <= 0:
+        raise ValidationError("Invalid or expired discount.")
+    try:
+        discount = Discount.objects.get(id=applied_discount_id, business=business)
+    except (Discount.DoesNotExist, ValueError):
+        raise ValidationError("Invalid or expired discount.")
+    if not discount.apply_to_widget:
+        raise ValidationError("This discount is not valid for widget bookings.")
+    if not discount.is_active:
+        raise ValidationError("This coupon is currently inactive.")
+    now = timezone.now()
+    if discount.valid_from and now < discount.valid_from:
+        raise ValidationError("This coupon is not yet active.")
+    if discount.valid_to and now > discount.valid_to:
+        raise ValidationError("This coupon has expired.")
+    if discount.usage_limit is not None:
+        current_usage = Booking.objects.filter(discounts=discount).count()
+        if current_usage >= discount.usage_limit:
+            raise ValidationError("This coupon has reached its usage limit.")
+    if (
+        discount.min_purchase_amount is not None
+        and subtotal < discount.min_purchase_amount
+    ):
+        raise ValidationError(
+            f"A minimum purchase of ${discount.min_purchase_amount:.2f} is required."
+        )
+    option = instance.schedule.option
+    if discount.scope == "class" and discount.target_class_id != option.classId_id:
+        raise ValidationError("This coupon is not valid for the selected class.")
+    if discount.scope == "schedule_group" and (
+        discount.target_class_option_id != option.id
+        or not discount.target_schedule_group_name
+    ):
+        raise ValidationError("This coupon is not valid for the selected session.")
+    return min(discount_amount, subtotal).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
 
 
 class WidgetEventsView(APIView):
@@ -792,6 +851,8 @@ class CreateGuestPaymentIntentView(APIView):
             "subtotal_cents": int(subtotal * 100),
             "subtotal_for_payout": str(subtotal_for_payout),
             "tax_cents": int(tax_on_subtotal * 100),
+            # Webhook instant booking reads tax_amount (string dollars); widget previously only had tax_cents
+            "tax_amount": str(tax_on_subtotal),
             "platform_fee_cents": int(platform_fee * 100),
             "net_payout_cents": int(net_payout_amount * 100),
         }
@@ -801,9 +862,15 @@ class CreateGuestPaymentIntentView(APIView):
             metadata["applied_discount_id"] = str(applied_discount_id)
             metadata["discount_amount"] = str(discount_amount)
 
-        if final_amount_cents <= 0 and member_booking and membership:
+        if final_amount_cents <= 0:
+            if member_booking and membership:
+                return Response(
+                    {"free_member_booking": True},
+                    status=status.HTTP_200_OK,
+                )
+            # 100% coupon (or edge case): no Stripe charge; client uses GuestFreeBookingCreateView
             return Response(
-                {"free_member_booking": True},
+                {"free_member_booking": False, "free_coupon_booking": True},
                 status=status.HTTP_200_OK,
             )
 
@@ -908,10 +975,25 @@ class GuestBookingCreateView(generics.CreateAPIView):
                 class_option = instance.schedule.option
                 amount_charged = Decimal(pi.amount_received) / 100
                 stripe_processing_fee = estimate_stripe_processing_fee(amount_charged)
-                net_before_stripe = Decimal(metadata.get("net_payout_cents", 0)) / 100
+                subtotal_for_payout = Decimal(
+                    metadata.get("subtotal_for_payout")
+                    or metadata.get("subtotal_after_discount", "0.00")
+                )
+                platform_fee_amount = Decimal(metadata.get("platform_fee_cents", 0)) / 100
+                tax_amount = Decimal(metadata.get("tax_cents", 0)) / 100
+
+                platform_fee_tax = (platform_fee_amount * HST_RATE).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP
+                )
+                business_payout_tax = (tax_amount - platform_fee_tax).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP
+                )
+                business_net_revenue = (
+                    subtotal_for_payout - platform_fee_amount - stripe_processing_fee
+                )
                 net_payout_after_stripe = max(
                     Decimal("0.00"),
-                    (net_before_stripe - stripe_processing_fee).quantize(
+                    (business_net_revenue + business_payout_tax).quantize(
                         Decimal("0.01"), rounding=ROUND_HALF_UP
                     ),
                 )
@@ -938,8 +1020,9 @@ class GuestBookingCreateView(generics.CreateAPIView):
                     stripe_charge_id=pi.latest_charge,
                     status="succeeded",
                     amount=amount_charged,
-                    tax_amount=Decimal(metadata.get("tax_cents", 0)) / 100,
-                    platform_fee_amount=Decimal(metadata.get("platform_fee_cents", 0)) / 100,
+                    tax_amount=tax_amount,
+                    platform_fee_amount=platform_fee_amount,
+                    platform_fee_tax=platform_fee_tax,
                     stripe_processing_fee=stripe_processing_fee,
                     net_payout_amount=net_payout_after_stripe,
                     currency=business.currency,
@@ -1009,6 +1092,28 @@ class GuestBookingCreateView(generics.CreateAPIView):
                     email_err,
                     exc_info=True,
                 )
+            if business_sms_enabled(business):
+                phone = normalize_phone_for_sns((data.get("phone_number") or "").strip())
+                if phone:
+                    class_title = getattr(
+                        instance.schedule.option.classId, "title", "Class"
+                    )
+                    date_str = (
+                        instance.date.strftime("%b %d")
+                        if instance.date
+                        else ""
+                    )
+                    try:
+                        send_sms_task.delay(
+                            phone,
+                            f"You're booked for {class_title} on {date_str}. ClassEasily",
+                        )
+                    except Exception as sms_e:
+                        logger.warning(
+                            "Widget: guest confirmation SMS failed for booking %s: %s",
+                            booking.id,
+                            sms_e,
+                        )
             if getattr(business, "newBookingNotification", False):
                 try:
                     recipients = {business.owner}
@@ -1025,6 +1130,15 @@ class GuestBookingCreateView(generics.CreateAPIView):
                 except Exception as email_err:
                     logger.warning(
                         "Widget: failed to send business new-booking email for booking %s: %s",
+                        booking.id,
+                        email_err,
+                        exc_info=True,
+                    )
+                try:
+                    send_super_admin_booking_created_email(booking)
+                except Exception as email_err:
+                    logger.warning(
+                        "Widget: failed to send super-admin new-booking email for booking %s: %s",
                         booking.id,
                         email_err,
                         exc_info=True,
@@ -1118,17 +1232,33 @@ class GuestFreeBookingCreateView(APIView):
                         data["email"],
                         class_id,
                     )
-                    if not membership:
+                    if membership:
+                        if use_credits:
+                            rem = get_credits_remaining(membership)
+                            if rem is None or rem <= 0:
+                                raise ValidationError(
+                                    "No credits remaining for this membership period."
+                                )
+                        member_booking = True
+                    elif applied_discount_id:
+                        capped_discount = _widget_validate_and_cap_discount_for_session(
+                            business,
+                            instance,
+                            participants,
+                            applied_discount_id,
+                            discount_amount,
+                        )
+                        if capped_discount >= session_subtotal:
+                            member_booking = False
+                            discount_amount = capped_discount
+                        else:
+                            raise ValidationError(
+                                "This session requires payment. Use the email on your active membership, or pay by card."
+                            )
+                    else:
                         raise ValidationError(
                             "This session requires payment. Use the email on your active membership, or pay by card."
                         )
-                    if use_credits:
-                        rem = get_credits_remaining(membership)
-                        if rem is None or rem <= 0:
-                            raise ValidationError(
-                                "No credits remaining for this membership period."
-                            )
-                    member_booking = True
 
                 contact, _ = Contact.objects.get_or_create(
                     business=business,

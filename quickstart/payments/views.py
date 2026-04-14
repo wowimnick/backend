@@ -2420,10 +2420,15 @@ class ProcessBookingWebhook(APIView):
                 recipient_user = first_booking.user
                 recipient_contact = first_booking.contact
 
+                _bs_course = metadata.get("booking_source")
                 if recipient_user:
-                    send_booking_confirmation_email(recipient_user, first_booking)
+                    send_booking_confirmation_email(
+                        recipient_user, first_booking, booking_source=_bs_course
+                    )
                 elif recipient_contact:
-                    send_booking_confirmation_email(recipient_contact, first_booking)
+                    send_booking_confirmation_email(
+                        recipient_contact, first_booking, booking_source=_bs_course
+                    )
 
                 if business_sms_enabled(business):
                     booker = recipient_user or recipient_contact
@@ -2865,10 +2870,15 @@ class ProcessBookingWebhook(APIView):
                         exc_info=True,
                     )
 
+            _bs_instant = metadata.get("booking_source")
             if user:
-                send_booking_confirmation_email(user, booking)
+                send_booking_confirmation_email(
+                    user, booking, booking_source=_bs_instant
+                )
             elif contact:
-                send_booking_confirmation_email(contact, booking)
+                send_booking_confirmation_email(
+                    contact, booking, booking_source=_bs_instant
+                )
 
             if business_sms_enabled(business):
                 booker = user or contact
@@ -3262,16 +3272,21 @@ class ProcessBookingWebhook(APIView):
         logger.info(f"[{webhook_id}]   - Recipient User object: {recipient_user}")
         logger.info(f"[{webhook_id}]   - Recipient Contact object: {recipient_contact}")
 
+        _bs_pending = metadata.get("booking_source")
         if recipient_user:
             logger.info(
                 f"[{webhook_id}]   - Identified as REGISTERED USER. Attempting to send email to {recipient_user.email}."
             )
-            send_booking_confirmation_email(recipient_user, pending_booking)
+            send_booking_confirmation_email(
+                recipient_user, pending_booking, booking_source=_bs_pending
+            )
         elif recipient_contact:
             logger.info(
                 f"[{webhook_id}]   - Identified as GUEST. Attempting to send email to {recipient_contact.email}."
             )
-            send_booking_confirmation_email(recipient_contact, pending_booking)
+            send_booking_confirmation_email(
+                recipient_contact, pending_booking, booking_source=_bs_pending
+            )
         else:
             logger.error(
                 f"[{webhook_id}] CRITICAL: No recipient (user or contact) found for Booking ID {pending_booking.id}. Cannot send confirmation email."
@@ -3499,6 +3514,7 @@ class CancelPendingBookingView(APIView):
                 {"error": "ID required"}, status=status.HTTP_400_BAD_REQUEST
             )
 
+        payment = None
         try:
             with transaction.atomic():
                 # Find the pending payment
@@ -3547,6 +3563,16 @@ class CancelPendingBookingView(APIView):
 
                     logger.info(
                         f"Hard deleted pending booking resources for PI {payment_intent_id}"
+                    )
+
+            # Widget embed creates Stripe PIs without a pending Payment row until booking succeeds.
+            # Still cancel the PI so holds don't linger until expiry.
+            if not payment:
+                try:
+                    stripe.PaymentIntent.cancel(payment_intent_id)
+                except stripe.error.StripeError as e:
+                    logger.warning(
+                        f"Stripe cancel (no pending Payment row) for {payment_intent_id}: {e}"
                     )
 
             return Response({"status": "cancelled"}, status=status.HTTP_200_OK)
