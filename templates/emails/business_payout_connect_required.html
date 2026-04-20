@@ -12,7 +12,7 @@
         <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
             {% blocktrans with first_name=user.first_name|default:"Partner" %}Hi {{ first_name }},{% endblocktrans %}
             <br>
-            {% trans "We can't send your payout yet because no payout account is connected. Connect your Stripe account to receive your funds." %}
+            {% trans "We can't send your payout yet because no payout account is connected, or your Stripe payout setup isn't finished. Open your dashboard to connect or complete setup and receive your funds." %}
         </p>
         <!-- Main Card -->
         <div style="background-color: #ffffff;
@@ -57,7 +57,7 @@
                   color: #86868B;
                   line-height: 1.5;
                   margin-bottom: 32px">
-            {% trans "Your funds are held safely. Connect your payout account in Settings to receive this amount and future payouts." %}
+            {% trans "Your funds are held safely. Finish connecting your payout account in Settings (or complete any remaining Stripe steps) to receive this amount and future payouts." %}
         </p>
         <table role="presentation"
                border="0"

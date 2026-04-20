@@ -16,25 +16,22 @@ from quickstart.utils.stripe_metadata import stripe_metadata_to_dict
 
 logger = logging.getLogger(__name__)
 
+_CONNECT_NOT_READY_STATUSES = frozenset(
+    {"incomplete", "restricted", "pending", "unlinked"}
+)
 
-def _maybe_send_payout_connect_reminder(business):
-    """
-    If the business has pending payout bookings and we haven't sent the
-    "connect Stripe" reminder in the last 3 days, send it and update the cooldown.
-    """
-    from quickstart.utils.email_utils import send_payout_connect_required_email
 
-    pending_bookings = (
-        Booking.objects.filter(
-            schedule_instance__schedule__option__classId__businessId=business,
-            status__in=["completed", "forfeited"],
-            payment_status="paid",
-            payout_status="pending",
-        )
+def _pending_payout_totals_for_business(business):
+    """
+    Sum allocated_net_payout and count bookings eligible for payout for this business
+    (completed/forfeited, paid, pending payout, allocated > 0).
+    """
+    pending_bookings = Booking.objects.filter(
+        schedule_instance__schedule__option__classId__businessId=business,
+        status__in=["completed", "forfeited"],
+        payment_status="paid",
+        payout_status="pending",
     )
-    if not pending_bookings.exists():
-        return
-
     total_payout = Decimal("0.00")
     booking_count = 0
     for booking in pending_bookings:
@@ -43,7 +40,94 @@ def _maybe_send_payout_connect_reminder(business):
             continue
         total_payout += allocated
         booking_count += 1
+    return total_payout, booking_count
 
+
+def _stripe_transfer_destination_not_ready(stripe_error: stripe.StripeError) -> bool:
+    """True when Stripe indicates the connected account cannot receive transfers yet."""
+    msg = (str(stripe_error) or "").lower()
+    code = (getattr(stripe_error, "code", None) or "").lower()
+    if code in ("balance_insufficient",):
+        return False
+    needles = (
+        "transfers are not enabled",
+        "transfer cannot be created",
+        "does not have transfers enabled",
+        "does not have the ability to receive transfers",
+        "cannot create a transfer",
+        "connected account is not ready",
+        "charges not enabled",
+        "payouts are not enabled",
+        "invalid destination",
+        "destination account cannot",
+        "account restricted",
+    )
+    return any(n in msg for n in needles)
+
+
+def _is_business_connect_not_ready_for_payout(
+    business: BusinessInfo, stripe_error: stripe.StripeError
+) -> bool:
+    """
+    Payout failure is the business's responsibility (finish Connect / resolve restrictions),
+    not an internal platform error — route to connect-required email instead of super admins.
+    """
+    status = (business.stripe_account_status or "").strip().lower()
+    if status in _CONNECT_NOT_READY_STATUSES:
+        return True
+    return _stripe_transfer_destination_not_ready(stripe_error)
+
+
+def _send_payout_connect_required_immediate(business: BusinessInfo) -> None:
+    """
+    Email the business to finish Connect / payout setup after a transfer failure.
+    Bypasses the 3-day cooldown used by scheduled reminders.
+    """
+    from quickstart.utils.email_utils import send_payout_connect_required_email
+
+    total_payout, booking_count = _pending_payout_totals_for_business(business)
+    if booking_count == 0:
+        logger.warning(
+            "Payout connect email skipped: Business %s has no eligible pending bookings.",
+            business.businessId,
+        )
+        return
+
+    owner = business.owner
+    if not owner or not owner.email:
+        logger.warning(
+            "Business %s has no owner email for immediate payout connect email.",
+            business.businessId,
+        )
+        return
+
+    send_payout_connect_required_email(
+        business_user=owner,
+        pending_amount=total_payout,
+        booking_count=booking_count,
+        currency=business.currency or "CAD",
+    )
+    BusinessInfo.objects.filter(pk=business.businessId).update(
+        last_payout_connect_reminder_sent=timezone.now()
+    )
+    logger.info(
+        "Sent immediate payout connect required email to %s for Business %s "
+        "(pending_amount=$%s, booking_count=%s)",
+        owner.email,
+        business.businessId,
+        total_payout,
+        booking_count,
+    )
+
+
+def _maybe_send_payout_connect_reminder(business):
+    """
+    If the business has pending payout bookings and we haven't sent the
+    "connect Stripe" reminder in the last 3 days, send it and update the cooldown.
+    """
+    from quickstart.utils.email_utils import send_payout_connect_required_email
+
+    total_payout, booking_count = _pending_payout_totals_for_business(business)
     if booking_count == 0:
         return
 
@@ -348,14 +432,23 @@ def process_daily_payouts():
             logger.error(f"✗ STRIPE ERROR for Business {business_id}: {e}")
             try:
                 business = BusinessInfo.objects.filter(pk=business_id).first()
-                from quickstart.utils.email_utils import send_super_admin_payout_failed_email
+                if business and _is_business_connect_not_ready_for_payout(business, e):
+                    try:
+                        _send_payout_connect_required_immediate(business)
+                    except Exception as biz_email_err:
+                        logger.warning(
+                            "Could not send business payout connect email after transfer failure: %s",
+                            biz_email_err,
+                        )
+                else:
+                    from quickstart.utils.email_utils import send_super_admin_payout_failed_email
 
-                send_super_admin_payout_failed_email(
-                    business_id, str(e), business=business, stripe_error=True
-                )
+                    send_super_admin_payout_failed_email(
+                        business_id, str(e), business=business, stripe_error=True
+                    )
             except Exception as email_err:
                 logger.warning(
-                    "Could not send Super Admin payout failure email: %s", email_err
+                    "Could not send payout failure notification: %s", email_err
                 )
             # Note: Transaction rollback will occur automatically, keeping bookings as 'pending'
 
