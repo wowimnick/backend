@@ -181,6 +181,49 @@ EMAIL_MARKETING_GROWTH_PRICE_ID = os.environ.get("EMAIL_MARKETING_GROWTH_PRICE_I
 EMAIL_MARKETING_BUSINESS_PRICE_ID = os.environ.get("EMAIL_MARKETING_BUSINESS_PRICE_ID", "")
 EMAIL_MARKETING_SCALE_PRICE_ID = os.environ.get("EMAIL_MARKETING_SCALE_PRICE_ID", "")
 
+# Optional annual Stripe Price IDs (same products as monthly; used by Checkout / Portal).
+WIDGET_SUBSCRIPTION_PRICE_BASIC_ANNUAL = os.environ.get(
+    "WIDGET_SUBSCRIPTION_PRICE_BASIC_ANNUAL", ""
+)
+WIDGET_SUBSCRIPTION_PRICE_GROWTH_ANNUAL = os.environ.get(
+    "WIDGET_SUBSCRIPTION_PRICE_GROWTH_ANNUAL", ""
+)
+WIDGET_SUBSCRIPTION_PRICE_ADVANCED_ANNUAL = os.environ.get(
+    "WIDGET_SUBSCRIPTION_PRICE_ADVANCED_ANNUAL", ""
+)
+MARKETPLACE_EMAIL_ADDON_PRICE_ID_ANNUAL = os.environ.get(
+    "MARKETPLACE_EMAIL_ADDON_PRICE_ID_ANNUAL", ""
+)
+EMAIL_MARKETING_STARTER_PRICE_ID_ANNUAL = os.environ.get(
+    "EMAIL_MARKETING_STARTER_PRICE_ID_ANNUAL", ""
+)
+EMAIL_MARKETING_GROWTH_PRICE_ID_ANNUAL = os.environ.get(
+    "EMAIL_MARKETING_GROWTH_PRICE_ID_ANNUAL", ""
+)
+EMAIL_MARKETING_BUSINESS_PRICE_ID_ANNUAL = os.environ.get(
+    "EMAIL_MARKETING_BUSINESS_PRICE_ID_ANNUAL", ""
+)
+EMAIL_MARKETING_SCALE_PRICE_ID_ANNUAL = os.environ.get(
+    "EMAIL_MARKETING_SCALE_PRICE_ID_ANNUAL", ""
+)
+
+# Stripe Pricing Tables (hosted Checkout). Optional embed IDs for the billing dashboard.
+STRIPE_PRICING_TABLE_ID_WIDGET = os.environ.get("STRIPE_PRICING_TABLE_ID_WIDGET", "")
+STRIPE_PRICING_TABLE_ID_ADDONS = os.environ.get("STRIPE_PRICING_TABLE_ID_ADDONS", "")
+STRIPE_PUBLISHABLE_KEY = os.environ.get(
+    "STRIPE_PUBLISHABLE_KEY", ""
+) or STRIPE_PUBLIC_KEY
+
+# Customer Portal configuration (Dashboard → Billing → Customer portal) — optional but recommended.
+STRIPE_BILLING_PORTAL_CONFIGURATION_ID = os.environ.get(
+    "STRIPE_BILLING_PORTAL_CONFIGURATION_ID", ""
+) or os.environ.get("STRIPE_BILLING_PORTAL_CONFIG_ID", "")
+
+# When True, Checkout Sessions use Stripe Tax automatic_tax (requires tax settings in Stripe).
+STRIPE_CHECKOUT_AUTOMATIC_TAX = (
+    os.environ.get("STRIPE_CHECKOUT_AUTOMATIC_TAX", "false").lower() == "true"
+)
+
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
 VERCEL_AUTOMATION_BYPASS_SECRET = os.environ["VERCEL_AUTOMATION_BYPASS_SECRET"]
 
@@ -643,3 +686,6 @@ NOTIFICATION_SETTINGS = {
     "max_batch_size": 1000,
     "rate_limit": 100,
 }
+
+# Comma-separated list ok; first address used for B2B /corporate form notifications.
+CORPORATE_LEADS_EMAIL = os.environ.get("CORPORATE_LEADS_EMAIL", "").strip()

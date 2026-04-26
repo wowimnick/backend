@@ -414,6 +414,11 @@ class AdminClassCollectionSerializer(serializers.ModelSerializer):
     
     # Ensure automation_rules is treated as a Dict
     automation_rules = serializers.JSONField(required=False, default=dict)
+    search_aliases = serializers.ListField(
+        child=serializers.CharField(max_length=120),
+        required=False,
+        default=list,
+    )
 
     class Meta:
         model = ClassCollection
@@ -428,9 +433,28 @@ class AdminClassCollectionSerializer(serializers.ModelSerializer):
             "image_s3_key",
             "is_active",
             "sort_order",
-            "class_count", 
+            "class_count",
+            "search_aliases",
+            "is_searchable",
+            "show_in_i_want",
+            "show_in_featured_categories",
+            "show_on_homepage_rows",
+            "icon_name",
+            "color",
         ]
         read_only_fields = ["id", "image_medium_url", "class_count"]
+
+    def validate_search_aliases(self, value):
+        if not value:
+            return []
+        seen = set()
+        out = []
+        for x in value:
+            s = str(x).strip().lower()
+            if s and s not in seen:
+                seen.add(s)
+                out.append(s)
+        return out
 
     def get_image_medium_url(self, obj):
         if not obj.image or not hasattr(obj.image, "name") or not obj.image.name:

@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 def generate_blog_draft(
     topic_hint,
     explore_url,
-    site_name="Classeasily",
+    site_name="ClassEasily",
     word_count_target=(400, 600),
 ):
     """

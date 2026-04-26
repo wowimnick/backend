@@ -40,6 +40,7 @@ from quickstart.models import (
     GiftCardTransaction,
     WidgetSubscription,
     CustomerMembership,
+    ProcessedStripeEvent,
 )
 from quickstart.models import ADDON_TYPE_EMAIL_MARKETING, ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING
 from quickstart.services.subscription_sync import (
@@ -1424,6 +1425,92 @@ class ProcessBookingWebhook(APIView):
             getattr(event, "type", "unknown"),
             getattr(event, "id", ""),
         )
+
+        if event.type == "checkout.session.completed":
+            stripe_eid = getattr(event, "id", None) or ""
+            if stripe_eid and ProcessedStripeEvent.objects.filter(event_id=stripe_eid).exists():
+                logger.info(
+                    "[%s] checkout.session.completed duplicate event_id=%s",
+                    webhook_id,
+                    stripe_eid,
+                )
+                return Response(status=status.HTTP_200_OK)
+
+            session = event.data.object
+            mode = getattr(session, "mode", None) or (
+                session.get("mode") if isinstance(session, dict) else None
+            )
+            if mode != "subscription":
+                return Response(status=status.HTTP_200_OK)
+
+            sub_id = getattr(session, "subscription", None) or (
+                session.get("subscription") if isinstance(session, dict) else None
+            )
+            if not sub_id:
+                return Response(status=status.HTTP_200_OK)
+
+            try:
+                stripe_sub = stripe.Subscription.retrieve(
+                    str(sub_id),
+                    expand=["items.data.price", "schedule", "schedule.phases"],
+                )
+                meta = _subscription_metadata(stripe_sub)
+                addon_type = _obj_get(meta, "addon_type")
+                if addon_type == ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING:
+                    sync_addon_subscription_from_stripe(
+                        str(sub_id),
+                        subscription_obj=stripe_sub,
+                        addon_type=ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING,
+                    )
+                elif addon_type == ADDON_TYPE_EMAIL_MARKETING:
+                    sync_addon_subscription_from_stripe(
+                        str(sub_id),
+                        subscription_obj=stripe_sub,
+                        addon_type=ADDON_TYPE_EMAIL_MARKETING,
+                    )
+                elif _obj_get(meta, "membership_product_id"):
+                    sync_customer_membership_from_stripe(
+                        str(sub_id), subscription_obj=stripe_sub
+                    )
+                elif _obj_get(meta, "business_id"):
+                    sync_widget_subscription_from_stripe(
+                        str(sub_id), subscription_obj=stripe_sub
+                    )
+                else:
+                    logger.info(
+                        "[%s] checkout.session.completed: unrecognized subscription metadata sub_id=%s",
+                        webhook_id,
+                        sub_id,
+                    )
+
+                cust_id = _obj_get(stripe_sub, "customer")
+                business_id_str = _obj_get(meta, "business_id")
+                if business_id_str and cust_id:
+                    try:
+                        biz = BusinessInfo.objects.get(businessId=int(business_id_str))
+                        if not biz.stripe_customer_id:
+                            biz.stripe_customer_id = str(cust_id)
+                            biz.save(update_fields=["stripe_customer_id"])
+                    except (BusinessInfo.DoesNotExist, ValueError):
+                        pass
+
+                if stripe_eid:
+                    ProcessedStripeEvent.objects.update_or_create(
+                        event_id=stripe_eid,
+                        defaults={
+                            "event_type": getattr(event, "type", "") or "",
+                        },
+                    )
+            except Exception as e:
+                logger.warning(
+                    "[%s] checkout.session.completed handling failed: %s",
+                    webhook_id,
+                    e,
+                    exc_info=True,
+                )
+                return Response(status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            return Response(status=status.HTTP_200_OK)
 
         if event.type == "payment_intent.succeeded":
             payment_intent = event.data.object

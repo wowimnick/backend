@@ -87,6 +87,8 @@ from django.contrib.gis.db.models.functions import Distance
 from django.contrib.gis.measure import D
 from django.conf import settings
 
+from quickstart.services.search_suggest_service import match_collection_by_alias
+
 logger = logging.getLogger(__name__)
 
 
@@ -421,6 +423,15 @@ def _shuffle_preset_results(response_data, search_name, collection_slug):
         rng.shuffle(tier)
         results[start:] = tier
     out["results"] = results
+    return out
+
+
+def _attach_resolved_collection_to_search_payload(data, meta):
+    """Add resolved_collection to paginated search JSON when keyword matched a collection."""
+    if not meta or not isinstance(data, dict):
+        return data
+    out = copy.deepcopy(data)
+    out["resolved_collection"] = meta
     return out
 
 
@@ -774,9 +785,19 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
 
         # 4. Mode Selection: only collections are used (categories removed from platform)
         if mode == "collections":
-            collections_qs = ClassCollection.objects.filter(is_active=True).order_by("sort_order")
+            base_coll = ClassCollection.objects.filter(is_active=True)
+            featured_qs = base_coll.filter(show_in_featured_categories=True).order_by(
+                "sort_order", "name"
+            )
+            if not featured_qs.exists():
+                featured_qs = base_coll.order_by("sort_order", "name")
             data["collections"] = PublicCollectionSerializer(
-                collections_qs, many=True, context=context
+                featured_qs, many=True, context=context
+            ).data
+            data["collections_i_want"] = PublicCollectionSerializer(
+                base_coll.filter(show_in_i_want=True).order_by("sort_order", "name"),
+                many=True,
+                context=context,
             ).data
             _safe_cache_set(
                 HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY,
@@ -1002,6 +1023,17 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             keyword_query_text = request.query_params.get("keyword")
             tag_filter = request.query_params.get("tag")
             price_max_str = request.query_params.get("price_max")
+
+            resolved_collection_meta = None
+            effective_collection_slug = collection_slug
+            if keyword_query_text and not collection_slug:
+                _matched_coll = match_collection_by_alias(keyword_query_text.strip())
+                if _matched_coll:
+                    effective_collection_slug = _matched_coll.slug
+                    resolved_collection_meta = {
+                        "slug": _matched_coll.slug,
+                        "name": _matched_coll.name,
+                    }
             
             # --- DATE PARAMETERS ---
             req_date_str = request.query_params.get("date")
@@ -1041,18 +1073,31 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             queryset = queryset.filter(Exists(has_future_instances))
 
             # --- COLLECTION FILTERING ---
-            if collection_slug:
-                logger.info(f"Applying Collection Filter: '{collection_slug}'")
-                queryset = queryset.filter(collections__slug=collection_slug)
+            if effective_collection_slug:
+                logger.info(
+                    f"Applying Collection Filter: '{effective_collection_slug}'"
+                    + (
+                        f" (resolved from keyword)"
+                        if resolved_collection_meta
+                        else ""
+                    )
+                )
+                queryset = queryset.filter(
+                    collections__slug=effective_collection_slug
+                )
                 # Ensure distinctness after M2M filter just in case
                 queryset = queryset.distinct()
-                
+
                 # Check count after collection filter
                 count_after_collection = queryset.count()
-                logger.info(f"QuerySet Count after Collection Filter: {count_after_collection}")
-                
+                logger.info(
+                    f"QuerySet Count after Collection Filter: {count_after_collection}"
+                )
+
                 if count_after_collection == 0:
-                    logger.warning(f"Collection filter '{collection_slug}' returned 0 results. Check if slug exists in DB.")
+                    logger.warning(
+                        f"Collection filter '{effective_collection_slug}' returned 0 results. Check if slug exists in DB."
+                    )
 
             user_location_point = None
             is_province_search = False
@@ -1322,9 +1367,18 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     collection_cache_key,
                 ]):
                     shuffled = _shuffle_preset_results(
-                        response.data, search_name, collection_slug
+                        response.data,
+                        search_name,
+                        effective_collection_slug or collection_slug,
+                    )
+                    shuffled = _attach_resolved_collection_to_search_payload(
+                        shuffled, resolved_collection_meta
                     )
                     return Response(shuffled)
+                if resolved_collection_meta and isinstance(response.data, dict):
+                    response.data = _attach_resolved_collection_to_search_payload(
+                        response.data, resolved_collection_meta
+                    )
                 return response
 
             serializer = self.get_serializer(
@@ -1348,9 +1402,18 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 collection_cache_key,
             ]):
                 shuffled = _shuffle_preset_results(
-                    response.data, search_name, collection_slug
+                    response.data,
+                    search_name,
+                    effective_collection_slug or collection_slug,
+                )
+                shuffled = _attach_resolved_collection_to_search_payload(
+                    shuffled, resolved_collection_meta
                 )
                 return Response(shuffled)
+            if resolved_collection_meta and isinstance(response.data, dict):
+                response.data = _attach_resolved_collection_to_search_payload(
+                    response.data, resolved_collection_meta
+                )
             return response
 
         except Exception as e:

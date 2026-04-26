@@ -526,11 +526,26 @@ class PublicClassDetailSerializer(PublicClassSerializer):
 
 class PublicCollectionSerializer(serializers.ModelSerializer):
     image_medium_url = serializers.SerializerMethodField()
-    key = serializers.CharField(source='slug', read_only=True) 
+    key = serializers.CharField(source='slug', read_only=True)
 
     class Meta:
         model = ClassCollection
-        fields = ['id', 'name', 'slug', 'key', 'description', 'image_medium_url', 'sort_order'] 
+        fields = [
+            "id",
+            "name",
+            "slug",
+            "key",
+            "description",
+            "image_medium_url",
+            "sort_order",
+            "search_aliases",
+            "is_searchable",
+            "show_in_i_want",
+            "show_in_featured_categories",
+            "show_on_homepage_rows",
+            "icon_name",
+            "color",
+        ] 
 
     def _get_resized_url(self, obj, size_name):
         """

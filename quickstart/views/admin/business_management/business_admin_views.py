@@ -14,6 +14,7 @@ from django.db.models import (
     Exists,
     OuterRef,
     Subquery,
+    BooleanField,
 )
 from django.db.models.functions import (
     Coalesce,
@@ -66,6 +67,53 @@ from quickstart.views.admin.metrics_time_windows import get_admin_metrics_window
 from quickstart.constants.search_location_presets import EXPLORE_LOCATION_PRESET_LABELS
 
 logger = logging.getLogger(__name__)
+
+# Rolling window for "engaged active" KPI (login within window AND at least one booking ever)
+ENGAGED_LOGIN_LOOKBACK_DAYS = 30
+
+
+def count_engaged_businesses(login_start_dt, login_end_exclusive_dt):
+    """
+    Businesses where an owner or accepted staff logged in during [login_start_dt, login_end_exclusive_dt)
+    AND the business has at least one Booking (any status), via class schedule chain.
+    """
+    login_user_ids = list(
+        AuditLog.objects.filter(
+            action="login",
+            timestamp__gte=login_start_dt,
+            timestamp__lt=login_end_exclusive_dt,
+            user_id__isnull=False,
+        )
+        .values_list("user_id", flat=True)
+        .distinct()
+    )
+    if not login_user_ids:
+        return 0
+    owner_biz_ids = set(
+        BusinessInfo.objects.filter(owner_id__in=login_user_ids).values_list(
+            "pk", flat=True
+        )
+    )
+    staff_biz_ids = set(
+        BusinessStaff.objects.filter(
+            user_id__in=login_user_ids,
+            status=BusinessStaff.StaffStatus.ACCEPTED,
+        ).values_list("business_id", flat=True)
+    )
+    candidates = owner_biz_ids | staff_biz_ids
+    if not candidates:
+        return 0
+    has_booking = Exists(
+        Booking.objects.filter(
+            schedule_instance__schedule__option__classId__businessId=OuterRef("pk"),
+        )
+    )
+    return (
+        BusinessInfo.objects.filter(pk__in=candidates)
+        .filter(has_booking)
+        .distinct()
+        .count()
+    )
 
 
 def _normalize_search_location_key(value):
@@ -180,6 +228,41 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
             )
         )
 
+        engaged_login_cutoff = timezone.now() - timedelta(days=ENGAGED_LOGIN_LOOKBACK_DAYS)
+        owner_login_engaged_sq = Exists(
+            AuditLog.objects.filter(
+                action="login",
+                timestamp__gte=engaged_login_cutoff,
+                user_id=OuterRef("owner_id"),
+            )
+        )
+        # Correlate to BusinessInfo, not AuditLog: nesting Subquery under AuditLog
+        # made OuterRef("pk") resolve to AuditLog.id (UUID), causing integer = uuid
+        # against business_staff.business_id.
+        staff_login_engaged_sq = Exists(
+            BusinessStaff.objects.filter(
+                business=OuterRef("pk"),
+                status=BusinessStaff.StaffStatus.ACCEPTED,
+            )
+            .exclude(user_id__isnull=True)
+            .filter(
+                Exists(
+                    AuditLog.objects.filter(
+                        action="login",
+                        timestamp__gte=engaged_login_cutoff,
+                        user_id=OuterRef("user_id"),
+                    )
+                )
+            )
+        )
+        has_any_booking_sq = Exists(
+            Booking.objects.filter(
+                schedule_instance__schedule__option__classId__businessId=OuterRef(
+                    "pk"
+                ),
+            )
+        )
+
         queryset = queryset.annotate(
             has_active_schedules=has_active_schedules_subquery,
             classes_count=Coalesce(classes_subquery, 0),
@@ -200,6 +283,22 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
                 When(verificationStatus="pending", then=Value("pending")),
                 default=Value("inactive"),
                 output_field=CharField(max_length=20),
+            ),
+            _owner_login_engaged=owner_login_engaged_sq,
+            _staff_login_engaged=staff_login_engaged_sq,
+            _has_any_booking_engaged=has_any_booking_sq,
+        ).annotate(
+            is_engaged=Case(
+                When(
+                    (
+                        Q(_owner_login_engaged=True)
+                        | Q(_staff_login_engaged=True)
+                    )
+                    & Q(_has_any_booking_engaged=True),
+                    then=Value(True),
+                ),
+                default=Value(False),
+                output_field=BooleanField(),
             ),
         )
 
@@ -229,6 +328,14 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(revenue__gte=1000, revenue__lt=10000)
         elif revenue_tier == "10k_plus":
             queryset = queryset.filter(revenue__gte=10000)
+
+        engaged_query = (
+            self.request.query_params.get("engaged") or ""
+        ).strip().lower()
+        if engaged_query in ("true", "1", "yes"):
+            queryset = queryset.filter(is_engaged=True)
+        elif engaged_query in ("false", "0", "no"):
+            queryset = queryset.filter(is_engaged=False)
 
         return queryset
 
@@ -546,31 +653,17 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
                     / previous_period_businesses
                 ) * 100
 
-        login_user_ids = list(
-            AuditLog.objects.filter(
-                action="login",
-                timestamp__gte=window.start_dt,
-                timestamp__lt=window.end_dt_exclusive,
-                user_id__isnull=False,
-            )
-            .values_list("user_id", flat=True)
-            .distinct()
+        active_businesses_in_period = count_engaged_businesses(
+            window.start_dt, window.end_dt_exclusive
         )
-        if not login_user_ids:
-            active_businesses_in_period = 0
-        else:
-            owner_biz_ids = set(
-                BusinessInfo.objects.filter(
-                    owner_id__in=login_user_ids
-                ).values_list("pk", flat=True)
-            )
-            staff_biz_ids = set(
-                BusinessStaff.objects.filter(
-                    user_id__in=login_user_ids,
-                    status=BusinessStaff.StaffStatus.ACCEPTED,
-                ).values_list("business_id", flat=True)
-            )
-            active_businesses_in_period = len(owner_biz_ids | staff_biz_ids)
+
+        engaged_fixed_end = timezone.now()
+        engaged_fixed_start = engaged_fixed_end - timedelta(
+            days=ENGAGED_LOGIN_LOOKBACK_DAYS
+        )
+        active_engaged_last_30d = count_engaged_businesses(
+            engaged_fixed_start, engaged_fixed_end
+        )
 
         total_gross_revenue = Booking.objects.filter(
             status__in=["confirmed", "completed"],
@@ -798,7 +891,10 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
         return Response(
             {
                 "total_businesses": business_counts["total_businesses"],
-                "active_businesses": business_counts["active_businesses"],
+                "active_platform_enabled_businesses": business_counts[
+                    "active_businesses"
+                ],
+                "active_businesses": active_engaged_last_30d,
                 "active_businesses_in_period": active_businesses_in_period,
                 "total_business_growth": round(total_business_growth, 2),
                 "featured_businesses": business_counts["featured_businesses"],

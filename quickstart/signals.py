@@ -334,6 +334,34 @@ def create_booking_notification(sender, instance, created, **kwargs):
                 exc_info=True,
             )
 
+
+@receiver(post_save, sender=Booking)
+def update_business_last_booking_date(sender, instance, **kwargs):
+    """Maintain BusinessInfo.last_booking_date as newest booking.booking_date for KPIs/backfill."""
+    if not getattr(instance, "booking_date", None):
+        return
+    try:
+        class_main = instance.schedule_instance.schedule.option.classId
+        biz_pk = class_main.businessId_id
+    except AttributeError:
+        return
+    try:
+        existing = BusinessInfo.objects.filter(pk=biz_pk).values_list(
+            "last_booking_date", flat=True
+        ).first()
+        if existing is None or instance.booking_date > existing:
+            BusinessInfo.objects.filter(pk=biz_pk).update(
+                last_booking_date=instance.booking_date
+            )
+    except Exception as e:
+        logger.warning(
+            "Could not update last_booking_date for business %s booking %s: %s",
+            biz_pk,
+            getattr(instance, "pk", None),
+            e,
+        )
+
+
 @receiver(post_save, sender=Reviews)
 def create_review_notification(sender, instance, created, **kwargs):
     """Notify business when a new review is created and approved."""

@@ -247,7 +247,7 @@ def generate_weekly_blog_draft_task():
         draft_data = generate_blog_draft(
             topic_hint=topic_hint,
             explore_url=explore_url,
-            site_name="Classeasily",
+            site_name="ClassEasily",
             word_count_target=(400, 600),
         )
         if not draft_data:

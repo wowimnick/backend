@@ -73,6 +73,17 @@ class TestSyncWidgetSubscription:
         assert err is None
         assert row.plan_id == "advanced"
 
+    def test_sync_maps_annual_widget_price_to_plan_id(self, business, settings):
+        settings.WIDGET_SUBSCRIPTION_PRICE_GROWTH_ANNUAL = "price_growth_yearly"
+        sub = _widget_sub_dict(
+            business,
+            metadata={"business_id": str(business.businessId), "plan_id": "growth"},
+            items={"data": [{"id": "si_1", "price": {"id": "price_growth_yearly"}}]},
+        )
+        row, err = sync_widget_subscription_from_stripe("sub_sync_test", subscription_obj=sub)
+        assert err is None
+        assert row.plan_id == "growth"
+
     def test_sync_falls_back_to_metadata_plan_id_when_price_unknown(self, business):
         sub = _widget_sub_dict(
             business,

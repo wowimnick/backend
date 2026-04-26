@@ -1164,7 +1164,36 @@ class AdminCollectionViewSet(viewsets.ModelViewSet):
             logger.error(f"Failed to update collection order: {e}")
             return Response({"error": "Internal error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-
+    @action(detail=True, methods=["post"], url_path="bulk-assign-classes")
+    def bulk_assign_classes(self, request, pk=None):
+        """Add this collection to many classes (M2M). Body: { \"class_ids\": [1, 2, 3] }."""
+        collection = self.get_object()
+        raw_ids = request.data.get("class_ids")
+        if not isinstance(raw_ids, list):
+            return Response(
+                {"error": "class_ids must be a list of integers"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        ids = []
+        for x in raw_ids:
+            try:
+                ids.append(int(x))
+            except (TypeError, ValueError):
+                continue
+        if not ids:
+            return Response(
+                {"error": "No valid class IDs"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        with transaction.atomic():
+            classes = list(ClassesMain.objects.filter(classId__in=ids))
+            for klass in classes:
+                klass.collections.add(collection)
+        self._invalidate_collection_caches(collection_slug=collection.slug)
+        trigger_nextjs_revalidation(path="/")
+        trigger_nextjs_revalidation(tag="homepage-content")
+        trigger_nextjs_revalidation(tag="collections")
+        return Response({"added": len(classes), "requested": len(ids)})
 
 
 class AdminReviewViewSet(viewsets.ModelViewSet):

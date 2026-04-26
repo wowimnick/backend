@@ -19,6 +19,7 @@ from quickstart.views.business.business_location_views import (
 from quickstart.views.widget.widget_config_views import (
     WidgetConfigManagementView,
     CreateWidgetSubscriptionCheckoutView,
+    CreateBillingPortalSessionView,
     CreateWidgetSubscriptionPaymentIntentView,
     WidgetSubscriptionView,
     WidgetSubscriptionCancelView,
@@ -155,6 +156,11 @@ from quickstart.views.public.public_global_discount_views import (
     ActiveGlobalDiscountView,
 )
 from quickstart.views.public.search_log_views import SearchLogCreateView
+from quickstart.views.public.search_views import (
+    PublicCollectionPlacementListView,
+    SearchSuggestView,
+)
+from quickstart.views.public.corporate_views import CorporateInquiryCreateView
 
 from quickstart.views import (
     CustomTokenObtainPairView,
@@ -422,6 +428,17 @@ widget_urlpatterns = [
 urlpatterns = [
     path("", health_check, name="api-root-health"),
     path("search-log/", SearchLogCreateView.as_view(), name="search-log-create"),
+    path(
+        "corporate-inquiry/",
+        CorporateInquiryCreateView.as_view(),
+        name="corporate-inquiry-create",
+    ),
+    path("search/suggest/", SearchSuggestView.as_view(), name="search-suggest"),
+    path(
+        "collections/placement/",
+        PublicCollectionPlacementListView.as_view(),
+        name="public-collections-placement",
+    ),
     # --- Django Admin & 3rd Party Libs ---
     path("admin/panel/", admin.site.urls),
     path(
@@ -693,6 +710,11 @@ urlpatterns = [
         "my-business/widget-subscription/checkout/",
         CreateWidgetSubscriptionCheckoutView.as_view(),
         name="my-business-widget-subscription-checkout",
+    ),
+    path(
+        "my-business/billing-portal/",
+        CreateBillingPortalSessionView.as_view(),
+        name="my-business-billing-portal",
     ),
     path(
         "my-business/widget-subscription/payment-intent/",

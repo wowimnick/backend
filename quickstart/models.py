@@ -1278,6 +1278,45 @@ class ClassCollection(models.Model):
     is_active = models.BooleanField(default=True)
     sort_order = models.IntegerField(default=0, help_text="Order on homepage")
 
+    # --- Discovery & placement (homepage pill, suggest, corporate, etc.) ---
+    search_aliases = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Lowercased strings matched for keyword search, e.g. pottery, ceramics.",
+    )
+    is_searchable = models.BooleanField(
+        default=True,
+        db_index=True,
+        help_text="Include in keyword/suggest matching.",
+    )
+    show_in_i_want = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="Show in homepage 'I want...' picker and corporate category strip.",
+    )
+    show_in_featured_categories = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="Show on homepage featured categories strip.",
+    )
+    show_on_homepage_rows = models.BooleanField(
+        default=True,
+        db_index=True,
+        help_text="Include in homepage collection carousels/rows.",
+    )
+    icon_name = models.CharField(
+        max_length=50,
+        blank=True,
+        default="",
+        help_text="Lucide icon name for chips (e.g. Palette).",
+    )
+    color = models.CharField(
+        max_length=20,
+        blank=True,
+        default="",
+        help_text="Optional hex color for UI chips.",
+    )
+
     def __str__(self):
         return self.name
 
@@ -4607,3 +4646,71 @@ class SearchLog(models.Model):
 
     def __str__(self):
         return f"{self.query or self.location or 'search'} @ {self.timestamp}"
+
+
+class ProcessedStripeEvent(models.Model):
+    """Stripe webhook event ids (ev_...) already handled successfully."""
+
+    event_id = models.CharField(max_length=255, primary_key=True)
+    event_type = models.CharField(max_length=128, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "processed_stripe_events"
+
+
+class StripeCheckoutAttempt(models.Model):
+    """Audit trail for Checkout Session creation (widget / add-ons)."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        BusinessInfo,
+        on_delete=models.CASCADE,
+        related_name="stripe_checkout_attempts",
+    )
+    checkout_session_id = models.CharField(max_length=255, unique=True, db_index=True)
+    product_type = models.CharField(max_length=64)
+    plan_or_tier_key = models.CharField(max_length=128, blank=True)
+    stripe_price_id = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "stripe_checkout_attempts"
+        indexes = [
+            models.Index(fields=["business", "-created_at"]),
+        ]
+
+
+class CorporateInquiry(models.Model):
+    """B2B / corporate team-building lead from the public /corporate page."""
+
+    COMPANY_SIZE_CHOICES = [
+        ("", "Prefer not to say"),
+        ("1-10", "1–10"),
+        ("11-50", "11–50"),
+        ("51-200", "51–200"),
+        ("201-500", "201–500"),
+        ("501+", "501+"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    company_name = models.CharField(max_length=200)
+    contact_name = models.CharField(max_length=150)
+    email = models.EmailField(max_length=254, db_index=True)
+    phone = models.CharField(max_length=50, blank=True, default="")
+    company_size = models.CharField(
+        max_length=20,
+        choices=COMPANY_SIZE_CHOICES,
+        blank=True,
+        default="",
+    )
+    message = models.TextField(max_length=5000, blank=True, default="")
+    meta = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        db_table = "corporate_inquiries"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.company_name} — {self.email} ({self.created_at.date()})"

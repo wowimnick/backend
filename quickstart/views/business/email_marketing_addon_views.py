@@ -8,11 +8,12 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from quickstart.models import ADDON_TYPE_EMAIL_MARKETING, BusinessAddonSubscription
-from quickstart.services.email_marketing_config import is_valid_marketing_price_id
+from quickstart.models import ADDON_TYPE_EMAIL_MARKETING, BusinessAddonSubscription, StripeCheckoutAttempt
+from quickstart.services.email_marketing_config import is_valid_marketing_price_id, price_id_to_tier
 from quickstart.services.subscription_sync import sync_addon_subscription_from_stripe
 from quickstart.services.widget_subscription_service import proration_after_subscription_item_modify
 from quickstart.utils.permissions import CanManageOwnClasses
+from quickstart.utils.stripe_migration import stripe_migration_gone_response
 from quickstart.views.widget.widget_config_views import (
     _business_can_instant_subscribe,
     _get_addon_subscription_for_manage,
@@ -49,21 +50,28 @@ class CreateEmailMarketingAddonCheckoutView(APIView):
                 {"error": "You already have an active email marketing subscription. Use change-tier to switch."},
                 status=status.HTTP_409_CONFLICT,
             )
-        success_url = request.data.get(
-            "success_url",
-            request.build_absolute_uri("/business/dashboard/settings"),
-        )
-        cancel_url = request.data.get(
-            "cancel_url",
-            request.build_absolute_uri("/business/dashboard/settings"),
-        )
+        base_fe = (getattr(settings, "FRONTEND_BASE_URL", None) or "").rstrip("/") or request.build_absolute_uri("/").rstrip("/")
+        default_success = f"{base_fe}/business/dashboard?tab=settings&checkout=success&addon=email_marketing"
+        default_cancel = f"{base_fe}/business/dashboard?tab=settings&checkout=cancel"
+        success_url = (request.data.get("success_url") or default_success).strip()
+        cancel_url = (request.data.get("cancel_url") or default_cancel).strip()
+        tier_info = price_id_to_tier(price_id)
+        tier_key = (tier_info or {}).get("tier_key") or ""
         try:
             session_params = {
                 "mode": "subscription",
                 "line_items": [{"price": price_id, "quantity": 1}],
-                "success_url": success_url + "?email_marketing=1&session_id={CHECKOUT_SESSION_ID}",
+                "success_url": success_url
+                + ("&" if "?" in success_url else "?")
+                + "email_marketing=1&session_id={CHECKOUT_SESSION_ID}",
                 "cancel_url": cancel_url,
                 "client_reference_id": str(business.businessId),
+                "metadata": {
+                    "business_id": str(business.businessId),
+                    "product_type": "email_marketing",
+                    "addon_type": ADDON_TYPE_EMAIL_MARKETING,
+                    "tier_key": tier_key,
+                },
                 "subscription_data": {
                     "metadata": {
                         "business_id": str(business.businessId),
@@ -71,12 +79,26 @@ class CreateEmailMarketingAddonCheckoutView(APIView):
                     },
                 },
             }
+            if getattr(settings, "STRIPE_CHECKOUT_AUTOMATIC_TAX", False):
+                session_params["automatic_tax"] = {"enabled": True}
+                session_params["customer_update"] = {"address": "auto"}
+                session_params["billing_address_collection"] = "required"
             if business.stripe_customer_id:
                 session_params["customer"] = business.stripe_customer_id
             else:
                 session_params["customer_email"] = business.studentContactEmail
             session = stripe.checkout.Session.create(**session_params)
-            return Response({"url": session.url}, status=status.HTTP_200_OK)
+            StripeCheckoutAttempt.objects.create(
+                business=business,
+                checkout_session_id=session.id,
+                product_type="email_marketing",
+                plan_or_tier_key=tier_key,
+                stripe_price_id=price_id,
+            )
+            return Response(
+                {"url": session.url, "checkout_url": session.url, "session_id": session.id},
+                status=status.HTTP_200_OK,
+            )
         except stripe.StripeError as e:
             return Response({"error": str(e)}, status=status.HTTP_502_BAD_GATEWAY)
 
@@ -87,6 +109,9 @@ class CreateEmailMarketingAddonPaymentIntentView(APIView):
     permission_classes = [IsAuthenticated, CanManageOwnClasses]
 
     def post(self, request, *args, **kwargs):
+        gone = stripe_migration_gone_response()
+        if gone is not None:
+            return gone
         price_id = _price_from_request(request)
         if not price_id or not is_valid_marketing_price_id(price_id):
             return Response(

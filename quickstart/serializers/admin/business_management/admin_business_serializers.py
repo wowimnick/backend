@@ -64,6 +64,7 @@ class AdminBusinessListSerializer(serializers.ModelSerializer):
     bookings_count = serializers.IntegerField(read_only=True, default=0)
     review_count = serializers.IntegerField(read_only=True, default=0)
     google_review_count = serializers.IntegerField(read_only=True, default=0)
+    is_engaged = serializers.BooleanField(read_only=True, default=False)
 
     # --- Model Fields (Read-Only for List) ---
     business_image_thumb_url = serializers.SerializerMethodField()
@@ -91,6 +92,7 @@ class AdminBusinessListSerializer(serializers.ModelSerializer):
             "review_count",
             "google_review_count",
             "verificationStatus",
+            "is_engaged",
         ]
         read_only_fields = fields
 

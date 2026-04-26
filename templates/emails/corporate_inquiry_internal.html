@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>New corporate inquiry</title>
+</head>
+<body style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; line-height: 1.5; color: #111827;">
+  <h1 style="font-size: 20px; margin: 0 0 16px;">New ClassEasily corporate inquiry</h1>
+  <table cellpadding="8" cellspacing="0" style="border-collapse: collapse; font-size: 15px;">
+    <tr><td><strong>Company</strong></td><td>{{ inquiry.company_name }}</td></tr>
+    <tr><td><strong>Contact</strong></td><td>{{ inquiry.contact_name }}</td></tr>
+    <tr><td><strong>Email</strong></td><td><a href="mailto:{{ inquiry.email }}">{{ inquiry.email }}</a></td></tr>
+    <tr><td><strong>Phone</strong></td><td>{{ inquiry.phone|default:"—" }}</td></tr>
+    <tr><td><strong>Company size</strong></td><td>{{ inquiry.get_company_size_display }}</td></tr>
+    <tr><td><strong>Submitted</strong></td><td>{{ inquiry.created_at }}</td></tr>
+  </table>
+  {% if inquiry.message %}
+  <h2 style="font-size: 16px; margin: 24px 0 8px;">Message</h2>
+  <p style="white-space: pre-wrap; margin: 0; padding: 12px; background: #f9fafb; border-radius: 8px;">{{ inquiry.message }}</p>
+  {% endif %}
+  {% if inquiry.meta %}
+  <h2 style="font-size: 16px; margin: 24px 0 8px;">Meta</h2>
+  <table cellpadding="6" cellspacing="0" style="border-collapse: collapse; font-size: 13px; background: #f3f4f6; border-radius: 8px;">
+    {% for key, val in inquiry.meta.items %}
+    <tr><td style="vertical-align: top;"><strong>{{ key }}</strong></td><td>{{ val }}</td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+  <p style="margin: 32px 0 0; padding-top: 20px; border-top: 1px solid #e5e7eb; font-size: 13px; color: #6b7280;">
+    You are receiving this as a ClassEasily Super Admin (or an address on CORPORATE_LEADS_EMAIL).
+    <a href="{{ frontend_url }}/admin" style="color: #e11d48;">Open admin dashboard</a>
+  </p>
+</body>
+</html>
