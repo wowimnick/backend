@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import stripe
+from django.utils import timezone
 
 from quickstart.tasks.payout_tasks import (
     _is_business_connect_not_ready_for_payout,
@@ -22,6 +23,7 @@ def _biz(stripe_account_status="active", bid=42):
         stripe_account_status=stripe_account_status,
         owner=SimpleNamespace(email="owner@example.com"),
         currency="CAD",
+        last_payout_connect_reminder_sent=None,
     )
 
 
@@ -81,3 +83,21 @@ def test_send_payout_connect_required_immediate_calls_email():
     assert kwargs["booking_count"] == 2
     m_q.assert_called_once_with(pk=7)
     m_q.return_value.update.assert_called_once()
+
+
+def test_send_payout_connect_required_immediate_respects_cooldown():
+    business = _biz("restricted", bid=8)
+    business.last_payout_connect_reminder_sent = timezone.now()
+    with patch(
+        "quickstart.tasks.payout_tasks._pending_payout_totals_for_business",
+        return_value=(Decimal("10.00"), 1),
+    ):
+        with patch(
+            "quickstart.utils.email_utils.send_payout_connect_required_email"
+        ) as mock_send:
+            with patch("quickstart.tasks.payout_tasks.BusinessInfo.objects.filter") as m_q:
+                m_q.return_value.update = MagicMock()
+                _send_payout_connect_required_immediate(business)
+
+    mock_send.assert_not_called()
+    m_q.assert_not_called()

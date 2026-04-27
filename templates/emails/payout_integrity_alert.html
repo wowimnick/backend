@@ -1,0 +1,96 @@
+{% extends "emails/base_email.html" %}
+{% load i18n %}
+
+{% block title %}
+    {% trans "Payout Integrity Alert" %}
+{% endblock title %}
+
+{% block content %}
+    <div style="text-align: center;">
+        <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">🚨</div>
+        {% if alert_mode == "daily_digest" %}
+            <h1>{% trans "Daily payout integrity digest" %}</h1>
+        {% else %}
+            <h1>{% trans "Payout integrity critical alert" %}</h1>
+        {% endif %}
+        <p style="font-size: 16px; color: #1D1D1F; margin-bottom: 24px;">
+            {% if alert_mode == "daily_digest" %}
+                {% trans "Automated payout monitoring summary for the day." %}
+            {% else %}
+                {% trans "Automated payout monitoring found critical issues that may require urgent review." %}
+            {% endif %}
+        </p>
+    </div>
+
+    <div style="background-color: #ffffff; border: 1px solid #E5E7EB; border-radius: 16px; margin-bottom: 20px; overflow: hidden; text-align: left;">
+        <div style="font-size: 11px; color: #6B7280; text-transform: uppercase; letter-spacing: 0.06em; padding: 14px 24px; background: #F9FAFB; border-bottom: 1px solid #E5E7EB; font-weight: 600;">
+            {% trans "Summary" %}
+        </div>
+        <div style="padding: 20px 24px; font-size: 14px; color: #1D1D1F;">
+            <div><strong>{% trans "Ran at:" %}</strong> {{ report.ran_at }}</div>
+            <div><strong>{% trans "Window:" %}</strong> {{ report.days }} {% trans "day(s)" %}</div>
+            <div><strong>{% trans "Stripe transfer limit:" %}</strong> {{ report.stripe_limit }}</div>
+            <div style="margin-top: 12px;">
+                <strong>{% trans "Critical findings:" %}</strong>
+                {% if critical_findings %}
+                    <ul style="margin: 8px 0 0 20px; padding: 0;">
+                        {% for item in critical_findings %}
+                            <li>{{ item }}</li>
+                        {% endfor %}
+                    </ul>
+                {% else %}
+                    <div style="margin-top: 8px;">{% trans "None" %}</div>
+                {% endif %}
+            </div>
+            <div style="margin-top: 12px;">
+                <strong>{% trans "Warning findings:" %}</strong>
+                {% if warning_findings %}
+                    <ul style="margin: 8px 0 0 20px; padding: 0;">
+                        {% for item in warning_findings %}
+                            <li>{{ item }}</li>
+                        {% endfor %}
+                    </ul>
+                {% else %}
+                    <div style="margin-top: 8px;">{% trans "None" %}</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div style="background-color: #ffffff; border: 1px solid #E5E7EB; border-radius: 16px; margin-bottom: 20px; overflow: hidden; text-align: left;">
+        <div style="font-size: 11px; color: #6B7280; text-transform: uppercase; letter-spacing: 0.06em; padding: 14px 24px; background: #F9FAFB; border-bottom: 1px solid #E5E7EB; font-weight: 600;">
+            {% trans "Top pending payout queue" %}
+        </div>
+        <div style="padding: 20px 24px; font-size: 14px; color: #1D1D1F;">
+            <div style="margin-bottom: 8px;">
+                <strong>{% trans "Businesses with pending payouts:" %}</strong> {{ report.pending_queue_businesses }}
+            </div>
+            <div style="margin-bottom: 8px;">
+                <strong>{% trans "Total pending net payout:" %}</strong> {{ report.pending_queue_total_alloc }}
+            </div>
+            {% if report.pending_queue_top %}
+                <ul style="margin: 0 0 0 20px; padding: 0;">
+                    {% for row in report.pending_queue_top %}
+                        <li>
+                            businessId={{ row.business_id }}, pending_bookings={{ row.pending_bookings }}, sum_allocated_net_payout={{ row.sum_allocated_net_payout }}
+                        </li>
+                    {% endfor %}
+                </ul>
+            {% else %}
+                <div>{% trans "No pending payout queue entries." %}</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+        <tr>
+            <td align="center">
+                <a href="{{ admin_url }}" target="_blank" class="button">{% trans "Open Admin" %}</a>
+            </td>
+        </tr>
+    </table>
+{% endblock content %}
+
+{% block footer_recipient %}
+    <p class="footer-text">{% trans "Sent to" %} {{ recipient_email }}</p>
+{% endblock footer_recipient %}

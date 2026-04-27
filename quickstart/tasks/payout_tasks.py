@@ -5,16 +5,20 @@ from django.db.models import Q, Sum, Count
 from django.conf import settings
 from datetime import timedelta, datetime
 from decimal import Decimal
+from collections import defaultdict
+import hashlib
 import stripe
 import logging
 import pytz
-import random
 
 from quickstart.models import Booking, Payout, BusinessInfo
 from quickstart.utils.notification_utils import create_notification_for_recipients
 from quickstart.utils.stripe_metadata import stripe_metadata_to_dict
 
 logger = logging.getLogger(__name__)
+PAYOUT_INTEGRITY_ALERT_RECIPIENTS = ("nick@classeasily.com",)
+PAYOUT_INTEGRITY_PENDING_QUEUE_WARNING_BUSINESSES = 25
+PAYOUT_INTEGRITY_PENDING_QUEUE_WARNING_TOTAL_ALLOC = Decimal("5000.00")
 
 _CONNECT_NOT_READY_STATUSES = frozenset(
     {"incomplete", "restricted", "pending", "unlinked"}
@@ -81,7 +85,7 @@ def _is_business_connect_not_ready_for_payout(
 def _send_payout_connect_required_immediate(business: BusinessInfo) -> None:
     """
     Email the business to finish Connect / payout setup after a transfer failure.
-    Bypasses the 3-day cooldown used by scheduled reminders.
+    Uses the same 3-day cooldown as scheduled reminders.
     """
     from quickstart.utils.email_utils import send_payout_connect_required_email
 
@@ -90,6 +94,16 @@ def _send_payout_connect_required_immediate(business: BusinessInfo) -> None:
         logger.warning(
             "Payout connect email skipped: Business %s has no eligible pending bookings.",
             business.businessId,
+        )
+        return
+
+    now = timezone.now()
+    last_sent = getattr(business, "last_payout_connect_reminder_sent", None)
+    if last_sent and (now - last_sent) < timedelta(days=3):
+        logger.info(
+            "Payout connect reminder cooldown: Business %s last sent %s. Skipping immediate email.",
+            business.businessId,
+            last_sent,
         )
         return
 
@@ -108,7 +122,7 @@ def _send_payout_connect_required_immediate(business: BusinessInfo) -> None:
         currency=business.currency or "CAD",
     )
     BusinessInfo.objects.filter(pk=business.businessId).update(
-        last_payout_connect_reminder_sent=timezone.now()
+        last_payout_connect_reminder_sent=now
     )
     logger.info(
         "Sent immediate payout connect required email to %s for Business %s "
@@ -132,7 +146,7 @@ def _maybe_send_payout_connect_reminder(business):
         return
 
     last_sent = getattr(business, "last_payout_connect_reminder_sent", None)
-    if last_sent and (timezone.now() - last_sent).days < 3:
+    if last_sent and (timezone.now() - last_sent) < timedelta(days=3):
         logger.info(
             f"Payout connect reminder cooldown: Business {business.businessId} "
             f"last sent {last_sent}. Skipping."
@@ -159,6 +173,290 @@ def _maybe_send_payout_connect_reminder(business):
         f"Sent payout connect required email to {owner.email} for Business {business.businessId} "
         f"(pending_amount=${total_payout}, booking_count={booking_count})"
     )
+
+
+def _build_payout_batch_idempotency_key(
+    business_id: int, currency: str, booking_ids: list[int], payout_amount_cents: int
+) -> str:
+    """
+    Deterministic key for a specific payout batch to make Stripe transfer retries safe.
+    """
+    normalized_ids = ",".join(str(i) for i in sorted(booking_ids))
+    payload = f"{business_id}|{currency.upper()}|{payout_amount_cents}|{normalized_ids}"
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+    return f"payout:{business_id}:{currency.upper()}:{payout_amount_cents}:{digest}"
+
+
+def collect_payout_integrity_findings(
+    *, days: int = 3, stripe_limit: int = 200, include_stripe: bool = True
+) -> dict:
+    """
+    Read-only payout integrity checks used by both scheduled task and management command.
+    Returns a dict with summary counts and anomaly details.
+    """
+    now = timezone.now()
+    since = now - timedelta(days=max(1, int(days)))
+
+    payouts = list(
+        Payout.objects.filter(created_at__gte=since).select_related("business")
+    )
+
+    duplicate_bucket = defaultdict(list)
+    temp_like_rows = []
+    for payout in payouts:
+        created_day = payout.created_at.date().isoformat()
+        destination = getattr(payout.business, "stripe_account_id", "") or ""
+        key = (
+            payout.business_id,
+            str(payout.amount),
+            (payout.currency or "").upper(),
+            created_day,
+            destination,
+        )
+        duplicate_bucket[key].append(payout)
+        meta = payout.metadata if isinstance(payout.metadata, dict) else {}
+        if str(payout.stripe_transfer_id).startswith("temp_") or meta.get("temp_id"):
+            temp_like_rows.append(payout)
+
+    duplicate_like_groups = []
+    for key, rows in duplicate_bucket.items():
+        if len(rows) <= 1:
+            continue
+        bid, amount, currency, created_day, destination = key
+        duplicate_like_groups.append(
+            {
+                "business_id": bid,
+                "amount": amount,
+                "currency": currency,
+                "day": created_day,
+                "destination": destination,
+                "count": len(rows),
+                "payout_ids": [str(r.id) for r in rows],
+                "transfer_ids": [r.stripe_transfer_id for r in rows],
+            }
+        )
+
+    pending_rows = list(
+        Booking.objects.filter(
+            status__in=["completed", "forfeited"],
+            payment_status="paid",
+            payout_status="pending",
+        )
+        .values("schedule_instance__schedule__option__classId__businessId")
+        .annotate(c=Count("id"), total_alloc=Sum("allocated_net_payout"))
+        .order_by("-total_alloc")
+    )
+    pending_rows_with_bookings = [row for row in pending_rows if row["c"] > 0]
+    pending_queue = [
+        {
+            "business_id": row[
+                "schedule_instance__schedule__option__classId__businessId"
+            ],
+            "pending_bookings": row["c"],
+            "sum_allocated_net_payout": str(
+                (row["total_alloc"] or Decimal("0")).quantize(Decimal("0.01"))
+            ),
+        }
+        for row in pending_rows_with_bookings
+    ]
+
+    db_transfer_ids = set(
+        Payout.objects.exclude(stripe_transfer_id__startswith="temp_")
+        .exclude(stripe_transfer_id="")
+        .values_list("stripe_transfer_id", flat=True)
+    )
+    orphan_transfers = []
+    stripe_api_errors = []
+    if include_stripe:
+        try:
+            tr_list = stripe.Transfer.list(limit=max(1, min(int(stripe_limit), 500)))
+            for tr in getattr(tr_list, "data", []) or []:
+                tid = getattr(tr, "id", "") or ""
+                if not tid.startswith("tr_"):
+                    continue
+                description = getattr(tr, "description", "") or ""
+                if "ClassEasily Payout" not in description:
+                    continue
+                created_ts = getattr(tr, "created", None)
+                if created_ts:
+                    created_dt = datetime.fromtimestamp(int(created_ts), tz=pytz.utc)
+                    if created_dt < since.astimezone(pytz.utc):
+                        continue
+                if tid in db_transfer_ids:
+                    continue
+                amount = Decimal(str(getattr(tr, "amount", 0) or 0)) / Decimal("100")
+                orphan_transfers.append(
+                    {
+                        "transfer_id": tid,
+                        "amount": str(amount.quantize(Decimal("0.01"))),
+                        "currency": (getattr(tr, "currency", "") or "").upper(),
+                        "destination": getattr(tr, "destination", "") or "",
+                        "created": created_dt.isoformat() if created_ts else "",
+                        "description": description,
+                    }
+                )
+        except stripe.StripeError as stripe_err:
+            stripe_api_errors.append(str(stripe_err))
+
+    pending_total_alloc = sum(
+        (row["total_alloc"] or Decimal("0") for row in pending_rows_with_bookings),
+        start=Decimal("0"),
+    ).quantize(Decimal("0.01"))
+
+    critical_findings = []
+    warning_findings = []
+    if duplicate_like_groups:
+        critical_findings.append(
+            f"Duplicate-like payout groups: {len(duplicate_like_groups)}"
+        )
+    if temp_like_rows:
+        critical_findings.append(
+            f"Payout rows still using temporary transfer ids: {len(temp_like_rows)}"
+        )
+    if orphan_transfers:
+        critical_findings.append(
+            f"Stripe transfers missing DB payout rows: {len(orphan_transfers)}"
+        )
+    if stripe_api_errors:
+        warning_findings.append(
+            f"Stripe API errors while auditing transfers: {len(stripe_api_errors)}"
+        )
+    if (
+        len(pending_queue) >= PAYOUT_INTEGRITY_PENDING_QUEUE_WARNING_BUSINESSES
+        or pending_total_alloc >= PAYOUT_INTEGRITY_PENDING_QUEUE_WARNING_TOTAL_ALLOC
+    ):
+        warning_findings.append(
+            "Pending payout queue elevated: "
+            f"{len(pending_queue)} businesses, total ${pending_total_alloc}"
+        )
+
+    findings = critical_findings + warning_findings
+
+    return {
+        "ran_at": now.isoformat(),
+        "days": int(days),
+        "stripe_limit": int(stripe_limit),
+        "findings": findings,
+        "critical_findings": critical_findings,
+        "warning_findings": warning_findings,
+        "duplicate_like_groups": duplicate_like_groups,
+        "temp_like_rows": [
+            {
+                "payout_id": str(p.id),
+                "business_id": p.business_id,
+                "stripe_transfer_id": p.stripe_transfer_id,
+                "created_at": p.created_at.isoformat(),
+            }
+            for p in temp_like_rows
+        ],
+        "orphan_transfers": orphan_transfers,
+        "stripe_api_errors": stripe_api_errors,
+        "pending_queue_top": pending_queue[:10],
+        "pending_queue_businesses": len(pending_queue),
+        "pending_queue_total_alloc": str(pending_total_alloc),
+    }
+
+
+def _send_payout_integrity_alert_email(report: dict, *, include_warnings: bool = False) -> None:
+    from quickstart.utils.email_utils import send_templated_email
+
+    critical_findings = report.get("critical_findings") or []
+    warning_findings = report.get("warning_findings") or []
+    findings = critical_findings + warning_findings if include_warnings else critical_findings
+    if not findings:
+        return
+
+    if include_warnings:
+        subject = (
+            "[ClassEasily] Daily payout integrity digest: "
+            f"{len(critical_findings)} critical, {len(warning_findings)} warning"
+        )
+        alert_mode = "daily_digest"
+    else:
+        subject = (
+            "[ClassEasily] Payout integrity CRITICAL alert: "
+            f"{len(critical_findings)} issue(s) detected"
+        )
+        alert_mode = "critical_only"
+
+    send_templated_email(
+        recipient_list=list(PAYOUT_INTEGRITY_ALERT_RECIPIENTS),
+        template_name="emails/payout_integrity_alert.html",
+        context={
+            "report": report,
+            "findings": findings,
+            "critical_findings": critical_findings,
+            "warning_findings": warning_findings,
+            "alert_mode": alert_mode,
+            "admin_url": f"{settings.FRONTEND_BASE_URL}/admin",
+            "recipient_email": ", ".join(PAYOUT_INTEGRITY_ALERT_RECIPIENTS),
+        },
+        subject=subject,
+    )
+    logger.warning(
+        "Payout integrity alert sent to %s with %s findings.",
+        ",".join(PAYOUT_INTEGRITY_ALERT_RECIPIENTS),
+        len(findings),
+    )
+
+
+@shared_task
+def monitor_payout_integrity(days: int = 3, stripe_limit: int = 200):
+    """
+    Scheduled payout audit every 6 hours.
+    Sends emails only for CRITICAL findings.
+    """
+    report = collect_payout_integrity_findings(
+        days=days, stripe_limit=stripe_limit, include_stripe=True
+    )
+    critical_findings = report.get("critical_findings") or []
+    warning_findings = report.get("warning_findings") or []
+    if critical_findings:
+        _send_payout_integrity_alert_email(report)
+        return (
+            f"Payout integrity CRITICAL anomalies found: {len(critical_findings)}. "
+            f"Alert sent to {','.join(PAYOUT_INTEGRITY_ALERT_RECIPIENTS)}."
+        )
+    if warning_findings:
+        logger.warning(
+            "Payout integrity warning-only run (no immediate email): %s",
+            "; ".join(warning_findings),
+        )
+        return (
+            f"Payout integrity warning-only findings: {len(warning_findings)}. "
+            "No immediate email sent."
+        )
+    logger.info(
+        "Payout integrity check clean (days=%s, stripe_limit=%s).",
+        days,
+        stripe_limit,
+    )
+    return "Payout integrity check clean."
+
+
+@shared_task
+def send_daily_payout_integrity_warning_digest(days: int = 7, stripe_limit: int = 300):
+    """
+    Daily digest for payout integrity warnings (and any criticals) to keep visibility
+    without alert fatigue from non-critical findings.
+    """
+    report = collect_payout_integrity_findings(
+        days=days, stripe_limit=stripe_limit, include_stripe=True
+    )
+    critical_findings = report.get("critical_findings") or []
+    warning_findings = report.get("warning_findings") or []
+    if critical_findings or warning_findings:
+        _send_payout_integrity_alert_email(report, include_warnings=True)
+        return (
+            "Daily payout integrity digest sent: "
+            f"{len(critical_findings)} critical, {len(warning_findings)} warning."
+        )
+    logger.info(
+        "Daily payout integrity digest clean (days=%s, stripe_limit=%s).",
+        days,
+        stripe_limit,
+    )
+    return "Daily payout integrity digest clean."
 
 
 def _on_cancellation_refund_failed(booking, reason):
@@ -349,8 +647,16 @@ def process_daily_payouts():
                     continue
 
                 # Create Payout Record
-                temp_transfer_id = f"temp_task_{timezone.now().strftime('%Y%m%d_%H%M%S')}_{business.businessId}_{random.randint(1000, 9999)}"
                 payout_amount_cents = int(total_payout * 100)
+                idempotency_key = _build_payout_batch_idempotency_key(
+                    business_id=business.businessId,
+                    currency=business.currency,
+                    booking_ids=booking_ids,
+                    payout_amount_cents=payout_amount_cents,
+                )
+                temp_transfer_id = (
+                    f"temp_task_{business.businessId}_{idempotency_key.split(':')[-1]}"
+                )
 
                 logger.info(f"Creating payout record with temp ID: {temp_transfer_id}")
 
@@ -366,6 +672,7 @@ def process_daily_payouts():
                         "business_id": business.businessId,
                         "booking_count": len(booking_ids),
                         "stripe_fees_deducted": str(total_stripe_fees),
+                        "batch_idempotency_key": idempotency_key,
                         "temp_id": True,
                     },
                 )
@@ -383,8 +690,9 @@ def process_daily_payouts():
                         "business_id": business.businessId,
                         "booking_count": len(booking_ids),
                         "payout_record_id": str(payout_record.id),
+                        "batch_idempotency_key": idempotency_key,
                     },
-                    idempotency_key=temp_transfer_id
+                    idempotency_key=idempotency_key
                 )
 
                 logger.info(f"Stripe Transfer successful: ID={transfer.id}")

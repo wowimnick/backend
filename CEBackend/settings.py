@@ -401,6 +401,16 @@ CELERY_BEAT_SCHEDULE = {
         "task": "quickstart.tasks.payout_tasks.process_daily_payouts",
         "schedule": crontab(hour=3, minute=30),  # Staggered to 3:30 AM
     },
+    "monitor-payout-integrity-every-6-hours": {
+        "task": "quickstart.tasks.payout_tasks.monitor_payout_integrity",
+        "schedule": crontab(minute=0, hour="*/6"),
+        "kwargs": {"days": 3, "stripe_limit": 200},
+    },
+    "send-daily-payout-integrity-warning-digest": {
+        "task": "quickstart.tasks.payout_tasks.send_daily_payout_integrity_warning_digest",
+        "schedule": crontab(hour=11, minute=0),
+        "kwargs": {"days": 7, "stripe_limit": 300},
+    },
     "process-refunds-daily": {
         "task": "quickstart.tasks.payout_tasks.process_daily_refunds",
         "schedule": crontab(hour=5, minute=0),  # Staggered to 5:00 AM

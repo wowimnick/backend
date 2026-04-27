@@ -14,6 +14,8 @@ from . import corporate_tasks  # noqa: F401 — register send_corporate_inquiry_
 
 __all__ = [
     "process_daily_payouts",
+    "monitor_payout_integrity",
+    "send_daily_payout_integrity_warning_digest",
     "update_completed_booking_status",
     "process_daily_refunds",
     "send_transactional_email_task",
