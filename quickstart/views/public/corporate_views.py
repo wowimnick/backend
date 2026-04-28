@@ -9,7 +9,7 @@ from rest_framework.views import APIView
 from quickstart.serializers.public.corporate_serializers import (
     CorporateInquiryCreateSerializer,
 )
-from quickstart.tasks.corporate_tasks import send_corporate_inquiry_emails
+from quickstart.tasks.corporate_tasks import queue_corporate_inquiry_emails
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,8 @@ class CorporateInquiryCreateThrottle(AnonRateThrottle):
 class CorporateInquiryCreateView(APIView):
     """
     Public POST to submit a corporate / team-building inquiry.
-    Persists the row and queues internal + confirmation emails.
+    Persists the row and queues internal + confirmation via send_transactional_email_task
+    (same Celery/Resend path as other transactional mail).
     """
 
     permission_classes = [AllowAny]
@@ -36,7 +37,8 @@ class CorporateInquiryCreateView(APIView):
 
         inquiry = ser.save()
         try:
-            send_corporate_inquiry_emails.delay(str(inquiry.id))
+            queue_corporate_inquiry_emails(inquiry)
+            logger.info("Corporate inquiry %s: transactional email tasks queued", inquiry.pk)
         except Exception as e:
             logger.exception("Failed to queue corporate inquiry emails: %s", e)
 

@@ -29,7 +29,7 @@ class TestCorporateInquiryCreateView:
             "meta": {"source": "corporate_page", "city": "NYC"},
         }
         with patch(
-            "quickstart.views.public.corporate_views.send_corporate_inquiry_emails.delay"
+            "quickstart.tasks.email_tasks.send_transactional_email_task.delay"
         ) as mock_delay:
             response = api_client.post(
                 f"{API}/corporate-inquiry/",
@@ -39,7 +39,8 @@ class TestCorporateInquiryCreateView:
         assert response.status_code == 201
         data = response.json()
         assert "id" in data
-        mock_delay.assert_called_once()
+        # Confirmation always queued; internal only if super-admins / CORPORATE_LEADS_EMAIL exist.
+        assert mock_delay.call_count >= 1
         assert CorporateInquiry.objects.filter(pk=data["id"]).exists()
 
     def test_post_invalid_email_returns_400(self, api_client):
@@ -50,7 +51,7 @@ class TestCorporateInquiryCreateView:
             "message": "",
         }
         with patch(
-            "quickstart.views.public.corporate_views.send_corporate_inquiry_emails.delay"
+            "quickstart.tasks.email_tasks.send_transactional_email_task.delay",
         ):
             response = api_client.post(
                 f"{API}/corporate-inquiry/",
@@ -84,23 +85,20 @@ class TestSendCorporateInquiryEmailsRecipients:
             meta={"source": "test"},
         )
 
-        sent_batches = []
+        queued = []
 
-        def make_msg(*args, **kwargs):
-            to = kwargs.get("to")
-            if to is None and len(args) > 3:
-                to = args[3]
+        def capture_delay(**kwargs):
+            queued.append(kwargs)
             m = MagicMock()
-            m.send = lambda fail_silently=False: sent_batches.append(list(to or []))
-            m.attach_alternative = MagicMock()
+            m.id = f"tid-{len(queued)}"
             return m
 
         with patch(
-            "quickstart.tasks.corporate_tasks.EmailMultiAlternatives",
-            side_effect=make_msg,
+            "quickstart.tasks.email_tasks.send_transactional_email_task.delay",
+            side_effect=capture_delay,
         ):
             send_corporate_inquiry_emails(str(inquiry.id))
 
-        assert len(sent_batches) >= 2
-        internal_recipients = sent_batches[0]
+        assert len(queued) == 2
+        internal_recipients = queued[0]["to"]
         assert "superadmin-corporate-test@example.com" in internal_recipients

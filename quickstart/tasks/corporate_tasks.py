@@ -2,7 +2,6 @@ import logging
 
 from celery import shared_task
 from django.conf import settings
-from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
 
 from quickstart.utils.email_utils import get_super_admin_emails
@@ -40,15 +39,17 @@ def _internal_recipients():
     return out
 
 
-@shared_task
-def send_corporate_inquiry_emails(inquiry_id: str):
-    from quickstart.models import CorporateInquiry
+def queue_corporate_inquiry_emails(inquiry):
+    """
+    Queue internal + confirmation emails using send_transactional_email_task — the same
+    Celery task and Resend path as the rest of the app (booking, auth, etc.).
 
-    try:
-        inquiry = CorporateInquiry.objects.get(pk=inquiry_id)
-    except CorporateInquiry.DoesNotExist:
-        logger.warning("CorporateInquiry not found: %s", inquiry_id)
-        return
+    Previously we used a dedicated @shared_task that called EmailMultiAlternatives.send()
+    inside the worker; that path did not always run (task registration / visibility) and
+    differed from other mail. Rendering happens here so the worker only runs the standard
+    transactional sender.
+    """
+    from quickstart.tasks.email_tasks import send_transactional_email_task
 
     ctx = {
         "inquiry": inquiry,
@@ -57,56 +58,79 @@ def send_corporate_inquiry_emails(inquiry_id: str):
             "/"
         ),
     }
+    from_email = _format_from()
 
     recipients = _internal_recipients()
-
     if recipients:
+        subject = f"[ClassEasily Corporate] New inquiry: {inquiry.company_name}"
+        html = render_to_string("emails/corporate_inquiry_internal.html", ctx)
+        text = (
+            f"New corporate inquiry\n\n"
+            f"Company: {inquiry.company_name}\n"
+            f"Contact: {inquiry.contact_name}\n"
+            f"Email: {inquiry.email}\n"
+            f"Phone: {inquiry.phone or '—'}\n"
+            f"Company size: {inquiry.get_company_size_display()}\n\n"
+            f"Message:\n{inquiry.message or '—'}\n"
+        )
         try:
-            subject = f"[ClassEasily Corporate] New inquiry: {inquiry.company_name}"
-            html = render_to_string("emails/corporate_inquiry_internal.html", ctx)
-            text = (
-                f"New corporate inquiry\n\n"
-                f"Company: {inquiry.company_name}\n"
-                f"Contact: {inquiry.contact_name}\n"
-                f"Email: {inquiry.email}\n"
-                f"Phone: {inquiry.phone or '—'}\n"
-                f"Company size: {inquiry.get_company_size_display()}\n\n"
-                f"Message:\n{inquiry.message or '—'}\n"
-            )
-            msg = EmailMultiAlternatives(
-                subject,
-                text,
-                _format_from(),
-                recipients,
+            async_result = send_transactional_email_task.delay(
+                subject=subject,
+                html=html,
+                text=text,
+                to=recipients,
+                from_email=from_email,
                 reply_to=[inquiry.email],
             )
-            msg.attach_alternative(html, "text/html")
-            msg.send(fail_silently=False)
+            logger.info(
+                "Queued corporate inquiry internal email (inquiry_id=%s, celery_task_id=%s)",
+                inquiry.pk,
+                async_result.id,
+            )
         except Exception as exc:
-            logger.exception("Corporate internal email failed: %s", exc)
+            logger.exception("Failed to queue corporate inquiry internal email: %s", exc)
+            raise
     else:
         logger.warning(
             "No Super Admin emails and CORPORATE_LEADS_EMAIL empty; skipping internal "
             "corporate inquiry email (id=%s)",
-            inquiry_id,
+            inquiry.pk,
         )
 
+    subj = "We received your ClassEasily corporate inquiry"
+    html = render_to_string("emails/corporate_inquiry_confirmation.html", ctx)
+    text = (
+        f"Hi {inquiry.contact_name},\n\n"
+        f"Thanks for reaching out about team experiences for {inquiry.company_name}. "
+        f"Our team will review your note and reply shortly.\n\n"
+        f"— ClassEasily\n"
+    )
     try:
-        subj = "We received your ClassEasily corporate inquiry"
-        html = render_to_string("emails/corporate_inquiry_confirmation.html", ctx)
-        text = (
-            f"Hi {inquiry.contact_name},\n\n"
-            f"Thanks for reaching out about team experiences for {inquiry.company_name}. "
-            f"Our team will review your note and reply shortly.\n\n"
-            f"— ClassEasily\n"
+        async_result = send_transactional_email_task.delay(
+            subject=subj,
+            html=html,
+            text=text,
+            to=[inquiry.email],
+            from_email=from_email,
         )
-        msg2 = EmailMultiAlternatives(
-            subj,
-            text,
-            _format_from(),
-            [inquiry.email],
+        logger.info(
+            "Queued corporate inquiry confirmation (inquiry_id=%s, celery_task_id=%s)",
+            inquiry.pk,
+            async_result.id,
         )
-        msg2.attach_alternative(html, "text/html")
-        msg2.send(fail_silently=False)
     except Exception as exc:
-        logger.exception("Corporate confirmation email failed: %s", exc)
+        logger.exception("Failed to queue corporate inquiry confirmation email: %s", exc)
+        raise
+
+
+@shared_task
+def send_corporate_inquiry_emails(inquiry_id: str):
+    """Legacy Celery entrypoint; loads inquiry and delegates to queue_corporate_inquiry_emails."""
+    from quickstart.models import CorporateInquiry
+
+    try:
+        inquiry = CorporateInquiry.objects.get(pk=inquiry_id)
+    except CorporateInquiry.DoesNotExist:
+        logger.warning("CorporateInquiry not found: %s", inquiry_id)
+        return
+    queue_corporate_inquiry_emails(inquiry)
