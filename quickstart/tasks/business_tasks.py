@@ -8,6 +8,7 @@ from django.core.cache import cache
 from collections import defaultdict
 from urllib.parse import quote
 import logging
+import time
 
 from quickstart.models import BusinessInfo, ClassesMain, ClassCollection, BlogPost, BlogCategory
 from quickstart.utils.services import CollectionAutoAssigner
@@ -38,15 +39,35 @@ def update_trending_collections_task():
     Useful for time-based rules like 'Newness' or dynamic scores.
     """
     assigner = CollectionAutoAssigner()
+    model_name = getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash")
+    min_interval_seconds = float(getattr(settings, "GEMINI_CLASSIFY_MIN_INTERVAL_SECONDS", 0))
+
+    logger.info(
+        "Starting trending collection reclassification model=%s min_interval_seconds=%s",
+        model_name,
+        min_interval_seconds,
+    )
     # Process in batches to avoid memory issues
     active_classes = ClassesMain.objects.filter(status='active').iterator()
     
     count = 0
+    last_call_at = None
     for cls in active_classes:
+        if min_interval_seconds > 0 and last_call_at is not None:
+            elapsed = time.monotonic() - last_call_at
+            sleep_for = min_interval_seconds - elapsed
+            if sleep_for > 0:
+                time.sleep(sleep_for)
         assigner.process_class(cls)
+        last_call_at = time.monotonic()
         count += 1
     
-    logger.info(f"Updated trending collections for {count} classes.")
+    logger.info(
+        "Updated trending collections for %s classes (model=%s min_interval_seconds=%s).",
+        count,
+        model_name,
+        min_interval_seconds,
+    )
 
 @shared_task
 def notify_businesses_of_expiring_schedules():

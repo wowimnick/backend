@@ -41,6 +41,7 @@ def generate_blog_draft(
             return None
 
         client = genai.Client(api_key=api_key)
+        logger.info("Gemini blog draft request model=%s topic_hint=%s", model_name, topic_hint)
 
         prompt = f"""
 You are a content writer for {site_name}, a platform where people discover and book local experiences and classes.
@@ -90,5 +91,5 @@ Output a single JSON object only. No markdown code fences. Use this exact struct
         logger.warning("Failed to parse Gemini blog JSON: %s", e)
         return None
     except Exception as e:
-        logger.error("Gemini blog draft API failed: %s", e, exc_info=True)
+        logger.exception("Gemini blog draft API failed model=%s topic_hint=%s error=%s", model_name, topic_hint, e)
         return None

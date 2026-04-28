@@ -76,7 +76,13 @@ class CollectionAutoAssigner:
 
             # --- LOG INPUT ---
             logger.info(f"\n🔮 --- ASKING LLM ---")
-            logger.info(f"Class: {cls.title}")
+            logger.info(
+                "Gemini classification request classId=%s title=%s model=%s candidate_collections=%s",
+                cls.classId,
+                cls.title,
+                model_name,
+                len(collections_list),
+            )
             
             prompt = f"""
             Act as a content curator for a class / experience booking platform.
@@ -124,7 +130,13 @@ class CollectionAutoAssigner:
             return []
 
         except Exception as e:
-            logger.error(f"LLM API failed for class {cls.classId}: {e}")
+            logger.exception(
+                "LLM API failed for classId=%s model=%s candidate_collections=%s error=%s",
+                getattr(cls, "classId", None),
+                locals().get("model_name", "unknown"),
+                len(collections_list) if collections_list else 0,
+                e,
+            )
             return []
 
     def _parse_llm_json_response(self, raw_text):
