@@ -8,6 +8,7 @@ from django.conf import settings
 
 from google import genai
 from google.genai import types
+from quickstart.utils.gemini_retry import generate_content_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,8 @@ Output a single JSON object only. No markdown code fences. Use this exact struct
 }}
 """
 
-        response = client.models.generate_content(
+        response = generate_content_with_retry(
+            client,
             model="gemini-2.0-flash",
             contents=prompt,
             config=types.GenerateContentConfig(response_mime_type="application/json"),

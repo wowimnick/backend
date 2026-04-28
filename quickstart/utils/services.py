@@ -3,6 +3,7 @@ import json
 import re
 from django.conf import settings
 from quickstart.models import ClassCollection
+from quickstart.utils.gemini_retry import generate_content_with_retry
 
 # NEW SDK IMPORTS
 from google import genai
@@ -103,7 +104,8 @@ class CollectionAutoAssigner:
             }}
             """
 
-            response = client.models.generate_content(
+            response = generate_content_with_retry(
+                client,
                 model='gemini-2.0-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
