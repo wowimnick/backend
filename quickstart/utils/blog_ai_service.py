@@ -1,5 +1,5 @@
 """
-AI-generated blog draft service using Google Gemini.
+AI-generated blog draft service using Google Gemini 2.0 Flash.
 Used by the weekly blog draft Celery task to generate one draft per run.
 """
 import json
@@ -8,7 +8,8 @@ from django.conf import settings
 
 from google import genai
 from google.genai import types
-from quickstart.utils.gemini_retry import generate_content_with_retry
+
+from quickstart.utils.gemini_rate_limit import gemini_call
 
 logger = logging.getLogger(__name__)
 
@@ -35,13 +36,11 @@ def generate_blog_draft(
     min_words, max_words = word_count_target
     try:
         api_key = getattr(settings, "GEMINI_API_KEY", None)
-        model_name = getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash")
         if not api_key:
             logger.error("GEMINI_API_KEY is missing; cannot generate blog draft.")
             return None
 
         client = genai.Client(api_key=api_key)
-        logger.info("Gemini blog draft request model=%s topic_hint=%s", model_name, topic_hint)
 
         prompt = f"""
 You are a content writer for {site_name}, a platform where people discover and book local experiences and classes.
@@ -65,9 +64,9 @@ Output a single JSON object only. No markdown code fences. Use this exact struct
 }}
 """
 
-        response = generate_content_with_retry(
-            client,
-            model=model_name,
+        response = gemini_call(
+            client.models.generate_content,
+            model="gemini-2.0-flash",
             contents=prompt,
             config=types.GenerateContentConfig(response_mime_type="application/json"),
         )
@@ -91,5 +90,5 @@ Output a single JSON object only. No markdown code fences. Use this exact struct
         logger.warning("Failed to parse Gemini blog JSON: %s", e)
         return None
     except Exception as e:
-        logger.exception("Gemini blog draft API failed model=%s topic_hint=%s error=%s", model_name, topic_hint, e)
+        logger.error("Gemini blog draft API failed: %s", e, exc_info=True)
         return None

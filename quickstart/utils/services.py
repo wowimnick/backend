@@ -3,11 +3,12 @@ import json
 import re
 from django.conf import settings
 from quickstart.models import ClassCollection
-from quickstart.utils.gemini_retry import generate_content_with_retry
 
 # NEW SDK IMPORTS
 from google import genai
 from google.genai import types
+
+from quickstart.utils.gemini_rate_limit import gemini_call
 
 logger = logging.getLogger(__name__)
 
@@ -63,11 +64,10 @@ class CollectionAutoAssigner:
 
     def _call_llm_curator(self, cls, collections_list):
         """
-        Calls Google Gemini using the `google.genai` SDK.
+        Calls Google Gemini 2.0 Flash using the new `google.genai` SDK.
         """
         try:
             api_key = getattr(settings, "GEMINI_API_KEY", None)
-            model_name = getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash")
             if not api_key:
                 logger.error("GEMINI_API_KEY is missing in settings.")
                 return []
@@ -76,13 +76,7 @@ class CollectionAutoAssigner:
 
             # --- LOG INPUT ---
             logger.info(f"\n🔮 --- ASKING LLM ---")
-            logger.info(
-                "Gemini classification request classId=%s title=%s model=%s candidate_collections=%s",
-                cls.classId,
-                cls.title,
-                model_name,
-                len(collections_list),
-            )
+            logger.info(f"Class: {cls.title}")
             
             prompt = f"""
             Act as a content curator for a class / experience booking platform.
@@ -111,13 +105,13 @@ class CollectionAutoAssigner:
             }}
             """
 
-            response = generate_content_with_retry(
-                client,
-                model=model_name,
+            response = gemini_call(
+                client.models.generate_content,
+                model='gemini-2.0-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type='application/json'
-                )
+                ),
             )
 
             # --- LOG OUTPUT ---
@@ -130,13 +124,7 @@ class CollectionAutoAssigner:
             return []
 
         except Exception as e:
-            logger.exception(
-                "LLM API failed for classId=%s model=%s candidate_collections=%s error=%s",
-                getattr(cls, "classId", None),
-                locals().get("model_name", "unknown"),
-                len(collections_list) if collections_list else 0,
-                e,
-            )
+            logger.error(f"LLM API failed for class {cls.classId}: {e}")
             return []
 
     def _parse_llm_json_response(self, raw_text):
