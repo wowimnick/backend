@@ -1,5 +1,5 @@
 """
-AI-generated blog draft service using Google Gemini 2.0 Flash.
+AI-generated blog draft service using Google Gemini.
 Used by the weekly blog draft Celery task to generate one draft per run.
 """
 import json
@@ -35,6 +35,7 @@ def generate_blog_draft(
     min_words, max_words = word_count_target
     try:
         api_key = getattr(settings, "GEMINI_API_KEY", None)
+        model_name = getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash")
         if not api_key:
             logger.error("GEMINI_API_KEY is missing; cannot generate blog draft.")
             return None
@@ -65,7 +66,7 @@ Output a single JSON object only. No markdown code fences. Use this exact struct
 
         response = generate_content_with_retry(
             client,
-            model="gemini-2.0-flash",
+            model=model_name,
             contents=prompt,
             config=types.GenerateContentConfig(response_mime_type="application/json"),
         )
