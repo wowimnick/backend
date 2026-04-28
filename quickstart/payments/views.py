@@ -1531,6 +1531,17 @@ class ProcessBookingWebhook(APIView):
                     )
                     return Response(status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+            # 1b. CORPORATE TEAM BOOKING — deposit PaymentIntent
+            md_pi = _stripe_metadata_dict(payment_intent.metadata)
+            if md_pi.get("type") == "corporate_deposit":
+                from quickstart.payments.corporate_stripe_webhooks import (
+                    handle_corporate_deposit_succeeded,
+                )
+
+                return handle_corporate_deposit_succeeded(
+                    payment_intent, getattr(event, "id", None), webhook_id
+                )
+
             # 2. SKIP INVOICE PAYMENTS (e.g. widget subscription) — not bookings; no CAPI
             invoice_id = getattr(payment_intent, "invoice", None) or (
                 payment_intent.get("invoice") if isinstance(payment_intent, dict) else None
@@ -1811,6 +1822,15 @@ class ProcessBookingWebhook(APIView):
             # Single source of truth: full sync from Stripe after any invoice.paid (widget or addon).
             logger.info("[%s] invoice.paid received", webhook_id)
             invoice = event.data.object
+            from quickstart.payments.corporate_stripe_webhooks import (
+                handle_corporate_balance_invoice_paid,
+            )
+
+            corp_r = handle_corporate_balance_invoice_paid(
+                invoice, getattr(event, "id", None), webhook_id
+            )
+            if corp_r is not None:
+                return corp_r
             sub_id = getattr(invoice, "subscription", None) or (
                 invoice.get("subscription") if isinstance(invoice, dict) else None
             )

@@ -1,0 +1,12 @@
+{% extends "emails/base_email.html" %}
+{% block title %}Option selected{% endblock %}
+{% block content %}
+  <h1>{{ inquiry.company_name }} selected an option</h1>
+  <p>
+    <strong>Booking ref:</strong> {{ booking.reference }}<br />
+    <strong>Option:</strong> {{ booking.selected_option.title }}<br />
+    <strong>Headcount:</strong> {{ booking.headcount }}<br />
+    <strong>When:</strong> {{ booking.confirmed_datetime }}
+  </p>
+  <p>They should complete deposit payment next.</p>
+{% endblock %}

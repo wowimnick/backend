@@ -1,0 +1,6 @@
+{% extends "emails/base_email.html" %}
+{% block title %}Balance paid (corporate){% endblock %}
+{% block content %}
+  <h1>Balance paid: {{ booking.reference }}</h1>
+  <p><strong>{{ inquiry.company_name }}</strong> &mdash; corporate booking is fully paid.</p>
+{% endblock %}

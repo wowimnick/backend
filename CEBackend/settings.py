@@ -449,6 +449,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "quickstart.tasks.email_marketing_workflow_tasks.process_due_workflow_enrollments",
         "schedule": crontab(minute="*"),
     },
+    "corporate-event-reminders-daily": {
+        "task": "quickstart.tasks.corporate_booking_tasks.dispatch_corporate_event_reminders",
+        "schedule": crontab(hour=12, minute=0),
+    },
 }
 
 # Celery Worker Settings - Prevent prefetch issues

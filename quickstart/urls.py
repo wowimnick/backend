@@ -161,6 +161,18 @@ from quickstart.views.public.search_views import (
     SearchSuggestView,
 )
 from quickstart.views.public.corporate_views import CorporateInquiryCreateView
+from quickstart.views.public.corporate_shortlist_views import (
+    CorporateBookingDepositIntentView,
+    CorporateBookingStatusPublicView,
+    CorporateShortlistPublicView,
+    CorporateShortlistSelectView,
+)
+from quickstart.views.admin.corporate_admin_views import (
+    AdminCorporateBookingViewSet,
+    AdminCorporateInquiryViewSet,
+    AdminCorporateShortlistOptionViewSet,
+    AdminCorporateShortlistViewSet,
+)
 
 from quickstart.views import (
     CustomTokenObtainPairView,
@@ -371,6 +383,26 @@ admin_router.register(
     AdminWidgetSubscriptionViewSet,
     basename="admin-widget-subscriptions",
 )
+admin_router.register(
+    r"corporate-inquiries",
+    AdminCorporateInquiryViewSet,
+    basename="admin-corporate-inquiries",
+)
+admin_router.register(
+    r"corporate-shortlists",
+    AdminCorporateShortlistViewSet,
+    basename="admin-corporate-shortlists",
+)
+admin_router.register(
+    r"corporate-shortlist-options",
+    AdminCorporateShortlistOptionViewSet,
+    basename="admin-corporate-shortlist-options",
+)
+admin_router.register(
+    r"corporate-bookings",
+    AdminCorporateBookingViewSet,
+    basename="admin-corporate-bookings",
+)
 
 
 def class_id_redirect_view(request, class_id):
@@ -432,6 +464,26 @@ urlpatterns = [
         "corporate-inquiry/",
         CorporateInquiryCreateView.as_view(),
         name="corporate-inquiry-create",
+    ),
+    path(
+        "corporate/shortlist/<uuid:token>/",
+        CorporateShortlistPublicView.as_view(),
+        name="corporate-shortlist-public",
+    ),
+    path(
+        "corporate/shortlist/<uuid:token>/select/",
+        CorporateShortlistSelectView.as_view(),
+        name="corporate-shortlist-select",
+    ),
+    path(
+        "corporate/shortlist/<uuid:token>/booking/<uuid:booking_id>/deposit-intent/",
+        CorporateBookingDepositIntentView.as_view(),
+        name="corporate-booking-deposit-intent",
+    ),
+    path(
+        "corporate/shortlist/<uuid:token>/booking/<uuid:booking_id>/",
+        CorporateBookingStatusPublicView.as_view(),
+        name="corporate-booking-status-public",
     ),
     path("search/suggest/", SearchSuggestView.as_view(), name="search-suggest"),
     path(

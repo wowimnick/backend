@@ -1,0 +1,13 @@
+{% extends "emails/base_email.html" %}
+{% block title %}Your team event options{% endblock %}
+{% block content %}
+  <h1>Your shortlist is ready</h1>
+  <p>Hi {{ inquiry.contact_name }},</p>
+  <p>We put together a focused set of options for <strong>{{ inquiry.company_name }}</strong>.</p>
+  <p style="text-align:center;margin:32px 0;">
+    <a class="button" href="{{ shortlist_url }}">View your options</a>
+  </p>
+  <p style="font-size:14px;color:#484848;">If the button does not work, copy this link:<br />
+    <a href="{{ shortlist_url }}">{{ shortlist_url }}</a>
+  </p>
+{% endblock %}

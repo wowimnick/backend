@@ -1,0 +1,12 @@
+{% extends "emails/base_email.html" %}
+{% block title %}Deposit received{% endblock %}
+{% block content %}
+  <h1>We received your deposit</h1>
+  <p>Hi {{ inquiry.contact_name }},</p>
+  <p>
+    Thank you &mdash; your <strong>deposit</strong> for <strong>{{ booking.reference }}</strong> is confirmed.
+  </p>
+  <p>
+    We will email a balance invoice for the remaining amount according to your agreement. If you have a PO or billing question, just reply to this message.
+  </p>
+{% endblock %}

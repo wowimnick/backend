@@ -4711,6 +4711,241 @@ class CorporateInquiry(models.Model):
     class Meta:
         db_table = "corporate_inquiries"
         ordering = ["-created_at"]
+        permissions = [
+            (
+                "access_corporate_admin",
+                "Can access corporate inquiry admin",
+            ),
+            (
+                "manage_corporate_shortlists",
+                "Can manage corporate shortlists",
+            ),
+            (
+                "manage_corporate_bookings",
+                "Can manage corporate bookings and billing",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.company_name} — {self.email} ({self.created_at.date()})"
+
+
+class CorporateShortlist(models.Model):
+    """Admin-curated option set for a corporate inquiry (magic link)."""
+
+    STATUS_DRAFT = "draft"
+    STATUS_READY = "ready"
+    STATUS_SENT = "sent"
+    STATUS_VIEWED = "viewed"
+    STATUS_ACCEPTED = "accepted"
+    STATUS_CANCELLED = "cancelled"
+
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, "Draft"),
+        (STATUS_READY, "Ready to send"),
+        (STATUS_SENT, "Sent"),
+        (STATUS_VIEWED, "Viewed"),
+        (STATUS_ACCEPTED, "Accepted"),
+        (STATUS_CANCELLED, "Cancelled"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    inquiry = models.OneToOneField(
+        "CorporateInquiry",
+        on_delete=models.CASCADE,
+        related_name="shortlist",
+    )
+    token = models.UUIDField(default=uuid.uuid4, unique=True, db_index=True)
+    status = models.CharField(
+        max_length=20, choices=STATUS_CHOICES, default=STATUS_DRAFT, db_index=True
+    )
+    intro_message = models.TextField(
+        max_length=8000,
+        blank=True,
+        default="",
+        help_text="Shown at top of the corporate shortlist page",
+    )
+    internal_notes = models.TextField(
+        max_length=8000,
+        blank=True,
+        default="",
+        help_text="Internal-only; not exposed on public shortlist",
+    )
+    deposit_percent = models.PositiveSmallIntegerField(default=25)
+    currency = models.CharField(max_length=3, default="usd")
+    sent_at = models.DateTimeField(null=True, blank=True)
+    first_viewed_at = models.DateTimeField(null=True, blank=True)
+    last_viewed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "corporate_shortlists"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Shortlist {self.inquiry.company_name} ({self.status})"
+
+
+class CorporateShortlistOption(models.Model):
+    """A single option on a corporate shortlist (existing class or custom)."""
+
+    SOURCE_EXISTING_CLASS = "existing_class"
+    SOURCE_CUSTOM = "custom"
+    SOURCE_CHOICES = [
+        (SOURCE_EXISTING_CLASS, "Existing class"),
+        (SOURCE_CUSTOM, "Custom"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    shortlist = models.ForeignKey(
+        CorporateShortlist,
+        on_delete=models.CASCADE,
+        related_name="options",
+    )
+    position = models.PositiveSmallIntegerField(
+        help_text="Display order 1-3 on the shortlist"
+    )
+    source_type = models.CharField(
+        max_length=20, choices=SOURCE_CHOICES, default=SOURCE_CUSTOM
+    )
+    source_class = models.ForeignKey(
+        "ClassesMain",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="corporate_shortlist_options",
+    )
+    title = models.CharField(max_length=200)
+    host_name = models.CharField(max_length=200, blank=True, default="")
+    tagline = models.CharField(max_length=500, blank=True, default="")
+    description = models.TextField(max_length=8000, blank=True, default="")
+    inclusions = models.JSONField(default=list, blank=True)
+    cover_image_url = models.URLField(max_length=2000, blank=True, default="")
+    gallery_urls = models.JSONField(default=list, blank=True)
+    location_text = models.CharField(max_length=500, blank=True, default="")
+    duration_minutes = models.PositiveIntegerField(null=True, blank=True)
+    min_headcount = models.PositiveIntegerField(null=True, blank=True)
+    max_headcount = models.PositiveIntegerField(null=True, blank=True)
+    price_total_cents = models.PositiveIntegerField()
+    price_per_person_cents = models.PositiveIntegerField(null=True, blank=True)
+    proposed_date_options = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="List of ISO datetime strings the corp may choose from",
+    )
+    is_archived = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "corporate_shortlist_options"
+        ordering = ["position", "created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["shortlist", "position"],
+                name="uniq_corporate_shortlist_option_position",
+            )
+        ]
+
+
+def _gen_corporate_booking_reference():
+    """CE-CORP- + 6 uppercase alphanumeric chars"""
+    return f"CE-CORP-{uuid.uuid4().hex[:6].upper()}"
+
+
+class CorporateBooking(models.Model):
+    """Corp selection + Stripe deposit + balance invoice (not marketplace Booking)."""
+
+    ST_PENDING = "pending_deposit"
+    ST_DEPOSIT_PAID = "deposit_paid"
+    ST_INVOICED = "invoiced"
+    ST_FULLY_PAID = "fully_paid"
+    ST_IN_PROGRESS = "in_progress"
+    ST_COMPLETED = "completed"
+    ST_CANCELLED = "cancelled"
+    ST_REFUNDED = "refunded"
+
+    STATUS_CHOICES = [
+        (ST_PENDING, "Pending deposit"),
+        (ST_DEPOSIT_PAID, "Deposit paid"),
+        (ST_INVOICED, "Balance invoiced"),
+        (ST_FULLY_PAID, "Fully paid"),
+        (ST_IN_PROGRESS, "In progress"),
+        (ST_COMPLETED, "Completed"),
+        (ST_CANCELLED, "Cancelled"),
+        (ST_REFUNDED, "Refunded"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    shortlist = models.ForeignKey(
+        CorporateShortlist,
+        on_delete=models.CASCADE,
+        related_name="bookings",
+    )
+    selected_option = models.ForeignKey(
+        CorporateShortlistOption,
+        on_delete=models.PROTECT,
+        related_name="bookings",
+    )
+    reference = models.CharField(
+        max_length=32,
+        unique=True,
+        default=_gen_corporate_booking_reference,
+        db_index=True,
+    )
+    status = models.CharField(
+        max_length=32, choices=STATUS_CHOICES, default=ST_PENDING, db_index=True
+    )
+    headcount = models.PositiveIntegerField()
+    confirmed_datetime = models.DateTimeField()
+    special_requests = models.TextField(max_length=8000, blank=True, default="")
+    billing_company_name = models.CharField(max_length=200)
+    billing_contact_name = models.CharField(max_length=150)
+    billing_email = models.EmailField()
+    billing_address = models.JSONField(default=dict, blank=True)
+    po_number = models.CharField(max_length=100, blank=True, default="")
+    total_cents = models.PositiveIntegerField()
+    deposit_cents = models.PositiveIntegerField()
+    balance_cents = models.PositiveIntegerField()
+    currency = models.CharField(max_length=3, default="usd")
+    stripe_customer_id = models.CharField(max_length=255, blank=True, default="")
+    deposit_payment_intent_id = models.CharField(max_length=255, blank=True, default="")
+    deposit_paid_at = models.DateTimeField(null=True, blank=True)
+    stripe_invoice_id = models.CharField(max_length=255, blank=True, default="")
+    invoice_status = models.CharField(max_length=50, blank=True, default="")
+    invoice_url = models.URLField(max_length=2000, blank=True, default="")
+    invoice_due_at = models.DateTimeField(null=True, blank=True)
+    balance_paid_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "corporate_bookings"
+        ordering = ["-created_at"]
+
+
+class CorporateBookingEvent(models.Model):
+    """Audit / timeline for admin and customer-visible history."""
+
+    id = models.BigAutoField(primary_key=True)
+    booking = models.ForeignKey(
+        CorporateBooking,
+        on_delete=models.CASCADE,
+        related_name="events",
+    )
+    event_type = models.CharField(max_length=64, db_index=True)
+    message = models.TextField(blank=True, default="")
+    metadata = models.JSONField(default=dict, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        db_table = "corporate_booking_events"
+        ordering = ["-created_at"]

@@ -1,0 +1,16 @@
+{% extends "emails/base_email.html" %}
+{% block title %}Balance invoice{% endblock %}
+{% block content %}
+  <h1>Your balance invoice</h1>
+  <p>Hi {{ inquiry.contact_name }},</p>
+  <p>
+    The remaining balance for <strong>{{ booking.reference }}</strong> is ready.
+  </p>
+  {% if booking.invoice_url %}
+  <p style="text-align:center;margin:32px 0;">
+    <a class="button" href="{{ booking.invoice_url }}">View &amp; pay invoice</a>
+  </p>
+  {% else %}
+  <p>You will receive a separate email from our payments provider with a secure pay link.</p>
+  {% endif %}
+{% endblock %}

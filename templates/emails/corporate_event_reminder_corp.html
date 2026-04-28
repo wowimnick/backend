@@ -1,0 +1,12 @@
+{% extends "emails/base_email.html" %}
+{% block title %}Event reminder{% endblock %}
+{% block content %}
+  <h1>Reminder: your team event</h1>
+  <p>Hi {{ inquiry.contact_name }},</p>
+  <p>
+    This is a quick reminder that your event for <strong>{{ inquiry.company_name }}</strong>
+    (<strong>{{ booking.reference }}</strong>) is coming up in <strong>{{ days_before }} day(s)</strong>.
+  </p>
+  <p><strong>When:</strong> {{ booking.confirmed_datetime }}</p>
+  <p>See you there!</p>
+{% endblock %}

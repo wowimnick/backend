@@ -1,0 +1,8 @@
+{% extends "emails/base_email.html" %}
+{% block title %}Balance paid — thank you{% endblock %}
+{% block content %}
+  <h1>You are all set</h1>
+  <p>Hi {{ inquiry.contact_name }},</p>
+  <p>We have received <strong>full payment</strong> for {{ booking.reference }}. We will see you and your team at the scheduled time.</p>
+  <p><strong>Event:</strong> {{ booking.confirmed_datetime }}</p>
+{% endblock %}

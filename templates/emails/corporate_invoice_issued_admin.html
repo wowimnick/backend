@@ -1,0 +1,9 @@
+{% extends "emails/base_email.html" %}
+{% block title %}Balance invoice issued{% endblock %}
+{% block content %}
+  <h1>Invoice issued: {{ booking.reference }}</h1>
+  <p><strong>Company:</strong> {{ inquiry.company_name }}</p>
+  {% if booking.invoice_url %}
+  <p><a href="{{ booking.invoice_url }}">Hosted invoice</a></p>
+  {% endif %}
+{% endblock %}
