@@ -49,7 +49,19 @@ def format_class_description_task(self, class_id, force=False):
         return
 
     raw = (instance.description or "").strip()
+    logger.info(
+        "format_class_description_task START class_id=%s force=%s slug=%r desc_chars=%s ai_status=%s",
+        class_id,
+        force,
+        getattr(instance, "slug", None),
+        len(raw),
+        getattr(instance, "description_ai_status", None),
+    )
     if not raw:
+        logger.info(
+            "format_class_description_task class_id=%s empty description; clearing AI fields",
+            class_id,
+        )
         ClassesMain.objects.filter(pk=class_id).update(
             description_summary="",
             description_sections=[],
@@ -65,10 +77,30 @@ def format_class_description_task(self, class_id, force=False):
         and instance.description_ai_status == "ready"
         and instance.description_ai_source_hash == new_hash
     ):
+        logger.info(
+            "format_class_description_task SKIP class_id=%s unchanged hash matches ready",
+            class_id,
+        )
         return
 
     try:
         DescriptionFormatter().process(instance, new_hash)
+        instance.refresh_from_db(
+            fields=[
+                "description_summary",
+                "description_sections",
+                "description_ai_status",
+                "description_ai_source_hash",
+            ]
+        )
+        logger.info(
+            "format_class_description_task DONE class_id=%s slug=%r status=%s summary_chars=%s sections_n=%s",
+            class_id,
+            getattr(instance, "slug", None),
+            instance.description_ai_status,
+            len(instance.description_summary or ""),
+            len(instance.description_sections or []),
+        )
     except Exception as e:
         logger.exception(
             "format_class_description_task failed for class_id=%s", class_id
