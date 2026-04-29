@@ -6,16 +6,33 @@ from quickstart.models import ClassCollection
 
 # NEW SDK IMPORTS
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
-
-from quickstart.utils.gemini_rate_limit import gemini_call
 
 logger = logging.getLogger(__name__)
 
 class CollectionAutoAssigner:
+    @staticmethod
+    def _candidate_models():
+        configured_models = getattr(settings, "GEMINI_COLLECTION_MODELS", None)
+        if isinstance(configured_models, str) and configured_models.strip():
+            models = [m.strip() for m in configured_models.split(",") if m.strip()]
+            if models:
+                return models
+
+        single_model = (
+            getattr(settings, "GEMINI_COLLECTION_MODEL", None)
+            or getattr(settings, "GEMINI_MODEL", None)
+        )
+        if isinstance(single_model, str) and single_model.strip():
+            return [single_model.strip()]
+
+        # Prefer 2.5 for stability; fallback to 2.0 for compatibility.
+        return ["gemini-2.5-flash", "gemini-2.0-flash"]
+
     def process_class(self, class_instance):
         """
-        Sends class details + all automation rules to Google Gemini 2.0
+        Sends class details + all automation rules to Gemini
         to determine collection membership in one go.
         """
         if class_instance.status != 'active':
@@ -64,7 +81,7 @@ class CollectionAutoAssigner:
 
     def _call_llm_curator(self, cls, collections_list):
         """
-        Calls Google Gemini 2.0 Flash using the new `google.genai` SDK.
+        Calls Gemini using the `google.genai` SDK.
         """
         try:
             api_key = getattr(settings, "GEMINI_API_KEY", None)
@@ -105,14 +122,43 @@ class CollectionAutoAssigner:
             }}
             """
 
-            response = gemini_call(
-                client.models.generate_content,
-                model='gemini-2.0-flash',
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type='application/json'
-                ),
-            )
+            response = None
+            candidate_models = self._candidate_models()
+            for idx, model_name in enumerate(candidate_models, start=1):
+                try:
+                    logger.info(
+                        "Calling Gemini curator model %s (%s/%s)",
+                        model_name,
+                        idx,
+                        len(candidate_models),
+                    )
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            response_mime_type='application/json'
+                        )
+                    )
+                    break
+                except genai_errors.ClientError as model_error:
+                    status_code = getattr(model_error, "code", None)
+                    is_retryable = status_code in {404, 429, 500, 502, 503, 504}
+                    logger.warning(
+                        "Gemini model %s failed with code=%s; retryable=%s; error=%s",
+                        model_name,
+                        status_code,
+                        is_retryable,
+                        model_error,
+                    )
+                    if not is_retryable or idx == len(candidate_models):
+                        raise
+
+            if response is None:
+                logger.warning(
+                    "Gemini returned no response object for class '%s'",
+                    cls.title,
+                )
+                return []
 
             # --- LOG OUTPUT ---
             if response.text:
