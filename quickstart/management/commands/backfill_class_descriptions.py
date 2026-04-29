@@ -32,7 +32,10 @@ class Command(BaseCommand):
         parser.add_argument(
             "--force",
             action="store_true",
-            help="Include classes already in description_ai_status=ready.",
+            help=(
+                "Include classes already in description_ai_status=ready; pass force=True "
+                "into the task so Gemini runs again even when the hash matches."
+            ),
         )
 
     def handle(self, *args, **options):
@@ -56,7 +59,7 @@ class Command(BaseCommand):
 
         for i, pk in enumerate(ids):
             ClassesMain.objects.filter(pk=pk).update(description_ai_status="pending")
-            format_class_description_task.delay(pk)
+            format_class_description_task.delay(pk, force=force)
             if delay and i < len(ids) - 1:
                 time.sleep(delay)
 

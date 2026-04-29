@@ -35,9 +35,12 @@ def classify_class_task(class_id):
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def format_class_description_task(self, class_id):
+def format_class_description_task(self, class_id, force=False):
     """
     Background task: Gemini formats description into summary + collapsible sections.
+
+    When ``force`` is True, always calls Gemini (unless description is empty), even if
+    status is already ``ready`` and the source hash is unchanged.
     """
     try:
         instance = ClassesMain.objects.get(pk=class_id)
@@ -58,7 +61,8 @@ def format_class_description_task(self, class_id):
 
     new_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
     if (
-        instance.description_ai_status == "ready"
+        not force
+        and instance.description_ai_status == "ready"
         and instance.description_ai_source_hash == new_hash
     ):
         return

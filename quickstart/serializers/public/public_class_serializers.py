@@ -530,7 +530,7 @@ class PublicClassDetailSerializer(PublicClassSerializer):
 class PublicCollectionSerializer(serializers.ModelSerializer):
     image_medium_url = serializers.SerializerMethodField()
     key = serializers.CharField(source='slug', read_only=True)
-    parent_id = serializers.IntegerField(source="parent_id", read_only=True, allow_null=True)
+    parent_id = serializers.IntegerField(read_only=True, allow_null=True)
     has_children = serializers.SerializerMethodField()
     children = serializers.SerializerMethodField()
 
