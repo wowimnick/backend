@@ -367,9 +367,12 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
         image_s3_keys = request_data.get("image_s3_keys", [])
         cover_image_s3_key = request_data.get("cover_image_s3_key")
 
-        if not image_s3_keys:
+        _min_images = 4
+        if not image_s3_keys or len(image_s3_keys) < _min_images:
             raise DRFValidationError(
-                {"image_s3_keys": "At least one class image is required."}
+                {
+                    "image_s3_keys": f"At least {_min_images} class images are required.",
+                }
             )
 
         if cover_image_s3_key and cover_image_s3_key not in image_s3_keys:
@@ -518,6 +521,14 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                 if first_image:
                     first_image.isCover = True
                     first_image.save(update_fields=["isCover"])
+
+            _min_images = 4
+            if ClassImage.objects.filter(classId=instance).count() < _min_images:
+                raise DRFValidationError(
+                    {
+                        "images": f"At least {_min_images} class images are required.",
+                    }
+                )
 
             # 4. Multi-Tier Options Update (Smart Sync)
             options_json_string = request_data.get("options")

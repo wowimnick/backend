@@ -411,6 +411,12 @@ class AdminClassCollectionSerializer(serializers.ModelSerializer):
     class_count = serializers.IntegerField(read_only=True, default=0)
     image_medium_url = serializers.SerializerMethodField()
     image_s3_key = serializers.CharField(write_only=True, required=False, allow_null=True)
+    parent = serializers.PrimaryKeyRelatedField(
+        queryset=ClassCollection.objects.filter(parent__isnull=True),
+        allow_null=True,
+        required=False,
+    )
+    parent_name = serializers.CharField(source="parent.name", read_only=True)
     
     # Ensure automation_rules is treated as a Dict
     automation_rules = serializers.JSONField(required=False, default=dict)
@@ -441,8 +447,23 @@ class AdminClassCollectionSerializer(serializers.ModelSerializer):
             "show_on_homepage_rows",
             "icon_name",
             "color",
+            "parent",
+            "parent_name",
         ]
-        read_only_fields = ["id", "image_medium_url", "class_count"]
+        read_only_fields = ["id", "image_medium_url", "class_count", "parent_name"]
+
+    def validate(self, attrs):
+        if "parent" in attrs:
+            parent = attrs["parent"]
+        elif self.instance:
+            parent = self.instance.parent
+        else:
+            parent = None
+        if self.instance and parent is not None and self.instance.pk == parent.pk:
+            raise serializers.ValidationError(
+                {"parent": "A collection cannot be its own parent."}
+            )
+        return attrs
 
     def validate_search_aliases(self, value):
         if not value:

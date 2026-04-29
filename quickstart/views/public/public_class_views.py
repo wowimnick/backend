@@ -340,6 +340,8 @@ def _is_collection_only_request(request):
     """Return True if request has only collection filter (no location, keyword, category, etc.)."""
     if not request.query_params.get("collection"):
         return False
+    if request.query_params.getlist("sub"):
+        return False
     if request.query_params.get("location") or request.query_params.get("location_search"):
         return False
     if request.query_params.get("lat") or request.query_params.get("lng"):
@@ -349,6 +351,11 @@ def _is_collection_only_request(request):
     if request.query_params.get("price_max"):
         return False
     return True
+
+
+def _subs_cache_segment(request):
+    subs = [s.strip().lower() for s in request.query_params.getlist("sub") if s.strip()]
+    return ",".join(sorted(subs))
 
 
 def _build_collection_search_cache_key(request, collection_slug):
@@ -361,7 +368,8 @@ def _build_collection_search_cache_key(request, collection_slug):
     end_date = request.query_params.get("end_date") or ""
     version = _get_preset_search_cache_version()
     slug = (collection_slug or "").lower().replace(" ", "_")
-    return f"{COLLECTION_CACHE_PREFIX}:{_CACHE_ENV}:v{version}:{slug}:p{page}:ps{page_size}:n{participants}:s{sort_by}:{start_date}:{end_date}"
+    sub_seg = _subs_cache_segment(request)
+    return f"{COLLECTION_CACHE_PREFIX}:{_CACHE_ENV}:v{version}:{slug}:subs:{sub_seg}:p{page}:ps{page_size}:n{participants}:s{sort_by}:{start_date}:{end_date}"
 
 
 def _build_preset_location_collection_cache_key(request, search_name, collection_slug):
@@ -369,6 +377,8 @@ def _build_preset_location_collection_cache_key(request, search_name, collection
     if request.query_params.get("keyword") or request.query_params.get("tag"):
         return None
     if request.query_params.get("price_max"):
+        return None
+    if request.query_params.getlist("sub"):
         return None
     page = request.query_params.get("page", "1")
     page_size = request.query_params.get("page_size", "24")
@@ -685,6 +695,23 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
 
         return queryset.distinct()
     
+    def collection_children(self, request, parent_slug=None):
+        """
+        Active sub-collections for a top-level collection (explore page tags).
+        GET .../classes/collections/<slug>/children/
+        """
+        parent = get_object_or_404(
+            ClassCollection.objects.filter(parent__isnull=True, is_active=True),
+            slug=parent_slug,
+        )
+        qs = ClassCollection.objects.filter(parent=parent, is_active=True).order_by(
+            "sort_order", "name"
+        )
+        serializer = PublicCollectionSerializer(
+            qs, many=True, context={"request": request}
+        )
+        return Response(serializer.data)
+
     @action(detail=False, methods=["get"])
     @method_decorator(vary_on_headers("Authorization"))
     def homepage_content(self, request):
@@ -720,7 +747,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         data = {}
 
         # 2. Trending (Highest Relevance) - Fetch this FIRST
-        trending_qs = base_qs.order_by('-relevance_score')[:10]
+        trending_qs = base_qs.order_by('-relevance_score', '-classId')[:10]
         # Serialize immediately to get the IDs
         trending_data = HomepageClassSerializer(trending_qs, many=True, context=context).data
         data["trending"] = trending_data
@@ -756,7 +783,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             status="scheduled",
         )
         next_week_qs = base_qs.filter(Exists(next_week_instances)).order_by(
-            "-review_count", "-average_rating"
+            "-review_count", "-average_rating", "-classId"
         )[:10]
         # Soonest (date, time) per class for "Happening Next Week" cards
         next_week_class_ids = list(next_week_qs.values_list("pk", flat=True))
@@ -785,17 +812,62 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
 
         # 4. Mode Selection: only collections are used (categories removed from platform)
         if mode == "collections":
-            base_coll = ClassCollection.objects.filter(is_active=True)
-            featured_qs = base_coll.filter(show_in_featured_categories=True).order_by(
-                "sort_order", "name"
+            child_prefetch = Prefetch(
+                "children",
+                queryset=ClassCollection.objects.filter(is_active=True).order_by(
+                    "sort_order", "name"
+                ),
+            )
+            base_coll = ClassCollection.objects.filter(
+                is_active=True, parent__isnull=True
+            )
+            featured_qs = (
+                base_coll.filter(show_in_featured_categories=True)
+                .order_by("sort_order", "name")
+                .prefetch_related(child_prefetch)
             )
             if not featured_qs.exists():
-                featured_qs = base_coll.order_by("sort_order", "name")
-            data["collections"] = PublicCollectionSerializer(
+                featured_qs = base_coll.order_by("sort_order", "name").prefetch_related(
+                    child_prefetch
+                )
+            serialized_collections = PublicCollectionSerializer(
                 featured_qs, many=True, context=context
             ).data
+
+            def _is_duplicate_all_chip(row):
+                slug = (row.get("slug") or "").strip().lower()
+                name = (row.get("name") or "").strip().lower()
+                return slug in ("", "all") or name == "all"
+
+            filtered_collections = [
+                row for row in serialized_collections if not _is_duplicate_all_chip(row)
+            ]
+            # Synthetic "All" chip must use empty slug so URL with no `collection` param matches selection.
+            all_chip = {
+                "id": None,
+                "name": "All",
+                "slug": "",
+                "key": "",
+                "parent_id": None,
+                "has_children": False,
+                "children": [],
+                "description": "",
+                "image_medium_url": None,
+                "sort_order": -1,
+                "search_aliases": [],
+                "is_searchable": True,
+                "show_in_i_want": False,
+                "show_in_featured_categories": True,
+                "show_on_homepage_rows": True,
+                "icon_name": "",
+                "color": "",
+                "is_all": True,
+            }
+            data["collections"] = [all_chip] + filtered_collections
             data["collections_i_want"] = PublicCollectionSerializer(
-                base_coll.filter(show_in_i_want=True).order_by("sort_order", "name"),
+                base_coll.filter(show_in_i_want=True)
+                .order_by("sort_order", "name")
+                .prefetch_related(child_prefetch),
                 many=True,
                 context=context,
             ).data
@@ -916,7 +988,8 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()
         queryset = self._calculate_relevance_score(queryset)
-        queryset = queryset.order_by("-relevance_score", "-createdAt")
+        # "-classId" tiebreaker — see search() for rationale (stable pagination).
+        queryset = queryset.order_by("-relevance_score", "-createdAt", "-classId")
         page = self.paginate_queryset(queryset)
         if page is not None:
             serializer = self.get_serializer(
@@ -986,6 +1059,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 and not request.query_params.get("keyword")
                 and not request.query_params.get("tag")
                 and not request.query_params.get("price_max")
+                and not request.query_params.getlist("sub")
             ):
                 preset_collection_cache_key = _build_preset_location_collection_cache_key(
                     request, search_name, collection_slug
@@ -1098,6 +1172,15 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     logger.warning(
                         f"Collection filter '{effective_collection_slug}' returned 0 results. Check if slug exists in DB."
                     )
+
+            sub_slugs = [
+                s.strip()
+                for s in request.query_params.getlist("sub")
+                if s and str(s).strip()
+            ]
+            if sub_slugs:
+                logger.info("Applying sub-collection filter: %s", sub_slugs)
+                queryset = queryset.filter(collections__slug__in=sub_slugs).distinct()
 
             user_location_point = None
             is_province_search = False
@@ -1316,26 +1399,37 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     distance=Distance("point", user_location_point)
                 )
 
+            # NOTE: every branch below appends "-classId" as a deterministic
+            # tiebreaker. Without it, ties in non-unique fields (relevance_score,
+            # rating, price, distance, etc.) combined with LIMIT/OFFSET +
+            # DISTINCT cause classes to be skipped or duplicated between pages,
+            # which made infinite scroll silently drop results.
             if sort_by == "distance" and user_location_point:
-                queryset = queryset.order_by("distance")
+                queryset = queryset.order_by("distance", "-classId")
             elif sort_by == "price_asc":
                 queryset = queryset.order_by(
                     F("min_session_price").asc(nulls_last=True),
                     F("min_course_price").asc(nulls_last=True),
+                    "-classId",
                 )
             elif sort_by == "price_desc":
                 queryset = queryset.order_by(
                     F("min_session_price").desc(nulls_first=True),
                     F("min_course_price").desc(nulls_first=True),
+                    "-classId",
                 )
             elif sort_by == "rating":
-                queryset = queryset.order_by("-average_rating", "-review_count")
+                queryset = queryset.order_by(
+                    "-average_rating", "-review_count", "-classId"
+                )
             elif sort_by == "reviews":
-                queryset = queryset.order_by("-review_count", "-average_rating")
+                queryset = queryset.order_by(
+                    "-review_count", "-average_rating", "-classId"
+                )
             elif sort_by == "newest":
-                queryset = queryset.order_by("-createdAt")
+                queryset = queryset.order_by("-createdAt", "-classId")
             else:  # Default sort is 'relevance'
-                order_fields = ["-relevance_score", "-createdAt"]
+                order_fields = ["-relevance_score", "-createdAt", "-classId"]
                 if keyword_query_text:
                     order_fields.insert(0, "-rank")
                 queryset = queryset.order_by(*order_fields)

@@ -1089,10 +1089,19 @@ class AdminCollectionViewSet(viewsets.ModelViewSet):
     parser_classes = [JSONParser, FormParser]
 
     def get_queryset(self):
-        # Annotate with the number of classes in this collection
-        return ClassCollection.objects.annotate(
-            class_count=Count('classes', distinct=True) 
-        ).order_by('sort_order')
+        qs = ClassCollection.objects.annotate(
+            class_count=Count("classes", distinct=True)
+        ).order_by("sort_order")
+        parent_param = self.request.query_params.get("parent")
+        if parent_param == "null":
+            qs = qs.filter(parent__isnull=True)
+        elif parent_param not in (None, ""):
+            try:
+                pid = int(parent_param)
+                qs = qs.filter(parent_id=pid)
+            except (TypeError, ValueError):
+                pass
+        return qs
 
     def _invalidate_collection_caches(self, collection_slug=None):
         """Invalidate backend caches so collection list and search are updated; trigger prewarm.
@@ -1163,6 +1172,23 @@ class AdminCollectionViewSet(viewsets.ModelViewSet):
         except Exception as e:
             logger.error(f"Failed to update collection order: {e}")
             return Response({"error": "Internal error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=["get"], url_path="children")
+    def children(self, request, pk=None):
+        """List sub-collections for a top-level collection (admin)."""
+        parent = self.get_object()
+        if parent.parent_id:
+            return Response(
+                {"detail": "Only top-level collections have sub-collections."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        qs = (
+            ClassCollection.objects.filter(parent=parent)
+            .annotate(class_count=Count("classes", distinct=True))
+            .order_by("sort_order", "name")
+        )
+        serializer = self.get_serializer(qs, many=True)
+        return Response(serializer.data)
 
     @action(detail=True, methods=["post"], url_path="bulk-assign-classes")
     def bulk_assign_classes(self, request, pk=None):

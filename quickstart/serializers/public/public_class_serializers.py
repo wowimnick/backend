@@ -517,6 +517,9 @@ class PublicClassDetailSerializer(PublicClassSerializer):
             "platform_review_count",
             "google_review_count",
             "collections",
+            "description_summary",
+            "description_sections",
+            "description_ai_status",
         ]
 
     def get_google_review_count(self, obj):
@@ -527,6 +530,9 @@ class PublicClassDetailSerializer(PublicClassSerializer):
 class PublicCollectionSerializer(serializers.ModelSerializer):
     image_medium_url = serializers.SerializerMethodField()
     key = serializers.CharField(source='slug', read_only=True)
+    parent_id = serializers.IntegerField(source="parent_id", read_only=True, allow_null=True)
+    has_children = serializers.SerializerMethodField()
+    children = serializers.SerializerMethodField()
 
     class Meta:
         model = ClassCollection
@@ -535,6 +541,9 @@ class PublicCollectionSerializer(serializers.ModelSerializer):
             "name",
             "slug",
             "key",
+            "parent_id",
+            "has_children",
+            "children",
             "description",
             "image_medium_url",
             "sort_order",
@@ -545,7 +554,33 @@ class PublicCollectionSerializer(serializers.ModelSerializer):
             "show_on_homepage_rows",
             "icon_name",
             "color",
-        ] 
+        ]
+
+    def get_has_children(self, obj):
+        pref = getattr(obj, "_prefetched_objects_cache", None)
+        if pref and "children" in pref:
+            return len(pref["children"]) > 0
+        return obj.children.filter(is_active=True).exists()
+
+    def get_children(self, obj):
+        pref = getattr(obj, "_prefetched_objects_cache", None)
+        if pref and "children" in pref:
+            qs = pref["children"]
+        else:
+            qs = list(
+                obj.children.filter(is_active=True).order_by("sort_order", "name")[:50]
+            )
+        out = []
+        for c in qs:
+            if getattr(c, "is_active", True):
+                out.append(
+                    {
+                        "slug": c.slug,
+                        "name": c.name,
+                        "icon_name": c.icon_name or "",
+                    }
+                )
+        return out 
 
     def _get_resized_url(self, obj, size_name):
         """

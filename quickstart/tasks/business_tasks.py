@@ -1,3 +1,4 @@
+import hashlib
 from celery import shared_task
 from django.utils import timezone
 from datetime import timedelta
@@ -11,6 +12,7 @@ import logging
 
 from quickstart.models import BusinessInfo, ClassesMain, ClassCollection, BlogPost, BlogCategory
 from quickstart.utils.services import CollectionAutoAssigner
+from quickstart.utils.description_formatter import DescriptionFormatter
 from quickstart.utils.blog_ai_service import generate_blog_draft
 import resend
 
@@ -30,6 +32,46 @@ def classify_class_task(class_id):
         logger.warning(f"Class {class_id} not found during classification task.")
     except Exception as e:
         logger.error(f"Error classifying class {class_id}: {e}", exc_info=True)
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def format_class_description_task(self, class_id):
+    """
+    Background task: Gemini formats description into summary + collapsible sections.
+    """
+    try:
+        instance = ClassesMain.objects.get(pk=class_id)
+    except ClassesMain.DoesNotExist:
+        logger.warning("format_class_description_task: class %s not found", class_id)
+        return
+
+    raw = (instance.description or "").strip()
+    if not raw:
+        ClassesMain.objects.filter(pk=class_id).update(
+            description_summary="",
+            description_sections=[],
+            description_ai_source_hash="",
+            description_ai_status="ready",
+            description_ai_generated_at=timezone.now(),
+        )
+        return
+
+    new_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    if (
+        instance.description_ai_status == "ready"
+        and instance.description_ai_source_hash == new_hash
+    ):
+        return
+
+    try:
+        DescriptionFormatter().process(instance, new_hash)
+    except Exception as e:
+        logger.exception(
+            "format_class_description_task failed for class_id=%s", class_id
+        )
+        ClassesMain.objects.filter(pk=class_id).update(description_ai_status="failed")
+        raise self.retry(exc=e)
+
 
 @shared_task
 def update_trending_collections_task():

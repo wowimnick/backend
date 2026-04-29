@@ -628,6 +628,11 @@ urlpatterns = [
         name="public-class-homepage-content",
     ),
     path(
+        "classes/collections/<slug:parent_slug>/children/",
+        PublicClassViewSet.as_view({"get": "collection_children"}),
+        name="public-collection-children",
+    ),
+    path(
         "classes/<str:pk>/toggle-favorite/",
         PublicClassViewSet.as_view({"post": "toggle_favorite"}),
         name="public-class-toggle-favorite",

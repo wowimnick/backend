@@ -1316,6 +1316,15 @@ class ClassCollection(models.Model):
         default="",
         help_text="Optional hex color for UI chips.",
     )
+    parent = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="children",
+        db_index=True,
+        help_text="Parent collection (top-level if null). Sub-collections are one level deep only.",
+    )
 
     def __str__(self):
         return self.name
@@ -1323,6 +1332,9 @@ class ClassCollection(models.Model):
     class Meta:
         db_table = "class_collections"
         ordering = ["sort_order", "name"]
+        indexes = [
+            models.Index(fields=["parent", "sort_order"]),
+        ]
 
 
 class BusinessLocation(models.Model):
@@ -1394,6 +1406,21 @@ class ClassesMain(models.Model):
     )
     title = models.CharField(max_length=100)
     description = models.TextField(max_length=4000)
+    description_summary = models.CharField(max_length=240, blank=True, default="")
+    description_sections = models.JSONField(default=list, blank=True)
+    description_ai_source_hash = models.CharField(max_length=64, blank=True, default="")
+    description_ai_status = models.CharField(
+        max_length=16,
+        choices=[
+            ("pending", "pending"),
+            ("ready", "ready"),
+            ("failed", "failed"),
+            ("stale", "stale"),
+        ],
+        default="stale",
+        db_index=True,
+    )
+    description_ai_generated_at = models.DateTimeField(null=True, blank=True)
     features = models.JSONField(default=list)
     STATUS_CHOICES = [
         ("active", "Active"),

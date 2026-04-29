@@ -678,6 +678,46 @@ def trigger_classification(sender, instance, created, update_fields, **kwargs):
             )
         transaction.on_commit(_queue_classify)
 
+@receiver(pre_save, sender=ClassesMain)
+def classes_main_track_description_before(sender, instance, **kwargs):
+    if not instance.pk:
+        instance._description_before = None
+        return
+    try:
+        instance._description_before = ClassesMain.objects.only("description").get(
+            pk=instance.pk
+        ).description
+    except ClassesMain.DoesNotExist:
+        instance._description_before = None
+
+
+@receiver(post_save, sender=ClassesMain)
+def queue_description_ai_formatting(sender, instance, created, **kwargs):
+    """Queue Gemini description structuring when description text changes."""
+    if instance.status != "active":
+        return
+    prev = getattr(instance, "_description_before", object())
+    desc = instance.description or ""
+    if not created:
+        if prev is not object() and prev == desc:
+            return
+    elif not (desc or "").strip():
+        return
+
+    class_pk = instance.pk
+    ClassesMain.objects.filter(pk=class_pk).update(description_ai_status="pending")
+
+    def _queue():
+        from CEBackend.celery import app as celery_app
+
+        celery_app.send_task(
+            "quickstart.tasks.business_tasks.format_class_description_task",
+            args=[class_pk],
+        )
+
+    transaction.on_commit(_queue)
+
+
 @receiver(post_save, sender=ClassCollection)
 def trigger_reclassification_on_collection_change(sender, instance, created, update_fields, **kwargs):
     """
