@@ -7,9 +7,27 @@ import logging
 from django.conf import settings
 
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 
 logger = logging.getLogger(__name__)
+
+
+def _candidate_models():
+    configured_models = getattr(settings, "GEMINI_BLOG_MODELS", None)
+    if isinstance(configured_models, str) and configured_models.strip():
+        models = [m.strip() for m in configured_models.split(",") if m.strip()]
+        if models:
+            return models
+
+    single_model = (
+        getattr(settings, "GEMINI_BLOG_MODEL", None)
+        or getattr(settings, "GEMINI_MODEL", None)
+    )
+    if isinstance(single_model, str) and single_model.strip():
+        return [single_model.strip()]
+
+    return ["gemini-2.5-flash", "gemini-2.0-flash"]
 
 
 def generate_blog_draft(
@@ -62,11 +80,38 @@ Output a single JSON object only. No markdown code fences. Use this exact struct
 }}
 """
 
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(response_mime_type="application/json"),
-        )
+        response = None
+        candidate_models = _candidate_models()
+        for idx, model_name in enumerate(candidate_models, start=1):
+            try:
+                logger.info(
+                    "Calling Gemini blog model %s (%s/%s)",
+                    model_name,
+                    idx,
+                    len(candidate_models),
+                )
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(response_mime_type="application/json"),
+                )
+                break
+            except genai_errors.ClientError as model_error:
+                status_code = getattr(model_error, "code", None)
+                is_retryable = status_code in {404, 429, 500, 502, 503, 504}
+                logger.warning(
+                    "Gemini blog model %s failed with code=%s; retryable=%s; error=%s",
+                    model_name,
+                    status_code,
+                    is_retryable,
+                    model_error,
+                )
+                if not is_retryable or idx == len(candidate_models):
+                    raise
+
+        if response is None:
+            logger.warning("Gemini returned no response object for blog draft.")
+            return None
 
         if not response.text:
             logger.warning("Gemini returned empty response for blog draft.")
