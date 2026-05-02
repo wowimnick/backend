@@ -189,6 +189,7 @@ class PublicScheduleSerializer(serializers.ModelSerializer):
             "time",
             "duration",
             "price",
+            "minParticipants",
             "maxParticipants",
             "available_spots",
             "start_date",
