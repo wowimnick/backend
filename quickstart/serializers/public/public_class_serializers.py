@@ -136,6 +136,30 @@ class PublicScheduleSerializer(serializers.ModelSerializer):
     """Serializer for publicly displaying basic schedule info."""
 
     available_spots = serializers.SerializerMethodField()
+    instance_id = serializers.SerializerMethodField()
+
+    def _matching_schedule_instance(self, obj):
+        """
+        Schedule row `obj.date` maps to a ScheduleInstance row for booking/payment APIs.
+        Must stay in sync with get_available_spots / get_instance_id.
+        """
+        try:
+            prefetched = getattr(obj, "_prefetched_instances", None)
+            if prefetched is not None:
+                instances = [
+                    i
+                    for i in prefetched
+                    if str(i.date) == str(obj.date) and i.status == "scheduled"
+                ]
+            else:
+                instances = list(
+                    obj.instances.filter(date=obj.date, status="scheduled")
+                )
+            if instances:
+                return instances[0]
+        except Exception:
+            pass
+        return None
 
     def get_available_spots(self, obj):
         """
@@ -144,30 +168,23 @@ class PublicScheduleSerializer(serializers.ModelSerializer):
         to avoid N+1 DB queries. Falls back to maxParticipants when no instance
         exists (e.g. recurring patterns without a concrete instance yet).
         """
-        try:
-            prefetched = getattr(obj, "_prefetched_instances", None)
-            if prefetched is not None:
-                instances = [
-                    i for i in prefetched
-                    if str(i.date) == str(obj.date) and i.status == "scheduled"
-                ]
-            else:
-                instances = list(obj.instances.filter(date=obj.date, status="scheduled"))
-            if instances:
-                inst = instances[0]
-                # Use annotated total_booked if available (view prefetch), else
-                # fall back to the live property which does its own query.
-                if hasattr(inst, "total_booked"):
-                    return max(0, inst.max_participants - inst.total_booked)
-                return max(0, inst.available_spots)
-        except Exception:
-            pass
+        inst = self._matching_schedule_instance(obj)
+        if inst:
+            if hasattr(inst, "total_booked"):
+                return max(0, inst.max_participants - inst.total_booked)
+            return max(0, inst.available_spots)
         return obj.maxParticipants
+
+    def get_instance_id(self, obj):
+        """ScheduleInstance PK — required for booking (distinct from Schedule.id)."""
+        inst = self._matching_schedule_instance(obj)
+        return inst.id if inst else None
 
     class Meta:
         model = Schedule
         fields = [
             "id",
+            "instance_id",
             "day",
             "time",
             "duration",
