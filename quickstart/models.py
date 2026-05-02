@@ -4714,10 +4714,11 @@ class CorporateInquiry(models.Model):
     COMPANY_SIZE_CHOICES = [
         ("", "Prefer not to say"),
         ("1-10", "1–10"),
-        ("11-50", "11–50"),
-        ("51-200", "51–200"),
-        ("201-500", "201–500"),
-        ("501+", "501+"),
+        ("11-25", "11–25"),
+        ("26-50", "26–50"),
+        ("51-100", "51–100"),
+        ("101-250", "101–250"),
+        ("250+", "250+"),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

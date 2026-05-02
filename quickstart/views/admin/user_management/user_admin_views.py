@@ -18,6 +18,7 @@ from quickstart.utils.permissions import (
 )
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.conf import settings
+from urllib.parse import urlencode
 
 from quickstart.models import AuditLog, Role, Booking, BusinessInfo
 from quickstart.serializers.admin.user_management.admin_serializers import (
@@ -238,34 +239,55 @@ class UserAdminViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        recipient_email = (user.email or "").strip()
+        if not recipient_email:
+            return Response(
+                {
+                    "detail": "This user has no email address; handover email cannot be sent."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         try:
-            from django.contrib.auth.tokens import default_token_generator
+            from quickstart.concierge_handover_tokens import (
+                concierge_handover_token_generator,
+            )
             from quickstart.utils.email_utils import send_concierge_handover_email
 
-            # Generate Token
+            # Generate Token (concierge-specific generator: no time-based expiry).
             # NOTE: We use the raw PK (user.pk) because CustomPasswordResetConfirmView
             # expects a raw UID, not a base64 encoded one.
-            token = default_token_generator.make_token(user)
-            uid = user.pk 
+            token = concierge_handover_token_generator.make_token(user)
+            uid = user.pk
 
             # Construct Frontend URL with Query Parameters
             # Example: https://classeasily.com/?mode=claim-account&uid=123&token=abc-123
-            claim_url = f"{settings.FRONTEND_BASE_URL}/?mode=claim-account&uid={uid}&token={token}"
+            base = getattr(
+                settings, "FRONTEND_BASE_URL", "https://classeasily.com"
+            ).rstrip("/")
+            query = urlencode(
+                {"mode": "claim-account", "uid": str(uid), "token": token}
+            )
+            claim_url = f"{base}/?{query}"
 
             # Send Email
             send_concierge_handover_email(user, claim_url)
 
             self._log_user_action(
-                user, 
-                "user_update", 
-                f"Concierge Handover email sent to {user.email}"
+                user,
+                "user_update",
+                f"Concierge Handover email sent to {recipient_email}",
             )
 
             return Response({"detail": "Handover email sent successfully."})
 
         except Exception as e:
             logger.error(f"Error sending handover email: {e}")
-            return Response({"detail": "Failed to send handover email."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {"detail": "Failed to send handover email."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
     @action(
         detail=True,
         methods=["get"],

@@ -27,6 +27,7 @@ from django.views import View
 from django.http import JsonResponse
 
 from django.contrib.auth.tokens import default_token_generator
+from quickstart.concierge_handover_tokens import concierge_handover_token_generator
 
 from allauth.account.forms import ResetPasswordForm, SetPasswordForm
 
@@ -559,8 +560,11 @@ class CustomPasswordResetConfirmView(APIView):
                 {"uid": ["Invalid value"]}, status=status.HTTP_400_BAD_REQUEST
             )
 
-        # 2. Check if the token is valid for the user
-        if not default_token_generator.check_token(user, token):
+        # 2. Check if the token is valid for the user (standard reset or concierge handover)
+        token_ok = default_token_generator.check_token(
+            user, token
+        ) or concierge_handover_token_generator.check_token(user, token)
+        if not token_ok:
             logger.error(
                 f"!!! [PWD-RESET-CONFIRM-RAW] FATAL: TOKEN CHECK FAILED for user {user.email}. The token is invalid or has expired."
             )

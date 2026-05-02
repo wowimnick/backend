@@ -1,12 +1,50 @@
 {% extends "emails/base_email.html" %}
-{% block title %}Event reminder{% endblock %}
+{% load i18n %}
+
+{% block title %}
+  {% trans "Event reminder" %}
+{% endblock title %}
+
 {% block content %}
-  <h1>Reminder: your team event</h1>
-  <p>Hi {{ inquiry.contact_name }},</p>
-  <p>
-    This is a quick reminder that your event for <strong>{{ inquiry.company_name }}</strong>
-    (<strong>{{ booking.reference }}</strong>) is coming up in <strong>{{ days_before }} day(s)</strong>.
-  </p>
-  <p><strong>When:</strong> {{ booking.confirmed_datetime }}</p>
-  <p>See you there!</p>
-{% endblock %}
+  <div style="text-align: center;">
+    <div style="font-size: 48px; margin-bottom: 14px; line-height: 1;">⏰</div>
+    <h1 style="margin-bottom: 8px;">{% trans "Your team event is almost here" %}</h1>
+    <p style="font-size: 16px; color: #484848; margin-bottom: 8px;">
+      {% trans "Hi" %} {{ inquiry.contact_name }},
+    </p>
+    <p style="font-size: 16px; color: #484848; margin-bottom: 24px;">
+      {% if days_before == 1 %}
+        {% trans "This is a quick reminder that your event is coming up" %} <strong>{% trans "tomorrow" %}</strong>.
+      {% else %}
+        {% trans "This is a quick reminder that your event is coming up in" %} <strong>{{ days_before }} {% trans "days" %}</strong>.
+      {% endif %}
+    </p>
+
+    <div style="background: #fff; border: 1px solid #e5e7eb; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 14px rgba(0,0,0,0.06); margin-bottom: 24px; max-width: 520px; margin-left: auto; margin-right: auto; text-align: left;">
+      <div style="background: linear-gradient(180deg, #fff7ed 0%, #ffffff 100%); padding: 16px 20px; border-bottom: 1px solid #fed7aa;">
+        <div style="font-size: 11px; color: #c2410c; text-transform: uppercase; letter-spacing: 0.05em;">{{ inquiry.company_name }}</div>
+        <div style="font-size: 20px; font-weight: 700; color: #1d1d1f; margin-top: 4px;">{{ booking.confirmed_datetime }}</div>
+      </div>
+      <div style="padding: 18px 20px;">
+        <div style="display: table; width: 100%;">
+          <div style="display: table-row;">
+            <div style="display: table-cell; font-size: 11px; color: #86868b; text-transform: uppercase; padding: 6px 12px 6px 0;">{% trans "Booking" %}</div>
+            <div style="display: table-cell; font-size: 14px; color: #1d1d1f; font-family: ui-monospace, monospace;">{{ booking.reference }}</div>
+          </div>
+          <div style="display: table-row;">
+            <div style="display: table-cell; font-size: 11px; color: #86868b; text-transform: uppercase; padding: 6px 12px 6px 0;">{% trans "Headcount" %}</div>
+            <div style="display: table-cell; font-size: 14px; color: #1d1d1f;">{{ booking.headcount }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+      <tr><td align="center" style="padding-bottom: 8px;">
+        <a href="{{ frontend_url }}/corporate/shortlist/{{ booking.shortlist.token }}/" class="button" target="_blank" style="background-color: #f81e3e !important; color: #ffffff !important; border-radius: 980px;">{% trans "View event details" %}</a>
+      </td></tr>
+    </table>
+
+    <p style="font-size: 14px; color: #6b7280; margin-top: 8px;">{% trans "See you there!" %}</p>
+  </div>
+{% endblock content %}

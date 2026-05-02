@@ -1,14 +1,116 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>We received your inquiry</title>
-</head>
-<body style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #111827; max-width: 560px;">
-  <p>Hi {{ inquiry.contact_name }},</p>
-  <p>Thanks for reaching out about <strong>team experiences</strong> for <strong>{{ inquiry.company_name }}</strong> on ClassEasily.</p>
-  <p>We’ve received your message and someone from our team will get back to you shortly.</p>
-  <p style="margin-top: 32px;">— The ClassEasily team</p>
-  <p style="font-size: 13px; color: #6b7280;"><a href="{{ frontend_url }}/corporate">ClassEasily for teams</a></p>
-</body>
-</html>
+{# Corporate inquiry — customer confirmation #}
+{% extends "emails/base_email.html" %}
+{% load i18n %}
+
+{% block title %}
+  {% trans "We received your inquiry" %}
+{% endblock title %}
+
+{% block content %}
+  <div style="text-align: center;">
+    <div style="font-size: 48px; margin-bottom: 16px; line-height: 1;">🎉</div>
+    <h1 style="margin-bottom: 8px;">{% trans "Thanks — we have your details" %}</h1>
+    <p style="font-size: 16px; color: #484848; margin-bottom: 24px;">
+      {% trans "Hi" %} {{ inquiry.contact_name }},
+      {% trans "here’s a quick recap of what you shared with ClassEasily." %}
+    </p>
+
+    <div style="background: #fff; border: 1px solid #e5e7eb; border-radius: 16px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.04); margin-bottom: 24px; max-width: 520px; margin-left: auto; margin-right: auto; text-align: left;">
+      <div style="background: #f5f5f7; padding: 16px 20px; border-bottom: 1px solid #e5e7eb;">
+        <div style="font-size: 11px; color: #86868b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">{% trans "Snapshot" %}</div>
+        <div style="font-size: 18px; font-weight: 700; color: #1d1d1f;">{{ inquiry.company_name }}</div>
+      </div>
+      <div style="padding: 18px 20px;">
+        <div style="display: table; width: 100%; border-collapse: collapse;">
+          <div style="display: table-row;">
+            <div style="display: table-cell; font-size: 11px; color: #86868b; text-transform: uppercase; padding: 6px 12px 6px 0; width: 38%; vertical-align: top;">{% trans "Group size" %}</div>
+            <div style="display: table-cell; font-size: 14px; color: #1d1d1f;">{{ inquiry.get_company_size_display }}</div>
+          </div>
+          {% if inquiry.meta.city %}
+          <div style="display: table-row;">
+            <div style="display: table-cell; font-size: 11px; color: #86868b; text-transform: uppercase; padding: 6px 12px 6px 0; vertical-align: top;">{% trans "City / metro" %}</div>
+            <div style="display: table-cell; font-size: 14px; color: #1d1d1f;">{{ inquiry.meta.city }}</div>
+          </div>
+          {% endif %}
+          {% if inquiry.meta.preferred_date %}
+          <div style="display: table-row;">
+            <div style="display: table-cell; font-size: 11px; color: #86868b; text-transform: uppercase; padding: 6px 12px 6px 0; vertical-align: top;">{% trans "Ideal date" %}</div>
+            <div style="display: table-cell; font-size: 14px; color: #1d1d1f;">{{ inquiry.meta.preferred_date }}</div>
+          </div>
+          {% endif %}
+        </div>
+
+        {% if inquiry.meta.activity_interests %}
+        <div style="margin-top: 14px; padding-top: 14px; border-top: 1px dashed #e5e7eb;">
+          <div style="font-size: 11px; color: #86868b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">{% trans "Experience interests" %}</div>
+          <div style="text-align: left;">
+            {% for aid in inquiry.meta.activity_interests %}
+              <span style="display: inline-block; background: #f5f5f7; border-radius: 99px; padding: 4px 10px; font-size: 12px; color: #1d1d1f; margin: 0 6px 6px 0;">
+                {% if aid == "food_drink" %}{% trans "Food & drink" %}
+                {% elif aid == "arts_crafts" %}{% trans "Arts & crafts" %}
+                {% elif aid == "wellness" %}{% trans "Wellness & mindfulness" %}
+                {% elif aid == "active_outdoor" %}{% trans "Active & outdoor" %}
+                {% elif aid == "music_performance" %}{% trans "Music & performance" %}
+                {% elif aid == "games" %}{% trans "Games & competitions" %}
+                {% elif aid == "learning" %}{% trans "Learning & skill-building" %}
+                {% elif aid == "open" %}{% trans "Open to suggestions" %}
+                {% else %}{{ aid }}
+                {% endif %}
+              </span>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
+
+        {% if inquiry.message %}
+        <div style="margin-top: 14px; padding-top: 14px; border-top: 1px dashed #e5e7eb;">
+          <div style="font-size: 11px; color: #86868b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">{% trans "Notes" %}</div>
+          <div style="font-size: 14px; color: #374151; white-space: pre-line; line-height: 1.5;">{{ inquiry.message }}</div>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 520px; margin: 0 auto 24px;">
+      <tr>
+        <td style="vertical-align: top; width: 33%; padding: 8px;">
+          <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px; text-align: left; min-height: 88px;">
+            <div style="font-size: 20px; font-weight: 700; color: #f81e3e; line-height: 1;">1</div>
+            <div style="font-size: 13px; font-weight: 600; color: #1d1d1f; margin-top: 4px;">{% trans "We curate options" %}</div>
+            <div style="font-size: 12px; color: #6b7280; margin-top: 4px; line-height: 1.4;">{% trans "Our team reviews your goals and builds a shortlist." %}</div>
+          </div>
+        </td>
+        <td style="vertical-align: top; width: 33%; padding: 8px;">
+          <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px; text-align: left; min-height: 88px;">
+            <div style="font-size: 20px; font-weight: 700; color: #f81e3e; line-height: 1;">2</div>
+            <div style="font-size: 13px; font-weight: 600; color: #1d1d1f; margin-top: 4px;">{% trans "You pick a favorite" %}</div>
+            <div style="font-size: 12px; color: #6b7280; margin-top: 4px; line-height: 1.4;">{% trans "Review tailored choices and choose what fits your team." %}</div>
+          </div>
+        </td>
+        <td style="vertical-align: top; width: 33%; padding: 8px;">
+          <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px; text-align: left; min-height: 88px;">
+            <div style="font-size: 20px; font-weight: 700; color: #f81e3e; line-height: 1;">3</div>
+            <div style="font-size: 13px; font-weight: 600; color: #1d1d1f; margin-top: 4px;">{% trans "Confirm & celebrate" %}</div>
+            <div style="font-size: 12px; color: #6b7280; margin-top: 4px; line-height: 1.4;">{% trans "Lock in details and we’ll help you through payment." %}</div>
+          </div>
+        </td>
+      </tr>
+    </table>
+
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+      <tr><td align="center">
+        <a href="{{ frontend_url }}/explore" class="button" target="_blank" style="background-color: #f81e3e !important; color: #ffffff !important; border-radius: 980px;">{% trans "Browse experiences" %}</a>
+      </td></tr>
+    </table>
+
+    <div style="margin-top: 24px; padding: 14px 16px; background: #f9fafb; border-radius: 12px; border: 1px solid #e5e7eb; text-align: center; max-width: 520px; margin-left: auto; margin-right: auto;">
+      <p style="margin: 0; font-size: 13px; color: #374151; line-height: 1.45;">
+        {% trans "Have a question? Just reply to this email — it goes straight to our team." %}
+      </p>
+    </div>
+
+    <p style="margin-top: 24px; font-size: 13px; color: #86868b;">
+      <a href="{{ frontend_url }}/corporate" style="color: #f81e3e; font-weight: 600;">{% trans "ClassEasily for teams" %}</a>
+    </p>
+  </div>
+{% endblock content %}

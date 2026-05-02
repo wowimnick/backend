@@ -1,7 +1,32 @@
 {% extends "emails/base_email.html" %}
-{% block title %}Booking update{% endblock %}
+{% load i18n %}
+
+{% block title %}
+  {% trans "Booking update" %}
+{% endblock title %}
+
 {% block content %}
-  <h1>Update on your request</h1>
-  <p>Hi {{ inquiry.contact_name }},</p>
-  <p>Your corporate booking <strong>{{ booking.reference }}</strong> has been cancelled. If you have questions, reply to this email and we will help.</p>
-{% endblock %}
+  <div style="text-align: center;">
+    <div style="font-size: 44px; margin-bottom: 12px; line-height: 1;">ℹ️</div>
+    <h1 style="margin-bottom: 8px; color: #374151;">{% trans "Update on your request" %}</h1>
+    <p style="font-size: 16px; color: #6b7280; margin-bottom: 24px; line-height: 1.55;">
+      {% trans "Hi" %} {{ inquiry.contact_name }},{% trans " your corporate booking has been updated. If you have questions, we’re here to help." %}
+    </p>
+
+    <div style="background: #fff; border: 1px solid #e5e7eb; border-radius: 16px; padding: 20px 22px; text-align: left; max-width: 480px; margin: 0 auto 28px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+      <div style="font-size: 12px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">{% trans "Booking" %}</div>
+      <div style="font-size: 18px; font-weight: 700; color: #1d1d1f; font-family: ui-monospace, monospace; margin-bottom: 12px;">{{ booking.reference }}</div>
+      <div style="font-size: 14px; color: #4b5563;">
+        <strong>{% trans "Status" %}:</strong> {{ booking.get_status_display }}
+      </div>
+    </div>
+
+    <p style="font-size: 14px; color: #4b5563; line-height: 1.6; max-width: 420px; margin: 0 auto 24px;">
+      {% trans "If this was unexpected or you think it’s a mistake, reply to this email and we’ll sort it out with you." %}
+    </p>
+
+    <p style="font-size: 14px; color: #1d1d1f;">
+      <a href="mailto:support@classeasily.com" style="color: #0ea5e9; font-weight: 600;">support@classeasily.com</a>
+    </p>
+  </div>
+{% endblock content %}

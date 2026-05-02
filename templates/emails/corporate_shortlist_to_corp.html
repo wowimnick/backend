@@ -1,13 +1,50 @@
 {% extends "emails/base_email.html" %}
-{% block title %}Your team event options{% endblock %}
+{% load i18n %}
+
+{% block title %}
+  {% trans "Your team options are ready" %}
+{% endblock title %}
+
 {% block content %}
-  <h1>Your shortlist is ready</h1>
-  <p>Hi {{ inquiry.contact_name }},</p>
-  <p>We put together a focused set of options for <strong>{{ inquiry.company_name }}</strong>.</p>
-  <p style="text-align:center;margin:32px 0;">
-    <a class="button" href="{{ shortlist_url }}">View your options</a>
-  </p>
-  <p style="font-size:14px;color:#484848;">If the button does not work, copy this link:<br />
-    <a href="{{ shortlist_url }}">{{ shortlist_url }}</a>
-  </p>
-{% endblock %}
+  <div style="text-align: center;">
+    <div style="font-size: 48px; margin-bottom: 14px; line-height: 1;">✨</div>
+    <h1 style="margin-bottom: 8px;">{% trans "Your shortlist is ready" %}</h1>
+    <p style="font-size: 16px; color: #484848; margin-bottom: 24px;">
+      {% trans "Hi" %} {{ inquiry.contact_name }},{% trans " we curated a focused set of options for" %}
+      <strong> {{ inquiry.company_name }}</strong>.
+    </p>
+
+    <div style="background: #fff; border: 1px solid #e5e7eb; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 14px rgba(0,0,0,0.06); margin-bottom: 28px; max-width: 520px; margin-left: auto; margin-right: auto; text-align: left;">
+      <div style="background: #f5f5f7; padding: 18px 22px; border-bottom: 1px solid #e5e7eb;">
+        <div style="font-size: 11px; color: #86868b; text-transform: uppercase; letter-spacing: 0.06em;">{% trans "Curated for you" %}</div>
+        <div style="font-size: 20px; font-weight: 700; color: #1d1d1f; margin-top: 4px;">{{ inquiry.company_name }}</div>
+      </div>
+      <div style="padding: 20px 22px;">
+        {% if shortlist.intro_message %}
+          <div style="font-size: 14px; color: #374151; line-height: 1.55; white-space: pre-line;">{{ shortlist.intro_message|truncatewords:120 }}</div>
+        {% else %}
+          <ul style="margin: 0; padding-left: 18px; font-size: 14px; color: #374151; line-height: 1.55;">
+            <li style="margin-bottom: 8px;">{% trans "Hand-picked experiences aligned with your team size and timing." %}</li>
+            <li style="margin-bottom: 8px;">{% trans "Transparent direction on pricing and what to expect next." %}</li>
+            <li>{% trans "A simple path to select your favorite and move forward with confidence." %}</li>
+          </ul>
+        {% endif %}
+      </div>
+    </div>
+
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+      <tr><td align="center" style="padding-bottom: 16px;">
+        <a href="{{ shortlist_url }}" class="button" target="_blank" style="background-color: #f81e3e !important; color: #ffffff !important; border-radius: 980px;">{% trans "View your options" %}</a>
+      </td></tr>
+    </table>
+
+    <div style="padding: 14px 16px; background: #f9fafb; border-radius: 12px; border: 1px solid #e5e7eb; text-align: left; max-width: 520px; margin: 0 auto 24px;">
+      <div style="font-size: 11px; color: #86868b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">{% trans "Link not working?" %}</div>
+      <p style="margin: 0; font-size: 13px; color: #374151; word-break: break-all; line-height: 1.45;">
+        <a href="{{ shortlist_url }}" style="color: #0ea5e9; font-weight: 600;">{{ shortlist_url }}</a>
+      </p>
+    </div>
+
+    <p style="font-size: 13px; color: #86868b;">{% trans "Questions? Reply to this email and we’ll help right away." %}</p>
+  </div>
+{% endblock content %}

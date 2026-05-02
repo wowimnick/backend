@@ -28,6 +28,7 @@ from django.db.models import (
     Func,
     Prefetch,
     Exists,
+    CharField,
 )
 from django.db.models.functions import (
     Coalesce,
@@ -60,6 +61,7 @@ from datetime import (
     timedelta,
 )
 import copy
+from uuid import UUID
 
 from quickstart.models import (
     ClassCollection,
@@ -337,7 +339,12 @@ def invalidate_public_class_search_preset_cache(
 
 
 def _is_collection_only_request(request):
-    """Return True if request has only collection filter (no location, keyword, category, etc.)."""
+    """Return True if request has only collection filter (no location, keyword, category, etc.).
+
+    Must stay aligned with _build_collection_search_cache_key: if any query param changes
+    the queryset but is not part of the cache key, return False or cached responses will
+    be wrong (e.g. time_of_day, days, date — see collection-only cache short-circuit).
+    """
     if not request.query_params.get("collection"):
         return False
     if request.query_params.getlist("sub"):
@@ -348,7 +355,15 @@ def _is_collection_only_request(request):
         return False
     if request.query_params.get("keyword") or request.query_params.get("tag"):
         return False
-    if request.query_params.get("price_max"):
+    if request.query_params.get("price_max") or request.query_params.get("price_min"):
+        return False
+    if request.query_params.getlist("time_preference"):
+        return False
+    if request.query_params.getlist("days"):
+        return False
+    if request.query_params.get("date"):
+        return False
+    if request.query_params.get("class_type"):
         return False
     return True
 
@@ -625,14 +640,34 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
 
         options_qs = _public_class_options_prefetch_queryset()
         if self.action == "retrieve":
-            options_qs = options_qs.prefetch_related(
-                Prefetch(
-                    "schedules",
-                    queryset=Schedule.objects.filter(
-                        Q(date__gte=timezone.now().date())
-                        | Q(end_date__gte=timezone.now().date())
-                    ).order_by("date", "time"),
+            # Prefetch instances annotated with total_booked so PublicScheduleSerializer
+            # can derive available_spots = max_participants - total_booked without
+            # extra per-instance DB queries (N+1 prevention).
+            instances_qs = ScheduleInstance.objects.filter(
+                date__gte=timezone.now().date(),
+                status="scheduled",
+            ).annotate(
+                total_booked=Coalesce(
+                    Sum(
+                        "bookings__participants",
+                        filter=Q(bookings__status__in=["confirmed", "pending"]),
+                    ),
+                    Value(0),
+                    output_field=IntegerField(),
                 )
+            )
+            schedules_qs = Schedule.objects.filter(
+                Q(date__gte=timezone.now().date())
+                | Q(end_date__gte=timezone.now().date())
+            ).prefetch_related(
+                Prefetch(
+                    "instances",
+                    queryset=instances_qs,
+                    to_attr="_prefetched_instances",
+                )
+            ).order_by("date", "time")
+            options_qs = options_qs.prefetch_related(
+                Prefetch("schedules", queryset=schedules_qs)
             )
 
         queryset = (
@@ -685,6 +720,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 min_session_price=Coalesce(min_session_price_subquery, None),
                 min_course_price=Coalesce(min_course_price_subquery, None),
                 image_count=Count("images", distinct=True),
+                listing_duration_minutes=Min("options__schedules__duration"),
             )
         )
 
@@ -1635,49 +1671,97 @@ def paginated_class_reviews(request, identifier):
         else:
             class_obj = get_object_or_404(queryset, slug=identifier)
 
-        # Fetch platform reviews
-        platform_reviews = (
-            Reviews.objects.filter(classId=class_obj, status="approved")
-            .select_related("userId")
-            .order_by("-createdAt")
-        )
-
-        # Fetch Google reviews
-        google_reviews = ImportedGoogleReview.objects.filter(
+        # Cheap totals — do not load all rows into memory (fixes timeouts on large imports).
+        platform_base = Reviews.objects.filter(classId=class_obj, status="approved")
+        google_base = ImportedGoogleReview.objects.filter(
             business=class_obj.businessId
-        ).order_by("-review_date")
+        )
+        platform_count = platform_base.count()
+        google_count = google_base.count()
+        total_count = platform_count + google_count
 
-        # Format reviews with source tags
-        formatted_platform_reviews = [
-            {
-                **PublicReviewSerializer(review).data,
-                "source": "classeasily",
-                "id": f"p-{review.reviewId}",
-                "date": review.createdAt.isoformat(),
-            }
-            for review in platform_reviews
-        ]
+        if total_count == 0:
+            return Response(
+                {
+                    "reviews": [],
+                    "pagination": {
+                        "page": page,
+                        "page_size": page_size,
+                        "total_count": 0,
+                        "has_more": False,
+                        "total_pages": 0,
+                    },
+                    "counts": {
+                        "platform_reviews": 0,
+                        "google_reviews": 0,
+                        "total_reviews": 0,
+                    },
+                }
+            )
 
-        formatted_google_reviews = [
-            {
-                **ImportedGoogleReviewSerializer(review).data,
-                "source": "google",
-                "id": f"g-{review.google_review_id}",
-                "date": review.review_date.isoformat(),
-            }
-            for review in google_reviews
-        ]
+        # Merge-sort keys in the database: UNION ALL + ORDER BY + LIMIT/OFFSET for this page only.
+        platform_keys = platform_base.annotate(
+            sort_date=F("createdAt"),
+            kind=Value("p", output_field=CharField(max_length=1)),
+            rid=Cast(F("reviewId"), CharField(max_length=36)),
+        ).values("sort_date", "kind", "rid")
 
-        # Combine and sort all reviews by date
-        all_reviews = formatted_platform_reviews + formatted_google_reviews
-        all_reviews.sort(key=lambda x: x["date"], reverse=True)
+        google_keys = google_base.annotate(
+            sort_date=Coalesce(F("review_date"), F("created_at")),
+            kind=Value("g", output_field=CharField(max_length=1)),
+            rid=Cast(F("id"), CharField(max_length=36)),
+        ).values("sort_date", "kind", "rid")
 
-        # Calculate pagination
-        total_count = len(all_reviews)
+        combined = platform_keys.union(google_keys, all=True).order_by("-sort_date")
+
         start_index = (page - 1) * page_size
         end_index = start_index + page_size
+        page_rows = list(combined[start_index:end_index])
 
-        paginated_reviews = all_reviews[start_index:end_index]
+        platform_ids = []
+        google_ids = []
+        for row in page_rows:
+            if row["kind"] == "p":
+                platform_ids.append(int(row["rid"]))
+            else:
+                google_ids.append(UUID(row["rid"]))
+
+        platform_by_pk = {}
+        if platform_ids:
+            for rev in Reviews.objects.filter(reviewId__in=platform_ids).select_related(
+                "userId"
+            ):
+                platform_by_pk[rev.reviewId] = rev
+
+        google_by_pk = {}
+        if google_ids:
+            for rev in ImportedGoogleReview.objects.filter(id__in=google_ids):
+                google_by_pk[rev.id] = rev
+
+        paginated_reviews = []
+        for row in page_rows:
+            if row["kind"] == "p":
+                review = platform_by_pk[int(row["rid"])]
+                paginated_reviews.append(
+                    {
+                        **PublicReviewSerializer(review).data,
+                        "source": "classeasily",
+                        "id": f"p-{review.reviewId}",
+                        "date": review.createdAt.isoformat(),
+                    }
+                )
+            else:
+                review = google_by_pk[UUID(row["rid"])]
+                date_val = review.review_date or review.created_at
+                paginated_reviews.append(
+                    {
+                        **ImportedGoogleReviewSerializer(review).data,
+                        "source": "google",
+                        "id": f"g-{review.google_review_id}",
+                        "date": date_val.isoformat() if date_val else "",
+                    }
+                )
+
         has_more = end_index < total_count
 
         return Response(
@@ -1691,8 +1775,8 @@ def paginated_class_reviews(request, identifier):
                     "total_pages": (total_count + page_size - 1) // page_size,
                 },
                 "counts": {
-                    "platform_reviews": len(formatted_platform_reviews),
-                    "google_reviews": len(formatted_google_reviews),
+                    "platform_reviews": platform_count,
+                    "google_reviews": google_count,
                     "total_reviews": total_count,
                 },
             }

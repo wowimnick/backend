@@ -70,7 +70,7 @@ def queue_corporate_inquiry_emails(inquiry):
             f"Contact: {inquiry.contact_name}\n"
             f"Email: {inquiry.email}\n"
             f"Phone: {inquiry.phone or '—'}\n"
-            f"Company size: {inquiry.get_company_size_display()}\n\n"
+            f"Group size: {inquiry.get_company_size_display()}\n\n"
             f"Message:\n{inquiry.message or '—'}\n"
         )
         try:

@@ -135,6 +135,35 @@ class PublicClassImageSerializer(serializers.ModelSerializer):
 class PublicScheduleSerializer(serializers.ModelSerializer):
     """Serializer for publicly displaying basic schedule info."""
 
+    available_spots = serializers.SerializerMethodField()
+
+    def get_available_spots(self, obj):
+        """
+        Return spots still bookable for this schedule's session date.
+        Uses the prefetched + annotated ScheduleInstance list (_prefetched_instances)
+        to avoid N+1 DB queries. Falls back to maxParticipants when no instance
+        exists (e.g. recurring patterns without a concrete instance yet).
+        """
+        try:
+            prefetched = getattr(obj, "_prefetched_instances", None)
+            if prefetched is not None:
+                instances = [
+                    i for i in prefetched
+                    if str(i.date) == str(obj.date) and i.status == "scheduled"
+                ]
+            else:
+                instances = list(obj.instances.filter(date=obj.date, status="scheduled"))
+            if instances:
+                inst = instances[0]
+                # Use annotated total_booked if available (view prefetch), else
+                # fall back to the live property which does its own query.
+                if hasattr(inst, "total_booked"):
+                    return max(0, inst.max_participants - inst.total_booked)
+                return max(0, inst.available_spots)
+        except Exception:
+            pass
+        return obj.maxParticipants
+
     class Meta:
         model = Schedule
         fields = [
@@ -144,6 +173,7 @@ class PublicScheduleSerializer(serializers.ModelSerializer):
             "duration",
             "price",
             "maxParticipants",
+            "available_spots",
             "start_date",
             "end_date",
             "date",
@@ -224,6 +254,10 @@ class PublicClassSerializer(serializers.ModelSerializer):
     min_course_price = serializers.DecimalField(
         max_digits=10, decimal_places=2, read_only=True
     )
+    listing_duration_minutes = serializers.SerializerMethodField(
+        read_only=True,
+        help_text="Shortest schedule duration (minutes); set by list queryset annotation when present.",
+    )
     coordinates = serializers.SerializerMethodField(read_only=True)
     location = serializers.SerializerMethodField(read_only=True)
     is_favorited = serializers.SerializerMethodField()
@@ -265,6 +299,7 @@ class PublicClassSerializer(serializers.ModelSerializer):
             "min_session_price",
             "min_course_price",
             "soonest_next_week",
+            "listing_duration_minutes",
             "student_contact_email",
             "student_contact_phone",
             "require_participant_names",
@@ -274,6 +309,10 @@ class PublicClassSerializer(serializers.ModelSerializer):
     def get_location_name(self, obj):
         ref = getattr(obj, "location_ref", None)
         return ref.name if ref else None
+
+    def get_listing_duration_minutes(self, obj):
+        v = getattr(obj, "listing_duration_minutes", None)
+        return v if v is not None else None
 
     def _get_business_contact_if_public(self, obj, attr):
         """Expose business contact when contact_privacy is public or public_with_chat (always visible)."""

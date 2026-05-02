@@ -1,8 +1,63 @@
 {% extends "emails/base_email.html" %}
-{% block title %}Balance paid — thank you{% endblock %}
+{% load i18n %}
+{% load string_filters %}
+
+{% block title %}
+  {% trans "Payment received" %}
+{% endblock title %}
+
 {% block content %}
-  <h1>You are all set</h1>
-  <p>Hi {{ inquiry.contact_name }},</p>
-  <p>We have received <strong>full payment</strong> for {{ booking.reference }}. We will see you and your team at the scheduled time.</p>
-  <p><strong>Event:</strong> {{ booking.confirmed_datetime }}</p>
-{% endblock %}
+  <div style="text-align: center;">
+    <div style="font-size: 48px; margin-bottom: 14px; line-height: 1;">🎉</div>
+    <h1 style="margin-bottom: 8px;">{% trans "You’re all set" %}</h1>
+    <p style="font-size: 16px; color: #484848; margin-bottom: 24px;">
+      {% trans "We’ve received full payment for" %} <strong>{{ booking.reference }}</strong>.
+      {% trans "Thank you — we can’t wait to host your team." %}
+    </p>
+
+    <div style="display: inline-block; background: #ecfdf5; color: #065f46; font-weight: 700; font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; padding: 6px 14px; border-radius: 999px; margin-bottom: 18px;">{% trans "Paid in full" %}</div>
+
+    <div style="background: #fff; border: 1px solid #e5e7eb; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 14px rgba(0,0,0,0.06); margin-bottom: 20px; max-width: 520px; margin-left: auto; margin-right: auto; text-align: left;">
+      <div style="background: #f5f5f7; padding: 16px 20px; border-bottom: 1px solid #e5e7eb;">
+        <div style="font-size: 11px; color: #86868b; text-transform: uppercase;">{% trans "Event summary" %}</div>
+        <div style="font-size: 18px; font-weight: 700; color: #1d1d1f; margin-top: 4px;">{{ inquiry.company_name }}</div>
+      </div>
+      <div style="padding: 18px 20px;">
+        <div style="display: table; width: 100%; border-collapse: collapse;">
+          <div style="display: table-row;">
+            <div style="display: table-cell; font-size: 11px; color: #86868b; text-transform: uppercase; padding: 6px 12px 6px 0;">{% trans "Booking" %}</div>
+            <div style="display: table-cell; font-size: 14px; color: #1d1d1f; font-family: ui-monospace, monospace;">{{ booking.reference }}</div>
+          </div>
+          <div style="display: table-row;">
+            <div style="display: table-cell; font-size: 11px; color: #86868b; text-transform: uppercase; padding: 6px 12px 6px 0;">{% trans "Headcount" %}</div>
+            <div style="display: table-cell; font-size: 14px; color: #1d1d1f;">{{ booking.headcount }}</div>
+          </div>
+          <div style="display: table-row;">
+            <div style="display: table-cell; font-size: 11px; color: #86868b; text-transform: uppercase; padding: 6px 12px 6px 0;">{% trans "When" %}</div>
+            <div style="display: table-cell; font-size: 14px; color: #1d1d1f;">{{ booking.confirmed_datetime }}</div>
+          </div>
+          <div style="display: table-row;">
+            <div style="display: table-cell; font-size: 11px; color: #86868b; text-transform: uppercase; padding: 6px 12px 6px 0;">{% trans "Total" %}</div>
+            <div style="display: table-cell; font-size: 14px; font-weight: 600; color: #1d1d1f;">{{ booking.total_cents|cents_to_usd }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="max-width: 520px; margin: 0 auto 24px; padding: 14px 18px; background: #f0fdf4; border-radius: 12px; border: 1px solid #bbf7d0; text-align: center;">
+      <p style="margin: 0; font-size: 13px; color: #166534; line-height: 1.6;">
+        <span style="color: #22c55e; font-weight: 700;">●</span> {% trans "Deposit" %}
+        &nbsp;&nbsp;<span style="color: #22c55e; font-weight: 700;">●</span> {% trans "Balance" %}
+        &nbsp;&nbsp;<span style="color: #f81e3e; font-weight: 700;">◐</span> {% trans "Event day" %}
+      </p>
+    </div>
+
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+      <tr><td align="center">
+        <a href="{{ frontend_url }}/corporate/shortlist/{{ booking.shortlist.token }}/" class="button" target="_blank" style="background-color: #f81e3e !important; color: #ffffff !important; border-radius: 980px;">{% trans "View booking" %}</a>
+      </td></tr>
+    </table>
+
+    <p style="margin-top: 22px; font-size: 13px; color: #86868b;">{% trans "See you at your event!" %}</p>
+  </div>
+{% endblock content %}

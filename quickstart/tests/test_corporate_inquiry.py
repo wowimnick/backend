@@ -24,7 +24,7 @@ class TestCorporateInquiryCreateView:
             "contact_name": "Jane Doe",
             "email": "jane@acme.example",
             "phone": "",
-            "company_size": "11-50",
+            "company_size": "11-25",
             "message": "Planning a team offsite.",
             "meta": {"source": "corporate_page", "city": "NYC"},
         }

@@ -28,3 +28,23 @@ def humanize_timezone(value):
     if isinstance(value, str):
         return value.replace('_', ' ')
     return value
+
+
+@register.filter(name="cents_to_usd")
+def cents_to_usd(value):
+    """
+    Format integer cents as USD (e.g. 12999 -> $129.99).
+    Usage: {{ booking.deposit_cents|cents_to_usd }}
+    """
+    if value is None:
+        return "—"
+    try:
+        cents = int(value)
+    except (TypeError, ValueError):
+        return "—"
+    negative = cents < 0
+    cents = abs(cents)
+    dollars = cents // 100
+    frac = cents % 100
+    sign = "-" if negative else ""
+    return f"{sign}${dollars:,}.{frac:02d}"
