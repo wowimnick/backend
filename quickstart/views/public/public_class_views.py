@@ -375,6 +375,25 @@ def _is_collection_only_request(request):
     return True
 
 
+def _is_count_only_request(request):
+    """Lightweight search preview: same filters, response is only {"count": int}."""
+    v = request.query_params.get("count_only")
+    if v is None:
+        return False
+    return str(v).strip().lower() in ("1", "true", "yes")
+
+
+def _count_only_response_if_applicable(request, payload):
+    """When count_only is set, return minimal JSON if payload includes total count (e.g. cached search)."""
+    if not _is_count_only_request(request):
+        return None
+    if isinstance(payload, dict):
+        c = payload.get("count")
+        if isinstance(c, int):
+            return Response({"count": c})
+    return None
+
+
 def _subs_cache_segment(request):
     subs = [s.strip().lower() for s in request.query_params.getlist("sub") if s.strip()]
     return ",".join(sorted(subs))
@@ -1132,6 +1151,9 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                         shuffled = _shuffle_preset_results(
                             cached, search_name, collection_slug
                         )
+                        cor = _count_only_response_if_applicable(request, shuffled)
+                        if cor is not None:
+                            return cor
                         return Response(shuffled)
 
             # Preset (banner) location cache only (no collection): return cached if available
@@ -1145,6 +1167,9 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                         shuffled = _shuffle_preset_results(
                             cached, search_name, None
                         )
+                        cor = _count_only_response_if_applicable(request, shuffled)
+                        if cor is not None:
+                            return cor
                         return Response(shuffled)
 
             logger.info(f"--- PUBLIC CLASS SEARCH INITIATED ---")
@@ -1189,6 +1214,9 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                         shuffled = _shuffle_preset_results(
                             cached, None, collection_slug
                         )
+                        cor = _count_only_response_if_applicable(request, shuffled)
+                        if cor is not None:
+                            return cor
                         return Response(shuffled)
 
             # Get Base Queryset
@@ -1507,7 +1535,10 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             # --- 6. Pagination and Response ---
             final_count = queryset.count()
             logger.info(f"Final queryset count before pagination: {final_count}")
-            
+
+            if _is_count_only_request(request):
+                return Response({"count": final_count})
+
             page = self.paginate_queryset(queryset)
             if page is not None:
                 serializer = self.get_serializer(
