@@ -344,8 +344,15 @@ def _is_collection_only_request(request):
     Must stay aligned with _build_collection_search_cache_key: if any query param changes
     the queryset but is not part of the cache key, return False or cached responses will
     be wrong (e.g. time_of_day, days, date — see collection-only cache short-circuit).
+
+    Multiple `collection` query params skip the single-collection cache path.
     """
-    if not request.query_params.get("collection"):
+    coll_list = [
+        s.strip()
+        for s in request.query_params.getlist("collection")
+        if s and str(s).strip()
+    ]
+    if not coll_list or len(coll_list) != 1:
         return False
     if request.query_params.getlist("sub"):
         return False
@@ -1085,7 +1092,21 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 "location"
             ) or request.query_params.get("location_search", "")
             search_name = location_param_text.split(",")[0].strip()
-            collection_slug = request.query_params.get("collection")
+            _collection_params_raw = request.query_params.getlist("collection")
+            _collection_slugs = []
+            _seen_coll = set()
+            for _s in _collection_params_raw:
+                if not _s:
+                    continue
+                _t = str(_s).strip()
+                if not _t:
+                    continue
+                _k = _t.lower()
+                if _k not in _seen_coll:
+                    _seen_coll.add(_k)
+                    _collection_slugs.append(_t)
+            # Single slug for cache keys / preset shuffle; None when 0 or multiple explicit collections
+            collection_slug = _collection_slugs[0] if len(_collection_slugs) == 1 else None
 
             # Preset location + collection cache (e.g. Toronto + trending): return cached if available
             preset_collection_cache_key = None
@@ -1135,11 +1156,11 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             price_max_str = request.query_params.get("price_max")
 
             resolved_collection_meta = None
-            effective_collection_slug = collection_slug
-            if keyword_query_text and not collection_slug:
+            effective_collection_slugs = list(_collection_slugs)
+            if keyword_query_text and not _collection_slugs:
                 _matched_coll = match_collection_by_alias(keyword_query_text.strip())
                 if _matched_coll:
-                    effective_collection_slug = _matched_coll.slug
+                    effective_collection_slugs = [_matched_coll.slug]
                     resolved_collection_meta = {
                         "slug": _matched_coll.slug,
                         "name": _matched_coll.name,
@@ -1183,19 +1204,27 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             queryset = queryset.filter(Exists(has_future_instances))
 
             # --- COLLECTION FILTERING ---
-            if effective_collection_slug:
-                logger.info(
-                    f"Applying Collection Filter: '{effective_collection_slug}'"
-                    + (
-                        f" (resolved from keyword)"
-                        if resolved_collection_meta
-                        else ""
+            if effective_collection_slugs:
+                if len(effective_collection_slugs) == 1:
+                    _slug_one = effective_collection_slugs[0]
+                    logger.info(
+                        f"Applying Collection Filter: '{_slug_one}'"
+                        + (
+                            f" (resolved from keyword)"
+                            if resolved_collection_meta
+                            else ""
+                        )
                     )
-                )
-                queryset = queryset.filter(
-                    collections__slug=effective_collection_slug
-                )
-                # Ensure distinctness after M2M filter just in case
+                    queryset = queryset.filter(collections__slug=_slug_one)
+                else:
+                    logger.info(
+                        "Applying Collection Filter (OR): %s",
+                        effective_collection_slugs,
+                    )
+                    queryset = queryset.filter(
+                        collections__slug__in=effective_collection_slugs
+                    )
+
                 queryset = queryset.distinct()
 
                 # Check count after collection filter
@@ -1206,7 +1235,8 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
 
                 if count_after_collection == 0:
                     logger.warning(
-                        f"Collection filter '{effective_collection_slug}' returned 0 results. Check if slug exists in DB."
+                        "Collection filter %s returned 0 results. Check if slugs exist in DB.",
+                        effective_collection_slugs,
                     )
 
             sub_slugs = [
@@ -1470,6 +1500,10 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     order_fields.insert(0, "-rank")
                 queryset = queryset.order_by(*order_fields)
 
+            primary_collection_for_shuffle = (
+                effective_collection_slugs[0] if effective_collection_slugs else None
+            )
+
             # --- 6. Pagination and Response ---
             final_count = queryset.count()
             logger.info(f"Final queryset count before pagination: {final_count}")
@@ -1499,7 +1533,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     shuffled = _shuffle_preset_results(
                         response.data,
                         search_name,
-                        effective_collection_slug or collection_slug,
+                        primary_collection_for_shuffle,
                     )
                     shuffled = _attach_resolved_collection_to_search_payload(
                         shuffled, resolved_collection_meta
@@ -1534,7 +1568,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 shuffled = _shuffle_preset_results(
                     response.data,
                     search_name,
-                    effective_collection_slug or collection_slug,
+                    primary_collection_for_shuffle,
                 )
                 shuffled = _attach_resolved_collection_to_search_payload(
                     shuffled, resolved_collection_meta
