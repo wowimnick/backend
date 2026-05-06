@@ -11,6 +11,7 @@ from .cache_tasks import *  # prewarm_class_search_cache_task (registered by nam
 from .giftcard_tasks import *
 from .notification_tasks import send_sms_task, send_campaign_task
 from . import corporate_tasks  # noqa: F401 — register send_corporate_inquiry_emails on workers
+from . import corporate_booking_tasks  # noqa: F401 — shortlist/booking lifecycle emails (worker must import)
 
 __all__ = [
     "process_daily_payouts",
