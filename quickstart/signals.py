@@ -37,6 +37,7 @@ from .models import (
     BlogPost,
     ClassesMain,
     ClassOption,
+    ImportedGoogleReview,
     Schedule,
     ScheduleInstance,
     StudentNote,
@@ -551,6 +552,48 @@ def student_review_response_notification(sender, instance, created, **kwargs):
         logger.info(
             f"Review response notification created for student {student_user.email} for review {instance.reviewId}"
         )
+
+
+def _bust_homepage_sections_cache():
+    """Invalidate short-lived homepage row cache (trending / date_night / next_week)."""
+    key = f"homepage_sections_v1:{getattr(settings, 'DJANGO_ENV', 'local')}"
+    try:
+        cache.delete(key)
+    except Exception as e:
+        logger.warning("homepage sections cache bust failed: %s", e)
+
+
+@receiver(post_save, sender=Reviews)
+@receiver(post_delete, sender=Reviews)
+def sync_denorm_platform_reviews(sender, instance, **kwargs):
+    from quickstart.utils.review_denorm import refresh_platform_review_aggregates_for_class
+
+    cid = getattr(instance, "classId_id", None)
+    if cid:
+        try:
+            refresh_platform_review_aggregates_for_class(cid)
+        except Exception as e:
+            logger.warning(
+                "refresh platform review denorm failed: %s", e, exc_info=True
+            )
+    _bust_homepage_sections_cache()
+
+
+@receiver(post_save, sender=ImportedGoogleReview)
+@receiver(post_delete, sender=ImportedGoogleReview)
+def sync_denorm_google_reviews(sender, instance, **kwargs):
+    from quickstart.utils.review_denorm import refresh_google_review_aggregates_for_business
+
+    bid = getattr(instance, "business_id", None)
+    if bid:
+        try:
+            refresh_google_review_aggregates_for_business(bid)
+        except Exception as e:
+            logger.warning(
+                "refresh google review denorm failed: %s", e, exc_info=True
+            )
+    _bust_homepage_sections_cache()
+
 
 @receiver(post_save, sender=Schedule)
 def notify_users_of_new_schedule(sender, instance: Schedule, created, **kwargs):
@@ -1125,6 +1168,7 @@ def nextjs_revalidate_on_class_save(sender, instance, **kwargs):
             "classes-search",
         ]
     )
+    _bust_homepage_sections_cache()
 
 
 @receiver(post_save, sender=BusinessInfo)
@@ -1153,3 +1197,4 @@ def nextjs_revalidate_on_collection(sender, instance, **kwargs):
     _schedule_next_revalidate(
         ["collections", "homepage-content", "classes-search"]
     )
+    _bust_homepage_sections_cache()

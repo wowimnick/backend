@@ -7,6 +7,7 @@ import resend
 from celery import shared_task
 from django.conf import settings
 from django.core.signing import Signer
+from django.db.utils import OperationalError
 from django.utils import timezone
 
 from quickstart.models import (
@@ -273,7 +274,11 @@ def send_business_marketing_campaign_task(self, campaign_id):
     logger.info("send_business_marketing_campaign_task campaign=%s sent=%s", campaign_id, sent_ok)
 
 
-@shared_task
+@shared_task(
+    autoretry_for=(OperationalError,),
+    retry_backoff=True,
+    retry_kwargs={"max_retries": 3},
+)
 def dispatch_due_scheduled_marketing_campaigns():
     """Beat task: move due scheduled campaigns to sending and queue Celery send."""
     from django.db import transaction

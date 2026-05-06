@@ -526,6 +526,16 @@ class BusinessInfo(models.Model):
         max_length=255,
     )
     featured = models.BooleanField(default=False)
+    google_review_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Denormalized count of ImportedGoogleReview rows for this business.",
+    )
+    google_avg_rating = models.DecimalField(
+        max_digits=4,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        help_text="Denormalized average rating from imported Google reviews.",
+    )
     isActive = models.BooleanField(default=False)
     createdAt = models.DateTimeField(auto_now_add=True)
     updatedAt = models.DateTimeField(auto_now=True)
@@ -1445,6 +1455,16 @@ class ClassesMain(models.Model):
     adminContactEmail = models.EmailField(null=True, blank=True)
     adminContactPhone = models.CharField(max_length=20, null=True, blank=True)
     search_vector = SearchVectorField(null=True, editable=False)
+    platform_review_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Denormalized count of approved platform reviews for this class.",
+    )
+    platform_avg_rating = models.DecimalField(
+        max_digits=4,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        help_text="Denormalized average rating (approved platform reviews only).",
+    )
     createdAt = models.DateTimeField(auto_now_add=True)
     updatedAt = models.DateTimeField(auto_now=True)
 
@@ -3888,6 +3908,10 @@ class Reviews(models.Model):
             models.Index(fields=["booking"]),
             models.Index(fields=["status"]),  # Index on status
             models.Index(fields=["reported"]),  # Index on reported
+            models.Index(
+                fields=["classId", "status"],
+                name="reviews_classid_status_idx",
+            ),
         ]
         permissions = [
             # --- Platform Admin Permissions ---

@@ -11,6 +11,7 @@ from quickstart.models import (
     Schedule,
     ClassCategory,
     ImportedGoogleReview,
+    Favorites,
 )
 
 # Important: Import the Google review serializer
@@ -368,9 +369,14 @@ class PublicClassSerializer(serializers.ModelSerializer):
         return obj.location
 
     def get_is_favorited(self, obj):
+        ids = self.context.get("favorited_ids")
+        if ids is not None:
+            return obj.pk in ids
         request = self.context.get("request")
         if request and hasattr(request, "user") and request.user.is_authenticated:
-            return request.user.favorited.filter(pk=obj.pk).exists()
+            return Favorites.objects.filter(
+                userId=request.user, classId=obj
+            ).exists()
         return False
 
     def _get_google_review_stats(self, obj):

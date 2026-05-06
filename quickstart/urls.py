@@ -594,7 +594,9 @@ urlpatterns = [
                 ),
                 path(
                     "account-confirm-email/",
-                    TemplateView.as_view(),
+                    TemplateView.as_view(
+                        template_name="account/email_verification_sent.html"
+                    ),
                     name="account_email_verification_sent",
                 ),
             ]

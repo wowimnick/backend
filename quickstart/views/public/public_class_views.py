@@ -10,7 +10,6 @@ from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import (
     Q,
-    Avg,
     Count,
     Min,
     Max,
@@ -193,6 +192,8 @@ PRESET_PREWARM_PAGE_SIZE = 50
 # Collections list (homepage_content mode=collections); per-env so staging/prod don't overwrite
 HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY = f"homepage_content_collections:{_CACHE_ENV}"
 HOMEPAGE_CONTENT_COLLECTIONS_CACHE_TIMEOUT = 60 * 60  # 1 hour (only used until next collection change)
+HOMEPAGE_SECTIONS_CACHE_KEY = f"homepage_sections_v1:{_CACHE_ENV}"
+HOMEPAGE_SECTIONS_CACHE_TIMEOUT = 300  # 5 min (trending / date_night / next_week rows)
 
 
 def _safe_cache_set(key, value, timeout=None):
@@ -558,20 +559,19 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
     def retrieve(self, request, *args, **kwargs):
         return super().retrieve(request, *args, **kwargs)
 
-    AVERAGE_RATING_SUBQUERY = Subquery(
-        Reviews.objects.filter(classId=OuterRef("pk"), status="approved")
-        .values("classId")
-        .annotate(avg_rating=Avg("rating"))
-        .values("avg_rating")[:1],
-        output_field=DecimalField(max_digits=3, decimal_places=1),
-    )
-    REVIEW_COUNT_SUBQUERY = Subquery(
-        Reviews.objects.filter(classId=OuterRef("pk"), status="approved")
-        .values("classId")
-        .annotate(count=Count("reviewId"))
-        .values("count")[:1],
-        output_field=IntegerField(),
-    )
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        request = self.request
+        if request.user.is_authenticated:
+            from quickstart.models import Favorites
+
+            ctx["favorited_ids"] = set(
+                Favorites.objects.filter(userId=request.user).values_list(
+                    "classId", flat=True
+                )
+            )
+        return ctx
+
     MIN_SESSION_PRICE_SUBQUERY = Subquery(
         Schedule.objects.filter(
             option__classId=OuterRef("pk"),
@@ -608,41 +608,10 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         return response
 
     def get_queryset(self):
-        # 1. Define Subqueries for Platform Data (Existing)
-        # We ensure these return Decimal/Integer types to prevent SQL casting errors
-        p_avg_subquery = Subquery(
-            Reviews.objects.filter(classId=OuterRef("pk"), status="approved")
-            .values("classId")
-            .annotate(avg_rating=Avg("rating"))
-            .values("avg_rating")[:1],
-            output_field=DecimalField(max_digits=3, decimal_places=2),
-        )
-        p_count_subquery = Subquery(
-            Reviews.objects.filter(classId=OuterRef("pk"), status="approved")
-            .values("classId")
-            .annotate(count=Count("reviewId"))
-            .values("count")[:1],
-            output_field=IntegerField(),
-        )
+        # Platform + Google review rollups are denormalized on ClassesMain / BusinessInfo
+        # (see platform_review_count, businessId__google_review_count) to avoid per-row subqueries.
 
-        # 2. Define Subqueries for Google Data (New)
-        # Note: We filter by businessId because Google reviews are attached to the Business, not the specific class
-        g_avg_subquery = Subquery(
-            ImportedGoogleReview.objects.filter(business=OuterRef("businessId"))
-            .values("business")
-            .annotate(avg=Avg("rating"))
-            .values("avg")[:1],
-            output_field=DecimalField(max_digits=3, decimal_places=2),
-        )
-        g_count_subquery = Subquery(
-            ImportedGoogleReview.objects.filter(business=OuterRef("businessId"))
-            .values("business")
-            .annotate(count=Count("id"))
-            .values("count")[:1],
-            output_field=IntegerField(),
-        )
-
-        # 3. Define Price Subqueries (Existing)
+        # Price subqueries (schedules still require scoped lookups)
         min_session_price_subquery = Subquery(
             Schedule.objects.filter(
                 option__classId=OuterRef("pk"),
@@ -710,13 +679,19 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 businessId__isActive=True,
                 businessId__verificationStatus="verified",
             )
-            # 4. Annotate Raw Counts and Ratings
+            # Annotate raw counts/ratings from denormalized columns
             .annotate(
-                # Coalesce ensures we get 0 instead of NULL if no reviews exist
-                p_rating_raw=Coalesce(p_avg_subquery, Value(Decimal("0.00"))),
-                p_count_raw=Coalesce(p_count_subquery, Value(0)),
-                g_rating_raw=Coalesce(g_avg_subquery, Value(Decimal("0.00"))),
-                g_count_raw=Coalesce(g_count_subquery, Value(0)),
+                p_rating_raw=Coalesce(
+                    F("platform_avg_rating"), Value(Decimal("0.00"))
+                ),
+                p_count_raw=Coalesce(F("platform_review_count"), Value(0)),
+                g_rating_raw=Coalesce(
+                    F("businessId__google_avg_rating"),
+                    Value(Decimal("0.00")),
+                ),
+                g_count_raw=Coalesce(
+                    F("businessId__google_review_count"), Value(0)
+                ),
             )
             # 5. Calculate Combined Totals (Used for Ranking)
             .annotate(
@@ -770,7 +745,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             "sort_order", "name"
         )
         serializer = PublicCollectionSerializer(
-            qs, many=True, context={"request": request}
+            qs, many=True, context=self.get_serializer_context()
         )
         return Response(serializer.data)
 
@@ -786,91 +761,105 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         Cache: mode=collections uses key HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY; invalidated when a collection changes.
         """
         mode = request.query_params.get("mode", "categories")
-        if mode == "collections":
+        if mode == "collections" and not request.user.is_authenticated:
             cached = cache.get(HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY)
             if cached is not None:
                 return Response(cached)
 
-        # 1. Base Query with availability check
-        base_qs = self.get_queryset()
-
-        # EFFICIENT FILTER: Check for future availability
-        future_instances = ScheduleInstance.objects.filter(
-            schedule__option__classId=OuterRef('pk'),
-            date__gte=timezone.now().date(),
-            status='scheduled'
-        )
-        base_qs = base_qs.filter(Exists(future_instances))
-        
-        # Calculate scores
-        base_qs = self._calculate_relevance_score(base_qs)
-
-        context = {'request': request}
         data = {}
+        cached_sections = None
+        if not request.user.is_authenticated:
+            cached_sections = cache.get(HOMEPAGE_SECTIONS_CACHE_KEY)
+        if cached_sections is not None:
+            data.update(cached_sections)
+        else:
+            # 1. Base Query with availability check
+            base_qs = self.get_queryset()
 
-        # 2. Trending (Highest Relevance) - Fetch this FIRST
-        trending_qs = base_qs.order_by('-relevance_score', '-classId')[:10]
-        # Serialize immediately to get the IDs
-        trending_data = HomepageClassSerializer(trending_qs, many=True, context=context).data
-        data["trending"] = trending_data
-        
-        # Extract IDs to prevent duplicates in the next section
-        trending_ids = [item['classId'] for item in trending_data]
-
-        # 3. Date Night Collection
-        date_night_slug = "date-night"
-        date_night_qs = base_qs.filter(collections__slug=date_night_slug)
-        
-        # EXCLUDE classes that are already in the Trending list
-        if trending_ids:
-            date_night_qs = date_night_qs.exclude(pk__in=trending_ids)
-            
-        # Randomize the remaining results so it's different every time
-        date_night_qs = date_night_qs.order_by('?')[:10]
-        
-        data["date_night"] = HomepageClassSerializer(date_night_qs, many=True, context=context).data
-
-        # 3b. Next Week — classes with at least one schedule in the next calendar week, ordered by most reviews
-        today = timezone.now().date()
-        # Next Monday (weekday 0); if today is Monday, "next week" starts next Monday
-        days_until_next_monday = (7 - today.weekday()) % 7
-        if days_until_next_monday == 0:
-            days_until_next_monday = 7
-        next_week_start = today + timedelta(days=days_until_next_monday)
-        next_week_end = next_week_start + timedelta(days=6)
-        next_week_instances = ScheduleInstance.objects.filter(
-            schedule__option__classId=OuterRef("pk"),
-            date__gte=next_week_start,
-            date__lte=next_week_end,
-            status="scheduled",
-        )
-        next_week_qs = base_qs.filter(Exists(next_week_instances)).order_by(
-            "-review_count", "-average_rating", "-classId"
-        )[:10]
-        # Soonest (date, time) per class for "Happening Next Week" cards
-        next_week_class_ids = list(next_week_qs.values_list("pk", flat=True))
-        soonest_per_class = {}
-        if next_week_class_ids:
-            soonest_instances = (
-                ScheduleInstance.objects.filter(
-                    schedule__option__classId__in=next_week_class_ids,
-                    date__gte=next_week_start,
-                    date__lte=next_week_end,
-                    status="scheduled",
-                )
-                .order_by("schedule__option__classId", "date", "time")
-                .distinct("schedule__option__classId")
-                .values("schedule__option__classId", "date", "time")
+            # EFFICIENT FILTER: Check for future availability
+            future_instances = ScheduleInstance.objects.filter(
+                schedule__option__classId=OuterRef("pk"),
+                date__gte=timezone.now().date(),
+                status="scheduled",
             )
-            for row in soonest_instances:
-                soonest_per_class[row["schedule__option__classId"]] = {
-                    "date": row["date"],
-                    "time": row["time"],
-                }
-        next_week_context = {**context, "soonest_per_class": soonest_per_class}
-        data["next_week"] = HomepageClassSerializer(
-            next_week_qs, many=True, context=next_week_context
-        ).data
+            base_qs = base_qs.filter(Exists(future_instances))
+
+            # Calculate scores
+            base_qs = self._calculate_relevance_score(base_qs)
+
+            context = self.get_serializer_context()
+
+            # 2. Trending (Highest Relevance) - Fetch this FIRST
+            trending_qs = base_qs.order_by("-relevance_score", "-classId")[:10]
+            trending_data = HomepageClassSerializer(
+                trending_qs, many=True, context=context
+            ).data
+            data["trending"] = trending_data
+
+            trending_ids = [item["classId"] for item in trending_data]
+
+            # 3. Date Night Collection
+            date_night_slug = "date-night"
+            date_night_qs = base_qs.filter(collections__slug=date_night_slug)
+            if trending_ids:
+                date_night_qs = date_night_qs.exclude(pk__in=trending_ids)
+            date_night_qs = date_night_qs.order_by("?")[:10]
+            data["date_night"] = HomepageClassSerializer(
+                date_night_qs, many=True, context=context
+            ).data
+
+            # 3b. Next Week
+            today = timezone.now().date()
+            days_until_next_monday = (7 - today.weekday()) % 7
+            if days_until_next_monday == 0:
+                days_until_next_monday = 7
+            next_week_start = today + timedelta(days=days_until_next_monday)
+            next_week_end = next_week_start + timedelta(days=6)
+            next_week_instances = ScheduleInstance.objects.filter(
+                schedule__option__classId=OuterRef("pk"),
+                date__gte=next_week_start,
+                date__lte=next_week_end,
+                status="scheduled",
+            )
+            next_week_qs = base_qs.filter(Exists(next_week_instances)).order_by(
+                "-review_count", "-average_rating", "-classId"
+            )[:10]
+            next_week_class_ids = list(next_week_qs.values_list("pk", flat=True))
+            soonest_per_class = {}
+            if next_week_class_ids:
+                soonest_instances = (
+                    ScheduleInstance.objects.filter(
+                        schedule__option__classId__in=next_week_class_ids,
+                        date__gte=next_week_start,
+                        date__lte=next_week_end,
+                        status="scheduled",
+                    )
+                    .order_by("schedule__option__classId", "date", "time")
+                    .distinct("schedule__option__classId")
+                    .values("schedule__option__classId", "date", "time")
+                )
+                for row in soonest_instances:
+                    soonest_per_class[row["schedule__option__classId"]] = {
+                        "date": row["date"],
+                        "time": row["time"],
+                    }
+            next_week_context = {**context, "soonest_per_class": soonest_per_class}
+            data["next_week"] = HomepageClassSerializer(
+                next_week_qs, many=True, context=next_week_context
+            ).data
+
+            if not request.user.is_authenticated:
+                _safe_cache_set(
+                    HOMEPAGE_SECTIONS_CACHE_KEY,
+                    {
+                        "trending": data["trending"],
+                        "date_night": data["date_night"],
+                        "next_week": data["next_week"],
+                    },
+                    timeout=HOMEPAGE_SECTIONS_CACHE_TIMEOUT,
+                )
+
+        context = self.get_serializer_context()
 
         # 4. Mode Selection: only collections are used (categories removed from platform)
         if mode == "collections":
@@ -1055,11 +1044,11 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         page = self.paginate_queryset(queryset)
         if page is not None:
             serializer = self.get_serializer(
-                page, many=True, context={"request": request}
+                page, many=True, context=self.get_serializer_context()
             )
             return self.get_paginated_response(serializer.data)
         serializer = self.get_serializer(
-            queryset, many=True, context={"request": request}
+            queryset, many=True, context=self.get_serializer_context()
         )
         return Response(serializer.data)
 
@@ -1254,18 +1243,6 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     )
 
                 queryset = queryset.distinct()
-
-                # Check count after collection filter
-                count_after_collection = queryset.count()
-                logger.info(
-                    f"QuerySet Count after Collection Filter: {count_after_collection}"
-                )
-
-                if count_after_collection == 0:
-                    logger.warning(
-                        "Collection filter %s returned 0 results. Check if slugs exist in DB.",
-                        effective_collection_slugs,
-                    )
 
             sub_slugs = [
                 s.strip()
@@ -1535,6 +1512,11 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             # --- 6. Pagination and Response ---
             final_count = queryset.count()
             logger.info(f"Final queryset count before pagination: {final_count}")
+            if final_count == 0 and effective_collection_slugs:
+                logger.warning(
+                    "Collection filter %s returned 0 results. Check if slugs exist in DB.",
+                    effective_collection_slugs,
+                )
 
             if _is_count_only_request(request):
                 return Response({"count": final_count})
@@ -1542,7 +1524,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             page = self.paginate_queryset(queryset)
             if page is not None:
                 serializer = self.get_serializer(
-                    page, many=True, context={"request": request}
+                    page, many=True, context=self.get_serializer_context()
                 )
                 response = self.get_paginated_response(serializer.data)
                 if preset_collection_cache_key:
@@ -1577,7 +1559,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 return response
 
             serializer = self.get_serializer(
-                queryset, many=True, context={"request": request}
+                queryset, many=True, context=self.get_serializer_context()
             )
             response = Response(serializer.data)
             if preset_collection_cache_key:
