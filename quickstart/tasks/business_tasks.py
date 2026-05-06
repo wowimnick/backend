@@ -12,6 +12,9 @@ import logging
 
 from quickstart.models import BusinessInfo, ClassesMain, ClassCollection, BlogPost, BlogCategory
 from quickstart.utils.services import CollectionAutoAssigner
+from quickstart.utils.experience_theme_coverage import (
+    ensure_preset_collection_memberships,
+)
 from quickstart.utils.description_formatter import DescriptionFormatter
 from quickstart.utils.blog_ai_service import generate_blog_draft
 import resend
@@ -125,6 +128,20 @@ def update_trending_collections_task():
         count += 1
     
     logger.info(f"Updated trending collections for {count} classes.")
+
+
+@shared_task
+def ensure_preset_experience_theme_coverage_task(thematic_collection_ids: list[int]):
+    """
+    Chained after ``update_trending_collections_task`` when bulk-loading the curated
+    "experience themes" preset: link any active classes that still belong to zero of
+    those collections (keyword title/description match first, otherwise default).
+    """
+    try:
+        return ensure_preset_collection_memberships(thematic_collection_ids)
+    except Exception as e:
+        logger.exception("ensure_preset_experience_theme_coverage_task failed: %s", e)
+
 
 @shared_task
 def notify_businesses_of_expiring_schedules():

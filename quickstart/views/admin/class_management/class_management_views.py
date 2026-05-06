@@ -168,16 +168,10 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 output_field=FloatField(),
             )
 
-            # Platform review count
-            approved_review_count_subquery = Subquery(
-                Reviews.objects.filter(classId=OuterRef("pk"), status="approved")
-                .values("classId")
-                .annotate(c=Count("pk"))
-                .values("c"),
-                output_field=Count("pk").output_field,
-            )
+            # Platform review counts use ClassesMain.platform_review_count (denormalized).
+            # Google counts use a subquery (see also BusinessInfo.google_review_count denorm).
 
-            # NEW: Google review count
+            # NEW: Google review count per business for this queryset
             google_review_count_subquery = Subquery(
                 ImportedGoogleReview.objects.filter(business=OuterRef("businessId"))
                 .values("business")
@@ -233,11 +227,6 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 business_featured=F("businessId__featured"),
                 average_rating=Coalesce(
                     approved_rating_subquery, Value(0.0), output_field=FloatField()
-                ),
-                platform_review_count=Coalesce(
-                    approved_review_count_subquery,
-                    Value(0),
-                    output_field=Count("pk").output_field,
                 ),
                 google_review_count=Coalesce(
                     google_review_count_subquery,
