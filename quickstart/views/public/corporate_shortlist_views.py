@@ -10,7 +10,10 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from django.db.models import Prefetch
+
 from quickstart.models import (
+    ClassImage,
     CorporateBooking,
     CorporateInquiry,
     CorporateShortlist,
@@ -21,23 +24,35 @@ from quickstart.serializers.public.corporate_shortlist_serializers import (
 )
 from quickstart.services.corporate_billing import create_or_reuse_deposit_payment_intent
 from quickstart.utils.corporate_events import log_corporate_booking_event
+from quickstart.utils.corporate_shortlist_images import effective_gallery_urls_for_option
+from quickstart.utils.corporate_shortlist_location import (
+    location_label_for_option,
+    maps_search_query_for_option,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def _opt_out(o: CorporateShortlistOption) -> dict:
+    slug = ""
+    sc = getattr(o, "source_class", None)
+    if sc is not None:
+        slug = (getattr(sc, "slug", None) or "").strip()
     return {
         "id": str(o.id),
         "position": o.position,
         "source_type": o.source_type,
+        "class_slug": slug,
         "title": o.title,
         "host_name": o.host_name,
         "tagline": o.tagline,
         "description": o.description,
         "inclusions": o.inclusions or [],
         "cover_image_url": o.cover_image_url or "",
-        "gallery_urls": o.gallery_urls or [],
+        "gallery_urls": effective_gallery_urls_for_option(o),
         "location_text": o.location_text or "",
+        "location_label": location_label_for_option(o),
+        "maps_query": maps_search_query_for_option(o),
         "duration_minutes": o.duration_minutes,
         "min_headcount": o.min_headcount,
         "max_headcount": o.max_headcount,
@@ -101,9 +116,18 @@ def _touch_shortlist_view(sl: CorporateShortlist):
 
 def _build_payload(sl: CorporateShortlist) -> dict:
     inq = sl.inquiry
-    options = list(
-        sl.options.filter(is_archived=False).order_by("position", "created_at")
+    option_qs = (
+        CorporateShortlistOption.objects.filter(shortlist=sl, is_archived=False)
+        .select_related("source_class", "source_class__location_ref")
+        .prefetch_related(
+            Prefetch(
+                "source_class__images",
+                queryset=ClassImage.objects.order_by("imageId"),
+            )
+        )
+        .order_by("position", "created_at")
     )
+    options = list(option_qs)
     booking = _active_booking(sl)
     return {
         "id": str(sl.id),

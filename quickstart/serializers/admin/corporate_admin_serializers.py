@@ -92,6 +92,9 @@ class CorporateShortlistOptionWriteSerializer(serializers.ModelSerializer):
 
 class CorporateShortlistOptionReadSerializer(serializers.ModelSerializer):
     source_class_slug = serializers.SerializerMethodField()
+    gallery_urls = serializers.SerializerMethodField()
+    location_label = serializers.SerializerMethodField()
+    maps_query = serializers.SerializerMethodField()
 
     class Meta:
         model = CorporateShortlistOption
@@ -110,6 +113,8 @@ class CorporateShortlistOptionReadSerializer(serializers.ModelSerializer):
             "cover_image_url",
             "gallery_urls",
             "location_text",
+            "location_label",
+            "maps_query",
             "duration_minutes",
             "min_headcount",
             "max_headcount",
@@ -124,6 +129,27 @@ class CorporateShortlistOptionReadSerializer(serializers.ModelSerializer):
     def get_source_class_slug(self, obj):
         sc = obj.source_class
         return getattr(sc, "slug", None) if sc else None
+
+    def get_gallery_urls(self, obj):
+        from quickstart.utils.corporate_shortlist_images import (
+            effective_gallery_urls_for_option,
+        )
+
+        return effective_gallery_urls_for_option(obj)
+
+    def get_location_label(self, obj):
+        from quickstart.utils.corporate_shortlist_location import (
+            location_label_for_option,
+        )
+
+        return location_label_for_option(obj)
+
+    def get_maps_query(self, obj):
+        from quickstart.utils.corporate_shortlist_location import (
+            maps_search_query_for_option,
+        )
+
+        return maps_search_query_for_option(obj)
 
 
 class CorporateShortlistAdminSerializer(serializers.ModelSerializer):

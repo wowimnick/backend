@@ -5,7 +5,7 @@ import os
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Prefetch, Q
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -121,14 +121,34 @@ class AdminCorporateShortlistViewSet(
     permission_classes = [IsAuthenticated, CanAccessCorporateAdmin]
     serializer_class = CorporateShortlistAdminSerializer
     queryset = CorporateShortlist.objects.select_related("inquiry").prefetch_related(
-        "options"
+        Prefetch(
+            "options",
+            queryset=CorporateShortlistOption.objects.select_related(
+                "source_class", "source_class__location_ref"
+            ).prefetch_related(
+                Prefetch(
+                    "source_class__images",
+                    queryset=ClassImage.objects.order_by("imageId"),
+                )
+            ).order_by("position", "created_at"),
+        ),
     )
     lookup_field = "pk"
     http_method_names = ["get", "put", "patch", "head", "options", "post"]
 
     def get_queryset(self):
         return CorporateShortlist.objects.select_related("inquiry").prefetch_related(
-            "options"
+            Prefetch(
+                "options",
+                queryset=CorporateShortlistOption.objects.select_related(
+                    "source_class", "source_class__location_ref"
+                ).prefetch_related(
+                    Prefetch(
+                        "source_class__images",
+                        queryset=ClassImage.objects.order_by("imageId"),
+                    )
+                ).order_by("position", "created_at"),
+            ),
         )
 
     @action(detail=True, methods=["post"], url_path="options")
@@ -232,7 +252,14 @@ class AdminCorporateShortlistOptionViewSet(
     viewsets.GenericViewSet,
 ):
     permission_classes = [IsAuthenticated, CanAccessCorporateAdmin]
-    queryset = CorporateShortlistOption.objects.select_related("shortlist")
+    queryset = CorporateShortlistOption.objects.select_related(
+        "shortlist", "source_class", "source_class__location_ref"
+    ).prefetch_related(
+        Prefetch(
+            "source_class__images",
+            queryset=ClassImage.objects.order_by("imageId"),
+        )
+    )
     serializer_class = CorporateShortlistOptionWriteSerializer
     lookup_field = "pk"
 
