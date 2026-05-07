@@ -877,10 +877,8 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 .order_by("sort_order", "name")
                 .prefetch_related(child_prefetch)
             )
-            if not featured_qs.exists():
-                featured_qs = base_coll.order_by("sort_order", "name").prefetch_related(
-                    child_prefetch
-                )
+            # Do not fall back to "all collections": an empty featured strip is intentional
+            # when every toggle is off—otherwise admins think show_in_featured_categories is ignored.
             serialized_collections = PublicCollectionSerializer(
                 featured_qs, many=True, context=context
             ).data
@@ -1510,19 +1508,27 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             )
 
             # --- 6. Pagination and Response ---
-            final_count = queryset.count()
-            logger.info(f"Final queryset count before pagination: {final_count}")
-            if final_count == 0 and effective_collection_slugs:
-                logger.warning(
-                    "Collection filter %s returned 0 results. Check if slugs exist in DB.",
-                    effective_collection_slugs,
-                )
-
+            # count_only: one COUNT query only. Otherwise Paginator.count would duplicate
+            # the same expensive COUNT this queryset already pays for in paginate_queryset.
             if _is_count_only_request(request):
+                final_count = queryset.count()
+                logger.info("Final queryset count (count_only): %s", final_count)
+                if final_count == 0 and effective_collection_slugs:
+                    logger.warning(
+                        "Collection filter %s returned 0 results. Check if slugs exist in DB.",
+                        effective_collection_slugs,
+                    )
                 return Response({"count": final_count})
 
             page = self.paginate_queryset(queryset)
             if page is not None:
+                total = self.paginator.page.paginator.count
+                logger.info("Final queryset count (paginated): %s", total)
+                if total == 0 and effective_collection_slugs:
+                    logger.warning(
+                        "Collection filter %s returned 0 results. Check if slugs exist in DB.",
+                        effective_collection_slugs,
+                    )
                 serializer = self.get_serializer(
                     page, many=True, context=self.get_serializer_context()
                 )

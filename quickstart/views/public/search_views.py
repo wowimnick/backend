@@ -183,8 +183,6 @@ class PublicCollectionPlacementListView(APIView):
             qs = base.filter(show_in_featured_categories=True).order_by(
                 "sort_order", "name"
             )
-            if not qs.exists():
-                qs = base.order_by("sort_order", "name")
         else:
             qs = base.order_by("sort_order", "name")
         ser = PublicCollectionSerializer(qs, many=True, context={"request": request})
