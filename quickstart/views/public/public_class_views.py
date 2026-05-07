@@ -118,7 +118,7 @@ def _public_class_options_prefetch_queryset():
 # Scope cache keys by environment so staging and prod share Redis without clearing each other's cache
 _CACHE_ENV = getattr(settings, "DJANGO_ENV", "local")
 
-DEFAULT_SEARCH_RADIUS_KM = 80
+DEFAULT_SEARCH_RADIUS_KM = 100
 W_FEATURED = 1.3
 W_QUALITY = 0.8
 W_RATING = 1.0
@@ -177,6 +177,21 @@ PRESET_LOCATIONS = {
     "Scarborough": (43.7731, -79.2574),
     "North York": (43.7615, -79.4111),
 }
+
+
+def _is_toronto_gta_search_name(search_name: str) -> bool:
+    """True when the location label should use GTA-wide radius from downtown (no merged polygon)."""
+    if not search_name:
+        return False
+    n = search_name.strip().lower()
+    return n == "toronto" or n.startswith("toronto (")
+
+
+def _toronto_gta_center_point() -> Point:
+    lat, lng = PRESET_LOCATIONS["Toronto"]
+    return Point(float(lng), float(lat), srid=4326)
+
+
 PRESET_CACHE_PREFIX = "public_class_search_preset"
 # Version key per env so staging/prod can share Redis without clearing each other
 PRESET_CACHE_VERSION_KEY = f"public_class_search_preset_version:{_CACHE_ENV}"
@@ -888,28 +903,50 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 name = (row.get("name") or "").strip().lower()
                 return slug in ("", "all") or name == "all"
 
-            filtered_collections = [
-                row for row in serialized_collections if not _is_duplicate_all_chip(row)
-            ]
-            # Synthetic "All" chip must use empty slug so URL with no `collection` param matches selection.
+            withdrawn_all_rows = []
+            filtered_collections = []
+            for row in serialized_collections:
+                if _is_duplicate_all_chip(row):
+                    withdrawn_all_rows.append(row)
+                else:
+                    filtered_collections.append(row)
+
+            def _source_for_synthetic_all_chip(rows):
+                """Prefer slug=all, then slug blank, then any duplicate row."""
+                if not rows:
+                    return None
+                for prefer in ("all", ""):
+                    for row in rows:
+                        if (row.get("slug") or "").strip().lower() == prefer:
+                            return row
+                return rows[0]
+
+            enrich = _source_for_synthetic_all_chip(withdrawn_all_rows)
+
+            # Synthetic routing chip must keep slug/key empty (& collection= aligns with unset filter).
+            # If an admin configures a featured row named/slugged "All", merge its visuals into this chip.
+            display_name = str((enrich.get("name") if enrich else "") or "").strip() or "All"
+            merged_description = str((enrich.get("description") if enrich else "") or "").strip()
+
+            # Synthetic "All" chip — slug/key forced empty; visuals from DB-backed "All" when present.
             all_chip = {
                 "id": None,
-                "name": "All",
+                "name": display_name,
                 "slug": "",
                 "key": "",
                 "parent_id": None,
                 "has_children": False,
                 "children": [],
-                "description": "",
-                "image_medium_url": None,
+                "description": merged_description,
+                "image_medium_url": enrich.get("image_medium_url") if enrich else None,
                 "sort_order": -1,
-                "search_aliases": [],
-                "is_searchable": True,
+                "search_aliases": list((enrich or {}).get("search_aliases") or []),
+                "is_searchable": bool((enrich or {}).get("is_searchable", True)),
                 "show_in_i_want": False,
                 "show_in_featured_categories": True,
                 "show_on_homepage_rows": True,
-                "icon_name": "",
-                "color": "",
+                "icon_name": str((enrich or {}).get("icon_name") or "").strip(),
+                "color": str((enrich or {}).get("color") or "").strip(),
                 "is_all": True,
             }
             data["collections"] = [all_chip] + filtered_collections
@@ -1086,6 +1123,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         """
         Handles class searches with a hybrid approach:
         - Uses precise polygon boundaries for known city/area searches.
+        - "Toronto" / "Toronto (...)" uses a fixed GTA-wide radius from downtown (no merged polygon).
         - Handles province-wide searches.
         - Falls back to a radius search for specific addresses or landmarks.
         - Caches results for preset (banner) locations; cache invalidates when classes/schedules change.
@@ -1253,6 +1291,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
 
             user_location_point = None
             is_province_search = False
+            metro_area_handled = False
 
             # --- 2. Geographic Search Logic ---
             boundary = None
@@ -1277,13 +1316,41 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     except (ValueError, TypeError):
                         user_location_point = None
 
+            elif search_name and _is_toronto_gta_search_name(search_name):
+                # No single GTA geometry in DB: radius from downtown Toronto (matches PRESET_LOCATIONS).
+                metro_area_handled = True
+                metro_point = _toronto_gta_center_point()
+                metro_radius_km = (
+                    float(req_radius_km_str)
+                    if req_radius_km_str
+                    and req_radius_km_str.replace(".", "", 1).isdigit()
+                    else float(DEFAULT_SEARCH_RADIUS_KM)
+                )
+                queryset = queryset.filter(
+                    point__distance_lte=(metro_point, D(km=metro_radius_km))
+                )
+                logger.info(
+                    "GTA metro radius search for %r: %skm from Toronto center",
+                    search_name,
+                    metro_radius_km,
+                )
+                if req_lat_str and req_lng_str:
+                    try:
+                        user_location_point = Point(
+                            float(req_lng_str), float(req_lat_str), srid=4326
+                        )
+                    except (ValueError, TypeError):
+                        user_location_point = metro_point
+                else:
+                    user_location_point = metro_point
+
             elif search_name:
                 boundary = GeographicBoundary.objects.filter(
                     Q(name__iexact=search_name)
                     | Q(name__istartswith=f"{search_name} (")
                 ).first()
 
-            if boundary:
+            if not metro_area_handled and boundary:
                 queryset_in_boundary = queryset.filter(point__within=boundary.geom)
                 if queryset_in_boundary.exists():
                     logger.info(
@@ -1333,7 +1400,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                         logger.warning(f"Boundary fallback failed: {e}")
                         queryset = queryset_before_fallback
 
-            elif req_lat_str and req_lng_str and not is_province_search:
+            elif not metro_area_handled and req_lat_str and req_lng_str and not is_province_search:
                 try:
                     user_location_point = Point(
                         float(req_lng_str), float(req_lat_str), srid=4326
@@ -1342,7 +1409,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                         float(req_radius_km_str)
                         if req_radius_km_str
                         and req_radius_km_str.replace(".", "", 1).isdigit()
-                        else 25.0
+                        else float(DEFAULT_SEARCH_RADIUS_KM)
                     )
                     logger.info(
                         f"Performing radius search: {search_radius_km}km around {req_lat_str}, {req_lng_str}"
