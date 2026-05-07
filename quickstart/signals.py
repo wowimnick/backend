@@ -761,38 +761,6 @@ def queue_description_ai_formatting(sender, instance, created, **kwargs):
     transaction.on_commit(_queue)
 
 
-@receiver(post_save, sender=ClassCollection)
-def trigger_reclassification_on_collection_change(sender, instance, created, update_fields, **kwargs):
-    """
-    If an Automated Collection is created or its rules change, we must 
-    re-evaluate ALL active classes.
-    """
-    if instance.type != 'automated':
-        return
-
-    should_run = False
-    if created:
-        should_run = True
-    elif update_fields:
-        relevant_fields = {'automation_rules', 'type', 'is_active'}
-        if any(field in update_fields for field in relevant_fields):
-            should_run = True
-    else:
-        should_run = True
-
-    if should_run:
-        # LOGIC CHANGE HERE:
-        # Instead of fetching IDs and queuing N tasks, we queue 1 task 
-        # that handles the iteration internally.
-        
-        logger.info(f"🔄 Collection '{instance.name}' changed. Queueing bulk re-classification.")
-
-        # Use the existing task that iterates over all active classes (send by name to avoid importing tasks at startup)
-        def _queue_update_trending():
-            from CEBackend.celery import app as celery_app
-            celery_app.send_task("quickstart.tasks.business_tasks.update_trending_collections_task")
-        transaction.on_commit(_queue_update_trending)
-        
 @receiver(post_save, sender=Payout)
 def send_payout_notification(sender, instance: Payout, created, **kwargs):
     """

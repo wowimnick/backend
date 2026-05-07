@@ -1,8 +1,103 @@
 """Helpers for BusinessLocation <-> BusinessInfo and ClassesMain sync."""
 
+import re
+
 from django.contrib.gis.geos import Point
 
 from quickstart.models import BusinessInfo, BusinessLocation, ClassesMain
+
+
+def normalize_business_location_fingerprint_tuple(
+    address=None,
+    unit=None,
+    city=None,
+    state=None,
+    zip_code=None,
+):
+    """Normalized address components for duplicate detection."""
+
+    def norm(s):
+        return re.sub(r"\s+", " ", (s or "").strip().lower())
+
+    z = re.sub(r"\s+", "", (zip_code or "").strip().lower())
+    return (
+        norm(address or ""),
+        norm(unit or ""),
+        norm(city or ""),
+        norm(state or ""),
+        z,
+    )
+
+
+def business_location_identity_key_from_values(
+    address=None,
+    unit=None,
+    city=None,
+    state=None,
+    zip_code=None,
+    latitude=None,
+    longitude=None,
+):
+    """
+    Stable identity for duplicate checks: normalized address tuple, or rounded lat/lng
+    when there is no usable street line.
+    """
+    tup = normalize_business_location_fingerprint_tuple(
+        address, unit, city, state, zip_code
+    )
+    if any(tup):
+        return ("fields", tup)
+    try:
+        if latitude is not None and longitude is not None:
+            return (
+                "ll",
+                round(float(latitude), 5),
+                round(float(longitude), 5),
+            )
+    except (TypeError, ValueError):
+        pass
+    return ("none", None)
+
+
+def business_location_identity_key_from_instance(loc: BusinessLocation):
+    return business_location_identity_key_from_values(
+        loc.address,
+        loc.unit,
+        loc.city,
+        loc.state,
+        loc.zip_code,
+        loc.latitude,
+        loc.longitude,
+    )
+
+
+def business_location_identity_key_from_merged(instance, data: dict):
+    """Merge serializer `data` with `instance` fields for a partial PATCH identity."""
+    if instance is None:
+        return business_location_identity_key_from_values(
+            data.get("address"),
+            data.get("unit"),
+            data.get("city"),
+            data.get("state"),
+            data.get("zip_code"),
+            data.get("latitude"),
+            data.get("longitude"),
+        )
+
+    def pick(field):
+        if field in data:
+            return data.get(field)
+        return getattr(instance, field, None)
+
+    return business_location_identity_key_from_values(
+        pick("address"),
+        pick("unit"),
+        pick("city"),
+        pick("state"),
+        pick("zip_code"),
+        pick("latitude"),
+        pick("longitude"),
+    )
 
 
 def business_location_to_class_field_dict(loc):
@@ -64,6 +159,37 @@ def sync_primary_location_from_business_profile(business: BusinessInfo):
         primary.show_exact_location = business.showExactLocation
         primary.save()
         return
+
+    profile_key = business_location_identity_key_from_values(
+        business.businessAddress,
+        business.businessUnit or "",
+        business.businessCity,
+        business.businessState,
+        business.businessZipCode or "",
+        business.latitude,
+        business.longitude,
+    )
+    if profile_key[0] != "none":
+        for loc in BusinessLocation.objects.filter(
+            business=business, is_active=True
+        ).order_by("-is_primary", "name"):
+            if business_location_identity_key_from_instance(loc) == profile_key:
+                BusinessLocation.objects.filter(
+                    business=business, is_primary=True
+                ).update(is_primary=False)
+                loc.is_primary = True
+                loc.address = business.businessAddress
+                loc.unit = business.businessUnit or ""
+                loc.city = business.businessCity
+                loc.state = business.businessState
+                loc.zip_code = business.businessZipCode or ""
+                loc.latitude = business.latitude
+                loc.longitude = business.longitude
+                loc.point = pt
+                loc.show_exact_location = business.showExactLocation
+                loc.save()
+                sync_business_profile_from_primary_location(loc)
+                return
 
     BusinessLocation.objects.filter(business=business, is_primary=True).update(
         is_primary=False

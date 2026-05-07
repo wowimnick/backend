@@ -596,6 +596,7 @@ class PublicCollectionSerializer(serializers.ModelSerializer):
     parent_id = serializers.IntegerField(read_only=True, allow_null=True)
     has_children = serializers.SerializerMethodField()
     children = serializers.SerializerMethodField()
+    active_class_count = serializers.SerializerMethodField()
 
     class Meta:
         model = ClassCollection
@@ -617,7 +618,14 @@ class PublicCollectionSerializer(serializers.ModelSerializer):
             "show_on_homepage_rows",
             "icon_name",
             "color",
+            "active_class_count",
         ]
+
+    def get_active_class_count(self, obj):
+        ann = getattr(obj, "active_class_count", None)
+        if ann is not None:
+            return int(ann)
+        return obj.classes.filter(status="active").distinct().count()
 
     def get_has_children(self, obj):
         pref = getattr(obj, "_prefetched_objects_cache", None)
@@ -669,14 +677,4 @@ class PublicCollectionSerializer(serializers.ModelSerializer):
         return None
     
     def get_image_medium_url(self, obj):
-        url = self._get_resized_url(obj, "medium")
-        if url is not None:
-            return url
-        # Fallback to storage URL when CloudFront resized version isn't available
-        # (e.g. CLOUDFRONT_DOMAIN not set, or resized not yet generated).
-        if obj.image and obj.image.name:
-            try:
-                return obj.image.url
-            except (ValueError, AttributeError):
-                pass
-        return None
+        return self._get_resized_url(obj, "medium")

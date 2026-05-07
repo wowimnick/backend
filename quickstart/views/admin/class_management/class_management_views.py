@@ -1125,6 +1125,49 @@ class AdminCollectionViewSet(viewsets.ModelViewSet):
             logger.info("Updated collection and triggered revalidation + prewarm")
         return response
 
+    @action(detail=True, methods=["post"], url_path="reclassify")
+    def reclassify(self, request, pk=None):
+        """
+        Queue Gemini-based membership pass for this automated collection only (all active classes).
+        Does not run on save — explicit admin trigger only.
+        """
+        collection = self.get_object()
+        if collection.type != "automated":
+            return Response(
+                {"detail": "Only automated collections can run AI curator reclassification."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        raw_rules = collection.automation_rules if isinstance(collection.automation_rules, dict) else {}
+        ai_criteria = (raw_rules.get("ai_criteria") or "").strip()
+        if not ai_criteria:
+            return Response(
+                {"detail": "This collection has no AI criteria configured."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        def _enqueue():
+            from CEBackend.celery import app as celery_app
+
+            celery_app.send_task(
+                "quickstart.tasks.business_tasks.reclassify_automated_collection_task",
+                args=[collection.pk],
+            )
+
+        transaction.on_commit(_enqueue)
+        logger.info(
+            "Queued reclassify_automated_collection_task for collection pk=%s slug=%s",
+            collection.pk,
+            collection.slug,
+        )
+        return Response(
+            {
+                "status": "queued",
+                "collection_id": collection.pk,
+                "slug": collection.slug,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
         doomed_slug = instance.slug

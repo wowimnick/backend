@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 
 BASE_PATH = "/api/classes/search/"
 PAGE_SIZES = [24, PRESET_PREWARM_PAGE_SIZE]
+# Preset banner search uses infinite scroll; page=1 alone always cold-missed page 2+.
+PREWARM_PRESET_LOCATION_PAGES = ["1", "2"]
 
 # Delay between each search request to avoid hitting DRF anon throttle (e.g. 500/min).
 # Overridable via settings.PREWARM_REQUEST_DELAY_SECONDS.
@@ -104,39 +106,43 @@ def _run_prewarm(
     if locations:
         for name, (lat, lng) in locations_to_prewarm:
             for page_size in PAGE_SIZES:
-                params = {
-                    "lat": lat,
-                    "lng": lng,
-                    "location": name,
-                    "page": "1",
-                    "page_size": str(page_size),
-                }
-                try:
-                    resp = client.get(BASE_PATH, params)
-                    _prewarm_delay()
-                    if resp.status_code == 200:
-                        count = len(resp.json().get("results", []))
-                        logger.info(
-                            "Prewarm preset %s (page_size=%s): %s results cached",
-                            name,
-                            page_size,
-                            count,
-                        )
-                    else:
+                for page in PREWARM_PRESET_LOCATION_PAGES:
+                    params = {
+                        "lat": lat,
+                        "lng": lng,
+                        "location_search": f"{name}, ON",
+                        "page": page,
+                        "page_size": str(page_size),
+                    }
+                    try:
+                        resp = client.get(BASE_PATH, params)
+                        _prewarm_delay()
+                        if resp.status_code == 200:
+                            count = len(resp.json().get("results", []))
+                            logger.info(
+                                "Prewarm preset %s (page=%s page_size=%s): %s results cached",
+                                name,
+                                page,
+                                page_size,
+                                count,
+                            )
+                        else:
+                            logger.warning(
+                                "Prewarm preset %s (page=%s page_size=%s): HTTP %s",
+                                name,
+                                page,
+                                page_size,
+                                resp.status_code,
+                            )
+                    except Exception as e:
                         logger.warning(
-                            "Prewarm preset %s (page_size=%s): HTTP %s",
+                            "Prewarm preset %s (page=%s page_size=%s) failed: %s",
                             name,
+                            page,
                             page_size,
-                            resp.status_code,
+                            e,
+                            exc_info=True,
                         )
-                except Exception as e:
-                    logger.warning(
-                        "Prewarm preset %s (page_size=%s) failed: %s",
-                        name,
-                        page_size,
-                        e,
-                        exc_info=True,
-                    )
 
     collections_qs = ClassCollection.objects.filter(is_active=True).order_by(
         "sort_order"

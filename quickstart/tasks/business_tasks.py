@@ -12,6 +12,11 @@ import logging
 
 from quickstart.models import BusinessInfo, ClassesMain, ClassCollection, BlogPost, BlogCategory
 from quickstart.utils.services import CollectionAutoAssigner
+from quickstart.views.public.public_class_views import (
+    HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY,
+    invalidate_public_class_search_preset_cache,
+)
+from quickstart.utils.revalidation import trigger_nextjs_revalidation
 from quickstart.utils.experience_theme_coverage import (
     ensure_preset_collection_memberships,
 )
@@ -128,6 +133,82 @@ def update_trending_collections_task():
         count += 1
     
     logger.info(f"Updated trending collections for {count} classes.")
+
+
+@shared_task(name="quickstart.tasks.business_tasks.reclassify_automated_collection_task")
+def reclassify_automated_collection_task(collection_id: int):
+    """
+    Re-evaluate membership for a single automated collection (Gemini per active class).
+    Run only when an admin explicitly triggers reclassify — not on collection save.
+    """
+    col = (
+        ClassCollection.objects.filter(pk=collection_id)
+        .only("pk", "name", "type", "automation_rules", "slug")
+        .first()
+    )
+    if not col:
+        logger.warning("reclassify_automated_collection_task: collection id=%s not found", collection_id)
+        return {"ok": False, "reason": "not_found"}
+    if col.type != "automated":
+        logger.info("reclassify_automated_collection_task: id=%s is not automated, skipping", collection_id)
+        return {"ok": False, "reason": "not_automated"}
+    raw_ar = col.automation_rules if isinstance(col.automation_rules, dict) else {}
+    criteria = (raw_ar.get("ai_criteria") or "").strip() if isinstance(raw_ar, dict) else ""
+    if not criteria:
+        logger.warning(
+            "reclassify_automated_collection_task: collection id=%s has no ai_criteria, skipping",
+            collection_id,
+        )
+        return {"ok": False, "reason": "no_ai_criteria"}
+
+    collections_info = [{"id": col.pk, "name": col.name, "criteria": criteria}]
+    assigner = CollectionAutoAssigner()
+
+    scanned = 0
+    added = 0
+    removed = 0
+    for cls_obj in ClassesMain.objects.filter(status="active").iterator():
+        scanned += 1
+        matched_ids = assigner._call_llm_curator(cls_obj, collections_info)
+        want = col.pk in (matched_ids or [])
+        has = cls_obj.collections.filter(pk=col.pk).exists()
+        if want and not has:
+            cls_obj.collections.add(col)
+            added += 1
+        elif not want and has:
+            cls_obj.collections.remove(col)
+            removed += 1
+
+    try:
+        cache.delete(HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY)
+        invalidate_public_class_search_preset_cache(
+            affected_collection_slugs=[col.slug] if getattr(col, "slug", None) else None
+        )
+    except Exception as e:
+        logger.warning("Post-reclassify cache invalidation failed: %s", e)
+
+    try:
+        trigger_nextjs_revalidation(tag="homepage-content")
+        trigger_nextjs_revalidation(tag="collections")
+        trigger_nextjs_revalidation(tag="homepage-classes")
+        trigger_nextjs_revalidation(tag="classes-search")
+    except Exception as e:
+        logger.warning("Post-reclassify Next.js revalidation trigger failed: %s", e)
+
+    logger.info(
+        "reclassify_automated_collection_task done collection_id=%s scanned=%s added=%s removed=%s",
+        collection_id,
+        scanned,
+        added,
+        removed,
+    )
+    return {
+        "ok": True,
+        "collection_id": collection_id,
+        "scanned": scanned,
+        "added": added,
+        "removed": removed,
+    }
 
 
 @shared_task

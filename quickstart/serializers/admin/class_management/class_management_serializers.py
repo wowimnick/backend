@@ -480,16 +480,16 @@ class AdminClassCollectionSerializer(serializers.ModelSerializer):
     def get_image_medium_url(self, obj):
         if not obj.image or not hasattr(obj.image, "name") or not obj.image.name:
             return None
-        if not getattr(settings, "CLOUDFRONT_DOMAIN", None):
-            return None
-
         original_path = obj.image.name
-        if not original_path.startswith("originals/"):
-            return None
-
-        base_name, _ = os.path.splitext(original_path.replace("originals/", "", 1))
-        path = f"public/medium/{base_name}.webp"
-        return build_cloudfront_url(path)
+        if getattr(settings, "CLOUDFRONT_DOMAIN", None) and original_path.startswith(
+            "originals/"
+        ):
+            base_path, _ = os.path.splitext(original_path)
+            resized_base = base_path.replace("originals/", "public/medium/", 1)
+            url = build_cloudfront_url(resized_base + ".webp")
+            if url:
+                return url
+        return None
 
     def _handle_image_update(self, instance, s3_key_data):
         s3_key = s3_key_data.pop("image_s3_key", "NOT_PROVIDED")
@@ -498,6 +498,8 @@ class AdminClassCollectionSerializer(serializers.ModelSerializer):
                 instance.image.delete(save=False)
             instance.image = None
         elif s3_key != "NOT_PROVIDED":
+            if isinstance(s3_key, str) and not s3_key.strip():
+                return
             if instance.image:
                 instance.image.delete(save=False)
             instance.image = s3_key
@@ -511,7 +513,8 @@ class AdminClassCollectionSerializer(serializers.ModelSerializer):
         return instance
 
     def update(self, instance, validated_data):
-        self._handle_image_update(instance, validated_data)
+        if "image_s3_key" in validated_data:
+            self._handle_image_update(instance, validated_data)
         return super().update(instance, validated_data)
     
 # --- AdminClassCategorySerializer ---

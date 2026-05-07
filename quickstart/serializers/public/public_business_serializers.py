@@ -3,6 +3,9 @@ from django.conf import settings
 from rest_framework import serializers
 
 from quickstart.utils.url_utils import build_cloudfront_url
+from quickstart.utils.business_location_utils import (
+    business_location_identity_key_from_instance,
+)
 from quickstart.models import BusinessInfo, BusinessLocation, Reviews, ImportedGoogleReview
 from .public_class_serializers import HomepageClassSerializer
 from .public_review_serializers import (
@@ -153,8 +156,20 @@ class PublicBusinessDetailSerializer(PublicBusinessInfoSerializer):
         ]
 
     def get_locations(self, obj):
-        qs = obj.locations.filter(is_active=True).order_by("-is_primary", "name")
-        return PublicBusinessLocationSerializer(qs, many=True).data
+        qs = list(
+            obj.locations.filter(is_active=True).order_by("-is_primary", "name")
+        )
+        seen = set()
+        unique = []
+        for loc in qs:
+            key = business_location_identity_key_from_instance(loc)
+            if key[0] == "none":
+                key = ("id", str(loc.pk))
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(loc)
+        return PublicBusinessLocationSerializer(unique, many=True).data
 
     def get_google_reviews(self, obj):
         # Fetches all imported google reviews for this business
