@@ -131,12 +131,30 @@ class ExplorePagesSitemap(Sitemap):
         urls.append({"url": "/explore", "lastmod": main_lastmod})
 
         # 2. Collection Pages (SEO: /explore?collection=slug)
-        for coll in ClassCollection.objects.filter(is_active=True).order_by("sort_order"):
-            coll_agg = base_qs.filter(collections=coll).aggregate(latest=Max("updatedAt"))
-            urls.append({
-                "url": f"/explore?collection={quote(coll.slug)}",
-                "lastmod": coll_agg["latest"] or main_lastmod,
-            })
+        # One aggregation query for all active collections (avoid N+1 per collection).
+        active_collections = list(
+            ClassCollection.objects.filter(is_active=True).order_by("sort_order")
+        )
+        coll_ids = [c.id for c in active_collections]
+        slug_by_coll_id = {c.id: c.slug for c in active_collections}
+
+        lastmod_by_collection_id = {}
+        if coll_ids:
+            lastmod_by_collection_id = {
+                row["collections__id"]: row["latest"]
+                for row in base_qs.filter(collections__id__in=coll_ids)
+                .values("collections__id")
+                .annotate(latest=Max("updatedAt"))
+            }
+
+        for coll in active_collections:
+            coll_lastmod = lastmod_by_collection_id.get(coll.id) or main_lastmod
+            urls.append(
+                {
+                    "url": f"/explore?collection={quote(coll.slug)}",
+                    "lastmod": coll_lastmod,
+                }
+            )
 
         # 3. Location Pages
         # Group by City and State. We assume one lat/lng pair per city is sufficient for the sitemap.
@@ -173,19 +191,27 @@ class ExplorePagesSitemap(Sitemap):
             )
 
         # 5. Location + Collection Pages (SEO: location + collection)
-        for coll in ClassCollection.objects.filter(is_active=True).order_by("sort_order"):
-            loc_coll_qs = (
-                base_qs.filter(collections=coll)
+        # Single grouped query for all active collections (avoid N+1 per collection).
+        if coll_ids:
+            loc_coll_rows = (
+                base_qs.filter(collections__id__in=coll_ids)
                 .exclude(businessId__businessCity__isnull=True)
                 .exclude(businessId__businessCity="")
-                .values("businessId__businessCity", "businessId__businessState")
+                .values(
+                    "collections__id",
+                    "businessId__businessCity",
+                    "businessId__businessState",
+                )
                 .annotate(
                     last_updated=Max("updatedAt"),
                     lat=Max("businessId__latitude"),
                     lng=Max("businessId__longitude"),
                 )
             )
-            for item in loc_coll_qs:
+            for item in loc_coll_rows:
+                coll_slug = slug_by_coll_id.get(item["collections__id"])
+                if not coll_slug:
+                    continue
                 city = item["businessId__businessCity"]
                 state = item["businessId__businessState"] or ""
                 lat = item["lat"]
@@ -194,10 +220,12 @@ class ExplorePagesSitemap(Sitemap):
                     continue
                 location_str = f"{city}, {state}" if state else city
                 encoded_location = quote(location_str)
-                urls.append({
-                    "url": f"/explore?collection={quote(coll.slug)}&location={encoded_location}&lat={lat}&lng={lng}",
-                    "lastmod": item["last_updated"],
-                })
+                urls.append(
+                    {
+                        "url": f"/explore?collection={quote(coll_slug)}&location={encoded_location}&lat={lat}&lng={lng}",
+                        "lastmod": item["last_updated"],
+                    }
+                )
 
         return urls
 

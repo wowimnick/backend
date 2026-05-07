@@ -379,7 +379,10 @@ class AdminClassDetailSerializer(AdminClassSerializer):
     options = AdminClassOptionSerializer(many=True, read_only=True)
     reviews = AdminReviewSerializer(many=True, read_only=True)
     business_locations = serializers.SerializerMethodField(read_only=True)
-    location_ref = serializers.PrimaryKeyRelatedField(
+    # Plain UUID read — avoids DRF PrimaryKeyRelatedField + ModelSerializer merging
+    # queryset with read_only (AssertionError at import time in some DRF versions).
+    location_ref = serializers.UUIDField(
+        source="location_ref_id",
         read_only=True,
         allow_null=True,
     )

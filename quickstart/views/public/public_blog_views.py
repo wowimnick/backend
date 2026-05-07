@@ -1,7 +1,7 @@
 # quickstart/views/blog_views.py
 from rest_framework import viewsets, permissions, filters
 from rest_framework.pagination import PageNumberPagination
-from django.db.models import Count
+from django.db.models import Count, Q
 
 from quickstart.models import BlogCategory, BlogPost
 from quickstart.serializers import (
@@ -36,6 +36,10 @@ class PublicBlogPostViewSet(viewsets.ReadOnlyModelViewSet):
             "author", "category"
         )
 
+        # List responses never serialize `content`; defer avoids loading large HTML per row.
+        if getattr(self, "action", None) == "list":
+            queryset = queryset.defer("content")
+
         # Handle category filtering e.g. /api/blog/posts/?category=education-trends
         category_slug = self.request.query_params.get("category")
         if category_slug:
@@ -56,7 +60,7 @@ class PublicBlogCategoryViewSet(viewsets.ReadOnlyModelViewSet):
 
     permission_classes = [permissions.AllowAny]
     serializer_class = PublicBlogCategorySerializer
-    queryset = BlogCategory.objects.annotate(post_count=Count("posts")).filter(
-        post_count__gt=0
-    )
+    queryset = BlogCategory.objects.annotate(
+        post_count=Count("posts", filter=Q(posts__status="published"))
+    ).filter(post_count__gt=0)
     lookup_field = "slug"

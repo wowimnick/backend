@@ -18,13 +18,16 @@ class PublicBlogAuthorSerializer(serializers.ModelSerializer):
 
 
 class PublicBlogCategorySerializer(serializers.ModelSerializer):
-    # This serializer is used for the public API that feeds the sidebar
-    post_count = serializers.IntegerField(read_only=True)  # FIX: Add post_count here
+    """Sidebar/categories API: `post_count` comes from queryset annotate. Nested on posts: omitted (null)."""
+
+    post_count = serializers.SerializerMethodField()
 
     class Meta:
         model = BlogCategory
-        # FIX: Added 'post_count' to the fields array.
         fields = ["name", "slug", "post_count"]
+
+    def get_post_count(self, obj):
+        return getattr(obj, "post_count", None)
 
 
 class PublicBlogPostListSerializer(serializers.ModelSerializer):

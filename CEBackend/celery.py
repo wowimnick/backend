@@ -28,6 +28,7 @@ _EXTRA_REQUIRED_CELERY_TASKS = frozenset(
         "quickstart.tasks.corporate_booking_tasks.send_shortlist_sent_to_admins",
         "quickstart.tasks.corporate_booking_tasks.send_shortlist_to_corporate",
         "quickstart.tasks.email_marketing_tasks.send_business_marketing_campaign_task",
+        "quickstart.tasks.cache_tasks.prewarm_class_search_cache",
     }
 )
 
@@ -62,16 +63,18 @@ def on_worker_ready(sender, **kwargs):
             + ", ".join(missing)
         )
 
-    # In production, prewarm class search cache after worker starts (synchronously in this process).
+    # In production, prewarm class search shortly after worker is ready. Running this
+    # synchronously in worker_ready held the boot sequence open (many /api/classes/search/
+    # requests) and overlapped with deploy SIGTERM, causing WorkerLost noise and failed tasks.
     if not getattr(settings, "IS_DEPLOYED_ENV", False):
         return
     try:
-        from quickstart.utils.cache_prewarm import run_prewarm_class_search_cache
-        logger.info("Starting class search cache prewarm...")
-        run_prewarm_class_search_cache(locations=True, collections=True)
-        logger.info("Class search cache prewarm finished.")
+        from quickstart.tasks.cache_tasks import prewarm_class_search_cache_task
+
+        prewarm_class_search_cache_task.apply_async(countdown=8)
+        logger.info("Scheduled class search cache prewarm (apply_async countdown=8).")
     except Exception as e:
-        logger.warning("Class search cache prewarm failed: %s", e, exc_info=True)
+        logger.warning("Could not schedule class search cache prewarm: %s", e, exc_info=True)
 
 
 @task_failure.connect
@@ -79,6 +82,19 @@ def handle_task_failure(sender=None, task_id=None, exception=None, args=None, kw
     """
     Catches failed celery tasks and logs them to the cache for dashboard visibility.
     """
+    # Worker shutdown / SIGTERM during deploy: not an app bug; skip noisy failure cache entries.
+    if exception is not None:
+        name = exception.__class__.__name__
+        msg = str(exception)
+        if name in ("WorkerLostError", "WorkerShutdown") or "SIGTERM" in msg or "WorkerShutdown" in msg:
+            logger.info(
+                "Celery task %s [%s] ended with worker shutdown (ignored for failure dashboard): %s",
+                getattr(sender, "name", sender),
+                task_id,
+                msg,
+            )
+            return
+
     logger.error(f"Celery task {sender.name} [{task_id}] failed: {exception}")
     
     # Structure the error info
