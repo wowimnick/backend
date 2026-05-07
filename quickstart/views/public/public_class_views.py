@@ -93,6 +93,17 @@ from quickstart.services.search_suggest_service import match_collection_by_alias
 logger = logging.getLogger(__name__)
 
 
+def annotate_collection_active_class_count(queryset):
+    """Distinct active classes linked to each collection (M2M)."""
+    return queryset.annotate(
+        active_class_count=Count(
+            "classes",
+            filter=Q(classes__status="active"),
+            distinct=True,
+        )
+    )
+
+
 def _public_class_options_prefetch_queryset():
     """
     Class options as exposed on public list/detail (PublicClassOptionSerializer).
@@ -756,8 +767,10 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             ClassCollection.objects.filter(parent__isnull=True, is_active=True),
             slug=parent_slug,
         )
-        qs = ClassCollection.objects.filter(parent=parent, is_active=True).order_by(
-            "sort_order", "name"
+        qs = annotate_collection_active_class_count(
+            ClassCollection.objects.filter(parent=parent, is_active=True).order_by(
+                "sort_order", "name"
+            )
         )
         serializer = PublicCollectionSerializer(
             qs, many=True, context=self.get_serializer_context()
@@ -887,16 +900,22 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             base_coll = ClassCollection.objects.filter(
                 is_active=True, parent__isnull=True
             )
-            featured_qs = (
-                base_coll.filter(show_in_featured_categories=True)
-                .order_by("sort_order", "name")
-                .prefetch_related(child_prefetch)
-            )
+            featured_qs = annotate_collection_active_class_count(
+                base_coll.filter(show_in_featured_categories=True).order_by(
+                    "sort_order", "name"
+                )
+            ).prefetch_related(child_prefetch)
             # Do not fall back to "all collections": an empty featured strip is intentional
             # when every toggle is off—otherwise admins think show_in_featured_categories is ignored.
             serialized_collections = PublicCollectionSerializer(
                 featured_qs, many=True, context=context
             ).data
+
+            i_want_qs = annotate_collection_active_class_count(
+                base_coll.filter(show_in_i_want=True).order_by(
+                    "sort_order", "name"
+                )
+            ).prefetch_related(child_prefetch)
 
             def _is_duplicate_all_chip(row):
                 slug = (row.get("slug") or "").strip().lower()
@@ -951,9 +970,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             }
             data["collections"] = [all_chip] + filtered_collections
             data["collections_i_want"] = PublicCollectionSerializer(
-                base_coll.filter(show_in_i_want=True)
-                .order_by("sort_order", "name")
-                .prefetch_related(child_prefetch),
+                i_want_qs,
                 many=True,
                 context=context,
             ).data

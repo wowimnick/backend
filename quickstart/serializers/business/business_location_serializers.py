@@ -5,7 +5,11 @@ from django.db import transaction
 from rest_framework import serializers
 
 from quickstart.models import BusinessLocation, ClassesMain
-from quickstart.utils.business_location_utils import sync_business_profile_from_primary_location
+from quickstart.utils.business_location_utils import (
+    sync_business_profile_from_primary_location,
+    business_location_identity_key_from_merged,
+    business_location_identity_key_from_instance,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +52,28 @@ class BusinessLocationSerializer(serializers.ModelSerializer):
                     "coordinates": "Provide both latitude and longitude, or neither.",
                 }
             )
+
+        business = self.context.get("business")
+        if business is None and self.instance is not None:
+            business = self.instance.business
+        if business is not None:
+            new_key = business_location_identity_key_from_merged(self.instance, data)
+            if new_key[0] != "none":
+                qs = BusinessLocation.objects.filter(
+                    business=business, is_active=True
+                )
+                if self.instance is not None:
+                    qs = qs.exclude(pk=self.instance.pk)
+                for other in qs:
+                    if business_location_identity_key_from_instance(other) == new_key:
+                        raise serializers.ValidationError(
+                            {
+                                "non_field_errors": [
+                                    "A location with this address already exists for your business."
+                                ]
+                            }
+                        )
+
         return data
 
     def _set_point(self, instance, latitude, longitude):

@@ -596,6 +596,7 @@ class PublicCollectionSerializer(serializers.ModelSerializer):
     parent_id = serializers.IntegerField(read_only=True, allow_null=True)
     has_children = serializers.SerializerMethodField()
     children = serializers.SerializerMethodField()
+    active_class_count = serializers.SerializerMethodField()
 
     class Meta:
         model = ClassCollection
@@ -617,7 +618,14 @@ class PublicCollectionSerializer(serializers.ModelSerializer):
             "show_on_homepage_rows",
             "icon_name",
             "color",
+            "active_class_count",
         ]
+
+    def get_active_class_count(self, obj):
+        ann = getattr(obj, "active_class_count", None)
+        if ann is not None:
+            return int(ann)
+        return obj.classes.filter(status="active").distinct().count()
 
     def get_has_children(self, obj):
         pref = getattr(obj, "_prefetched_objects_cache", None)
