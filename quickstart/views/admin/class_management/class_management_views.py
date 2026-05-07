@@ -8,6 +8,8 @@ from rest_framework.parsers import JSONParser, FormParser
 from rest_framework.exceptions import ValidationError
 import json
 from django.db import transaction
+from django.shortcuts import get_object_or_404
+from django.core.files.storage import default_storage
 from django.db.models import (
     Q,
     Min,
@@ -321,6 +323,7 @@ class AdminClassViewSet(viewsets.ModelViewSet):
             serializer = self.get_serializer(instance, data=request_data, partial=True)
             serializer.is_valid(raise_exception=True)
             updated_instance = serializer.save()
+            instance = updated_instance
             logger.info(
                 f"Admin {request.user.email} started updating Class '{instance.title}' (ID: {instance.pk})."
             )
@@ -329,61 +332,125 @@ class AdminClassViewSet(viewsets.ModelViewSet):
             if "collections" in request_data:
                 collection_ids = request_data.get("collections")
                 if isinstance(collection_ids, list):
-                    # .set() handles the M2M relationship using IDs
                     instance.collections.set(collection_ids)
-                    logger.info(f"Updated collections for class {instance.pk} to {collection_ids}")
+                    logger.info(
+                        f"Updated collections for class {instance.pk} to {collection_ids}"
+                    )
 
-            # 3. Handle Image Deletions
+            # 3. Image deletions (S3 + DB) — align with business dashboard
+            delete_image_ids_str = request_data.get("delete_image_ids", "[]")
             try:
-                delete_image_ids = json.loads(
-                    request_data.get("delete_image_ids", "[]")
-                )
+                delete_image_ids = json.loads(delete_image_ids_str)
                 if delete_image_ids:
-                    ClassImage.objects.filter(
+                    images_to_delete = ClassImage.objects.filter(
                         classId=instance, imageId__in=delete_image_ids
-                    ).delete()
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-            # 4. Handle New Image Additions from S3 keys
-            try:
-                new_image_s3_keys = json.loads(
-                    request_data.get("new_image_s3_keys", "[]")
+                    )
+                    for img in images_to_delete:
+                        if img.image and img.image.name:
+                            default_storage.delete(img.image.name)
+                    deleted_count, _ = images_to_delete.delete()
+                    if deleted_count:
+                        logger.info(
+                            f"Admin deleted {deleted_count} ClassImage records for class {instance.pk}."
+                        )
+            except json.JSONDecodeError:
+                logger.warning(
+                    f"Admin: could not parse delete_image_ids: {delete_image_ids_str}"
                 )
+
+            # 4. New images from S3 keys
+            new_image_s3_keys_str = request_data.get("new_image_s3_keys", "[]")
+            try:
+                new_image_s3_keys = json.loads(new_image_s3_keys_str)
                 if new_image_s3_keys:
-                    images_to_create = [
+                    img_objects = [
                         ClassImage(classId=instance, image=key, isCover=False)
                         for key in new_image_s3_keys
                     ]
-                    ClassImage.objects.bulk_create(images_to_create)
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-            # 5. Handle Cover Image Assignment
-            cover_image_id = request_data.get("cover_image_id")
-            if cover_image_id:
-                ClassImage.objects.filter(classId=instance, isCover=True).update(
-                    isCover=False
+                    ClassImage.objects.bulk_create(img_objects)
+                    logger.info(
+                        f"Admin bulk-added {len(img_objects)} new images for class {instance.pk}."
+                    )
+            except json.JSONDecodeError:
+                logger.warning(
+                    f"Admin: could not parse new_image_s3_keys: {new_image_s3_keys_str}"
                 )
-                ClassImage.objects.filter(
-                    classId=instance, imageId=cover_image_id
-                ).update(isCover=True)
 
-            # 6. Handle ClassOption Update
+            # 5. Cover image
+            cover_image_id_str = request_data.get("cover_image_id")
+            cover_image_s3_key = request_data.get("cover_image_s3_key")
+            ClassImage.objects.filter(classId=instance, isCover=True).update(
+                isCover=False
+            )
+            if cover_image_s3_key:
+                ClassImage.objects.filter(
+                    classId=instance, image=cover_image_s3_key
+                ).update(isCover=True)
+            elif cover_image_id_str:
+                ClassImage.objects.filter(
+                    classId=instance, imageId=int(cover_image_id_str)
+                ).update(isCover=True)
+            if not ClassImage.objects.filter(classId=instance, isCover=True).exists():
+                first_image = (
+                    ClassImage.objects.filter(classId=instance)
+                    .order_by("createdAt")
+                    .first()
+                )
+                if first_image:
+                    first_image.isCover = True
+                    first_image.save(update_fields=["isCover"])
+
+            _min_images = 4
+            if ClassImage.objects.filter(classId=instance).count() < _min_images:
+                raise ValidationError(
+                    {"images": f"At least {_min_images} class images are required."}
+                )
+
+            # 6. Multi-tier options (smart sync) — align with business dashboard
             options_json_string = request_data.get("options")
             if options_json_string:
                 try:
-                    options_data = json.loads(options_json_string)[0]
-                    option_instance = instance.options.first()
-                    if option_instance:
-                        option_serializer = ManagedClassOptionSerializer(
-                            instance=option_instance, data=options_data, partial=True
+                    options_data_list = json.loads(options_json_string)
+                    if not isinstance(options_data_list, list):
+                        raise ValidationError(
+                            {"options": "Options data must be a list."}
                         )
+                    incoming_ids = [
+                        item.get("optionId")
+                        for item in options_data_list
+                        if item.get("optionId")
+                    ]
+                    if len(options_data_list) > 0:
+                        ClassOption.objects.filter(classId=instance).exclude(
+                            optionId__in=incoming_ids
+                        ).delete()
+                    for index, option_dict in enumerate(options_data_list):
+                        option_id = option_dict.get("optionId")
+                        if index == 0:
+                            option_dict["schedule_mode"] = "primary"
+                        if option_id:
+                            option_instance = get_object_or_404(
+                                ClassOption, optionId=option_id, classId=instance
+                            )
+                            option_serializer = ManagedClassOptionSerializer(
+                                option_instance, data=option_dict, partial=True
+                            )
+                        else:
+                            option_serializer = ManagedClassOptionSerializer(
+                                data=option_dict
+                            )
                         option_serializer.is_valid(raise_exception=True)
-                        option_serializer.save()
-                except (json.JSONDecodeError, IndexError, TypeError) as e:
-                    logger.error(f"Error processing options: {e}")
-                    raise ValidationError({"options": "Invalid options data."})
+                        option_serializer.save(classId=instance)
+                except ValidationError:
+                    raise
+                except Exception as e:
+                    logger.error(
+                        f"Admin: error processing options for class {instance.pk}: {e}",
+                        exc_info=True,
+                    )
+                    raise ValidationError(
+                        {"options": f"Failed to update class options: {str(e)}"}
+                    )
 
         # --- Trigger Revalidation ---
         if hasattr(self, '_trigger_class_revalidation'):

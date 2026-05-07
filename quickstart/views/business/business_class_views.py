@@ -80,11 +80,20 @@ from quickstart.serializers import (
 
 from quickstart.utils.permissions import (
     CanManageOwnClasses,
+    CanManageOwnClassesOrClassAdmin,
     IsVerifiedAndActiveBusinessMember,
 )
 
 
 logger = logging.getLogger(__name__)
+
+
+def _user_is_class_schedule_admin(user):
+    return bool(
+        user
+        and user.is_authenticated
+        and user.has_perm("quickstart.access_class_admin")
+    )
 
 
 class StandardResultsSetPagination(PageNumberPagination):
@@ -796,21 +805,28 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
     serializer_class = ScheduleSerializer
     permission_classes = [
         IsAuthenticated,
-        CanManageOwnClasses,
+        CanManageOwnClassesOrClassAdmin,
     ]
 
     def get_queryset(self):
         user = self.request.user
-        business = BusinessInfo.objects.filter(
-            Q(owner=user)
-            | Q(staff_members__user=user, staff_members__status="accepted")
-        ).first()
-        if not business:
-            return Schedule.objects.none()
+        is_class_admin = _user_is_class_schedule_admin(user)
 
-        # --- START OF MODIFICATION ---
+        if is_class_admin:
+            queryset = Schedule.objects.all()
+        else:
+            business = BusinessInfo.objects.filter(
+                Q(owner=user)
+                | Q(staff_members__user=user, staff_members__status="accepted")
+            ).first()
+            if not business:
+                return Schedule.objects.none()
+            queryset = Schedule.objects.filter(option__classId__businessId=business)
 
-        # Subquery to efficiently calculate the sum of participants for confirmed bookings
+        option_id = self.request.query_params.get("option_id")
+        if option_id and option_id.isdigit():
+            queryset = queryset.filter(option_id=int(option_id))
+
         booked_participants_subquery = (
             Booking.objects.filter(
                 schedule_instance__schedule=OuterRef("pk"), status="confirmed"
@@ -820,7 +836,6 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
             .values("total_pax")
         )
 
-        # Subquery to efficiently calculate the total revenue from paid, confirmed bookings
         total_revenue_subquery = (
             Booking.objects.filter(
                 schedule_instance__schedule=OuterRef("pk"),
@@ -832,20 +847,10 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
             .values("total_rev")
         )
 
-        # Subquery to efficiently check for the existence of any confirmed bookings
         has_bookings_subquery = Booking.objects.filter(
             schedule_instance__schedule=OuterRef("pk"), status="confirmed"
         )
 
-        queryset = Schedule.objects.filter(option__classId__businessId=business)
-
-        option_id = self.request.query_params.get("option_id")
-        if option_id and option_id.isdigit():
-            queryset = queryset.filter(
-                option_id=option_id, option__classId__businessId=business
-            )
-
-        # Annotate the main queryset to include calculated values in a single DB trip
         queryset = (
             queryset.select_related("option", "option__classId")
             .annotate(
@@ -862,23 +867,24 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
             .order_by("option__classId__title", "day", "time")
         )
 
-        # --- END OF MODIFICATION ---
-
         return queryset
 
     def perform_create(self, serializer):
         option = serializer.validated_data.get("option")
         user = self.request.user
-        business = BusinessInfo.objects.filter(
-            Q(owner=user)
-            | Q(staff_members__user=user, staff_members__status="accepted")
-        ).first()
-        if not business or not option or option.classId.businessId != business:
-            raise PermissionDenied(
-                "Cannot create schedule for an option not belonging to your business."
-            )
+        if _user_is_class_schedule_admin(user):
+            if not option:
+                raise PermissionDenied("Option is required.")
+        else:
+            business = BusinessInfo.objects.filter(
+                Q(owner=user)
+                | Q(staff_members__user=user, staff_members__status="accepted")
+            ).first()
+            if not business or not option or option.classId.businessId != business:
+                raise PermissionDenied(
+                    "Cannot create schedule for an option not belonging to your business."
+                )
 
-        # The serializer now only saves the Schedule, not the instance.
         schedule = serializer.save()
 
         # FIX: Explicitly create the ScheduleInstance(s) for the new Schedule.
@@ -1033,28 +1039,30 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
         Updates fields like time, price, duration, capacity.
         """
         user = request.user
-        business = BusinessInfo.objects.filter(
-            Q(owner=user)
-            | Q(staff_members__user=user, staff_members__status="accepted")
-        ).first()
-        
-        if not business:
-            raise PermissionDenied("User is not associated with any business.")
+        is_class_admin = _user_is_class_schedule_admin(user)
+        if not is_class_admin:
+            business = BusinessInfo.objects.filter(
+                Q(owner=user)
+                | Q(staff_members__user=user, staff_members__status="accepted")
+            ).first()
+            if not business:
+                raise PermissionDenied("User is not associated with any business.")
 
-        # reusing the structure of group action, but we expect 'updates' dict
         option_id = request.data.get("option_id")
         group_name = request.data.get("name")
         updates = request.data.get("updates", {})
 
         if not option_id or not group_name:
             return Response(
-                {"detail": "option_id and name are required."}, 
-                status=status.HTTP_400_BAD_REQUEST
+                {"detail": "option_id and name are required."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Validate Option ownership
         try:
-            option = ClassOption.objects.get(pk=option_id, classId__businessId=business)
+            if is_class_admin:
+                option = ClassOption.objects.get(pk=option_id)
+            else:
+                option = ClassOption.objects.get(pk=option_id, classId__businessId=business)
         except ClassOption.DoesNotExist:
             raise NotFound("Class option not found or access denied.")
 
@@ -1082,6 +1090,12 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
                         schedule.duration = updates["duration"]
                         has_changes = True
                     if "price" in updates:
+                        p = Decimal(str(updates["price"]))
+                        if p <= 0:
+                            return Response(
+                                {"detail": "Price must be greater than zero."},
+                                status=status.HTTP_400_BAD_REQUEST,
+                            )
                         schedule.price = updates["price"]
                         has_changes = True
                     if "maxParticipants" in updates:
@@ -1120,20 +1134,21 @@ class BusinessScheduleViewSet(viewsets.ModelViewSet):
         Fails if any schedule in the group has confirmed bookings.
         """
         user = request.user
-        business = BusinessInfo.objects.filter(
-            Q(owner=user)
-            | Q(staff_members__user=user, staff_members__status="accepted")
-        ).first()
-        if not business:
-            raise PermissionDenied("User is not associated with any business.")
+        is_class_admin = _user_is_class_schedule_admin(user)
+        if not is_class_admin:
+            business = BusinessInfo.objects.filter(
+                Q(owner=user)
+                | Q(staff_members__user=user, staff_members__status="accepted")
+            ).first()
+            if not business:
+                raise PermissionDenied("User is not associated with any business.")
 
         serializer = ScheduleGroupActionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         option = serializer.validated_data["option_id"]
         group_name = serializer.validated_data["name"]
 
-        # Security check: ensure the option belongs to the user's business
-        if option.classId.businessId != business:
+        if not is_class_admin and option.classId.businessId != business:
             raise PermissionDenied(
                 "You do not have permission to access this class option."
             )
@@ -1230,23 +1245,29 @@ class BusinessScheduleInstanceViewSet(viewsets.ModelViewSet):
     serializer_class = ScheduleInstanceSerializer
     permission_classes = [
         IsAuthenticated,
-        CanManageOwnClasses,
+        CanManageOwnClassesOrClassAdmin,
     ]
     http_method_names = ["get", "post", "patch", "head", "options"]  # No PUT/DELETE
 
     def get_queryset(self):
         user = self.request.user
-        business = BusinessInfo.objects.filter(
-            Q(owner=user)
-            | Q(staff_members__user=user, staff_members__status="accepted")
-        ).first()
-        if not business:
-            return ScheduleInstance.objects.none()
-        queryset = (
-            ScheduleInstance.objects.filter(
+        is_class_admin = _user_is_class_schedule_admin(user)
+
+        if is_class_admin:
+            base_filter = ScheduleInstance.objects.all()
+        else:
+            business = BusinessInfo.objects.filter(
+                Q(owner=user)
+                | Q(staff_members__user=user, staff_members__status="accepted")
+            ).first()
+            if not business:
+                return ScheduleInstance.objects.none()
+            base_filter = ScheduleInstance.objects.filter(
                 schedule__option__classId__businessId=business
             )
-            .select_related("schedule__option__classId")
+
+        queryset = (
+            base_filter.select_related("schedule__option__classId")
             .annotate(
                 current_bookings_count=Coalesce(
                     Subquery(

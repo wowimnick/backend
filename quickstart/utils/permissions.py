@@ -194,6 +194,30 @@ class CanManageOwnClasses(BasePermission):
             return False
 
 
+class CanManageOwnClassesOrClassAdmin(BasePermission):
+    """
+    Business dashboard schedule APIs: business members, or platform class admins
+    (same /business/schedules/ URLs — no impersonation required).
+    """
+
+    message = "You do not have permission to manage schedules."
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        if user.has_perm("quickstart.access_class_admin"):
+            return True
+        return user.has_perm("quickstart.manage_own_classes")
+
+    def has_object_permission(self, request, view, obj):
+        if not request.user or not request.user.is_authenticated:
+            return False
+        if request.user.has_perm("quickstart.access_class_admin"):
+            return True
+        return CanManageOwnClasses().has_object_permission(request, view, obj)
+
+
 # MODIFIED: This permission class is being deprecated by the more specific IsBusinessMember
 # but we update it for any legacy use cases. Best practice would be to phase it out.
 class IsBusinessOwnerOrManager(BasePermission):
