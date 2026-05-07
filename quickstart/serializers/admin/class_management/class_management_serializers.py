@@ -380,7 +380,6 @@ class AdminClassDetailSerializer(AdminClassSerializer):
     reviews = AdminReviewSerializer(many=True, read_only=True)
     business_locations = serializers.SerializerMethodField(read_only=True)
     location_ref = serializers.PrimaryKeyRelatedField(
-        queryset=BusinessLocation.objects.all(),
         read_only=True,
         allow_null=True,
     )
