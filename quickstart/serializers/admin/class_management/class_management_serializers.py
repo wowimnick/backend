@@ -411,9 +411,20 @@ class AdminClassCollectionSerializer(serializers.ModelSerializer):
     class_count = serializers.IntegerField(read_only=True, default=0)
     image_medium_url = serializers.SerializerMethodField()
     image_s3_key = serializers.CharField(write_only=True, required=False, allow_null=True)
+    parent = serializers.PrimaryKeyRelatedField(
+        queryset=ClassCollection.objects.filter(parent__isnull=True),
+        allow_null=True,
+        required=False,
+    )
+    parent_name = serializers.CharField(source="parent.name", read_only=True)
     
     # Ensure automation_rules is treated as a Dict
     automation_rules = serializers.JSONField(required=False, default=dict)
+    search_aliases = serializers.ListField(
+        child=serializers.CharField(max_length=120),
+        required=False,
+        default=list,
+    )
 
     class Meta:
         model = ClassCollection
@@ -428,9 +439,43 @@ class AdminClassCollectionSerializer(serializers.ModelSerializer):
             "image_s3_key",
             "is_active",
             "sort_order",
-            "class_count", 
+            "class_count",
+            "search_aliases",
+            "is_searchable",
+            "show_in_i_want",
+            "show_in_featured_categories",
+            "show_on_homepage_rows",
+            "icon_name",
+            "color",
+            "parent",
+            "parent_name",
         ]
-        read_only_fields = ["id", "image_medium_url", "class_count"]
+        read_only_fields = ["id", "image_medium_url", "class_count", "parent_name"]
+
+    def validate(self, attrs):
+        if "parent" in attrs:
+            parent = attrs["parent"]
+        elif self.instance:
+            parent = self.instance.parent
+        else:
+            parent = None
+        if self.instance and parent is not None and self.instance.pk == parent.pk:
+            raise serializers.ValidationError(
+                {"parent": "A collection cannot be its own parent."}
+            )
+        return attrs
+
+    def validate_search_aliases(self, value):
+        if not value:
+            return []
+        seen = set()
+        out = []
+        for x in value:
+            s = str(x).strip().lower()
+            if s and s not in seen:
+                seen.add(s)
+                out.append(s)
+        return out
 
     def get_image_medium_url(self, obj):
         if not obj.image or not hasattr(obj.image, "name") or not obj.image.name:

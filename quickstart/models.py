@@ -526,6 +526,16 @@ class BusinessInfo(models.Model):
         max_length=255,
     )
     featured = models.BooleanField(default=False)
+    google_review_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Denormalized count of ImportedGoogleReview rows for this business.",
+    )
+    google_avg_rating = models.DecimalField(
+        max_digits=4,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        help_text="Denormalized average rating from imported Google reviews.",
+    )
     isActive = models.BooleanField(default=False)
     createdAt = models.DateTimeField(auto_now_add=True)
     updatedAt = models.DateTimeField(auto_now=True)
@@ -1278,12 +1288,63 @@ class ClassCollection(models.Model):
     is_active = models.BooleanField(default=True)
     sort_order = models.IntegerField(default=0, help_text="Order on homepage")
 
+    # --- Discovery & placement (homepage pill, suggest, corporate, etc.) ---
+    search_aliases = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Lowercased strings matched for keyword search, e.g. pottery, ceramics.",
+    )
+    is_searchable = models.BooleanField(
+        default=True,
+        db_index=True,
+        help_text="Include in keyword/suggest matching.",
+    )
+    show_in_i_want = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="Show in homepage 'I want...' picker and corporate category strip.",
+    )
+    show_in_featured_categories = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="Show on homepage featured categories strip.",
+    )
+    show_on_homepage_rows = models.BooleanField(
+        default=True,
+        db_index=True,
+        help_text="Include in homepage collection carousels/rows.",
+    )
+    icon_name = models.CharField(
+        max_length=50,
+        blank=True,
+        default="",
+        help_text="Lucide icon name for chips (e.g. Palette).",
+    )
+    color = models.CharField(
+        max_length=20,
+        blank=True,
+        default="",
+        help_text="Optional hex color for UI chips.",
+    )
+    parent = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="children",
+        db_index=True,
+        help_text="Parent collection (top-level if null). Sub-collections are one level deep only.",
+    )
+
     def __str__(self):
         return self.name
 
     class Meta:
         db_table = "class_collections"
         ordering = ["sort_order", "name"]
+        indexes = [
+            models.Index(fields=["parent", "sort_order"]),
+        ]
 
 
 class BusinessLocation(models.Model):
@@ -1355,6 +1416,21 @@ class ClassesMain(models.Model):
     )
     title = models.CharField(max_length=100)
     description = models.TextField(max_length=4000)
+    description_summary = models.CharField(max_length=240, blank=True, default="")
+    description_sections = models.JSONField(default=list, blank=True)
+    description_ai_source_hash = models.CharField(max_length=64, blank=True, default="")
+    description_ai_status = models.CharField(
+        max_length=16,
+        choices=[
+            ("pending", "pending"),
+            ("ready", "ready"),
+            ("failed", "failed"),
+            ("stale", "stale"),
+        ],
+        default="stale",
+        db_index=True,
+    )
+    description_ai_generated_at = models.DateTimeField(null=True, blank=True)
     features = models.JSONField(default=list)
     STATUS_CHOICES = [
         ("active", "Active"),
@@ -1379,6 +1455,16 @@ class ClassesMain(models.Model):
     adminContactEmail = models.EmailField(null=True, blank=True)
     adminContactPhone = models.CharField(max_length=20, null=True, blank=True)
     search_vector = SearchVectorField(null=True, editable=False)
+    platform_review_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Denormalized count of approved platform reviews for this class.",
+    )
+    platform_avg_rating = models.DecimalField(
+        max_digits=4,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        help_text="Denormalized average rating (approved platform reviews only).",
+    )
     createdAt = models.DateTimeField(auto_now_add=True)
     updatedAt = models.DateTimeField(auto_now=True)
 
@@ -3822,6 +3908,10 @@ class Reviews(models.Model):
             models.Index(fields=["booking"]),
             models.Index(fields=["status"]),  # Index on status
             models.Index(fields=["reported"]),  # Index on reported
+            models.Index(
+                fields=["classId", "status"],
+                name="reviews_classid_status_idx",
+            ),
         ]
         permissions = [
             # --- Platform Admin Permissions ---
@@ -4607,3 +4697,307 @@ class SearchLog(models.Model):
 
     def __str__(self):
         return f"{self.query or self.location or 'search'} @ {self.timestamp}"
+
+
+class ProcessedStripeEvent(models.Model):
+    """Stripe webhook event ids (ev_...) already handled successfully."""
+
+    event_id = models.CharField(max_length=255, primary_key=True)
+    event_type = models.CharField(max_length=128, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "processed_stripe_events"
+
+
+class StripeCheckoutAttempt(models.Model):
+    """Audit trail for Checkout Session creation (widget / add-ons)."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        BusinessInfo,
+        on_delete=models.CASCADE,
+        related_name="stripe_checkout_attempts",
+    )
+    checkout_session_id = models.CharField(max_length=255, unique=True, db_index=True)
+    product_type = models.CharField(max_length=64)
+    plan_or_tier_key = models.CharField(max_length=128, blank=True)
+    stripe_price_id = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "stripe_checkout_attempts"
+        indexes = [
+            models.Index(fields=["business", "-created_at"]),
+        ]
+
+
+class CorporateInquiry(models.Model):
+    """B2B / corporate team-building lead from the public /corporate page."""
+
+    COMPANY_SIZE_CHOICES = [
+        ("", "Prefer not to say"),
+        ("1-10", "1–10"),
+        ("11-25", "11–25"),
+        ("26-50", "26–50"),
+        ("51-100", "51–100"),
+        ("101-250", "101–250"),
+        ("250+", "250+"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    company_name = models.CharField(max_length=200)
+    contact_name = models.CharField(max_length=150)
+    email = models.EmailField(max_length=254, db_index=True)
+    phone = models.CharField(max_length=50, blank=True, default="")
+    company_size = models.CharField(
+        max_length=20,
+        choices=COMPANY_SIZE_CHOICES,
+        blank=True,
+        default="",
+    )
+    message = models.TextField(max_length=5000, blank=True, default="")
+    meta = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        db_table = "corporate_inquiries"
+        ordering = ["-created_at"]
+        permissions = [
+            (
+                "access_corporate_admin",
+                "Can access corporate inquiry admin",
+            ),
+            (
+                "manage_corporate_shortlists",
+                "Can manage corporate shortlists",
+            ),
+            (
+                "manage_corporate_bookings",
+                "Can manage corporate bookings and billing",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.company_name} — {self.email} ({self.created_at.date()})"
+
+
+class CorporateShortlist(models.Model):
+    """Admin-curated option set for a corporate inquiry (magic link)."""
+
+    STATUS_DRAFT = "draft"
+    STATUS_READY = "ready"
+    STATUS_SENT = "sent"
+    STATUS_VIEWED = "viewed"
+    STATUS_ACCEPTED = "accepted"
+    STATUS_CANCELLED = "cancelled"
+
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, "Draft"),
+        (STATUS_READY, "Ready to send"),
+        (STATUS_SENT, "Sent"),
+        (STATUS_VIEWED, "Viewed"),
+        (STATUS_ACCEPTED, "Accepted"),
+        (STATUS_CANCELLED, "Cancelled"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    inquiry = models.OneToOneField(
+        "CorporateInquiry",
+        on_delete=models.CASCADE,
+        related_name="shortlist",
+    )
+    token = models.UUIDField(default=uuid.uuid4, unique=True, db_index=True)
+    status = models.CharField(
+        max_length=20, choices=STATUS_CHOICES, default=STATUS_DRAFT, db_index=True
+    )
+    intro_message = models.TextField(
+        max_length=8000,
+        blank=True,
+        default="",
+        help_text="Shown at top of the corporate shortlist page",
+    )
+    internal_notes = models.TextField(
+        max_length=8000,
+        blank=True,
+        default="",
+        help_text="Internal-only; not exposed on public shortlist",
+    )
+    deposit_percent = models.PositiveSmallIntegerField(default=25)
+    currency = models.CharField(max_length=3, default="usd")
+    sent_at = models.DateTimeField(null=True, blank=True)
+    first_viewed_at = models.DateTimeField(null=True, blank=True)
+    last_viewed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "corporate_shortlists"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Shortlist {self.inquiry.company_name} ({self.status})"
+
+
+class CorporateShortlistOption(models.Model):
+    """A single option on a corporate shortlist (existing class or custom)."""
+
+    SOURCE_EXISTING_CLASS = "existing_class"
+    SOURCE_CUSTOM = "custom"
+    SOURCE_CHOICES = [
+        (SOURCE_EXISTING_CLASS, "Existing class"),
+        (SOURCE_CUSTOM, "Custom"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    shortlist = models.ForeignKey(
+        CorporateShortlist,
+        on_delete=models.CASCADE,
+        related_name="options",
+    )
+    position = models.PositiveSmallIntegerField(
+        help_text="Display order 1-3 on the shortlist"
+    )
+    source_type = models.CharField(
+        max_length=20, choices=SOURCE_CHOICES, default=SOURCE_CUSTOM
+    )
+    source_class = models.ForeignKey(
+        "ClassesMain",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="corporate_shortlist_options",
+    )
+    title = models.CharField(max_length=200)
+    host_name = models.CharField(max_length=200, blank=True, default="")
+    tagline = models.CharField(max_length=500, blank=True, default="")
+    description = models.TextField(max_length=8000, blank=True, default="")
+    inclusions = models.JSONField(default=list, blank=True)
+    cover_image_url = models.URLField(max_length=2000, blank=True, default="")
+    gallery_urls = models.JSONField(default=list, blank=True)
+    location_text = models.CharField(max_length=500, blank=True, default="")
+    duration_minutes = models.PositiveIntegerField(null=True, blank=True)
+    min_headcount = models.PositiveIntegerField(null=True, blank=True)
+    max_headcount = models.PositiveIntegerField(null=True, blank=True)
+    price_total_cents = models.PositiveIntegerField()
+    price_per_person_cents = models.PositiveIntegerField(null=True, blank=True)
+    proposed_date_options = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="List of ISO datetime strings the corp may choose from",
+    )
+    is_archived = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "corporate_shortlist_options"
+        ordering = ["position", "created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["shortlist", "position"],
+                name="uniq_corporate_shortlist_option_position",
+            )
+        ]
+
+
+def _gen_corporate_booking_reference():
+    """CE-CORP- + 6 uppercase alphanumeric chars"""
+    return f"CE-CORP-{uuid.uuid4().hex[:6].upper()}"
+
+
+class CorporateBooking(models.Model):
+    """Corp selection + Stripe deposit + balance invoice (not marketplace Booking)."""
+
+    ST_PENDING = "pending_deposit"
+    ST_DEPOSIT_PAID = "deposit_paid"
+    ST_INVOICED = "invoiced"
+    ST_FULLY_PAID = "fully_paid"
+    ST_IN_PROGRESS = "in_progress"
+    ST_COMPLETED = "completed"
+    ST_CANCELLED = "cancelled"
+    ST_REFUNDED = "refunded"
+
+    STATUS_CHOICES = [
+        (ST_PENDING, "Pending deposit"),
+        (ST_DEPOSIT_PAID, "Deposit paid"),
+        (ST_INVOICED, "Balance invoiced"),
+        (ST_FULLY_PAID, "Fully paid"),
+        (ST_IN_PROGRESS, "In progress"),
+        (ST_COMPLETED, "Completed"),
+        (ST_CANCELLED, "Cancelled"),
+        (ST_REFUNDED, "Refunded"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    shortlist = models.ForeignKey(
+        CorporateShortlist,
+        on_delete=models.CASCADE,
+        related_name="bookings",
+    )
+    selected_option = models.ForeignKey(
+        CorporateShortlistOption,
+        on_delete=models.PROTECT,
+        related_name="bookings",
+    )
+    reference = models.CharField(
+        max_length=32,
+        unique=True,
+        default=_gen_corporate_booking_reference,
+        db_index=True,
+    )
+    status = models.CharField(
+        max_length=32, choices=STATUS_CHOICES, default=ST_PENDING, db_index=True
+    )
+    headcount = models.PositiveIntegerField()
+    confirmed_datetime = models.DateTimeField()
+    special_requests = models.TextField(max_length=8000, blank=True, default="")
+    billing_company_name = models.CharField(max_length=200)
+    billing_contact_name = models.CharField(max_length=150)
+    billing_email = models.EmailField()
+    billing_address = models.JSONField(default=dict, blank=True)
+    po_number = models.CharField(max_length=100, blank=True, default="")
+    total_cents = models.PositiveIntegerField()
+    deposit_cents = models.PositiveIntegerField()
+    balance_cents = models.PositiveIntegerField()
+    currency = models.CharField(max_length=3, default="usd")
+    stripe_customer_id = models.CharField(max_length=255, blank=True, default="")
+    deposit_payment_intent_id = models.CharField(max_length=255, blank=True, default="")
+    deposit_paid_at = models.DateTimeField(null=True, blank=True)
+    stripe_invoice_id = models.CharField(max_length=255, blank=True, default="")
+    invoice_status = models.CharField(max_length=50, blank=True, default="")
+    invoice_url = models.URLField(max_length=2000, blank=True, default="")
+    invoice_due_at = models.DateTimeField(null=True, blank=True)
+    balance_paid_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "corporate_bookings"
+        ordering = ["-created_at"]
+
+
+class CorporateBookingEvent(models.Model):
+    """Audit / timeline for admin and customer-visible history."""
+
+    id = models.BigAutoField(primary_key=True)
+    booking = models.ForeignKey(
+        CorporateBooking,
+        on_delete=models.CASCADE,
+        related_name="events",
+    )
+    event_type = models.CharField(max_length=64, db_index=True)
+    message = models.TextField(blank=True, default="")
+    metadata = models.JSONField(default=dict, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        db_table = "corporate_booking_events"
+        ordering = ["-created_at"]

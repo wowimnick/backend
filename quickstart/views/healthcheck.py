@@ -59,7 +59,7 @@ def robots_txt_view(request):
     else:
         # For production, we allow everything and advertise the sitemap.
         lines = [
-            "# Classeasily Robots Rules",
+            "# ClassEasily Robots Rules",
             "#   /$$$$$$  /$$                                                           /$$ /$$          ",
             "#  /$$__  $$| $$                                                           |__/| $$          ",
             r"# | $$  \__/| $$  /$$$$$$   /$$$$$$$ /$$$$$$$  /$$$$$$   /$$$$$$   /$$$$$$$ /$$| $$ /$$   /$$",

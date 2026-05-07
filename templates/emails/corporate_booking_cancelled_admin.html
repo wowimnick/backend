@@ -1,0 +1,6 @@
+{% extends "emails/base_email.html" %}
+{% block title %}Corporate booking cancelled{% endblock %}
+{% block content %}
+  <h1>Cancelled: {{ booking.reference }}</h1>
+  <p><strong>{{ inquiry.company_name }}</strong> &mdash; status: {{ booking.status }}</p>
+{% endblock %}

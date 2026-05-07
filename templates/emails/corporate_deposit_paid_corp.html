@@ -1,0 +1,64 @@
+{% extends "emails/base_email.html" %}
+{% load i18n %}
+{% load string_filters %}
+
+{% block title %}
+  {% trans "Deposit received" %}
+{% endblock title %}
+
+{% block content %}
+  <div style="text-align: center;">
+    <div style="font-size: 48px; margin-bottom: 14px; line-height: 1;">✅</div>
+    <h1 style="margin-bottom: 8px;">{% trans "Deposit confirmed" %}</h1>
+    <p style="font-size: 16px; color: #484848; margin-bottom: 24px;">
+      {% trans "Thank you — your deposit for" %} <strong>{{ booking.reference }}</strong> {% trans "is secured." %}
+    </p>
+
+    <div style="background: #fff; border: 1px solid #e5e7eb; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 14px rgba(0,0,0,0.06); margin-bottom: 20px; max-width: 520px; margin-left: auto; margin-right: auto; text-align: left;">
+      <div style="background: #ecfdf5; padding: 16px 20px; border-bottom: 1px solid #d1fae5;">
+        <div style="font-size: 11px; color: #047857; text-transform: uppercase; letter-spacing: 0.05em;">{% trans "Booking" %}</div>
+        <div style="font-size: 22px; font-weight: 700; color: #065f46; font-family: ui-monospace, monospace;">{{ booking.reference }}</div>
+      </div>
+      <div style="padding: 18px 20px;">
+        <div style="display: table; width: 100%; border-collapse: collapse;">
+          <div style="display: table-row;">
+            <div style="display: table-cell; font-size: 11px; color: #86868b; text-transform: uppercase; padding: 6px 12px 6px 0; white-space: nowrap;">{% trans "Company" %}</div>
+            <div style="display: table-cell; font-size: 14px; color: #1d1d1f;">{{ inquiry.company_name }}</div>
+          </div>
+          <div style="display: table-row;">
+            <div style="display: table-cell; font-size: 11px; color: #86868b; text-transform: uppercase; padding: 6px 12px 6px 0;">{% trans "Headcount" %}</div>
+            <div style="display: table-cell; font-size: 14px; color: #1d1d1f;">{{ booking.headcount }}</div>
+          </div>
+          <div style="display: table-row;">
+            <div style="display: table-cell; font-size: 11px; color: #86868b; text-transform: uppercase; padding: 6px 12px 6px 0;">{% trans "When" %}</div>
+            <div style="display: table-cell; font-size: 14px; color: #1d1d1f;">{{ booking.confirmed_datetime }}</div>
+          </div>
+          <div style="display: table-row;">
+            <div style="display: table-cell; font-size: 11px; color: #86868b; text-transform: uppercase; padding: 6px 12px 6px 0;">{% trans "Deposit paid" %}</div>
+            <div style="display: table-cell; font-size: 14px; font-weight: 700; color: #065f46;">{{ booking.deposit_cents|cents_to_usd }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="max-width: 520px; margin: 0 auto 24px; padding: 14px 18px; background: #f9fafb; border-radius: 12px; border: 1px dashed #e5e7eb; text-align: center;">
+      <p style="margin: 0; font-size: 13px; color: #374151; line-height: 1.6;">
+        <span style="color: #f81e3e; font-weight: 700;">●</span> {% trans "Deposit" %}
+        &nbsp;&nbsp;<span style="color: #d1d5db;">○</span> {% trans "Balance invoice" %}
+        &nbsp;&nbsp;<span style="color: #d1d5db;">○</span> {% trans "Event day" %}
+      </p>
+    </div>
+
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+      <tr><td align="center" style="padding-bottom: 12px;">
+        <a href="{{ frontend_url }}/corporate/shortlist/{{ booking.shortlist.token }}/" class="button" target="_blank" style="background-color: #f81e3e !important; color: #ffffff !important; border-radius: 980px;">{% trans "View booking details" %}</a>
+      </td></tr>
+    </table>
+
+    <div style="margin-top: 8px; padding: 14px 16px; background: #fffbeb; border-radius: 12px; border: 1px solid #fde68a; text-align: center; max-width: 520px; margin-left: auto; margin-right: auto;">
+      <p style="margin: 0; font-size: 13px; color: #92400e; line-height: 1.45;">
+        {% trans "We’ll email a balance invoice for the remaining amount according to your agreement. For PO or billing questions, reply to this message." %}
+      </p>
+    </div>
+  </div>
+{% endblock content %}

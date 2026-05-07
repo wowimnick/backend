@@ -19,6 +19,7 @@ from quickstart.views.business.business_location_views import (
 from quickstart.views.widget.widget_config_views import (
     WidgetConfigManagementView,
     CreateWidgetSubscriptionCheckoutView,
+    CreateBillingPortalSessionView,
     CreateWidgetSubscriptionPaymentIntentView,
     WidgetSubscriptionView,
     WidgetSubscriptionCancelView,
@@ -155,6 +156,23 @@ from quickstart.views.public.public_global_discount_views import (
     ActiveGlobalDiscountView,
 )
 from quickstart.views.public.search_log_views import SearchLogCreateView
+from quickstart.views.public.search_views import (
+    PublicCollectionPlacementListView,
+    SearchSuggestView,
+)
+from quickstart.views.public.corporate_views import CorporateInquiryCreateView
+from quickstart.views.public.corporate_shortlist_views import (
+    CorporateBookingDepositIntentView,
+    CorporateBookingStatusPublicView,
+    CorporateShortlistPublicView,
+    CorporateShortlistSelectView,
+)
+from quickstart.views.admin.corporate_admin_views import (
+    AdminCorporateBookingViewSet,
+    AdminCorporateInquiryViewSet,
+    AdminCorporateShortlistOptionViewSet,
+    AdminCorporateShortlistViewSet,
+)
 
 from quickstart.views import (
     CustomTokenObtainPairView,
@@ -365,6 +383,26 @@ admin_router.register(
     AdminWidgetSubscriptionViewSet,
     basename="admin-widget-subscriptions",
 )
+admin_router.register(
+    r"corporate-inquiries",
+    AdminCorporateInquiryViewSet,
+    basename="admin-corporate-inquiries",
+)
+admin_router.register(
+    r"corporate-shortlists",
+    AdminCorporateShortlistViewSet,
+    basename="admin-corporate-shortlists",
+)
+admin_router.register(
+    r"corporate-shortlist-options",
+    AdminCorporateShortlistOptionViewSet,
+    basename="admin-corporate-shortlist-options",
+)
+admin_router.register(
+    r"corporate-bookings",
+    AdminCorporateBookingViewSet,
+    basename="admin-corporate-bookings",
+)
 
 
 def class_id_redirect_view(request, class_id):
@@ -422,6 +460,37 @@ widget_urlpatterns = [
 urlpatterns = [
     path("", health_check, name="api-root-health"),
     path("search-log/", SearchLogCreateView.as_view(), name="search-log-create"),
+    path(
+        "corporate-inquiry/",
+        CorporateInquiryCreateView.as_view(),
+        name="corporate-inquiry-create",
+    ),
+    path(
+        "corporate/shortlist/<uuid:token>/",
+        CorporateShortlistPublicView.as_view(),
+        name="corporate-shortlist-public",
+    ),
+    path(
+        "corporate/shortlist/<uuid:token>/select/",
+        CorporateShortlistSelectView.as_view(),
+        name="corporate-shortlist-select",
+    ),
+    path(
+        "corporate/shortlist/<uuid:token>/booking/<uuid:booking_id>/deposit-intent/",
+        CorporateBookingDepositIntentView.as_view(),
+        name="corporate-booking-deposit-intent",
+    ),
+    path(
+        "corporate/shortlist/<uuid:token>/booking/<uuid:booking_id>/",
+        CorporateBookingStatusPublicView.as_view(),
+        name="corporate-booking-status-public",
+    ),
+    path("search/suggest/", SearchSuggestView.as_view(), name="search-suggest"),
+    path(
+        "collections/placement/",
+        PublicCollectionPlacementListView.as_view(),
+        name="public-collections-placement",
+    ),
     # --- Django Admin & 3rd Party Libs ---
     path("admin/panel/", admin.site.urls),
     path(
@@ -525,7 +594,9 @@ urlpatterns = [
                 ),
                 path(
                     "account-confirm-email/",
-                    TemplateView.as_view(),
+                    TemplateView.as_view(
+                        template_name="account/email_verification_sent.html"
+                    ),
                     name="account_email_verification_sent",
                 ),
             ]
@@ -557,6 +628,11 @@ urlpatterns = [
         "classes/homepage-content/",
         PublicClassViewSet.as_view({"get": "homepage_content"}),
         name="public-class-homepage-content",
+    ),
+    path(
+        "classes/collections/<slug:parent_slug>/children/",
+        PublicClassViewSet.as_view({"get": "collection_children"}),
+        name="public-collection-children",
     ),
     path(
         "classes/<str:pk>/toggle-favorite/",
@@ -693,6 +769,11 @@ urlpatterns = [
         "my-business/widget-subscription/checkout/",
         CreateWidgetSubscriptionCheckoutView.as_view(),
         name="my-business-widget-subscription-checkout",
+    ),
+    path(
+        "my-business/billing-portal/",
+        CreateBillingPortalSessionView.as_view(),
+        name="my-business-billing-portal",
     ),
     path(
         "my-business/widget-subscription/payment-intent/",

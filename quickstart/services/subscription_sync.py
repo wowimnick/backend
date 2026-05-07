@@ -44,12 +44,18 @@ def _widget_price_to_plan_id(stripe_price_id):
     """Map Stripe price ID to plan_id. Returns None if unknown."""
     if not stripe_price_id:
         return None
-    price_map = {
-        getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_BASIC", None): "basic",
-        getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_GROWTH", None): "growth",
-        getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_ADVANCED", None): "advanced",
-    }
-    return price_map.get(stripe_price_id)
+    pairs = [
+        (getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_BASIC", None), "basic"),
+        (getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_GROWTH", None), "growth"),
+        (getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_ADVANCED", None), "advanced"),
+        (getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_BASIC_ANNUAL", None), "basic"),
+        (getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_GROWTH_ANNUAL", None), "growth"),
+        (getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_ADVANCED_ANNUAL", None), "advanced"),
+    ]
+    for price, plan in pairs:
+        if price and price == stripe_price_id:
+            return plan
+    return None
 
 
 def _subscription_to_period_end(sub):

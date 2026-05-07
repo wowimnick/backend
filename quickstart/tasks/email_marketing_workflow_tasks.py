@@ -5,6 +5,7 @@ from datetime import timedelta
 import resend
 from celery import shared_task
 from django.conf import settings
+from django.db.utils import OperationalError
 from django.utils import timezone
 
 from quickstart.models import (
@@ -83,7 +84,11 @@ def _send_workflow_email(*, business, addon, tier, contact, cfg, sender_profile_
     return True, None
 
 
-@shared_task
+@shared_task(
+    autoretry_for=(OperationalError,),
+    retry_backoff=True,
+    retry_kwargs={"max_retries": 3},
+)
 def process_due_workflow_enrollments():
     now = timezone.now()
     qs = (

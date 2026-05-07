@@ -3,13 +3,12 @@ import logging
 from decimal import Decimal
 
 from django.db.models import (
-    Avg,
-    Count,
     Subquery,
     OuterRef,
     Value,
     DecimalField,
     IntegerField,
+    F,
 )
 from django.db.models.functions import Coalesce
 from django.utils import timezone  # FIX: Import timezone
@@ -18,7 +17,7 @@ from rest_framework import generics, permissions
 from rest_framework.pagination import PageNumberPagination
 
 # Adjust imports based on your project structure
-from quickstart.models import ClassesMain, Reviews, Schedule, Favorites
+from quickstart.models import ClassesMain, Schedule, Favorites
 from quickstart.serializers import PublicClassSerializer  # Reuse the public serializer
 
 logger = logging.getLogger(__name__)
@@ -55,21 +54,6 @@ MIN_COURSE_PRICE_SUBQUERY = Subquery(
     output_field=DecimalField(max_digits=10, decimal_places=2),
 )
 
-AVERAGE_RATING_SUBQUERY = Subquery(
-    Reviews.objects.filter(classId=OuterRef("pk"), status="approved")
-    .values("classId")
-    .annotate(avg_rating=Avg("rating"))
-    .values("avg_rating")[:1],
-    output_field=DecimalField(max_digits=3, decimal_places=1),
-)
-REVIEW_COUNT_SUBQUERY = Subquery(
-    Reviews.objects.filter(classId=OuterRef("pk"), status="approved")
-    .values("classId")
-    .annotate(count=Count("reviewId"))
-    .values("count")[:1],
-    output_field=IntegerField(),
-)
-
 
 class MyFavoritesListView(generics.ListAPIView):
     """
@@ -101,10 +85,10 @@ class MyFavoritesListView(generics.ListAPIView):
                 businessId__verificationStatus="verified",
             )
             .annotate(
-                # FIX: Changed annotations to provide min_session_price and
-                # min_course_price, which the PublicClassSerializer expects.
-                average_rating=Coalesce(AVERAGE_RATING_SUBQUERY, Value(Decimal("0.0"))),
-                review_count=Coalesce(REVIEW_COUNT_SUBQUERY, Value(0)),
+                average_rating=Coalesce(
+                    F("platform_avg_rating"), Value(Decimal("0.0"))
+                ),
+                review_count=Coalesce(F("platform_review_count"), Value(0)),
                 min_session_price=Coalesce(MIN_SESSION_PRICE_SUBQUERY, None),
                 min_course_price=Coalesce(MIN_COURSE_PRICE_SUBQUERY, None),
             )
@@ -117,4 +101,8 @@ class MyFavoritesListView(generics.ListAPIView):
         """Pass request context to the serializer."""
         context = super().get_serializer_context()
         context.update({"request": self.request})
+        user = self.request.user
+        context["favorited_ids"] = set(
+            Favorites.objects.filter(userId=user).values_list("classId", flat=True)
+        )
         return context

@@ -37,6 +37,7 @@ from .models import (
     BlogPost,
     ClassesMain,
     ClassOption,
+    ImportedGoogleReview,
     Schedule,
     ScheduleInstance,
     StudentNote,
@@ -334,6 +335,34 @@ def create_booking_notification(sender, instance, created, **kwargs):
                 exc_info=True,
             )
 
+
+@receiver(post_save, sender=Booking)
+def update_business_last_booking_date(sender, instance, **kwargs):
+    """Maintain BusinessInfo.last_booking_date as newest booking.booking_date for KPIs/backfill."""
+    if not getattr(instance, "booking_date", None):
+        return
+    try:
+        class_main = instance.schedule_instance.schedule.option.classId
+        biz_pk = class_main.businessId_id
+    except AttributeError:
+        return
+    try:
+        existing = BusinessInfo.objects.filter(pk=biz_pk).values_list(
+            "last_booking_date", flat=True
+        ).first()
+        if existing is None or instance.booking_date > existing:
+            BusinessInfo.objects.filter(pk=biz_pk).update(
+                last_booking_date=instance.booking_date
+            )
+    except Exception as e:
+        logger.warning(
+            "Could not update last_booking_date for business %s booking %s: %s",
+            biz_pk,
+            getattr(instance, "pk", None),
+            e,
+        )
+
+
 @receiver(post_save, sender=Reviews)
 def create_review_notification(sender, instance, created, **kwargs):
     """Notify business when a new review is created and approved."""
@@ -524,6 +553,48 @@ def student_review_response_notification(sender, instance, created, **kwargs):
             f"Review response notification created for student {student_user.email} for review {instance.reviewId}"
         )
 
+
+def _bust_homepage_sections_cache():
+    """Invalidate short-lived homepage row cache (trending / date_night / next_week)."""
+    key = f"homepage_sections_v1:{getattr(settings, 'DJANGO_ENV', 'local')}"
+    try:
+        cache.delete(key)
+    except Exception as e:
+        logger.warning("homepage sections cache bust failed: %s", e)
+
+
+@receiver(post_save, sender=Reviews)
+@receiver(post_delete, sender=Reviews)
+def sync_denorm_platform_reviews(sender, instance, **kwargs):
+    from quickstart.utils.review_denorm import refresh_platform_review_aggregates_for_class
+
+    cid = getattr(instance, "classId_id", None)
+    if cid:
+        try:
+            refresh_platform_review_aggregates_for_class(cid)
+        except Exception as e:
+            logger.warning(
+                "refresh platform review denorm failed: %s", e, exc_info=True
+            )
+    _bust_homepage_sections_cache()
+
+
+@receiver(post_save, sender=ImportedGoogleReview)
+@receiver(post_delete, sender=ImportedGoogleReview)
+def sync_denorm_google_reviews(sender, instance, **kwargs):
+    from quickstart.utils.review_denorm import refresh_google_review_aggregates_for_business
+
+    bid = getattr(instance, "business_id", None)
+    if bid:
+        try:
+            refresh_google_review_aggregates_for_business(bid)
+        except Exception as e:
+            logger.warning(
+                "refresh google review denorm failed: %s", e, exc_info=True
+            )
+    _bust_homepage_sections_cache()
+
+
 @receiver(post_save, sender=Schedule)
 def notify_users_of_new_schedule(sender, instance: Schedule, created, **kwargs):
     """
@@ -649,6 +720,46 @@ def trigger_classification(sender, instance, created, update_fields, **kwargs):
                 args=[class_pk],
             )
         transaction.on_commit(_queue_classify)
+
+@receiver(pre_save, sender=ClassesMain)
+def classes_main_track_description_before(sender, instance, **kwargs):
+    if not instance.pk:
+        instance._description_before = None
+        return
+    try:
+        instance._description_before = ClassesMain.objects.only("description").get(
+            pk=instance.pk
+        ).description
+    except ClassesMain.DoesNotExist:
+        instance._description_before = None
+
+
+@receiver(post_save, sender=ClassesMain)
+def queue_description_ai_formatting(sender, instance, created, **kwargs):
+    """Queue Gemini description structuring when description text changes."""
+    if instance.status != "active":
+        return
+    prev = getattr(instance, "_description_before", object())
+    desc = instance.description or ""
+    if not created:
+        if prev is not object() and prev == desc:
+            return
+    elif not (desc or "").strip():
+        return
+
+    class_pk = instance.pk
+    ClassesMain.objects.filter(pk=class_pk).update(description_ai_status="pending")
+
+    def _queue():
+        from CEBackend.celery import app as celery_app
+
+        celery_app.send_task(
+            "quickstart.tasks.business_tasks.format_class_description_task",
+            args=[class_pk],
+        )
+
+    transaction.on_commit(_queue)
+
 
 @receiver(post_save, sender=ClassCollection)
 def trigger_reclassification_on_collection_change(sender, instance, created, update_fields, **kwargs):
@@ -1057,6 +1168,7 @@ def nextjs_revalidate_on_class_save(sender, instance, **kwargs):
             "classes-search",
         ]
     )
+    _bust_homepage_sections_cache()
 
 
 @receiver(post_save, sender=BusinessInfo)
@@ -1085,3 +1197,4 @@ def nextjs_revalidate_on_collection(sender, instance, **kwargs):
     _schedule_next_revalidate(
         ["collections", "homepage-content", "classes-search"]
     )
+    _bust_homepage_sections_cache()

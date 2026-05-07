@@ -11,6 +11,7 @@ from quickstart.models import (
     Schedule,
     ClassCategory,
     ImportedGoogleReview,
+    Favorites,
 )
 
 # Important: Import the Google review serializer
@@ -135,15 +136,63 @@ class PublicClassImageSerializer(serializers.ModelSerializer):
 class PublicScheduleSerializer(serializers.ModelSerializer):
     """Serializer for publicly displaying basic schedule info."""
 
+    available_spots = serializers.SerializerMethodField()
+    instance_id = serializers.SerializerMethodField()
+
+    def _matching_schedule_instance(self, obj):
+        """
+        Schedule row `obj.date` maps to a ScheduleInstance row for booking/payment APIs.
+        Must stay in sync with get_available_spots / get_instance_id.
+        """
+        try:
+            prefetched = getattr(obj, "_prefetched_instances", None)
+            if prefetched is not None:
+                instances = [
+                    i
+                    for i in prefetched
+                    if str(i.date) == str(obj.date) and i.status == "scheduled"
+                ]
+            else:
+                instances = list(
+                    obj.instances.filter(date=obj.date, status="scheduled")
+                )
+            if instances:
+                return instances[0]
+        except Exception:
+            pass
+        return None
+
+    def get_available_spots(self, obj):
+        """
+        Return spots still bookable for this schedule's session date.
+        Uses the prefetched + annotated ScheduleInstance list (_prefetched_instances)
+        to avoid N+1 DB queries. Falls back to maxParticipants when no instance
+        exists (e.g. recurring patterns without a concrete instance yet).
+        """
+        inst = self._matching_schedule_instance(obj)
+        if inst:
+            if hasattr(inst, "total_booked"):
+                return max(0, inst.max_participants - inst.total_booked)
+            return max(0, inst.available_spots)
+        return obj.maxParticipants
+
+    def get_instance_id(self, obj):
+        """ScheduleInstance PK — required for booking (distinct from Schedule.id)."""
+        inst = self._matching_schedule_instance(obj)
+        return inst.id if inst else None
+
     class Meta:
         model = Schedule
         fields = [
             "id",
+            "instance_id",
             "day",
             "time",
             "duration",
             "price",
+            "minParticipants",
             "maxParticipants",
+            "available_spots",
             "start_date",
             "end_date",
             "date",
@@ -224,6 +273,10 @@ class PublicClassSerializer(serializers.ModelSerializer):
     min_course_price = serializers.DecimalField(
         max_digits=10, decimal_places=2, read_only=True
     )
+    listing_duration_minutes = serializers.SerializerMethodField(
+        read_only=True,
+        help_text="Shortest schedule duration (minutes); set by list queryset annotation when present.",
+    )
     coordinates = serializers.SerializerMethodField(read_only=True)
     location = serializers.SerializerMethodField(read_only=True)
     is_favorited = serializers.SerializerMethodField()
@@ -265,6 +318,7 @@ class PublicClassSerializer(serializers.ModelSerializer):
             "min_session_price",
             "min_course_price",
             "soonest_next_week",
+            "listing_duration_minutes",
             "student_contact_email",
             "student_contact_phone",
             "require_participant_names",
@@ -274,6 +328,10 @@ class PublicClassSerializer(serializers.ModelSerializer):
     def get_location_name(self, obj):
         ref = getattr(obj, "location_ref", None)
         return ref.name if ref else None
+
+    def get_listing_duration_minutes(self, obj):
+        v = getattr(obj, "listing_duration_minutes", None)
+        return v if v is not None else None
 
     def _get_business_contact_if_public(self, obj, attr):
         """Expose business contact when contact_privacy is public or public_with_chat (always visible)."""
@@ -311,9 +369,14 @@ class PublicClassSerializer(serializers.ModelSerializer):
         return obj.location
 
     def get_is_favorited(self, obj):
+        ids = self.context.get("favorited_ids")
+        if ids is not None:
+            return obj.pk in ids
         request = self.context.get("request")
         if request and hasattr(request, "user") and request.user.is_authenticated:
-            return request.user.favorited.filter(pk=obj.pk).exists()
+            return Favorites.objects.filter(
+                userId=request.user, classId=obj
+            ).exists()
         return False
 
     def _get_google_review_stats(self, obj):
@@ -517,6 +580,9 @@ class PublicClassDetailSerializer(PublicClassSerializer):
             "platform_review_count",
             "google_review_count",
             "collections",
+            "description_summary",
+            "description_sections",
+            "description_ai_status",
         ]
 
     def get_google_review_count(self, obj):
@@ -526,11 +592,58 @@ class PublicClassDetailSerializer(PublicClassSerializer):
 
 class PublicCollectionSerializer(serializers.ModelSerializer):
     image_medium_url = serializers.SerializerMethodField()
-    key = serializers.CharField(source='slug', read_only=True) 
+    key = serializers.CharField(source='slug', read_only=True)
+    parent_id = serializers.IntegerField(read_only=True, allow_null=True)
+    has_children = serializers.SerializerMethodField()
+    children = serializers.SerializerMethodField()
 
     class Meta:
         model = ClassCollection
-        fields = ['id', 'name', 'slug', 'key', 'description', 'image_medium_url', 'sort_order'] 
+        fields = [
+            "id",
+            "name",
+            "slug",
+            "key",
+            "parent_id",
+            "has_children",
+            "children",
+            "description",
+            "image_medium_url",
+            "sort_order",
+            "search_aliases",
+            "is_searchable",
+            "show_in_i_want",
+            "show_in_featured_categories",
+            "show_on_homepage_rows",
+            "icon_name",
+            "color",
+        ]
+
+    def get_has_children(self, obj):
+        pref = getattr(obj, "_prefetched_objects_cache", None)
+        if pref and "children" in pref:
+            return len(pref["children"]) > 0
+        return obj.children.filter(is_active=True).exists()
+
+    def get_children(self, obj):
+        pref = getattr(obj, "_prefetched_objects_cache", None)
+        if pref and "children" in pref:
+            qs = pref["children"]
+        else:
+            qs = list(
+                obj.children.filter(is_active=True).order_by("sort_order", "name")[:50]
+            )
+        out = []
+        for c in qs:
+            if getattr(c, "is_active", True):
+                out.append(
+                    {
+                        "slug": c.slug,
+                        "name": c.name,
+                        "icon_name": c.icon_name or "",
+                    }
+                )
+        return out 
 
     def _get_resized_url(self, obj, size_name):
         """

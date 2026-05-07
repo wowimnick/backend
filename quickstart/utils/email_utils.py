@@ -2216,20 +2216,21 @@ def send_concierge_handover_email(user: CustomUser, claim_url: str):
     """
     Sends the account claim email to a user who was onboarded via Concierge services.
     """
-    if not user or not user.email:
+    recipient = (getattr(user, "email", None) or "").strip()
+    if not user or not recipient:
         logger.warning("Attempted to send handover email to invalid user.")
         return
 
-    logger.info(f"Preparing concierge handover email for user {user.email}")
+    logger.info(f"Preparing concierge handover email for user {recipient}")
 
     context = {
         "user": user,
         "claim_url": claim_url,
-        "recipient_email": user.email,
+        "recipient_email": recipient,
     }
 
     send_templated_email(
-        recipient_list=[user.email],
+        recipient_list=[recipient],
         template_name="emails/concierge_handover.html",
         context=context,
         subject="Your Business Account is Ready! - ClassEasily",

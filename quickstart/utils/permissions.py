@@ -610,6 +610,18 @@ class CanAccessGlobalDiscountAdmin(BasePermission):
         )
 
 
+# --- Admin: Corporate inquiries / shortlists / bookings ---
+class CanAccessCorporateAdmin(BasePermission):
+    message = "You do not have permission to access corporate booking administration."
+
+    def has_permission(self, request, view):
+        return (
+            request.user
+            and request.user.is_authenticated
+            and request.user.has_perm("quickstart.access_corporate_admin")
+        )
+
+
 # --- Admin: Notifications ---
 class CanAccessNotificationAdmin(BasePermission):
     message = "You do not have permission to access notification management."

@@ -20,6 +20,7 @@ from quickstart.models import (
     BusinessAddonSubscription,
     ClassesMain,
     MembershipProduct,
+    StripeCheckoutAttempt,
     WidgetSubscription,
 )
 from quickstart.models import ADDON_TYPE_EMAIL_MARKETING, ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING
@@ -52,6 +53,7 @@ from quickstart.services.widget_subscription_service import (
     _is_downgrade,
 )
 from quickstart.utils.email_branding_html import normalize_and_validate_branding_payload
+from quickstart.utils.stripe_migration import stripe_migration_gone_response
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
@@ -345,33 +347,53 @@ class CreateWidgetSubscriptionCheckoutView(APIView):
         plan_id = (request.data.get("plan_id") or "growth").strip().lower()
         if plan_id not in VALID_PLAN_IDS:
             plan_id = "growth"
-        price_map = {
+
+        interval = (request.data.get("billing_interval") or request.data.get("interval") or "month").strip().lower()
+        if interval not in ("month", "year"):
+            interval = "month"
+
+        monthly_map = {
             "basic": getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_BASIC", None),
             "growth": getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_GROWTH", None),
             "advanced": getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_ADVANCED", None),
         }
-        price_id = price_map.get(plan_id) or getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_ID", None)
+        annual_map = {
+            "basic": getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_BASIC_ANNUAL", None),
+            "growth": getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_GROWTH_ANNUAL", None),
+            "advanced": getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_ADVANCED_ANNUAL", None),
+        }
+        if interval == "year":
+            price_id = annual_map.get(plan_id) or monthly_map.get(plan_id)
+        else:
+            price_id = monthly_map.get(plan_id) or getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_ID", None)
         if not price_id:
             return Response(
                 {"error": "Widget subscription is not configured. Please set Stripe Price IDs in settings."},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         business = self.get_business(request.user)
-        success_url = request.data.get(
-            "success_url",
-            request.build_absolute_uri("/business/dashboard/widget"),
-        )
-        cancel_url = request.data.get(
-            "cancel_url",
-            request.build_absolute_uri("/booking-widget/checkout"),
-        )
+        base_fe = (getattr(settings, "FRONTEND_BASE_URL", None) or "").rstrip("/")
+        if not base_fe:
+            base_fe = request.build_absolute_uri("/").rstrip("/")
+        default_success = f"{base_fe}/business/dashboard?tab=settings&checkout=success"
+        default_cancel = f"{base_fe}/business/dashboard?tab=settings&checkout=cancel"
+        success_url = (request.data.get("success_url") or default_success).strip()
+        cancel_url = (request.data.get("cancel_url") or default_cancel).strip()
         try:
             session_params = {
                 "mode": "subscription",
                 "line_items": [{"price": price_id, "quantity": 1}],
-                "success_url": success_url + "?session_id={CHECKOUT_SESSION_ID}&subscribed=1",
-                "cancel_url": cancel_url + ("?" if "?" not in cancel_url else "&") + f"plan={plan_id}",
+                "success_url": success_url
+                + ("&" if "?" in success_url else "?")
+                + "session_id={CHECKOUT_SESSION_ID}&subscribed=1",
+                "cancel_url": cancel_url + ("&" if "?" in cancel_url else "?") + f"plan={plan_id}",
                 "client_reference_id": str(business.businessId),
+                "metadata": {
+                    "business_id": str(business.businessId),
+                    "plan_id": plan_id,
+                    "product_type": "widget",
+                    "billing_interval": interval,
+                },
                 "subscription_data": {
                     "metadata": {
                         "business_id": str(business.businessId),
@@ -379,17 +401,106 @@ class CreateWidgetSubscriptionCheckoutView(APIView):
                     },
                 },
             }
+            if getattr(settings, "STRIPE_CHECKOUT_AUTOMATIC_TAX", False):
+                session_params["automatic_tax"] = {"enabled": True}
+                session_params["customer_update"] = {"address": "auto"}
+                session_params["billing_address_collection"] = "required"
             if business.stripe_customer_id:
                 session_params["customer"] = business.stripe_customer_id
             else:
                 session_params["customer_email"] = business.studentContactEmail
             session = stripe.checkout.Session.create(**session_params)
-            return Response({"url": session.url}, status=status.HTTP_200_OK)
+            StripeCheckoutAttempt.objects.create(
+                business=business,
+                checkout_session_id=session.id,
+                product_type="widget",
+                plan_or_tier_key=plan_id,
+                stripe_price_id=price_id or "",
+            )
+            return Response(
+                {
+                    "url": session.url,
+                    "checkout_url": session.url,
+                    "session_id": session.id,
+                },
+                status=status.HTTP_200_OK,
+            )
         except stripe.StripeError as e:
             return Response(
                 {"error": str(e)},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
+
+
+class CreateBillingPortalSessionView(APIView):
+    """POST: Return a Stripe Customer Portal URL (manage/cancel subscriptions, payment methods)."""
+
+    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+
+    def post(self, request, *args, **kwargs):
+        business = BusinessInfo.objects.filter(
+            Q(owner=request.user) | Q(staff_members__user=request.user, staff_members__status="accepted")
+        ).first()
+        if not business:
+            from rest_framework.exceptions import NotFound
+
+            raise NotFound("You are not a member of any business.")
+        if not business.stripe_customer_id:
+            return Response(
+                {
+                    "error": "no_stripe_customer",
+                    "detail": "Complete a subscription checkout once to manage billing.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        base_fe = (getattr(settings, "FRONTEND_BASE_URL", None) or "").rstrip("/")
+        if not base_fe:
+            base_fe = request.build_absolute_uri("/").rstrip("/")
+        return_url = (request.data.get("return_url") or f"{base_fe}/business/dashboard?tab=settings").strip()
+        params = {
+            "customer": business.stripe_customer_id,
+            "return_url": return_url,
+        }
+        flow = (request.data.get("flow") or "").strip()
+        subscription_id = (request.data.get("subscription_id") or "").strip()
+        if flow == "subscription_update":
+            if not subscription_id:
+                return Response(
+                    {"error": "subscription_id is required for subscription_update."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            try:
+                stripe_sub = stripe.Subscription.retrieve(subscription_id)
+                sub_customer = _obj_get(stripe_sub, "customer")
+                if sub_customer != business.stripe_customer_id:
+                    return Response(
+                        {"error": "That subscription does not belong to this account."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            except stripe.InvalidRequestError:
+                return Response(
+                    {"error": "Subscription not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            except stripe.StripeError as e:
+                logger.warning("Billing Portal subscription verify failed: %s", e)
+                return Response({"error": str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+            params["flow_data"] = {
+                "type": "subscription_update",
+                "subscription_update": {"subscription": subscription_id},
+            }
+        cfg = getattr(settings, "STRIPE_BILLING_PORTAL_CONFIGURATION_ID", "") or ""
+        if cfg:
+            params["configuration"] = cfg
+        try:
+            session = stripe.billing_portal.Session.create(**params)
+            return Response(
+                {"url": session.url, "portal_url": session.url},
+                status=status.HTTP_200_OK,
+            )
+        except stripe.StripeError as e:
+            logger.warning("Billing Portal session failed business=%s: %s", business.businessId, e)
+            return Response({"error": str(e)}, status=status.HTTP_502_BAD_GATEWAY)
 
 
 class CreateWidgetSubscriptionPaymentIntentView(APIView):
@@ -410,6 +521,9 @@ class CreateWidgetSubscriptionPaymentIntentView(APIView):
         return business
 
     def post(self, request, *args, **kwargs):
+        gone = stripe_migration_gone_response()
+        if gone is not None:
+            return gone
         plan_id = (request.data.get("plan_id") or "growth").strip().lower()
         if plan_id not in VALID_PLAN_IDS:
             plan_id = "growth"
@@ -720,6 +834,7 @@ def _subscription_response_from_sub(sub):
             sub.current_period_end.isoformat() if sub.current_period_end else None
         ),
         "cancelAtPeriodEnd": sub.cancel_at_period_end,
+        "stripeSubscriptionId": sub.stripe_subscription_id or None,
     }
 
 
@@ -1108,7 +1223,7 @@ class WidgetSubscriptionReactivateView(APIView):
 
 
 class WidgetSubscriptionInvoicesView(APIView):
-    """GET: List Stripe invoices for the business customer (widget + add-ons)."""
+    """GET: List invoices from Stripe for this customer (source of truth; no local invoice DB)."""
 
     permission_classes = [IsAuthenticated, CanManageOwnClasses]
 
@@ -1118,13 +1233,11 @@ class WidgetSubscriptionInvoicesView(APIView):
         if not customer_id:
             return Response({"invoices": []}, status=status.HTTP_200_OK)
 
-        # Billing history: only completed (paid) invoices — not open, draft, or failed attempts.
         invoices_by_id = {}
         try:
             stripe_invoices = stripe.Invoice.list(
                 customer=customer_id,
-                status="paid",
-                limit=50,
+                limit=100,
                 expand=["data.charge", "data.lines.data"],
             )
             for inv in _obj_get(stripe_invoices, "data", []) or []:
@@ -1132,21 +1245,26 @@ class WidgetSubscriptionInvoicesView(APIView):
                 if inv_id:
                     invoices_by_id[inv_id] = inv
         except stripe.StripeError as e:
-            logger.warning("Stripe Invoice.list (customer, paid) failed: %s", e)
+            logger.warning("Stripe Invoice.list (customer) failed: %s", e)
 
         invoices = []
         for inv in invoices_by_id.values():
-            amount = (_obj_get(inv, "amount_paid") or 0) / 100.0
-            # Ignore zero-value paid invoices (free / fully credited).
-            if amount <= 0:
+            inv_status = (_obj_get(inv, "status") or "").lower()
+            if inv_status == "draft":
                 continue
+            amount_paid = (_obj_get(inv, "amount_paid") or 0) / 100.0
+            amount_due = (_obj_get(inv, "amount_due") or 0) / 100.0
+            if inv_status == "paid" and amount_paid <= 0:
+                continue
+            if inv_status == "open" and amount_due <= 0:
+                continue
+
             currency = (_obj_get(inv, "currency") or "usd").upper()
             created = _obj_get(inv, "created")
             if created:
                 from datetime import datetime
                 if isinstance(created, (int, float)):
                     created = datetime.utcfromtimestamp(created).isoformat() + "Z"
-            # Card used to pay (from charge.payment_method_details)
             payment_method = None
             charge = _obj_get(inv, "charge")
             if charge:
@@ -1157,7 +1275,6 @@ class WidgetSubscriptionInvoicesView(APIView):
                         "brand": (_obj_get(card, "brand") or "card").capitalize(),
                         "last4": _obj_get(card, "last4") or "****",
                     }
-            # Line items breakdown
             inv_lines = _obj_get(inv, "lines")
             lines_data = _obj_get(inv_lines, "data", []) or []
             lines = []
@@ -1173,14 +1290,15 @@ class WidgetSubscriptionInvoicesView(APIView):
                 "id": _obj_get(inv, "id"),
                 "number": _obj_get(inv, "number") or _obj_get(inv, "id"),
                 "created": created,
-                "amount_paid": amount,
+                "amount_paid": amount_paid,
+                "amount_due": amount_due,
                 "currency": currency,
                 "status": _obj_get(inv, "status"),
                 "invoice_pdf": _obj_get(inv, "invoice_pdf"),
+                "hosted_invoice_url": _obj_get(inv, "hosted_invoice_url"),
                 "payment_method": payment_method,
                 "lines": lines,
             })
-        # Sort by created descending
         invoices.sort(key=lambda x: x.get("created") or "", reverse=True)
         return Response({"invoices": invoices}, status=status.HTTP_200_OK)
 
@@ -1306,6 +1424,9 @@ class CreateUpdatePaymentMethodSetupIntentView(APIView):
     permission_classes = [IsAuthenticated, CanManageOwnClasses]
 
     def post(self, request, *args, **kwargs):
+        gone = stripe_migration_gone_response()
+        if gone is not None:
+            return gone
         business = _get_business_for_subscription(request.user)
         if not business.stripe_customer_id:
             customer = stripe.Customer.create(
@@ -1339,6 +1460,9 @@ class SetDefaultPaymentMethodView(APIView):
     permission_classes = [IsAuthenticated, CanManageOwnClasses]
 
     def post(self, request, *args, **kwargs):
+        gone = stripe_migration_gone_response()
+        if gone is not None:
+            return gone
         business = _get_business_for_subscription(request.user)
         if not business.stripe_customer_id:
             return Response(
@@ -1474,6 +1598,9 @@ class DetachBusinessPaymentMethodView(APIView):
     permission_classes = [IsAuthenticated, CanManageOwnClasses]
 
     def post(self, request, *args, **kwargs):
+        gone = stripe_migration_gone_response()
+        if gone is not None:
+            return gone
         business = _get_business_for_subscription(request.user)
         if not business.stripe_customer_id:
             return Response(
@@ -1622,7 +1749,14 @@ class CreateMarketplaceEmailAddonCheckoutView(APIView):
     permission_classes = [IsAuthenticated, CanManageOwnClasses]
 
     def post(self, request, *args, **kwargs):
-        price_id = getattr(settings, "MARKETPLACE_EMAIL_ADDON_PRICE_ID", None)
+        interval = (request.data.get("billing_interval") or request.data.get("interval") or "month").strip().lower()
+        if interval not in ("month", "year"):
+            interval = "month"
+        monthly_pid = getattr(settings, "MARKETPLACE_EMAIL_ADDON_PRICE_ID", None)
+        annual_pid = getattr(settings, "MARKETPLACE_EMAIL_ADDON_PRICE_ID_ANNUAL", None)
+        price_id = annual_pid if interval == "year" else monthly_pid
+        if not price_id:
+            price_id = monthly_pid or annual_pid
         if not price_id:
             return Response(
                 {"error": "Marketplace email addon is not configured. Please contact support."},
@@ -1634,21 +1768,26 @@ class CreateMarketplaceEmailAddonCheckoutView(APIView):
                 {"error": "You already have an active marketplace email branding subscription."},
                 status=status.HTTP_409_CONFLICT,
             )
-        success_url = request.data.get(
-            "success_url",
-            request.build_absolute_uri("/business/dashboard/settings"),
-        )
-        cancel_url = request.data.get(
-            "cancel_url",
-            request.build_absolute_uri("/business/dashboard/settings"),
-        )
+        base_fe = (getattr(settings, "FRONTEND_BASE_URL", None) or "").rstrip("/") or request.build_absolute_uri("/").rstrip("/")
+        default_success = f"{base_fe}/business/dashboard?tab=settings&checkout=success&addon=marketplace_email"
+        default_cancel = f"{base_fe}/business/dashboard?tab=settings&checkout=cancel"
+        success_url = (request.data.get("success_url") or default_success).strip()
+        cancel_url = (request.data.get("cancel_url") or default_cancel).strip()
         try:
             session_params = {
                 "mode": "subscription",
                 "line_items": [{"price": price_id, "quantity": 1}],
-                "success_url": success_url + "?addon=1&session_id={CHECKOUT_SESSION_ID}",
+                "success_url": success_url
+                + ("&" if "?" in success_url else "?")
+                + "session_id={CHECKOUT_SESSION_ID}",
                 "cancel_url": cancel_url,
                 "client_reference_id": str(business.businessId),
+                "metadata": {
+                    "business_id": str(business.businessId),
+                    "product_type": "marketplace_email_branding",
+                    "addon_type": ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING,
+                    "billing_interval": interval,
+                },
                 "subscription_data": {
                     "metadata": {
                         "business_id": str(business.businessId),
@@ -1656,12 +1795,26 @@ class CreateMarketplaceEmailAddonCheckoutView(APIView):
                     },
                 },
             }
+            if getattr(settings, "STRIPE_CHECKOUT_AUTOMATIC_TAX", False):
+                session_params["automatic_tax"] = {"enabled": True}
+                session_params["customer_update"] = {"address": "auto"}
+                session_params["billing_address_collection"] = "required"
             if business.stripe_customer_id:
                 session_params["customer"] = business.stripe_customer_id
             else:
                 session_params["customer_email"] = business.studentContactEmail
             session = stripe.checkout.Session.create(**session_params)
-            return Response({"url": session.url}, status=status.HTTP_200_OK)
+            StripeCheckoutAttempt.objects.create(
+                business=business,
+                checkout_session_id=session.id,
+                product_type="marketplace_email_branding",
+                plan_or_tier_key="",
+                stripe_price_id=price_id or "",
+            )
+            return Response(
+                {"url": session.url, "checkout_url": session.url, "session_id": session.id},
+                status=status.HTTP_200_OK,
+            )
         except stripe.StripeError as e:
             return Response({"error": str(e)}, status=status.HTTP_502_BAD_GATEWAY)
 
@@ -1675,6 +1828,9 @@ class CreateMarketplaceEmailAddonPaymentIntentView(APIView):
     permission_classes = [IsAuthenticated, CanManageOwnClasses]
 
     def post(self, request, *args, **kwargs):
+        gone = stripe_migration_gone_response()
+        if gone is not None:
+            return gone
         price_id = getattr(settings, "MARKETPLACE_EMAIL_ADDON_PRICE_ID", None)
         if not price_id:
             return Response(

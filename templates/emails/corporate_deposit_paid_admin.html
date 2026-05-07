@@ -1,0 +1,11 @@
+{% extends "emails/base_email.html" %}
+{% block title %}Corporate deposit paid{% endblock %}
+{% block content %}
+  <h1>Deposit paid: {{ booking.reference }}</h1>
+  <p>
+    <strong>Company:</strong> {{ inquiry.company_name }}<br />
+    <strong>Deposit (cents):</strong> {{ booking.deposit_cents }}<br />
+    <strong>Balance (cents):</strong> {{ booking.balance_cents }}<br />
+  </p>
+  <p>Issue balance invoice from the admin when ready.</p>
+{% endblock %}

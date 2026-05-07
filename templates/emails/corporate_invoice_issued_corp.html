@@ -1,0 +1,55 @@
+{% extends "emails/base_email.html" %}
+{% load i18n %}
+{% load string_filters %}
+
+{% block title %}
+  {% trans "Balance invoice" %}
+{% endblock title %}
+
+{% block content %}
+  <div style="text-align: center;">
+    <div style="font-size: 48px; margin-bottom: 14px; line-height: 1;">🧾</div>
+    <h1 style="margin-bottom: 8px;">{% trans "Your balance invoice is ready" %}</h1>
+    <p style="font-size: 16px; color: #484848; margin-bottom: 24px;">
+      {% trans "The remaining balance for" %} <strong>{{ booking.reference }}</strong> {% trans "is ready when you are." %}
+    </p>
+
+    <div style="background: #fff; border: 1px solid #e5e7eb; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 14px rgba(0,0,0,0.06); margin-bottom: 24px; max-width: 520px; margin-left: auto; margin-right: auto; text-align: left;">
+      <div style="background: #eff6ff; padding: 16px 20px; border-bottom: 1px solid #bfdbfe;">
+        <div style="font-size: 11px; color: #1d4ed8; text-transform: uppercase; letter-spacing: 0.05em;">{% trans "Amount due" %}</div>
+        <div style="font-size: 26px; font-weight: 700; color: #1e3a8a;">{{ booking.balance_cents|cents_to_usd }}</div>
+        {% if booking.invoice_due_at %}
+        <div style="font-size: 12px; color: #1e40af; margin-top: 6px;">{% trans "Due" %}: {{ booking.invoice_due_at }}</div>
+        {% endif %}
+      </div>
+      <div style="padding: 18px 20px;">
+        <div style="display: table; width: 100%;">
+          <div style="display: table-row;">
+            <div style="display: table-cell; font-size: 11px; color: #86868b; text-transform: uppercase; padding: 6px 12px 6px 0;">{% trans "Booking" %}</div>
+            <div style="display: table-cell; font-size: 14px; color: #1d1d1f; font-family: ui-monospace, monospace;">{{ booking.reference }}</div>
+          </div>
+          <div style="display: table-row;">
+            <div style="display: table-cell; font-size: 11px; color: #86868b; text-transform: uppercase; padding: 6px 12px 6px 0;">{% trans "Company" %}</div>
+            <div style="display: table-cell; font-size: 14px; color: #1d1d1f;">{{ inquiry.company_name }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {% if booking.invoice_url %}
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+      <tr><td align="center">
+        <a href="{{ booking.invoice_url }}" class="button" target="_blank" style="background-color: #f81e3e !important; color: #ffffff !important; border-radius: 980px;">{% trans "View & pay invoice" %}</a>
+      </td></tr>
+    </table>
+    {% else %}
+    <div style="padding: 16px 18px; background: #f9fafb; border-radius: 12px; border: 1px solid #e5e7eb; max-width: 520px; margin: 0 auto;">
+      <p style="margin: 0; font-size: 14px; color: #374151; line-height: 1.5;">
+        {% trans "You will receive a separate email from our payments provider with a secure pay link." %}
+      </p>
+    </div>
+    {% endif %}
+
+    <p style="margin-top: 24px; font-size: 13px; color: #86868b;">{% trans "Need help with procurement or a PO? Reply to this email." %}</p>
+  </div>
+{% endblock content %}

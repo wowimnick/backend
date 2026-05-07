@@ -1,0 +1,113 @@
+{# Corporate inquiry — internal notification #}
+{% extends "emails/base_email.html" %}
+{% load i18n %}
+
+{% block title %}
+  {% trans "New corporate inquiry" %}
+{% endblock title %}
+
+{% block content %}
+  <div style="text-align: center;">
+    <div style="font-size: 44px; margin-bottom: 12px; line-height: 1;">🆕</div>
+    <h1 style="margin-bottom: 6px;">{% trans "New inquiry" %} — {{ inquiry.company_name }}</h1>
+    <p style="font-size: 15px; color: #484848; margin-bottom: 24px;">
+      {% trans "Reply goes to the contact below when you use Reply in your mail client." %}
+    </p>
+
+    <div style="background: #fff; border: 1px solid #e5e7eb; border-radius: 16px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.04); margin-bottom: 28px; max-width: 560px; margin-left: auto; margin-right: auto; text-align: left;">
+      <div style="background: linear-gradient(180deg, #fff5f5 0%, #ffffff 100%); padding: 16px 20px; border-bottom: 1px solid #e5e7eb;">
+        <div style="font-size: 11px; color: #86868b; text-transform: uppercase; letter-spacing: 0.05em;">{% trans "Lead" %}</div>
+        <div style="font-size: 20px; font-weight: 700; color: #1d1d1f;">{{ inquiry.company_name }}</div>
+        <div style="font-size: 13px; color: #6b7280; margin-top: 4px;">{{ inquiry.created_at }}</div>
+      </div>
+      <div style="padding: 18px 20px;">
+        <div style="display: table; width: 100%; border-collapse: collapse;">
+          <div style="display: table-row;">
+            <div style="display: table-cell; font-size: 11px; color: #86868b; text-transform: uppercase; padding: 6px 12px 6px 0; width: 34%; vertical-align: top;">{% trans "Contact" %}</div>
+            <div style="display: table-cell; font-size: 14px; color: #1d1d1f;">{{ inquiry.contact_name }}</div>
+          </div>
+          <div style="display: table-row;">
+            <div style="display: table-cell; font-size: 11px; color: #86868b; text-transform: uppercase; padding: 6px 12px 6px 0; vertical-align: top;">{% trans "Email" %}</div>
+            <div style="display: table-cell; font-size: 14px;"><a href="mailto:{{ inquiry.email }}" style="color: #0ea5e9; text-decoration: none; font-weight: 600;">{{ inquiry.email }}</a></div>
+          </div>
+          <div style="display: table-row;">
+            <div style="display: table-cell; font-size: 11px; color: #86868b; text-transform: uppercase; padding: 6px 12px 6px 0; vertical-align: top;">{% trans "Phone" %}</div>
+            <div style="display: table-cell; font-size: 14px; color: #1d1d1f;">{{ inquiry.phone|default:"—" }}</div>
+          </div>
+          <div style="display: table-row;">
+            <div style="display: table-cell; font-size: 11px; color: #86868b; text-transform: uppercase; padding: 6px 12px 6px 0; vertical-align: top;">{% trans "Group size" %}</div>
+            <div style="display: table-cell; font-size: 14px; color: #1d1d1f;">{{ inquiry.get_company_size_display }}</div>
+          </div>
+        </div>
+
+        {% if inquiry.message %}
+        <div style="margin-top: 14px; padding-top: 14px; border-top: 1px dashed #e5e7eb;">
+          <div style="font-size: 11px; color: #86868b; text-transform: uppercase; margin-bottom: 6px;">{% trans "Message" %}</div>
+          <div style="font-size: 14px; color: #374151; white-space: pre-wrap; background: #f9fafb; border-radius: 10px; padding: 12px; border: 1px solid #e5e7eb;">{{ inquiry.message }}</div>
+        </div>
+        {% endif %}
+
+        {% if inquiry.meta %}
+        <div style="margin-top: 14px; padding-top: 14px; border-top: 1px dashed #e5e7eb;">
+          <div style="font-size: 11px; color: #86868b; text-transform: uppercase; margin-bottom: 8px;">{% trans "Details" %}</div>
+          {% if inquiry.meta.city %}
+          <div style="font-size: 14px; color: #1d1d1f; margin-bottom: 6px;"><strong>{% trans "City / metro" %}:</strong> {{ inquiry.meta.city }}</div>
+          {% endif %}
+          {% if inquiry.meta.preferred_date %}
+          <div style="font-size: 14px; color: #1d1d1f; margin-bottom: 6px;"><strong>{% trans "Ideal date" %}:</strong> {{ inquiry.meta.preferred_date }}</div>
+          {% endif %}
+          {% if inquiry.meta.source %}
+          <div style="font-size: 14px; color: #1d1d1f; margin-bottom: 6px;"><strong>{% trans "Source" %}:</strong> {{ inquiry.meta.source }}</div>
+          {% endif %}
+          {% if inquiry.meta.activity_interests %}
+          <div style="margin-top: 10px;">
+            <strong style="font-size: 13px; color: #374151;">{% trans "Experience interests" %}</strong>
+            <div style="margin-top: 8px;">
+              {% for aid in inquiry.meta.activity_interests %}
+                <span style="display: inline-block; background: #f5f5f7; border-radius: 99px; padding: 4px 10px; font-size: 12px; color: #1d1d1f; margin: 0 6px 6px 0;">
+                  {% if aid == "food_drink" %}{% trans "Food & drink" %}
+                  {% elif aid == "arts_crafts" %}{% trans "Arts & crafts" %}
+                  {% elif aid == "wellness" %}{% trans "Wellness & mindfulness" %}
+                  {% elif aid == "active_outdoor" %}{% trans "Active & outdoor" %}
+                  {% elif aid == "music_performance" %}{% trans "Music & performance" %}
+                  {% elif aid == "games" %}{% trans "Games & competitions" %}
+                  {% elif aid == "learning" %}{% trans "Learning & skill-building" %}
+                  {% elif aid == "open" %}{% trans "Open to suggestions" %}
+                  {% else %}{{ aid }}
+                  {% endif %}
+                </span>
+              {% endfor %}
+            </div>
+          </div>
+          {% endif %}
+          {% if inquiry.meta.user_agent %}
+          <div style="margin-top: 12px; font-size: 11px; color: #9ca3af; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; word-break: break-all;">
+            {{ inquiry.meta.user_agent }}
+          </div>
+          {% endif %}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 520px; margin: 0 auto;">
+      <tr>
+        <td align="center" style="padding: 6px;">
+          <a href="{{ frontend_url }}/admin" class="button" target="_blank" style="background-color: #f81e3e !important; color: #ffffff !important; border-radius: 980px; display: inline-block;">{% trans "Open admin dashboard" %}</a>
+        </td>
+      </tr>
+      <tr>
+        <td align="center" style="padding: 6px;">
+          <a href="mailto:{{ inquiry.email }}" style="color: #1d1d1f; font-weight: 600; font-size: 15px; text-decoration: underline;">{% trans "Reply to" %} {{ inquiry.contact_name }}</a>
+        </td>
+      </tr>
+    </table>
+
+    <p style="margin-top: 28px; font-size: 12px; color: #9ca3af; text-align: center; max-width: 480px; margin-left: auto; margin-right: auto; line-height: 1.5;">
+      {% trans "You are receiving this as a ClassEasily Super Admin or an address on CORPORATE_LEADS_EMAIL." %}
+    </p>
+  </div>
+{% endblock content %}
+
+{# Hide default footer_recipient if not passed — base template handles missing recipient #}
+{% block footer_recipient %}{% endblock footer_recipient %}

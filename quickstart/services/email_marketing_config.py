@@ -17,6 +17,7 @@ def _tier_defs():
             "tier_key": TIER_STARTER_KEY,
             "plan_label": "Starter",
             "price_id": getattr(settings, "EMAIL_MARKETING_STARTER_PRICE_ID", None) or "",
+            "annual_price_id": getattr(settings, "EMAIL_MARKETING_STARTER_PRICE_ID_ANNUAL", None) or "",
             "ui_monthly_price": 6,
             "monthly_marketing_send_limit": 2500,
             "max_recipients_per_campaign": 2500,
@@ -34,6 +35,7 @@ def _tier_defs():
             "tier_key": TIER_GROWTH_KEY,
             "plan_label": "Growth",
             "price_id": getattr(settings, "EMAIL_MARKETING_GROWTH_PRICE_ID", None) or "",
+            "annual_price_id": getattr(settings, "EMAIL_MARKETING_GROWTH_PRICE_ID_ANNUAL", None) or "",
             "ui_monthly_price": 15,
             "monthly_marketing_send_limit": 10000,
             "max_recipients_per_campaign": 10000,
@@ -51,6 +53,7 @@ def _tier_defs():
             "tier_key": TIER_BUSINESS_KEY,
             "plan_label": "Business",
             "price_id": getattr(settings, "EMAIL_MARKETING_BUSINESS_PRICE_ID", None) or "",
+            "annual_price_id": getattr(settings, "EMAIL_MARKETING_BUSINESS_PRICE_ID_ANNUAL", None) or "",
             "ui_monthly_price": 29,
             "monthly_marketing_send_limit": 50000,
             "max_recipients_per_campaign": 50000,
@@ -68,6 +71,7 @@ def _tier_defs():
             "tier_key": TIER_SCALE_KEY,
             "plan_label": "Scale",
             "price_id": getattr(settings, "EMAIL_MARKETING_SCALE_PRICE_ID", None) or "",
+            "annual_price_id": getattr(settings, "EMAIL_MARKETING_SCALE_PRICE_ID_ANNUAL", None) or "",
             "ui_monthly_price": 59,
             "monthly_marketing_send_limit": 150000,
             "max_recipients_per_campaign": 150000,
@@ -88,7 +92,9 @@ def price_id_to_tier(price_id):
     if not price_id:
         return None
     for t in _tier_defs():
-        if t["price_id"] and t["price_id"] == price_id:
+        if (t["price_id"] and t["price_id"] == price_id) or (
+            t.get("annual_price_id") and t["annual_price_id"] == price_id
+        ):
             return dict(t)
     return None
 

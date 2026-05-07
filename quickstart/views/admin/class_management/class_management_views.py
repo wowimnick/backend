@@ -168,16 +168,10 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 output_field=FloatField(),
             )
 
-            # Platform review count
-            approved_review_count_subquery = Subquery(
-                Reviews.objects.filter(classId=OuterRef("pk"), status="approved")
-                .values("classId")
-                .annotate(c=Count("pk"))
-                .values("c"),
-                output_field=Count("pk").output_field,
-            )
+            # Platform review counts use ClassesMain.platform_review_count (denormalized).
+            # Google counts use a subquery (see also BusinessInfo.google_review_count denorm).
 
-            # NEW: Google review count
+            # NEW: Google review count per business for this queryset
             google_review_count_subquery = Subquery(
                 ImportedGoogleReview.objects.filter(business=OuterRef("businessId"))
                 .values("business")
@@ -233,11 +227,6 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 business_featured=F("businessId__featured"),
                 average_rating=Coalesce(
                     approved_rating_subquery, Value(0.0), output_field=FloatField()
-                ),
-                platform_review_count=Coalesce(
-                    approved_review_count_subquery,
-                    Value(0),
-                    output_field=Count("pk").output_field,
                 ),
                 google_review_count=Coalesce(
                     google_review_count_subquery,
@@ -1089,10 +1078,19 @@ class AdminCollectionViewSet(viewsets.ModelViewSet):
     parser_classes = [JSONParser, FormParser]
 
     def get_queryset(self):
-        # Annotate with the number of classes in this collection
-        return ClassCollection.objects.annotate(
-            class_count=Count('classes', distinct=True) 
-        ).order_by('sort_order')
+        qs = ClassCollection.objects.annotate(
+            class_count=Count("classes", distinct=True)
+        ).order_by("sort_order")
+        parent_param = self.request.query_params.get("parent")
+        if parent_param == "null":
+            qs = qs.filter(parent__isnull=True)
+        elif parent_param not in (None, ""):
+            try:
+                pid = int(parent_param)
+                qs = qs.filter(parent_id=pid)
+            except (TypeError, ValueError):
+                pass
+        return qs
 
     def _invalidate_collection_caches(self, collection_slug=None):
         """Invalidate backend caches so collection list and search are updated; trigger prewarm.
@@ -1164,7 +1162,53 @@ class AdminCollectionViewSet(viewsets.ModelViewSet):
             logger.error(f"Failed to update collection order: {e}")
             return Response({"error": "Internal error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    @action(detail=True, methods=["get"], url_path="children")
+    def children(self, request, pk=None):
+        """List sub-collections for a top-level collection (admin)."""
+        parent = self.get_object()
+        if parent.parent_id:
+            return Response(
+                {"detail": "Only top-level collections have sub-collections."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        qs = (
+            ClassCollection.objects.filter(parent=parent)
+            .annotate(class_count=Count("classes", distinct=True))
+            .order_by("sort_order", "name")
+        )
+        serializer = self.get_serializer(qs, many=True)
+        return Response(serializer.data)
 
+    @action(detail=True, methods=["post"], url_path="bulk-assign-classes")
+    def bulk_assign_classes(self, request, pk=None):
+        """Add this collection to many classes (M2M). Body: { \"class_ids\": [1, 2, 3] }."""
+        collection = self.get_object()
+        raw_ids = request.data.get("class_ids")
+        if not isinstance(raw_ids, list):
+            return Response(
+                {"error": "class_ids must be a list of integers"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        ids = []
+        for x in raw_ids:
+            try:
+                ids.append(int(x))
+            except (TypeError, ValueError):
+                continue
+        if not ids:
+            return Response(
+                {"error": "No valid class IDs"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        with transaction.atomic():
+            classes = list(ClassesMain.objects.filter(classId__in=ids))
+            for klass in classes:
+                klass.collections.add(collection)
+        self._invalidate_collection_caches(collection_slug=collection.slug)
+        trigger_nextjs_revalidation(path="/")
+        trigger_nextjs_revalidation(tag="homepage-content")
+        trigger_nextjs_revalidation(tag="collections")
+        return Response({"added": len(classes), "requested": len(ids)})
 
 
 class AdminReviewViewSet(viewsets.ModelViewSet):

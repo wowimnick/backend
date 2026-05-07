@@ -1,0 +1,6977 @@
+[
+  {
+    "name": "api-root",
+    "path": "/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "api-root-health",
+    "path": "/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "public-blog-categories-list",
+    "path": "/^blog/categories/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-blog-categories-detail",
+    "path": "/^blog/categories/(?P<slug>[^/.]+)/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-blog-categories-detail",
+    "path": "/^blog/categories/(?P<slug>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-blog-categories-list",
+    "path": "/^blog/categories\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-blog-posts-list",
+    "path": "/^blog/posts/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-blog-posts-detail",
+    "path": "/^blog/posts/(?P<slug>[^/.]+)/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-blog-posts-detail",
+    "path": "/^blog/posts/(?P<slug>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-blog-posts-list",
+    "path": "/^blog/posts\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-business-list",
+    "path": "/^businesses/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-business-detail",
+    "path": "/^businesses/(?P<slug>[^/.]+)/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-business-contact-details",
+    "path": "/^businesses/(?P<slug>[^/.]+)/contact_details/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-business-contact-details",
+    "path": "/^businesses/(?P<slug>[^/.]+)/contact_details\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-business-memberships",
+    "path": "/^businesses/(?P<slug>[^/.]+)/memberships/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-business-memberships",
+    "path": "/^businesses/(?P<slug>[^/.]+)/memberships\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-business-list-reviews",
+    "path": "/^businesses/(?P<slug>[^/.]+)/reviews/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-business-list-reviews",
+    "path": "/^businesses/(?P<slug>[^/.]+)/reviews\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-business-detail",
+    "path": "/^businesses/(?P<slug>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-business-list",
+    "path": "/^businesses\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-categories-list",
+    "path": "/^categories/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-categories-detail",
+    "path": "/^categories/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-categories-detail",
+    "path": "/^categories/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-categories-list",
+    "path": "/^categories\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "conversation-list",
+    "path": "/^conversations/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "conversation-detail",
+    "path": "/^conversations/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "conversation-mark-read",
+    "path": "/^conversations/(?P<pk>[^/.]+)/mark_read/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "conversation-mark-read",
+    "path": "/^conversations/(?P<pk>[^/.]+)/mark_read\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "conversation-send-message",
+    "path": "/^conversations/(?P<pk>[^/.]+)/send_message/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "conversation-send-message",
+    "path": "/^conversations/(?P<pk>[^/.]+)/send_message\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "conversation-detail",
+    "path": "/^conversations/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "conversation-list",
+    "path": "/^conversations\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-courses-list",
+    "path": "/^courses/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-courses-detail",
+    "path": "/^courses/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-courses-detail",
+    "path": "/^courses/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-courses-list",
+    "path": "/^courses\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "my-booking-list",
+    "path": "/^my-bookings/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "my-booking-detail",
+    "path": "/^my-bookings/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "my-booking-student-cancel",
+    "path": "/^my-bookings/(?P<pk>[^/.]+)/cancel/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "my-booking-student-cancel",
+    "path": "/^my-bookings/(?P<pk>[^/.]+)/cancel\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "my-booking-cancellation-info",
+    "path": "/^my-bookings/(?P<pk>[^/.]+)/cancellation-info/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "my-booking-cancellation-info",
+    "path": "/^my-bookings/(?P<pk>[^/.]+)/cancellation-info\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "my-booking-detail",
+    "path": "/^my-bookings/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "my-booking-list",
+    "path": "/^my-bookings\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-schedule-list",
+    "path": "/^schedules/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-schedule-detail",
+    "path": "/^schedules/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-schedule-detail",
+    "path": "/^schedules/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-schedule-availability",
+    "path": "/^schedules/availability/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-schedule-availability",
+    "path": "/^schedules/availability\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-schedule-list",
+    "path": "/^schedules\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "support-ticket-list",
+    "path": "/^support-tickets/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "support-ticket-detail",
+    "path": "/^support-tickets/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "support-ticket-reply",
+    "path": "/^support-tickets/(?P<pk>[^/.]+)/reply/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "support-ticket-reply",
+    "path": "/^support-tickets/(?P<pk>[^/.]+)/reply\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "support-ticket-detail",
+    "path": "/^support-tickets/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "support-ticket-list",
+    "path": "/^support-tickets\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "socialaccount_connections",
+    "path": "/accounts/3rdparty/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "socialaccount_login_cancelled",
+    "path": "/accounts/3rdparty/login/cancelled/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "socialaccount_login_error",
+    "path": "/accounts/3rdparty/login/error/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "socialaccount_signup",
+    "path": "/accounts/3rdparty/signup/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "account_confirm_email",
+    "path": "/accounts/^confirm-email/(?P<key>[-:\\w]+)/$/",
+    "methods": [
+      "GET",
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "account_reset_password_from_key",
+    "path": "/accounts/^password/reset/key/(?P<uidb36>[0-9A-Za-z]+)-(?P<key>.+)/$/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "account_email_verification_sent",
+    "path": "/accounts/confirm-email/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "account_email",
+    "path": "/accounts/email/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "facebook_login",
+    "path": "/accounts/facebook/login/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "facebook_callback",
+    "path": "/accounts/facebook/login/callback/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "facebook_login_by_token",
+    "path": "/accounts/facebook/login/token/",
+    "methods": [
+      "GET",
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "google_login",
+    "path": "/accounts/google/login/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "google_callback",
+    "path": "/accounts/google/login/callback/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "google_login_by_token",
+    "path": "/accounts/google/login/token/",
+    "methods": [
+      "GET",
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "account_inactive",
+    "path": "/accounts/inactive/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "account_login",
+    "path": "/accounts/login/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "account_logout",
+    "path": "/accounts/logout/",
+    "methods": [
+      "GET",
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "account_change_password",
+    "path": "/accounts/password/change/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "account_reset_password",
+    "path": "/accounts/password/reset/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "account_reset_password_done",
+    "path": "/accounts/password/reset/done/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "account_reset_password_from_key_done",
+    "path": "/accounts/password/reset/key/done/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "account_set_password",
+    "path": "/accounts/password/set/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "account_reauthenticate",
+    "path": "/accounts/reauthenticate/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "account_signup",
+    "path": "/accounts/signup/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "",
+    "path": "/accounts/social/connections/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "HEAD",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "",
+    "path": "/accounts/social/login/cancelled/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "HEAD",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "",
+    "path": "/accounts/social/login/error/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "HEAD",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "",
+    "path": "/accounts/social/signup/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "HEAD",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "api-root",
+    "path": "/admin/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "admin-audit-logs-list",
+    "path": "/admin/^audit-logs/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-audit-logs-detail",
+    "path": "/admin/^audit-logs/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-audit-logs-detail",
+    "path": "/admin/^audit-logs/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-audit-logs-activity-summary",
+    "path": "/admin/^audit-logs/activity_summary/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-audit-logs-activity-summary",
+    "path": "/admin/^audit-logs/activity_summary\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-audit-logs-export",
+    "path": "/admin/^audit-logs/export/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-audit-logs-export",
+    "path": "/admin/^audit-logs/export\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-audit-logs-list",
+    "path": "/admin/^audit-logs\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-blog-categories-list",
+    "path": "/admin/^blog/categories/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-blog-categories-detail",
+    "path": "/admin/^blog/categories/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-blog-categories-detail",
+    "path": "/admin/^blog/categories/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-blog-categories-list",
+    "path": "/admin/^blog/categories\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-blog-posts-list",
+    "path": "/admin/^blog/posts/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-blog-posts-detail",
+    "path": "/admin/^blog/posts/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-blog-posts-detail",
+    "path": "/admin/^blog/posts/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-blog-posts-list",
+    "path": "/admin/^blog/posts\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-bookings-list",
+    "path": "/admin/^bookings/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-bookings-detail",
+    "path": "/admin/^bookings/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-bookings-cancel",
+    "path": "/admin/^bookings/(?P<pk>[^/.]+)/cancel/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-bookings-cancel",
+    "path": "/admin/^bookings/(?P<pk>[^/.]+)/cancel\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-bookings-detail",
+    "path": "/admin/^bookings/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-bookings-analytics",
+    "path": "/admin/^bookings/analytics/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-bookings-analytics",
+    "path": "/admin/^bookings/analytics\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-bookings-export",
+    "path": "/admin/^bookings/export/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-bookings-export",
+    "path": "/admin/^bookings/export\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-bookings-list",
+    "path": "/admin/^bookings\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-businesses-list",
+    "path": "/admin/^businesses/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-businesses-detail",
+    "path": "/admin/^businesses/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-businesses-toggle-feature",
+    "path": "/admin/^businesses/(?P<pk>[^/.]+)/toggle_feature/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-businesses-toggle-feature",
+    "path": "/admin/^businesses/(?P<pk>[^/.]+)/toggle_feature\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-businesses-detail",
+    "path": "/admin/^businesses/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-businesses-announcements",
+    "path": "/admin/^businesses/announcements/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-businesses-announcements",
+    "path": "/admin/^businesses/announcements\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-businesses-export",
+    "path": "/admin/^businesses/export/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-businesses-export",
+    "path": "/admin/^businesses/export\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-businesses-geographical",
+    "path": "/admin/^businesses/geographical/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-businesses-geographical",
+    "path": "/admin/^businesses/geographical\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-businesses-growth",
+    "path": "/admin/^businesses/growth/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-businesses-growth",
+    "path": "/admin/^businesses/growth\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-businesses-metrics",
+    "path": "/admin/^businesses/metrics/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-businesses-metrics",
+    "path": "/admin/^businesses/metrics\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-businesses-list",
+    "path": "/admin/^businesses\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-categories-list",
+    "path": "/admin/^categories/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-categories-detail",
+    "path": "/admin/^categories/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-categories-delete-with-reassignment",
+    "path": "/admin/^categories/(?P<pk>[^/.]+)/delete-with-reassignment/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-categories-delete-with-reassignment",
+    "path": "/admin/^categories/(?P<pk>[^/.]+)/delete-with-reassignment\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-categories-add-subcategory",
+    "path": "/admin/^categories/(?P<pk>[^/.]+)/subcategories/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-categories-update-or-delete-subcategory",
+    "path": "/admin/^categories/(?P<pk>[^/.]+)/subcategories/(?P<subcategory_pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "PATCH",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-categories-update-or-delete-subcategory",
+    "path": "/admin/^categories/(?P<pk>[^/.]+)/subcategories/(?P<subcategory_pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "PATCH",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-categories-add-subcategory",
+    "path": "/admin/^categories/(?P<pk>[^/.]+)/subcategories\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-categories-detail",
+    "path": "/admin/^categories/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-categories-update-order",
+    "path": "/admin/^categories/update-order/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-categories-update-order",
+    "path": "/admin/^categories/update-order\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-categories-list",
+    "path": "/admin/^categories\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-classes-list",
+    "path": "/admin/^classes/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-classes-detail",
+    "path": "/admin/^classes/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-classes-update-class-status",
+    "path": "/admin/^classes/(?P<pk>[^/.]+)/update_class_status/$/",
+    "methods": [
+      "PATCH",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-classes-update-class-status",
+    "path": "/admin/^classes/(?P<pk>[^/.]+)/update_class_status\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "PATCH",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-classes-detail",
+    "path": "/admin/^classes/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-classes-analytics",
+    "path": "/admin/^classes/analytics/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-classes-analytics",
+    "path": "/admin/^classes/analytics\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-classes-list",
+    "path": "/admin/^classes\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-collections-list",
+    "path": "/admin/^collections/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-collections-detail",
+    "path": "/admin/^collections/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-collections-bulk-assign-classes",
+    "path": "/admin/^collections/(?P<pk>[^/.]+)/bulk-assign-classes/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-collections-bulk-assign-classes",
+    "path": "/admin/^collections/(?P<pk>[^/.]+)/bulk-assign-classes\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-collections-children",
+    "path": "/admin/^collections/(?P<pk>[^/.]+)/children/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-collections-children",
+    "path": "/admin/^collections/(?P<pk>[^/.]+)/children\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-collections-detail",
+    "path": "/admin/^collections/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-collections-update-order",
+    "path": "/admin/^collections/update-order/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-collections-update-order",
+    "path": "/admin/^collections/update-order\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-collections-list",
+    "path": "/admin/^collections\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-conversations-list",
+    "path": "/admin/^conversations/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-conversations-detail",
+    "path": "/admin/^conversations/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-conversations-detail",
+    "path": "/admin/^conversations/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-conversations-list",
+    "path": "/admin/^conversations\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-corporate-bookings-list",
+    "path": "/admin/^corporate-bookings/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-corporate-bookings-detail",
+    "path": "/admin/^corporate-bookings/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-corporate-bookings-cancel-booking",
+    "path": "/admin/^corporate-bookings/(?P<pk>[^/.]+)/cancel/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-corporate-bookings-cancel-booking",
+    "path": "/admin/^corporate-bookings/(?P<pk>[^/.]+)/cancel\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-corporate-bookings-issue-invoice",
+    "path": "/admin/^corporate-bookings/(?P<pk>[^/.]+)/issue-invoice/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-corporate-bookings-issue-invoice",
+    "path": "/admin/^corporate-bookings/(?P<pk>[^/.]+)/issue-invoice\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-corporate-bookings-mark-completed",
+    "path": "/admin/^corporate-bookings/(?P<pk>[^/.]+)/mark-completed/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-corporate-bookings-mark-completed",
+    "path": "/admin/^corporate-bookings/(?P<pk>[^/.]+)/mark-completed\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-corporate-bookings-detail",
+    "path": "/admin/^corporate-bookings/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-corporate-bookings-list",
+    "path": "/admin/^corporate-bookings\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-corporate-inquiries-list",
+    "path": "/admin/^corporate-inquiries/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-corporate-inquiries-detail",
+    "path": "/admin/^corporate-inquiries/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-corporate-inquiries-shortlist",
+    "path": "/admin/^corporate-inquiries/(?P<pk>[^/.]+)/shortlist/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-corporate-inquiries-shortlist",
+    "path": "/admin/^corporate-inquiries/(?P<pk>[^/.]+)/shortlist\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-corporate-inquiries-detail",
+    "path": "/admin/^corporate-inquiries/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-corporate-inquiries-list",
+    "path": "/admin/^corporate-inquiries\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-corporate-shortlist-options-detail",
+    "path": "/admin/^corporate-shortlist-options/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-corporate-shortlist-options-detail",
+    "path": "/admin/^corporate-shortlist-options/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-corporate-shortlists-detail",
+    "path": "/admin/^corporate-shortlists/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-corporate-shortlists-add-option",
+    "path": "/admin/^corporate-shortlists/(?P<pk>[^/.]+)/options/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-corporate-shortlists-add-option-from-class",
+    "path": "/admin/^corporate-shortlists/(?P<pk>[^/.]+)/options/from-class/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-corporate-shortlists-add-option-from-class",
+    "path": "/admin/^corporate-shortlists/(?P<pk>[^/.]+)/options/from-class\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-corporate-shortlists-add-option",
+    "path": "/admin/^corporate-shortlists/(?P<pk>[^/.]+)/options\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-corporate-shortlists-send-shortlist",
+    "path": "/admin/^corporate-shortlists/(?P<pk>[^/.]+)/send/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-corporate-shortlists-send-shortlist",
+    "path": "/admin/^corporate-shortlists/(?P<pk>[^/.]+)/send\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-corporate-shortlists-detail",
+    "path": "/admin/^corporate-shortlists/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-global-discounts-list",
+    "path": "/admin/^global-discounts/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-global-discounts-detail",
+    "path": "/admin/^global-discounts/(?P<id>[0-9a-f-]+)/$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-global-discounts-stats",
+    "path": "/admin/^global-discounts/(?P<id>[0-9a-f-]+)/stats/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-global-discounts-stats",
+    "path": "/admin/^global-discounts/(?P<id>[0-9a-f-]+)/stats\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-global-discounts-detail",
+    "path": "/admin/^global-discounts/(?P<id>[0-9a-f-]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-global-discounts-list",
+    "path": "/admin/^global-discounts\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-notification-attachments-list",
+    "path": "/admin/^notification-attachments/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-notification-attachments-detail",
+    "path": "/admin/^notification-attachments/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-notification-attachments-detail",
+    "path": "/admin/^notification-attachments/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-notification-attachments-list",
+    "path": "/admin/^notification-attachments\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-notifications-list",
+    "path": "/admin/^notifications/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-notifications-detail",
+    "path": "/admin/^notifications/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-notifications-cancel",
+    "path": "/admin/^notifications/(?P<pk>[^/.]+)/cancel/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-notifications-cancel",
+    "path": "/admin/^notifications/(?P<pk>[^/.]+)/cancel\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-notifications-duplicate",
+    "path": "/admin/^notifications/(?P<pk>[^/.]+)/duplicate/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-notifications-duplicate",
+    "path": "/admin/^notifications/(?P<pk>[^/.]+)/duplicate\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-notifications-get-send-progress",
+    "path": "/admin/^notifications/(?P<pk>[^/.]+)/send-progress/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-notifications-get-send-progress",
+    "path": "/admin/^notifications/(?P<pk>[^/.]+)/send-progress\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-notifications-send",
+    "path": "/admin/^notifications/(?P<pk>[^/.]+)/send/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-notifications-send",
+    "path": "/admin/^notifications/(?P<pk>[^/.]+)/send\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-notifications-detail",
+    "path": "/admin/^notifications/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-notifications-metrics",
+    "path": "/admin/^notifications/metrics/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-notifications-metrics",
+    "path": "/admin/^notifications/metrics\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-notifications-list",
+    "path": "/admin/^notifications\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payments-list",
+    "path": "/admin/^payments/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payments-detail",
+    "path": "/admin/^payments/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payments-history",
+    "path": "/admin/^payments/(?P<pk>[^/.]+)/history/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payments-history",
+    "path": "/admin/^payments/(?P<pk>[^/.]+)/history\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payments-mark-paid",
+    "path": "/admin/^payments/(?P<pk>[^/.]+)/mark_paid/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payments-mark-paid",
+    "path": "/admin/^payments/(?P<pk>[^/.]+)/mark_paid\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payments-receipt",
+    "path": "/admin/^payments/(?P<pk>[^/.]+)/receipt/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payments-receipt",
+    "path": "/admin/^payments/(?P<pk>[^/.]+)/receipt\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payments-refund",
+    "path": "/admin/^payments/(?P<pk>[^/.]+)/refund/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payments-refund",
+    "path": "/admin/^payments/(?P<pk>[^/.]+)/refund\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payments-detail",
+    "path": "/admin/^payments/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payments-export",
+    "path": "/admin/^payments/export/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payments-export",
+    "path": "/admin/^payments/export\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payments-stats",
+    "path": "/admin/^payments/stats/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payments-stats",
+    "path": "/admin/^payments/stats\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payments-list",
+    "path": "/admin/^payments\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payouts-list",
+    "path": "/admin/^payouts/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payouts-detail",
+    "path": "/admin/^payouts/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payouts-retry-failed-payout",
+    "path": "/admin/^payouts/(?P<pk>[^/.]+)/retry/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payouts-retry-failed-payout",
+    "path": "/admin/^payouts/(?P<pk>[^/.]+)/retry\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payouts-detail",
+    "path": "/admin/^payouts/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payouts-analytics",
+    "path": "/admin/^payouts/analytics/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payouts-analytics",
+    "path": "/admin/^payouts/analytics\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payouts-export",
+    "path": "/admin/^payouts/export/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payouts-export",
+    "path": "/admin/^payouts/export\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payouts-trigger-manual-payout",
+    "path": "/admin/^payouts/trigger-manual/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payouts-trigger-manual-payout",
+    "path": "/admin/^payouts/trigger-manual\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-payouts-list",
+    "path": "/admin/^payouts\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-reviews-list",
+    "path": "/admin/^reviews/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-reviews-detail",
+    "path": "/admin/^reviews/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-reviews-update-status",
+    "path": "/admin/^reviews/(?P<pk>[^/.]+)/update_status/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-reviews-update-status",
+    "path": "/admin/^reviews/(?P<pk>[^/.]+)/update_status\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-reviews-detail",
+    "path": "/admin/^reviews/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-reviews-analytics",
+    "path": "/admin/^reviews/analytics/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-reviews-analytics",
+    "path": "/admin/^reviews/analytics\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-reviews-list",
+    "path": "/admin/^reviews\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-roles-list",
+    "path": "/admin/^roles/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-roles-detail",
+    "path": "/admin/^roles/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-roles-duplicate",
+    "path": "/admin/^roles/(?P<pk>[^/.]+)/duplicate/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-roles-duplicate",
+    "path": "/admin/^roles/(?P<pk>[^/.]+)/duplicate\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-roles-detail",
+    "path": "/admin/^roles/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-roles-permissions",
+    "path": "/admin/^roles/permissions/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-roles-permissions",
+    "path": "/admin/^roles/permissions\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-roles-update-order",
+    "path": "/admin/^roles/update_order/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-roles-update-order",
+    "path": "/admin/^roles/update_order\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-roles-list",
+    "path": "/admin/^roles\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-support-tickets-list",
+    "path": "/admin/^support-tickets/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-support-tickets-detail",
+    "path": "/admin/^support-tickets/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-support-tickets-assign",
+    "path": "/admin/^support-tickets/(?P<pk>[^/.]+)/assign/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-support-tickets-assign",
+    "path": "/admin/^support-tickets/(?P<pk>[^/.]+)/assign\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-support-tickets-history",
+    "path": "/admin/^support-tickets/(?P<pk>[^/.]+)/history/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-support-tickets-history",
+    "path": "/admin/^support-tickets/(?P<pk>[^/.]+)/history\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-support-tickets-reply",
+    "path": "/admin/^support-tickets/(?P<pk>[^/.]+)/reply/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-support-tickets-reply",
+    "path": "/admin/^support-tickets/(?P<pk>[^/.]+)/reply\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-support-tickets-resolve",
+    "path": "/admin/^support-tickets/(?P<pk>[^/.]+)/resolve/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-support-tickets-resolve",
+    "path": "/admin/^support-tickets/(?P<pk>[^/.]+)/resolve\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-support-tickets-set-priority",
+    "path": "/admin/^support-tickets/(?P<pk>[^/.]+)/set_priority/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-support-tickets-set-priority",
+    "path": "/admin/^support-tickets/(?P<pk>[^/.]+)/set_priority\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-support-tickets-detail",
+    "path": "/admin/^support-tickets/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-support-tickets-get-assignable-agents",
+    "path": "/admin/^support-tickets/assignable-agents/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-support-tickets-get-assignable-agents",
+    "path": "/admin/^support-tickets/assignable-agents\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-support-tickets-stats",
+    "path": "/admin/^support-tickets/stats/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-support-tickets-stats",
+    "path": "/admin/^support-tickets/stats\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-support-tickets-list",
+    "path": "/admin/^support-tickets\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-user-segments-list",
+    "path": "/admin/^user-segments/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-user-segments-detail",
+    "path": "/admin/^user-segments/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-user-segments-users",
+    "path": "/admin/^user-segments/(?P<pk>[^/.]+)/users/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-user-segments-users",
+    "path": "/admin/^user-segments/(?P<pk>[^/.]+)/users\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-user-segments-detail",
+    "path": "/admin/^user-segments/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-user-segments-refresh-counts",
+    "path": "/admin/^user-segments/refresh-counts/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-user-segments-refresh-counts",
+    "path": "/admin/^user-segments/refresh-counts\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-user-segments-list",
+    "path": "/admin/^user-segments\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-users-list",
+    "path": "/admin/^users/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-users-detail",
+    "path": "/admin/^users/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-users-get-user-bookings",
+    "path": "/admin/^users/(?P<pk>[^/.]+)/bookings/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-users-get-user-bookings",
+    "path": "/admin/^users/(?P<pk>[^/.]+)/bookings\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-users-get-user-communications",
+    "path": "/admin/^users/(?P<pk>[^/.]+)/communications/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-users-get-user-communications",
+    "path": "/admin/^users/(?P<pk>[^/.]+)/communications\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-users-get-user-history",
+    "path": "/admin/^users/(?P<pk>[^/.]+)/history/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-users-get-user-history",
+    "path": "/admin/^users/(?P<pk>[^/.]+)/history\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-users-impersonate",
+    "path": "/admin/^users/(?P<pk>[^/.]+)/impersonate/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-users-impersonate",
+    "path": "/admin/^users/(?P<pk>[^/.]+)/impersonate\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-users-lock-account",
+    "path": "/admin/^users/(?P<pk>[^/.]+)/lock_account/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-users-lock-account",
+    "path": "/admin/^users/(?P<pk>[^/.]+)/lock_account\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-users-reset-password",
+    "path": "/admin/^users/(?P<pk>[^/.]+)/reset_password/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-users-reset-password",
+    "path": "/admin/^users/(?P<pk>[^/.]+)/reset_password\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-users-send-handover-email",
+    "path": "/admin/^users/(?P<pk>[^/.]+)/send-handover/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-users-send-handover-email",
+    "path": "/admin/^users/(?P<pk>[^/.]+)/send-handover\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-users-unlock-account",
+    "path": "/admin/^users/(?P<pk>[^/.]+)/unlock_account/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-users-unlock-account",
+    "path": "/admin/^users/(?P<pk>[^/.]+)/unlock_account\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-users-detail",
+    "path": "/admin/^users/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-users-create-shadow-user",
+    "path": "/admin/^users/create-shadow/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-users-create-shadow-user",
+    "path": "/admin/^users/create-shadow\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-users-metrics",
+    "path": "/admin/^users/metrics/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-users-metrics",
+    "path": "/admin/^users/metrics\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-users-list",
+    "path": "/admin/^users\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-verification-list",
+    "path": "/admin/^verification/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-verification-detail",
+    "path": "/admin/^verification/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-verification-documents",
+    "path": "/admin/^verification/(?P<pk>[^/.]+)/documents/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-verification-documents",
+    "path": "/admin/^verification/(?P<pk>[^/.]+)/documents\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-verification-process-verification",
+    "path": "/admin/^verification/(?P<pk>[^/.]+)/process_verification/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-verification-process-verification",
+    "path": "/admin/^verification/(?P<pk>[^/.]+)/process_verification\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-verification-detail",
+    "path": "/admin/^verification/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-verification-stats",
+    "path": "/admin/^verification/stats/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-verification-stats",
+    "path": "/admin/^verification/stats\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-verification-submit-verification",
+    "path": "/admin/^verification/submit_verification/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-verification-submit-verification",
+    "path": "/admin/^verification/submit_verification\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-verification-list",
+    "path": "/admin/^verification\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-widget-subscriptions-list",
+    "path": "/admin/^widget-subscriptions/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin-widget-subscriptions-list",
+    "path": "/admin/^widget-subscriptions\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "end_impersonation",
+    "path": "/admin/end-impersonation/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "admin-geographical-data",
+    "path": "/admin/geographical-data/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "admin-import-google-reviews",
+    "path": "/admin/import-google-reviews/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "index",
+    "path": "/admin/panel/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "",
+    "path": "/admin/panel/(?P<url>.*)$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "app_list",
+    "path": "/admin/panel/^(?P<app_label>admin_interface|auth|sites|impersonate|authtoken|token_blacklist|account|socialaccount|django_celery_beat|quickstart)/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "account_emailaddress_changelist",
+    "path": "/admin/panel/account/emailaddress/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "",
+    "path": "/admin/panel/account/emailaddress/<path:object_id>/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "HEAD",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "account_emailaddress_change",
+    "path": "/admin/panel/account/emailaddress/<path:object_id>/change/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "account_emailaddress_delete",
+    "path": "/admin/panel/account/emailaddress/<path:object_id>/delete/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "account_emailaddress_history",
+    "path": "/admin/panel/account/emailaddress/<path:object_id>/history/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "account_emailaddress_add",
+    "path": "/admin/panel/account/emailaddress/add/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "admin_interface_theme_changelist",
+    "path": "/admin/panel/admin_interface/theme/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "",
+    "path": "/admin/panel/admin_interface/theme/<path:object_id>/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "HEAD",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin_interface_theme_change",
+    "path": "/admin/panel/admin_interface/theme/<path:object_id>/change/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin_interface_theme_delete",
+    "path": "/admin/panel/admin_interface/theme/<path:object_id>/delete/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin_interface_theme_history",
+    "path": "/admin/panel/admin_interface/theme/<path:object_id>/history/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "admin_interface_theme_add",
+    "path": "/admin/panel/admin_interface/theme/add/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "auth_group_changelist",
+    "path": "/admin/panel/auth/group/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "",
+    "path": "/admin/panel/auth/group/<path:object_id>/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "HEAD",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "auth_group_change",
+    "path": "/admin/panel/auth/group/<path:object_id>/change/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "auth_group_delete",
+    "path": "/admin/panel/auth/group/<path:object_id>/delete/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "auth_group_history",
+    "path": "/admin/panel/auth/group/<path:object_id>/history/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "auth_group_add",
+    "path": "/admin/panel/auth/group/add/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "authtoken_tokenproxy_changelist",
+    "path": "/admin/panel/authtoken/tokenproxy/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "",
+    "path": "/admin/panel/authtoken/tokenproxy/<path:object_id>/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "HEAD",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "authtoken_tokenproxy_change",
+    "path": "/admin/panel/authtoken/tokenproxy/<path:object_id>/change/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "authtoken_tokenproxy_delete",
+    "path": "/admin/panel/authtoken/tokenproxy/<path:object_id>/delete/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "authtoken_tokenproxy_history",
+    "path": "/admin/panel/authtoken/tokenproxy/<path:object_id>/history/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "authtoken_tokenproxy_add",
+    "path": "/admin/panel/authtoken/tokenproxy/add/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "autocomplete",
+    "path": "/admin/panel/autocomplete/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "django_celery_beat_clockedschedule_changelist",
+    "path": "/admin/panel/django_celery_beat/clockedschedule/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "",
+    "path": "/admin/panel/django_celery_beat/clockedschedule/<path:object_id>/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "HEAD",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "django_celery_beat_clockedschedule_change",
+    "path": "/admin/panel/django_celery_beat/clockedschedule/<path:object_id>/change/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "django_celery_beat_clockedschedule_delete",
+    "path": "/admin/panel/django_celery_beat/clockedschedule/<path:object_id>/delete/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "django_celery_beat_clockedschedule_history",
+    "path": "/admin/panel/django_celery_beat/clockedschedule/<path:object_id>/history/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "django_celery_beat_clockedschedule_add",
+    "path": "/admin/panel/django_celery_beat/clockedschedule/add/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "django_celery_beat_crontabschedule_changelist",
+    "path": "/admin/panel/django_celery_beat/crontabschedule/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "",
+    "path": "/admin/panel/django_celery_beat/crontabschedule/<path:object_id>/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "HEAD",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "django_celery_beat_crontabschedule_change",
+    "path": "/admin/panel/django_celery_beat/crontabschedule/<path:object_id>/change/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "django_celery_beat_crontabschedule_delete",
+    "path": "/admin/panel/django_celery_beat/crontabschedule/<path:object_id>/delete/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "django_celery_beat_crontabschedule_history",
+    "path": "/admin/panel/django_celery_beat/crontabschedule/<path:object_id>/history/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "django_celery_beat_crontabschedule_add",
+    "path": "/admin/panel/django_celery_beat/crontabschedule/add/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "django_celery_beat_intervalschedule_changelist",
+    "path": "/admin/panel/django_celery_beat/intervalschedule/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "",
+    "path": "/admin/panel/django_celery_beat/intervalschedule/<path:object_id>/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "HEAD",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "django_celery_beat_intervalschedule_change",
+    "path": "/admin/panel/django_celery_beat/intervalschedule/<path:object_id>/change/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "django_celery_beat_intervalschedule_delete",
+    "path": "/admin/panel/django_celery_beat/intervalschedule/<path:object_id>/delete/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "django_celery_beat_intervalschedule_history",
+    "path": "/admin/panel/django_celery_beat/intervalschedule/<path:object_id>/history/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "django_celery_beat_intervalschedule_add",
+    "path": "/admin/panel/django_celery_beat/intervalschedule/add/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "django_celery_beat_periodictask_changelist",
+    "path": "/admin/panel/django_celery_beat/periodictask/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "",
+    "path": "/admin/panel/django_celery_beat/periodictask/<path:object_id>/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "HEAD",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "django_celery_beat_periodictask_change",
+    "path": "/admin/panel/django_celery_beat/periodictask/<path:object_id>/change/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "django_celery_beat_periodictask_delete",
+    "path": "/admin/panel/django_celery_beat/periodictask/<path:object_id>/delete/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "django_celery_beat_periodictask_history",
+    "path": "/admin/panel/django_celery_beat/periodictask/<path:object_id>/history/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "django_celery_beat_periodictask_add",
+    "path": "/admin/panel/django_celery_beat/periodictask/add/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "django_celery_beat_solarschedule_changelist",
+    "path": "/admin/panel/django_celery_beat/solarschedule/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "",
+    "path": "/admin/panel/django_celery_beat/solarschedule/<path:object_id>/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "HEAD",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "django_celery_beat_solarschedule_change",
+    "path": "/admin/panel/django_celery_beat/solarschedule/<path:object_id>/change/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "django_celery_beat_solarschedule_delete",
+    "path": "/admin/panel/django_celery_beat/solarschedule/<path:object_id>/delete/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "django_celery_beat_solarschedule_history",
+    "path": "/admin/panel/django_celery_beat/solarschedule/<path:object_id>/history/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "django_celery_beat_solarschedule_add",
+    "path": "/admin/panel/django_celery_beat/solarschedule/add/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "impersonate_impersonationlog_changelist",
+    "path": "/admin/panel/impersonate/impersonationlog/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "",
+    "path": "/admin/panel/impersonate/impersonationlog/<path:object_id>/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "HEAD",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "impersonate_impersonationlog_change",
+    "path": "/admin/panel/impersonate/impersonationlog/<path:object_id>/change/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "impersonate_impersonationlog_delete",
+    "path": "/admin/panel/impersonate/impersonationlog/<path:object_id>/delete/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "impersonate_impersonationlog_history",
+    "path": "/admin/panel/impersonate/impersonationlog/<path:object_id>/history/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "impersonate_impersonationlog_add",
+    "path": "/admin/panel/impersonate/impersonationlog/add/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "jsi18n",
+    "path": "/admin/panel/jsi18n/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "login",
+    "path": "/admin/panel/login/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "logout",
+    "path": "/admin/panel/logout/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "password_change",
+    "path": "/admin/panel/password_change/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "password_change_done",
+    "path": "/admin/panel/password_change/done/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "quickstart_corporateinquiry_changelist",
+    "path": "/admin/panel/quickstart/corporateinquiry/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "",
+    "path": "/admin/panel/quickstart/corporateinquiry/<path:object_id>/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "HEAD",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "quickstart_corporateinquiry_change",
+    "path": "/admin/panel/quickstart/corporateinquiry/<path:object_id>/change/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "quickstart_corporateinquiry_delete",
+    "path": "/admin/panel/quickstart/corporateinquiry/<path:object_id>/delete/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "quickstart_corporateinquiry_history",
+    "path": "/admin/panel/quickstart/corporateinquiry/<path:object_id>/history/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "quickstart_corporateinquiry_add",
+    "path": "/admin/panel/quickstart/corporateinquiry/add/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "view_on_site",
+    "path": "/admin/panel/r/<int:content_type_id>/<path:object_id>/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "sites_site_changelist",
+    "path": "/admin/panel/sites/site/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "",
+    "path": "/admin/panel/sites/site/<path:object_id>/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "HEAD",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "sites_site_change",
+    "path": "/admin/panel/sites/site/<path:object_id>/change/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "sites_site_delete",
+    "path": "/admin/panel/sites/site/<path:object_id>/delete/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "sites_site_history",
+    "path": "/admin/panel/sites/site/<path:object_id>/history/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "sites_site_add",
+    "path": "/admin/panel/sites/site/add/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "socialaccount_socialaccount_changelist",
+    "path": "/admin/panel/socialaccount/socialaccount/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "",
+    "path": "/admin/panel/socialaccount/socialaccount/<path:object_id>/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "HEAD",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "socialaccount_socialaccount_change",
+    "path": "/admin/panel/socialaccount/socialaccount/<path:object_id>/change/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "socialaccount_socialaccount_delete",
+    "path": "/admin/panel/socialaccount/socialaccount/<path:object_id>/delete/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "socialaccount_socialaccount_history",
+    "path": "/admin/panel/socialaccount/socialaccount/<path:object_id>/history/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "socialaccount_socialaccount_add",
+    "path": "/admin/panel/socialaccount/socialaccount/add/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "socialaccount_socialapp_changelist",
+    "path": "/admin/panel/socialaccount/socialapp/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "",
+    "path": "/admin/panel/socialaccount/socialapp/<path:object_id>/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "HEAD",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "socialaccount_socialapp_change",
+    "path": "/admin/panel/socialaccount/socialapp/<path:object_id>/change/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "socialaccount_socialapp_delete",
+    "path": "/admin/panel/socialaccount/socialapp/<path:object_id>/delete/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "socialaccount_socialapp_history",
+    "path": "/admin/panel/socialaccount/socialapp/<path:object_id>/history/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "socialaccount_socialapp_add",
+    "path": "/admin/panel/socialaccount/socialapp/add/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "socialaccount_socialtoken_changelist",
+    "path": "/admin/panel/socialaccount/socialtoken/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "",
+    "path": "/admin/panel/socialaccount/socialtoken/<path:object_id>/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "HEAD",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "socialaccount_socialtoken_change",
+    "path": "/admin/panel/socialaccount/socialtoken/<path:object_id>/change/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "socialaccount_socialtoken_delete",
+    "path": "/admin/panel/socialaccount/socialtoken/<path:object_id>/delete/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "socialaccount_socialtoken_history",
+    "path": "/admin/panel/socialaccount/socialtoken/<path:object_id>/history/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "socialaccount_socialtoken_add",
+    "path": "/admin/panel/socialaccount/socialtoken/add/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "token_blacklist_blacklistedtoken_changelist",
+    "path": "/admin/panel/token_blacklist/blacklistedtoken/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "",
+    "path": "/admin/panel/token_blacklist/blacklistedtoken/<path:object_id>/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "HEAD",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "token_blacklist_blacklistedtoken_change",
+    "path": "/admin/panel/token_blacklist/blacklistedtoken/<path:object_id>/change/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "token_blacklist_blacklistedtoken_delete",
+    "path": "/admin/panel/token_blacklist/blacklistedtoken/<path:object_id>/delete/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "token_blacklist_blacklistedtoken_history",
+    "path": "/admin/panel/token_blacklist/blacklistedtoken/<path:object_id>/history/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "token_blacklist_blacklistedtoken_add",
+    "path": "/admin/panel/token_blacklist/blacklistedtoken/add/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "token_blacklist_outstandingtoken_changelist",
+    "path": "/admin/panel/token_blacklist/outstandingtoken/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "",
+    "path": "/admin/panel/token_blacklist/outstandingtoken/<path:object_id>/",
+    "methods": [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "HEAD",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "token_blacklist_outstandingtoken_change",
+    "path": "/admin/panel/token_blacklist/outstandingtoken/<path:object_id>/change/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "token_blacklist_outstandingtoken_delete",
+    "path": "/admin/panel/token_blacklist/outstandingtoken/<path:object_id>/delete/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "token_blacklist_outstandingtoken_history",
+    "path": "/admin/panel/token_blacklist/outstandingtoken/<path:object_id>/history/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "token_blacklist_outstandingtoken_add",
+    "path": "/admin/panel/token_blacklist/outstandingtoken/add/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "google_login",
+    "path": "/auth/google/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "rest_login",
+    "path": "/auth/login/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "rest_logout",
+    "path": "/auth/logout/",
+    "methods": [
+      "GET",
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "rest_password_change",
+    "path": "/auth/password/change/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "rest_password_reset",
+    "path": "/auth/password/reset/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "password_reset_confirm",
+    "path": "/auth/password/reset/confirm/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "rest_password_reset_confirm",
+    "path": "/auth/password/reset/confirm/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "rest_register",
+    "path": "/auth/registration/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "account_confirm_email",
+    "path": "/auth/registration/^account-confirm-email/(?P<key>[-:\\w]+)/$/",
+    "methods": [
+      "GET",
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "account_email_verification_sent",
+    "path": "/auth/registration/account-confirm-email/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "rest_resend_email",
+    "path": "/auth/registration/resend-email/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "rest_verify_email",
+    "path": "/auth/registration/verify-email/",
+    "methods": [
+      "GET",
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "token_refresh",
+    "path": "/auth/token/refresh/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "token_verify",
+    "path": "/auth/token/verify/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "rest_user_details",
+    "path": "/auth/user/",
+    "methods": [
+      "GET",
+      "PUT",
+      "PATCH",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "booking-status-by-payment-intent",
+    "path": "/booking-status/by-payment-intent/<str:payment_intent_id>/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "guest-booking-cancel",
+    "path": "/bookings/guest-cancel/<uuid:token>/",
+    "methods": [
+      "GET",
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-stats-list",
+    "path": "/business-stats/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "business-stats-detail",
+    "path": "/business-stats/<int:pk>/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-stats-class-perf",
+    "path": "/business-stats/<int:pk>/class_performance/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-stats-dashboard",
+    "path": "/business-stats/<int:pk>/dashboard_stats/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-stats-revenue",
+    "path": "/business-stats/<int:pk>/revenue_over_time/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "api-root",
+    "path": "/business/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "business-id-redirect",
+    "path": "/business/<int:business_id>/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-google-reviews",
+    "path": "/business/<int:business_id>/google-reviews/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-booking-list",
+    "path": "/business/^bookings/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-booking-detail",
+    "path": "/business/^bookings/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-booking-available-slots",
+    "path": "/business/^bookings/(?P<pk>[^/.]+)/available-slots/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-booking-available-slots",
+    "path": "/business/^bookings/(?P<pk>[^/.]+)/available-slots\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-booking-business-cancel",
+    "path": "/business/^bookings/(?P<pk>[^/.]+)/cancel/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-booking-business-cancel",
+    "path": "/business/^bookings/(?P<pk>[^/.]+)/cancel\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-booking-reschedule",
+    "path": "/business/^bookings/(?P<pk>[^/.]+)/reschedule/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-booking-reschedule",
+    "path": "/business/^bookings/(?P<pk>[^/.]+)/reschedule\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-booking-detail",
+    "path": "/business/^bookings/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-booking-analytics",
+    "path": "/business/^bookings/analytics/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-booking-analytics",
+    "path": "/business/^bookings/analytics\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-booking-list",
+    "path": "/business/^bookings\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-class-list",
+    "path": "/business/^classes/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-class-detail",
+    "path": "/business/^classes/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-class-delete-image",
+    "path": "/business/^classes/(?P<pk>[^/.]+)/images/(?P<image_id>[^/.]+)/$/",
+    "methods": [
+      "DELETE"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-class-delete-image",
+    "path": "/business/^classes/(?P<pk>[^/.]+)/images/(?P<image_id>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-class-toggle-class-active",
+    "path": "/business/^classes/(?P<pk>[^/.]+)/toggle-active/$/",
+    "methods": [
+      "PATCH"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-class-toggle-class-active",
+    "path": "/business/^classes/(?P<pk>[^/.]+)/toggle-active\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "PATCH"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-class-detail",
+    "path": "/business/^classes/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-class-contact-info",
+    "path": "/business/^classes/contact-info/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-class-contact-info",
+    "path": "/business/^classes/contact-info\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-class-list",
+    "path": "/business/^classes\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-contact-import-start-processing",
+    "path": "/business/^contact-import/start-processing/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-contact-import-start-processing",
+    "path": "/business/^contact-import/start-processing\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-contact-import-upload-file",
+    "path": "/business/^contact-import/upload/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-contact-import-upload-file",
+    "path": "/business/^contact-import/upload\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-conversation-list",
+    "path": "/business/^conversations/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-conversation-detail",
+    "path": "/business/^conversations/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-conversation-mark-read",
+    "path": "/business/^conversations/(?P<pk>[^/.]+)/mark_read/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-conversation-mark-read",
+    "path": "/business/^conversations/(?P<pk>[^/.]+)/mark_read\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-conversation-send-message",
+    "path": "/business/^conversations/(?P<pk>[^/.]+)/send_message/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-conversation-send-message",
+    "path": "/business/^conversations/(?P<pk>[^/.]+)/send_message\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-conversation-detail",
+    "path": "/business/^conversations/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-conversation-start-by-booking",
+    "path": "/business/^conversations/start-by-booking/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-conversation-start-by-booking",
+    "path": "/business/^conversations/start-by-booking\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-conversation-list",
+    "path": "/business/^conversations\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-course-management-list",
+    "path": "/business/^course-management/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-course-management-detail",
+    "path": "/business/^course-management/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-course-management-cancel-course",
+    "path": "/business/^course-management/(?P<pk>[^/.]+)/cancel_course/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-course-management-cancel-course",
+    "path": "/business/^course-management/(?P<pk>[^/.]+)/cancel_course\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-course-management-enrollments",
+    "path": "/business/^course-management/(?P<pk>[^/.]+)/enrollments/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-course-management-enrollments",
+    "path": "/business/^course-management/(?P<pk>[^/.]+)/enrollments\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-course-management-detail",
+    "path": "/business/^course-management/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-course-management-list",
+    "path": "/business/^course-management\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-discount-list",
+    "path": "/business/^discounts/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-discount-detail",
+    "path": "/business/^discounts/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-discount-toggle-active",
+    "path": "/business/^discounts/(?P<pk>[^/.]+)/toggle-active/$/",
+    "methods": [
+      "PATCH"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-discount-toggle-active",
+    "path": "/business/^discounts/(?P<pk>[^/.]+)/toggle-active\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "PATCH"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-discount-detail",
+    "path": "/business/^discounts/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-discount-validate-coupon",
+    "path": "/business/^discounts/validate-coupon/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-discount-validate-coupon",
+    "path": "/business/^discounts/validate-coupon\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-discount-list",
+    "path": "/business/^discounts\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "notification-list",
+    "path": "/business/^notifications/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "notification-detail",
+    "path": "/business/^notifications/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "notification-mark-as-read",
+    "path": "/business/^notifications/(?P<pk>[^/.]+)/mark-read/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "notification-mark-as-read",
+    "path": "/business/^notifications/(?P<pk>[^/.]+)/mark-read\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "notification-detail",
+    "path": "/business/^notifications/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "notification-mark-all-as-read",
+    "path": "/business/^notifications/mark-all-read/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "notification-mark-all-as-read",
+    "path": "/business/^notifications/mark-all-read\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "notification-unread-count",
+    "path": "/business/^notifications/unread-count/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "notification-unread-count",
+    "path": "/business/^notifications/unread-count\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "notification-list",
+    "path": "/business/^notifications\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-payout-list",
+    "path": "/business/^payouts/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-payout-detail",
+    "path": "/business/^payouts/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-payout-bookings",
+    "path": "/business/^payouts/(?P<pk>[^/.]+)/bookings/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-payout-bookings",
+    "path": "/business/^payouts/(?P<pk>[^/.]+)/bookings\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-payout-export-payout-details",
+    "path": "/business/^payouts/(?P<pk>[^/.]+)/export/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-payout-export-payout-details",
+    "path": "/business/^payouts/(?P<pk>[^/.]+)/export\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-payout-detail",
+    "path": "/business/^payouts/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-payout-summary",
+    "path": "/business/^payouts/summary/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-payout-summary",
+    "path": "/business/^payouts/summary\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-payout-list",
+    "path": "/business/^payouts\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-review-list",
+    "path": "/business/^reviews/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-review-detail",
+    "path": "/business/^reviews/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-review-report",
+    "path": "/business/^reviews/(?P<pk>[^/.]+)/report/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-review-report",
+    "path": "/business/^reviews/(?P<pk>[^/.]+)/report\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-review-respond",
+    "path": "/business/^reviews/(?P<pk>[^/.]+)/respond/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-review-respond",
+    "path": "/business/^reviews/(?P<pk>[^/.]+)/respond\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-review-detail",
+    "path": "/business/^reviews/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-review-analytics",
+    "path": "/business/^reviews/analytics/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-review-analytics",
+    "path": "/business/^reviews/analytics\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-review-list",
+    "path": "/business/^reviews\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-role-list",
+    "path": "/business/^roles/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-role-detail",
+    "path": "/business/^roles/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-role-detail",
+    "path": "/business/^roles/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-role-available-permissions",
+    "path": "/business/^roles/available-permissions/$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-role-available-permissions",
+    "path": "/business/^roles/available-permissions\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-role-list",
+    "path": "/business/^roles\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-schedule-instance-list",
+    "path": "/business/^schedule-instances/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-schedule-instance-detail",
+    "path": "/business/^schedule-instances/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-schedule-instance-cancel",
+    "path": "/business/^schedule-instances/(?P<pk>[^/.]+)/cancel/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-schedule-instance-cancel",
+    "path": "/business/^schedule-instances/(?P<pk>[^/.]+)/cancel\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-schedule-instance-detail",
+    "path": "/business/^schedule-instances/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-schedule-instance-list",
+    "path": "/business/^schedule-instances\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-schedule-list",
+    "path": "/business/^schedules/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-schedule-detail",
+    "path": "/business/^schedules/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-schedule-detail",
+    "path": "/business/^schedules/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-schedule-bulk-create",
+    "path": "/business/^schedules/bulk-create/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-schedule-bulk-create",
+    "path": "/business/^schedules/bulk-create\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-schedule-group-delete",
+    "path": "/business/^schedules/group-delete/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-schedule-group-delete",
+    "path": "/business/^schedules/group-delete\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-schedule-group-update",
+    "path": "/business/^schedules/group-update/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-schedule-group-update",
+    "path": "/business/^schedules/group-update\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-schedule-list",
+    "path": "/business/^schedules\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-staff-list",
+    "path": "/business/^staff/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-staff-detail",
+    "path": "/business/^staff/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-staff-detail",
+    "path": "/business/^staff/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-staff-list",
+    "path": "/business/^staff\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "student-course-enrollments-list",
+    "path": "/business/^student/course-enrollments/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "student-course-enrollments-detail",
+    "path": "/business/^student/course-enrollments/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "student-course-enrollments-cancel-enrollment",
+    "path": "/business/^student/course-enrollments/(?P<pk>[^/.]+)/cancel/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "student-course-enrollments-cancel-enrollment",
+    "path": "/business/^student/course-enrollments/(?P<pk>[^/.]+)/cancel\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "student-course-enrollments-drop-enrollment",
+    "path": "/business/^student/course-enrollments/(?P<pk>[^/.]+)/drop/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "student-course-enrollments-drop-enrollment",
+    "path": "/business/^student/course-enrollments/(?P<pk>[^/.]+)/drop\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "student-course-enrollments-detail",
+    "path": "/business/^student/course-enrollments/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "student-course-enrollments-list",
+    "path": "/business/^student/course-enrollments\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-student-list",
+    "path": "/business/^students/$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-student-detail",
+    "path": "/business/^students/(?P<pk>[^/.]+)/$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-student-add-note",
+    "path": "/business/^students/(?P<pk>[^/.]+)/add_note/$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-student-add-note",
+    "path": "/business/^students/(?P<pk>[^/.]+)/add_note\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-student-detail",
+    "path": "/business/^students/(?P<pk>[^/.]+)\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "DELETE",
+      "GET",
+      "PATCH",
+      "PUT"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "business-student-list",
+    "path": "/business/^students\\.(?P<format>[a-z0-9]+)/?$/",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "accept-staff-invitation",
+    "path": "/business/accept-invitation/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "all-categories-for-business",
+    "path": "/business/all-categories/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "business-class-option-detail",
+    "path": "/business/classes/<int:pk>/options/<int:option_id>/",
+    "methods": [
+      "GET",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "generate-upload-url",
+    "path": "/business/generate-upload-url/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "business-register",
+    "path": "/business/register/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "validate-staff-invitation",
+    "path": "/business/validate-invitation/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "public-class-list",
+    "path": "/classes/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "class-id-redirect",
+    "path": "/classes/<int:class_id>/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "class-reviews-paginated",
+    "path": "/classes/<str:identifier>/reviews/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-class-detail",
+    "path": "/classes/<str:pk>/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-class-toggle-favorite",
+    "path": "/classes/<str:pk>/toggle-favorite/",
+    "methods": [
+      "POST"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-collection-children",
+    "path": "/classes/collections/<slug:parent_slug>/children/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "public-class-homepage-content",
+    "path": "/classes/homepage-content/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "public-class-search",
+    "path": "/classes/search/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "public-collections-placement",
+    "path": "/collections/placement/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "corporate-inquiry-create",
+    "path": "/corporate-inquiry/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "corporate-shortlist-public",
+    "path": "/corporate/shortlist/<uuid:token>/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "corporate-booking-status-public",
+    "path": "/corporate/shortlist/<uuid:token>/booking/<uuid:booking_id>/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "corporate-booking-deposit-intent",
+    "path": "/corporate/shortlist/<uuid:token>/booking/<uuid:booking_id>/deposit-intent/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "corporate-shortlist-select",
+    "path": "/corporate/shortlist/<uuid:token>/select/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "csrf_cookie",
+    "path": "/csrf/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "gc-purchase",
+    "path": "/gift-cards/purchase-intent/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "gc-validate",
+    "path": "/gift-cards/validate/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "active-global-discount",
+    "path": "/global-discount/active/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "guest-inbox",
+    "path": "/guest-inbox/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "guest-inbox-mark-read",
+    "path": "/guest-inbox/mark-read/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "guest-inbox-send",
+    "path": "/guest-inbox/send/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "guest-message-create",
+    "path": "/guest-message/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "health-check",
+    "path": "/health-check/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "impersonate-start",
+    "path": "/impersonate/<path:uid>/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "impersonate-list",
+    "path": "/impersonate/list/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "impersonate-search",
+    "path": "/impersonate/search/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "impersonate-stop",
+    "path": "/impersonate/stop/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "token_obtain_pair",
+    "path": "/login/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "logout",
+    "path": "/logout/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-addons",
+    "path": "/my-business/addons/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "my-business-addon-email-marketing-cancel",
+    "path": "/my-business/addons/email-marketing/cancel/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-addon-email-marketing-change-tier",
+    "path": "/my-business/addons/email-marketing/change-tier/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-addon-email-marketing-checkout",
+    "path": "/my-business/addons/email-marketing/checkout/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-addon-email-marketing-instant-subscribe",
+    "path": "/my-business/addons/email-marketing/instant-subscribe/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-addon-email-marketing-payment-intent",
+    "path": "/my-business/addons/email-marketing/payment-intent/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-addon-email-marketing-reactivate",
+    "path": "/my-business/addons/email-marketing/reactivate/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-addon-marketplace-email-cancel",
+    "path": "/my-business/addons/marketplace-email/cancel/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-addon-marketplace-email-checkout",
+    "path": "/my-business/addons/marketplace-email/checkout/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-addon-marketplace-email-instant-subscribe",
+    "path": "/my-business/addons/marketplace-email/instant-subscribe/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-addon-marketplace-email-payment-intent",
+    "path": "/my-business/addons/marketplace-email/payment-intent/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-addon-marketplace-email-reactivate",
+    "path": "/my-business/addons/marketplace-email/reactivate/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-billing-portal",
+    "path": "/my-business/billing-portal/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-contacts",
+    "path": "/my-business/contacts/",
+    "methods": [
+      "GET",
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "my-business-contact-detail",
+    "path": "/my-business/contacts/<uuid:contact_id>/",
+    "methods": [
+      "GET",
+      "PATCH",
+      "DELETE",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-email-branding-preview",
+    "path": "/my-business/email-branding/preview/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-locations",
+    "path": "/my-business/locations/",
+    "methods": [
+      "GET",
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "my-business-location-detail",
+    "path": "/my-business/locations/<uuid:pk>/",
+    "methods": [
+      "GET",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-marketing-account",
+    "path": "/my-business/marketing/account/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "my-business-marketing-audience-facets",
+    "path": "/my-business/marketing/audience/facets/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "my-business-marketing-audience-preview",
+    "path": "/my-business/marketing/audience/preview/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-marketing-campaigns",
+    "path": "/my-business/marketing/campaigns/",
+    "methods": [
+      "GET",
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "my-business-marketing-campaign-detail",
+    "path": "/my-business/marketing/campaigns/<uuid:campaign_id>/",
+    "methods": [
+      "GET",
+      "PUT",
+      "DELETE",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-marketing-campaign-schedule",
+    "path": "/my-business/marketing/campaigns/<uuid:campaign_id>/schedule/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-marketing-campaign-send",
+    "path": "/my-business/marketing/campaigns/<uuid:campaign_id>/send/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-marketing-campaign-test-send",
+    "path": "/my-business/marketing/campaigns/<uuid:campaign_id>/test-send/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-marketing-domains",
+    "path": "/my-business/marketing/domains/",
+    "methods": [
+      "GET",
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "my-business-marketing-domain-detail",
+    "path": "/my-business/marketing/domains/<uuid:domain_id>/",
+    "methods": [
+      "DELETE",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-marketing-domain-verify",
+    "path": "/my-business/marketing/domains/<uuid:domain_id>/verify/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-marketing-segments",
+    "path": "/my-business/marketing/segments/",
+    "methods": [
+      "GET",
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "my-business-marketing-segment-detail",
+    "path": "/my-business/marketing/segments/<uuid:segment_id>/",
+    "methods": [
+      "PUT",
+      "DELETE",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-marketing-senders",
+    "path": "/my-business/marketing/senders/",
+    "methods": [
+      "GET",
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "my-business-marketing-sender-detail",
+    "path": "/my-business/marketing/senders/<uuid:sender_id>/",
+    "methods": [
+      "DELETE",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-marketing-settings",
+    "path": "/my-business/marketing/settings/",
+    "methods": [
+      "GET",
+      "PATCH",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "my-business-marketing-templates",
+    "path": "/my-business/marketing/templates/",
+    "methods": [
+      "GET",
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "my-business-marketing-template-detail",
+    "path": "/my-business/marketing/templates/<uuid:template_id>/",
+    "methods": [
+      "GET",
+      "PUT",
+      "DELETE",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-marketing-workflow-enrollments",
+    "path": "/my-business/marketing/workflow-enrollments/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "my-business-marketing-workflows",
+    "path": "/my-business/marketing/workflows/",
+    "methods": [
+      "GET",
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "my-business-marketing-workflow-detail",
+    "path": "/my-business/marketing/workflows/<uuid:workflow_id>/",
+    "methods": [
+      "GET",
+      "PUT",
+      "DELETE",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-marketing-workflow-enroll",
+    "path": "/my-business/marketing/workflows/<uuid:workflow_id>/enroll/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-members",
+    "path": "/my-business/members/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "my-business-member-detail",
+    "path": "/my-business/members/<uuid:member_id>/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-member-cancel",
+    "path": "/my-business/members/<uuid:member_id>/cancel/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-member-approve",
+    "path": "/my-business/members/<uuid:pk>/approve/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-member-decline",
+    "path": "/my-business/members/<uuid:pk>/decline/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-members-manual-add",
+    "path": "/my-business/members/manual-add/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-membership-products",
+    "path": "/my-business/membership-products/",
+    "methods": [
+      "GET",
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "my-business-membership-product-detail",
+    "path": "/my-business/membership-products/<uuid:product_id>/",
+    "methods": [
+      "GET",
+      "PATCH",
+      "DELETE",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-membership-product-sync-stripe",
+    "path": "/my-business/membership-products/<uuid:product_id>/sync-stripe/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-overview",
+    "path": "/my-business/overview/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "my-business-profile",
+    "path": "/my-business/profile/",
+    "methods": [
+      "GET",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "stripe-connect-onboarding",
+    "path": "/my-business/stripe-connect/",
+    "methods": [
+      "GET",
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "my-business-widget-config",
+    "path": "/my-business/widget-config/",
+    "methods": [
+      "GET",
+      "PATCH",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "my-business-widget-subscription",
+    "path": "/my-business/widget-subscription/",
+    "methods": [
+      "GET",
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "my-business-widget-subscription-cancel",
+    "path": "/my-business/widget-subscription/cancel/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-widget-subscription-checkout",
+    "path": "/my-business/widget-subscription/checkout/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-widget-subscription-default-payment-method",
+    "path": "/my-business/widget-subscription/default-payment-method/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "my-business-widget-subscription-detach-payment-method",
+    "path": "/my-business/widget-subscription/detach-payment-method/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-widget-subscription-invoices",
+    "path": "/my-business/widget-subscription/invoices/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "my-business-widget-subscription-payment-intent",
+    "path": "/my-business/widget-subscription/payment-intent/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-widget-subscription-reactivate",
+    "path": "/my-business/widget-subscription/reactivate/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-widget-subscription-set-default-payment-method",
+    "path": "/my-business/widget-subscription/set-default-payment-method/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "my-business-widget-subscription-setup-intent",
+    "path": "/my-business/widget-subscription/setup-intent/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "my-businesses",
+    "path": "/my-businesses/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "my-favorites-list",
+    "path": "/my-favorites/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "cancel-payment-intent",
+    "path": "/payments/cancel-payment-intent/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "check-slot-availability",
+    "path": "/payments/check-slot-availability/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "create-payment-intent",
+    "path": "/payments/create-payment-intent/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "update-payment-intent",
+    "path": "/payments/update-payment-intent/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "update-payment-intent-alt",
+    "path": "/payments/update_intent/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "payment-webhook",
+    "path": "/payments/webhook/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "public-marketing-email-unsubscribe",
+    "path": "/public/marketing-email/unsubscribe/<str:token>/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": true,
+    "perf_get": false
+  },
+  {
+    "name": "revenue-analytics",
+    "path": "/revenue/analytics/",
+    "methods": [
+      "GET",
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "submit-review",
+    "path": "/reviews/submit/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "search-log-create",
+    "path": "/search-log/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "search-suggest",
+    "path": "/search/suggest/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "token_refresh",
+    "path": "/token/refresh/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "my-profile",
+    "path": "/user/profile/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "user-update",
+    "path": "/user/update/",
+    "methods": [
+      "PUT",
+      "PATCH",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "resend-webhook",
+    "path": "/webhooks/resend/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "stripe-connect-webhook",
+    "path": "/webhooks/stripe-connect/",
+    "methods": [
+      "GET"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "widget-availability",
+    "path": "/widget/v1/availability/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "widget-create-booking",
+    "path": "/widget/v1/bookings/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "widget-create-free-booking",
+    "path": "/widget/v1/bookings/free/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "widget-classes",
+    "path": "/widget/v1/classes/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "widget-config",
+    "path": "/widget/v1/config/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "widget-events",
+    "path": "/widget/v1/events/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "widget-membership-products",
+    "path": "/widget/v1/membership-products/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "widget-membership-status",
+    "path": "/widget/v1/membership-status/",
+    "methods": [
+      "GET",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": true
+  },
+  {
+    "name": "widget-membership-subscribe",
+    "path": "/widget/v1/membership-subscribe/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "widget-payment-intent",
+    "path": "/widget/v1/payment-intent/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  },
+  {
+    "name": "widget-validate-coupon",
+    "path": "/widget/v1/validate-coupon/",
+    "methods": [
+      "POST",
+      "OPTIONS"
+    ],
+    "requires_args": false,
+    "perf_get": false
+  }
+]

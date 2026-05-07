@@ -3,9 +3,10 @@ import logging
 import time
 
 from celery import Celery
-from celery.signals import task_failure, worker_ready
+from celery.signals import task_failure, task_prerun, worker_ready
 from django.conf import settings
 from django.core.cache import cache
+from django.db import close_old_connections
 
 logger = logging.getLogger(__name__)
 
@@ -18,10 +19,50 @@ app.config_from_object("django.conf:settings", namespace="CELERY")
 
 app.autodiscover_tasks()
 
+# Do not import quickstart.tasks at module level: CEBackend/__init__.py imports this
+# module before Django apps are ready (pytest + some tooling). Registration is forced
+# in worker_ready and in tests via `import quickstart.tasks`.
+# Tasks invoked from views (not listed in CELERY_BEAT_SCHEDULE) must still exist on workers.
+_EXTRA_REQUIRED_CELERY_TASKS = frozenset(
+    {
+        "quickstart.tasks.corporate_booking_tasks.send_shortlist_sent_to_admins",
+        "quickstart.tasks.corporate_booking_tasks.send_shortlist_to_corporate",
+        "quickstart.tasks.email_marketing_tasks.send_business_marketing_campaign_task",
+    }
+)
+
+
+def _required_celery_task_names():
+    from django.conf import settings as dj_settings
+
+    beat = getattr(dj_settings, "CELERY_BEAT_SCHEDULE", None) or {}
+    names = {entry["task"] for entry in beat.values() if isinstance(entry, dict) and entry.get("task")}
+    names |= _EXTRA_REQUIRED_CELERY_TASKS
+    return sorted(names)
+
+
+@task_prerun.connect
+def close_stale_db_connections_before_task(**kwargs):
+    """Recycle DB conns between tasks (RDS idle timeout does not trigger Django's HTTP hooks)."""
+    close_old_connections()
+
 
 @worker_ready.connect
 def on_worker_ready(sender, **kwargs):
-    """In production, prewarm class search cache after worker starts (synchronously so it runs and logs in this process)."""
+    """
+    Fail fast if worker image is missing beat-scheduled or critical .delay() tasks (deploy skew).
+    Operational fix: redeploy Celery workers with the same image tag as the web tier.
+    """
+    import quickstart.tasks  # noqa: F401 — registers submodules after Django setup
+
+    missing = [name for name in _required_celery_task_names() if name not in app.tasks]
+    if missing:
+        raise RuntimeError(
+            "Celery worker is missing registered tasks (redeploy worker with current code): "
+            + ", ".join(missing)
+        )
+
+    # In production, prewarm class search cache after worker starts (synchronously in this process).
     if not getattr(settings, "IS_DEPLOYED_ENV", False):
         return
     try:
@@ -31,6 +72,7 @@ def on_worker_ready(sender, **kwargs):
         logger.info("Class search cache prewarm finished.")
     except Exception as e:
         logger.warning("Class search cache prewarm failed: %s", e, exc_info=True)
+
 
 @task_failure.connect
 def handle_task_failure(sender=None, task_id=None, exception=None, args=None, kwargs=None, traceback=None, einfo=None, **kw):

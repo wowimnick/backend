@@ -18,6 +18,7 @@ from quickstart.tests.factories import (
     BookingFactory,
     ScheduleInstanceFactory,
 )
+from quickstart.tasks.payout_tasks import _build_payout_batch_idempotency_key
 from quickstart.utils.stripe_metadata import stripe_metadata_to_dict
 
 
@@ -34,6 +35,30 @@ def test_merge_metadata_like_payout_task():
     assert updated["business_id"] == "99"
     assert updated["payout_record_id"] == "abc"
     assert "temp_id" not in updated
+
+
+def test_build_payout_batch_idempotency_key_is_deterministic_for_same_batch():
+    key_a = _build_payout_batch_idempotency_key(
+        business_id=99,
+        currency="cad",
+        booking_ids=[3, 1, 2],
+        payout_amount_cents=12345,
+    )
+    key_b = _build_payout_batch_idempotency_key(
+        business_id=99,
+        currency="CAD",
+        booking_ids=[1, 2, 3],
+        payout_amount_cents=12345,
+    )
+    key_c = _build_payout_batch_idempotency_key(
+        business_id=99,
+        currency="CAD",
+        booking_ids=[1, 2, 4],
+        payout_amount_cents=12345,
+    )
+
+    assert key_a == key_b
+    assert key_a != key_c
 
 
 @pytest.mark.django_db

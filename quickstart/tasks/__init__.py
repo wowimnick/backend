@@ -10,9 +10,13 @@ from .booking_tasks import *
 from .cache_tasks import *  # prewarm_class_search_cache_task (registered by name for workers)
 from .giftcard_tasks import *
 from .notification_tasks import send_sms_task, send_campaign_task
+from . import corporate_tasks  # noqa: F401 — register send_corporate_inquiry_emails on workers
+from . import corporate_booking_tasks  # noqa: F401 — shortlist/booking lifecycle emails (worker must import)
 
 __all__ = [
     "process_daily_payouts",
+    "monitor_payout_integrity",
+    "send_daily_payout_integrity_warning_digest",
     "update_completed_booking_status",
     "process_daily_refunds",
     "send_transactional_email_task",

@@ -1,0 +1,10 @@
+{% extends "emails/base_email.html" %}
+{% block title %}Shortlist sent{% endblock %}
+{% block content %}
+  <h1>Shortlist sent to {{ inquiry.company_name }}</h1>
+  <p>
+    <strong>Contact:</strong> {{ inquiry.contact_name }} &lt;{{ inquiry.email }}&gt;<br />
+    <strong>Status:</strong> {{ shortlist.get_status_display }}
+  </p>
+  <p><a href="{{ shortlist_url }}">Preview link (same as customer)</a></p>
+{% endblock %}

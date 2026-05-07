@@ -113,6 +113,7 @@ def generate_presigned_upload_url(request):
         "review_image": "review_images/",
         "category_image": "category_images/",
         "collection_image": "collection_images/",
+        "corporate_option": "corporate_option_images/",
     }
 
     subfolder = allowed_upload_types.get(upload_type)

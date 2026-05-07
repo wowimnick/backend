@@ -1,3 +1,4 @@
+import hashlib
 from celery import shared_task
 from django.utils import timezone
 from datetime import timedelta
@@ -11,6 +12,10 @@ import logging
 
 from quickstart.models import BusinessInfo, ClassesMain, ClassCollection, BlogPost, BlogCategory
 from quickstart.utils.services import CollectionAutoAssigner
+from quickstart.utils.experience_theme_coverage import (
+    ensure_preset_collection_memberships,
+)
+from quickstart.utils.description_formatter import DescriptionFormatter
 from quickstart.utils.blog_ai_service import generate_blog_draft
 import resend
 
@@ -31,6 +36,82 @@ def classify_class_task(class_id):
     except Exception as e:
         logger.error(f"Error classifying class {class_id}: {e}", exc_info=True)
 
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def format_class_description_task(self, class_id, force=False):
+    """
+    Background task: Gemini formats description into summary + collapsible sections.
+
+    When ``force`` is True, always calls Gemini (unless description is empty), even if
+    status is already ``ready`` and the source hash is unchanged.
+    """
+    try:
+        instance = ClassesMain.objects.get(pk=class_id)
+    except ClassesMain.DoesNotExist:
+        logger.warning("format_class_description_task: class %s not found", class_id)
+        return
+
+    raw = (instance.description or "").strip()
+    logger.info(
+        "format_class_description_task START class_id=%s force=%s slug=%r desc_chars=%s ai_status=%s",
+        class_id,
+        force,
+        getattr(instance, "slug", None),
+        len(raw),
+        getattr(instance, "description_ai_status", None),
+    )
+    if not raw:
+        logger.info(
+            "format_class_description_task class_id=%s empty description; clearing AI fields",
+            class_id,
+        )
+        ClassesMain.objects.filter(pk=class_id).update(
+            description_summary="",
+            description_sections=[],
+            description_ai_source_hash="",
+            description_ai_status="ready",
+            description_ai_generated_at=timezone.now(),
+        )
+        return
+
+    new_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    if (
+        not force
+        and instance.description_ai_status == "ready"
+        and instance.description_ai_source_hash == new_hash
+    ):
+        logger.info(
+            "format_class_description_task SKIP class_id=%s unchanged hash matches ready",
+            class_id,
+        )
+        return
+
+    try:
+        DescriptionFormatter().process(instance, new_hash)
+        instance.refresh_from_db(
+            fields=[
+                "description_summary",
+                "description_sections",
+                "description_ai_status",
+                "description_ai_source_hash",
+            ]
+        )
+        logger.info(
+            "format_class_description_task DONE class_id=%s slug=%r status=%s summary_chars=%s sections_n=%s",
+            class_id,
+            getattr(instance, "slug", None),
+            instance.description_ai_status,
+            len(instance.description_summary or ""),
+            len(instance.description_sections or []),
+        )
+    except Exception as e:
+        logger.exception(
+            "format_class_description_task failed for class_id=%s", class_id
+        )
+        ClassesMain.objects.filter(pk=class_id).update(description_ai_status="failed")
+        raise self.retry(exc=e)
+
+
 @shared_task
 def update_trending_collections_task():
     """
@@ -47,6 +128,20 @@ def update_trending_collections_task():
         count += 1
     
     logger.info(f"Updated trending collections for {count} classes.")
+
+
+@shared_task
+def ensure_preset_experience_theme_coverage_task(thematic_collection_ids: list[int]):
+    """
+    Chained after ``update_trending_collections_task`` when bulk-loading the curated
+    "experience themes" preset: link any active classes that still belong to zero of
+    those collections (keyword title/description match first, otherwise default).
+    """
+    try:
+        return ensure_preset_collection_memberships(thematic_collection_ids)
+    except Exception as e:
+        logger.exception("ensure_preset_experience_theme_coverage_task failed: %s", e)
+
 
 @shared_task
 def notify_businesses_of_expiring_schedules():
@@ -247,7 +342,7 @@ def generate_weekly_blog_draft_task():
         draft_data = generate_blog_draft(
             topic_hint=topic_hint,
             explore_url=explore_url,
-            site_name="Classeasily",
+            site_name="ClassEasily",
             word_count_target=(400, 600),
         )
         if not draft_data:

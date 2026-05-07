@@ -10,7 +10,6 @@ from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import (
     Q,
-    Avg,
     Count,
     Min,
     Max,
@@ -28,6 +27,7 @@ from django.db.models import (
     Func,
     Prefetch,
     Exists,
+    CharField,
 )
 from django.db.models.functions import (
     Coalesce,
@@ -60,6 +60,7 @@ from datetime import (
     timedelta,
 )
 import copy
+from uuid import UUID
 
 from quickstart.models import (
     ClassCollection,
@@ -86,6 +87,8 @@ from django.contrib.gis.geos import Point
 from django.contrib.gis.db.models.functions import Distance
 from django.contrib.gis.measure import D
 from django.conf import settings
+
+from quickstart.services.search_suggest_service import match_collection_by_alias
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +192,8 @@ PRESET_PREWARM_PAGE_SIZE = 50
 # Collections list (homepage_content mode=collections); per-env so staging/prod don't overwrite
 HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY = f"homepage_content_collections:{_CACHE_ENV}"
 HOMEPAGE_CONTENT_COLLECTIONS_CACHE_TIMEOUT = 60 * 60  # 1 hour (only used until next collection change)
+HOMEPAGE_SECTIONS_CACHE_KEY = f"homepage_sections_v1:{_CACHE_ENV}"
+HOMEPAGE_SECTIONS_CACHE_TIMEOUT = 300  # 5 min (trending / date_night / next_week rows)
 
 
 def _safe_cache_set(key, value, timeout=None):
@@ -335,8 +340,22 @@ def invalidate_public_class_search_preset_cache(
 
 
 def _is_collection_only_request(request):
-    """Return True if request has only collection filter (no location, keyword, category, etc.)."""
-    if not request.query_params.get("collection"):
+    """Return True if request has only collection filter (no location, keyword, category, etc.).
+
+    Must stay aligned with _build_collection_search_cache_key: if any query param changes
+    the queryset but is not part of the cache key, return False or cached responses will
+    be wrong (e.g. time_of_day, days, date — see collection-only cache short-circuit).
+
+    Multiple `collection` query params skip the single-collection cache path.
+    """
+    coll_list = [
+        s.strip()
+        for s in request.query_params.getlist("collection")
+        if s and str(s).strip()
+    ]
+    if not coll_list or len(coll_list) != 1:
+        return False
+    if request.query_params.getlist("sub"):
         return False
     if request.query_params.get("location") or request.query_params.get("location_search"):
         return False
@@ -344,9 +363,41 @@ def _is_collection_only_request(request):
         return False
     if request.query_params.get("keyword") or request.query_params.get("tag"):
         return False
-    if request.query_params.get("price_max"):
+    if request.query_params.get("price_max") or request.query_params.get("price_min"):
+        return False
+    if request.query_params.getlist("time_preference"):
+        return False
+    if request.query_params.getlist("days"):
+        return False
+    if request.query_params.get("date"):
+        return False
+    if request.query_params.get("class_type"):
         return False
     return True
+
+
+def _is_count_only_request(request):
+    """Lightweight search preview: same filters, response is only {"count": int}."""
+    v = request.query_params.get("count_only")
+    if v is None:
+        return False
+    return str(v).strip().lower() in ("1", "true", "yes")
+
+
+def _count_only_response_if_applicable(request, payload):
+    """When count_only is set, return minimal JSON if payload includes total count (e.g. cached search)."""
+    if not _is_count_only_request(request):
+        return None
+    if isinstance(payload, dict):
+        c = payload.get("count")
+        if isinstance(c, int):
+            return Response({"count": c})
+    return None
+
+
+def _subs_cache_segment(request):
+    subs = [s.strip().lower() for s in request.query_params.getlist("sub") if s.strip()]
+    return ",".join(sorted(subs))
 
 
 def _build_collection_search_cache_key(request, collection_slug):
@@ -359,7 +410,8 @@ def _build_collection_search_cache_key(request, collection_slug):
     end_date = request.query_params.get("end_date") or ""
     version = _get_preset_search_cache_version()
     slug = (collection_slug or "").lower().replace(" ", "_")
-    return f"{COLLECTION_CACHE_PREFIX}:{_CACHE_ENV}:v{version}:{slug}:p{page}:ps{page_size}:n{participants}:s{sort_by}:{start_date}:{end_date}"
+    sub_seg = _subs_cache_segment(request)
+    return f"{COLLECTION_CACHE_PREFIX}:{_CACHE_ENV}:v{version}:{slug}:subs:{sub_seg}:p{page}:ps{page_size}:n{participants}:s{sort_by}:{start_date}:{end_date}"
 
 
 def _build_preset_location_collection_cache_key(request, search_name, collection_slug):
@@ -367,6 +419,8 @@ def _build_preset_location_collection_cache_key(request, search_name, collection
     if request.query_params.get("keyword") or request.query_params.get("tag"):
         return None
     if request.query_params.get("price_max"):
+        return None
+    if request.query_params.getlist("sub"):
         return None
     page = request.query_params.get("page", "1")
     page_size = request.query_params.get("page_size", "24")
@@ -421,6 +475,15 @@ def _shuffle_preset_results(response_data, search_name, collection_slug):
         rng.shuffle(tier)
         results[start:] = tier
     out["results"] = results
+    return out
+
+
+def _attach_resolved_collection_to_search_payload(data, meta):
+    """Add resolved_collection to paginated search JSON when keyword matched a collection."""
+    if not meta or not isinstance(data, dict):
+        return data
+    out = copy.deepcopy(data)
+    out["resolved_collection"] = meta
     return out
 
 
@@ -496,20 +559,19 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
     def retrieve(self, request, *args, **kwargs):
         return super().retrieve(request, *args, **kwargs)
 
-    AVERAGE_RATING_SUBQUERY = Subquery(
-        Reviews.objects.filter(classId=OuterRef("pk"), status="approved")
-        .values("classId")
-        .annotate(avg_rating=Avg("rating"))
-        .values("avg_rating")[:1],
-        output_field=DecimalField(max_digits=3, decimal_places=1),
-    )
-    REVIEW_COUNT_SUBQUERY = Subquery(
-        Reviews.objects.filter(classId=OuterRef("pk"), status="approved")
-        .values("classId")
-        .annotate(count=Count("reviewId"))
-        .values("count")[:1],
-        output_field=IntegerField(),
-    )
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        request = self.request
+        if request.user.is_authenticated:
+            from quickstart.models import Favorites
+
+            ctx["favorited_ids"] = set(
+                Favorites.objects.filter(userId=request.user).values_list(
+                    "classId", flat=True
+                )
+            )
+        return ctx
+
     MIN_SESSION_PRICE_SUBQUERY = Subquery(
         Schedule.objects.filter(
             option__classId=OuterRef("pk"),
@@ -546,41 +608,10 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         return response
 
     def get_queryset(self):
-        # 1. Define Subqueries for Platform Data (Existing)
-        # We ensure these return Decimal/Integer types to prevent SQL casting errors
-        p_avg_subquery = Subquery(
-            Reviews.objects.filter(classId=OuterRef("pk"), status="approved")
-            .values("classId")
-            .annotate(avg_rating=Avg("rating"))
-            .values("avg_rating")[:1],
-            output_field=DecimalField(max_digits=3, decimal_places=2),
-        )
-        p_count_subquery = Subquery(
-            Reviews.objects.filter(classId=OuterRef("pk"), status="approved")
-            .values("classId")
-            .annotate(count=Count("reviewId"))
-            .values("count")[:1],
-            output_field=IntegerField(),
-        )
+        # Platform + Google review rollups are denormalized on ClassesMain / BusinessInfo
+        # (see platform_review_count, businessId__google_review_count) to avoid per-row subqueries.
 
-        # 2. Define Subqueries for Google Data (New)
-        # Note: We filter by businessId because Google reviews are attached to the Business, not the specific class
-        g_avg_subquery = Subquery(
-            ImportedGoogleReview.objects.filter(business=OuterRef("businessId"))
-            .values("business")
-            .annotate(avg=Avg("rating"))
-            .values("avg")[:1],
-            output_field=DecimalField(max_digits=3, decimal_places=2),
-        )
-        g_count_subquery = Subquery(
-            ImportedGoogleReview.objects.filter(business=OuterRef("businessId"))
-            .values("business")
-            .annotate(count=Count("id"))
-            .values("count")[:1],
-            output_field=IntegerField(),
-        )
-
-        # 3. Define Price Subqueries (Existing)
+        # Price subqueries (schedules still require scoped lookups)
         min_session_price_subquery = Subquery(
             Schedule.objects.filter(
                 option__classId=OuterRef("pk"),
@@ -604,14 +635,34 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
 
         options_qs = _public_class_options_prefetch_queryset()
         if self.action == "retrieve":
-            options_qs = options_qs.prefetch_related(
-                Prefetch(
-                    "schedules",
-                    queryset=Schedule.objects.filter(
-                        Q(date__gte=timezone.now().date())
-                        | Q(end_date__gte=timezone.now().date())
-                    ).order_by("date", "time"),
+            # Prefetch instances annotated with total_booked so PublicScheduleSerializer
+            # can derive available_spots = max_participants - total_booked without
+            # extra per-instance DB queries (N+1 prevention).
+            instances_qs = ScheduleInstance.objects.filter(
+                date__gte=timezone.now().date(),
+                status="scheduled",
+            ).annotate(
+                total_booked=Coalesce(
+                    Sum(
+                        "bookings__participants",
+                        filter=Q(bookings__status__in=["confirmed", "pending"]),
+                    ),
+                    Value(0),
+                    output_field=IntegerField(),
                 )
+            )
+            schedules_qs = Schedule.objects.filter(
+                Q(date__gte=timezone.now().date())
+                | Q(end_date__gte=timezone.now().date())
+            ).prefetch_related(
+                Prefetch(
+                    "instances",
+                    queryset=instances_qs,
+                    to_attr="_prefetched_instances",
+                )
+            ).order_by("date", "time")
+            options_qs = options_qs.prefetch_related(
+                Prefetch("schedules", queryset=schedules_qs)
             )
 
         queryset = (
@@ -628,13 +679,19 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 businessId__isActive=True,
                 businessId__verificationStatus="verified",
             )
-            # 4. Annotate Raw Counts and Ratings
+            # Annotate raw counts/ratings from denormalized columns
             .annotate(
-                # Coalesce ensures we get 0 instead of NULL if no reviews exist
-                p_rating_raw=Coalesce(p_avg_subquery, Value(Decimal("0.00"))),
-                p_count_raw=Coalesce(p_count_subquery, Value(0)),
-                g_rating_raw=Coalesce(g_avg_subquery, Value(Decimal("0.00"))),
-                g_count_raw=Coalesce(g_count_subquery, Value(0)),
+                p_rating_raw=Coalesce(
+                    F("platform_avg_rating"), Value(Decimal("0.00"))
+                ),
+                p_count_raw=Coalesce(F("platform_review_count"), Value(0)),
+                g_rating_raw=Coalesce(
+                    F("businessId__google_avg_rating"),
+                    Value(Decimal("0.00")),
+                ),
+                g_count_raw=Coalesce(
+                    F("businessId__google_review_count"), Value(0)
+                ),
             )
             # 5. Calculate Combined Totals (Used for Ranking)
             .annotate(
@@ -664,6 +721,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 min_session_price=Coalesce(min_session_price_subquery, None),
                 min_course_price=Coalesce(min_course_price_subquery, None),
                 image_count=Count("images", distinct=True),
+                listing_duration_minutes=Min("options__schedules__duration"),
             )
         )
 
@@ -674,6 +732,23 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
 
         return queryset.distinct()
     
+    def collection_children(self, request, parent_slug=None):
+        """
+        Active sub-collections for a top-level collection (explore page tags).
+        GET .../classes/collections/<slug>/children/
+        """
+        parent = get_object_or_404(
+            ClassCollection.objects.filter(parent__isnull=True, is_active=True),
+            slug=parent_slug,
+        )
+        qs = ClassCollection.objects.filter(parent=parent, is_active=True).order_by(
+            "sort_order", "name"
+        )
+        serializer = PublicCollectionSerializer(
+            qs, many=True, context=self.get_serializer_context()
+        )
+        return Response(serializer.data)
+
     @action(detail=False, methods=["get"])
     @method_decorator(vary_on_headers("Authorization"))
     def homepage_content(self, request):
@@ -686,97 +761,166 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         Cache: mode=collections uses key HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY; invalidated when a collection changes.
         """
         mode = request.query_params.get("mode", "categories")
-        if mode == "collections":
+        if mode == "collections" and not request.user.is_authenticated:
             cached = cache.get(HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY)
             if cached is not None:
                 return Response(cached)
 
-        # 1. Base Query with availability check
-        base_qs = self.get_queryset()
-
-        # EFFICIENT FILTER: Check for future availability
-        future_instances = ScheduleInstance.objects.filter(
-            schedule__option__classId=OuterRef('pk'),
-            date__gte=timezone.now().date(),
-            status='scheduled'
-        )
-        base_qs = base_qs.filter(Exists(future_instances))
-        
-        # Calculate scores
-        base_qs = self._calculate_relevance_score(base_qs)
-
-        context = {'request': request}
         data = {}
+        cached_sections = None
+        if not request.user.is_authenticated:
+            cached_sections = cache.get(HOMEPAGE_SECTIONS_CACHE_KEY)
+        if cached_sections is not None:
+            data.update(cached_sections)
+        else:
+            # 1. Base Query with availability check
+            base_qs = self.get_queryset()
 
-        # 2. Trending (Highest Relevance) - Fetch this FIRST
-        trending_qs = base_qs.order_by('-relevance_score')[:10]
-        # Serialize immediately to get the IDs
-        trending_data = HomepageClassSerializer(trending_qs, many=True, context=context).data
-        data["trending"] = trending_data
-        
-        # Extract IDs to prevent duplicates in the next section
-        trending_ids = [item['classId'] for item in trending_data]
-
-        # 3. Date Night Collection
-        date_night_slug = "date-night"
-        date_night_qs = base_qs.filter(collections__slug=date_night_slug)
-        
-        # EXCLUDE classes that are already in the Trending list
-        if trending_ids:
-            date_night_qs = date_night_qs.exclude(pk__in=trending_ids)
-            
-        # Randomize the remaining results so it's different every time
-        date_night_qs = date_night_qs.order_by('?')[:10]
-        
-        data["date_night"] = HomepageClassSerializer(date_night_qs, many=True, context=context).data
-
-        # 3b. Next Week — classes with at least one schedule in the next calendar week, ordered by most reviews
-        today = timezone.now().date()
-        # Next Monday (weekday 0); if today is Monday, "next week" starts next Monday
-        days_until_next_monday = (7 - today.weekday()) % 7
-        if days_until_next_monday == 0:
-            days_until_next_monday = 7
-        next_week_start = today + timedelta(days=days_until_next_monday)
-        next_week_end = next_week_start + timedelta(days=6)
-        next_week_instances = ScheduleInstance.objects.filter(
-            schedule__option__classId=OuterRef("pk"),
-            date__gte=next_week_start,
-            date__lte=next_week_end,
-            status="scheduled",
-        )
-        next_week_qs = base_qs.filter(Exists(next_week_instances)).order_by(
-            "-review_count", "-average_rating"
-        )[:10]
-        # Soonest (date, time) per class for "Happening Next Week" cards
-        next_week_class_ids = list(next_week_qs.values_list("pk", flat=True))
-        soonest_per_class = {}
-        if next_week_class_ids:
-            soonest_instances = (
-                ScheduleInstance.objects.filter(
-                    schedule__option__classId__in=next_week_class_ids,
-                    date__gte=next_week_start,
-                    date__lte=next_week_end,
-                    status="scheduled",
-                )
-                .order_by("schedule__option__classId", "date", "time")
-                .distinct("schedule__option__classId")
-                .values("schedule__option__classId", "date", "time")
+            # EFFICIENT FILTER: Check for future availability
+            future_instances = ScheduleInstance.objects.filter(
+                schedule__option__classId=OuterRef("pk"),
+                date__gte=timezone.now().date(),
+                status="scheduled",
             )
-            for row in soonest_instances:
-                soonest_per_class[row["schedule__option__classId"]] = {
-                    "date": row["date"],
-                    "time": row["time"],
-                }
-        next_week_context = {**context, "soonest_per_class": soonest_per_class}
-        data["next_week"] = HomepageClassSerializer(
-            next_week_qs, many=True, context=next_week_context
-        ).data
+            base_qs = base_qs.filter(Exists(future_instances))
+
+            # Calculate scores
+            base_qs = self._calculate_relevance_score(base_qs)
+
+            context = self.get_serializer_context()
+
+            # 2. Trending (Highest Relevance) - Fetch this FIRST
+            trending_qs = base_qs.order_by("-relevance_score", "-classId")[:10]
+            trending_data = HomepageClassSerializer(
+                trending_qs, many=True, context=context
+            ).data
+            data["trending"] = trending_data
+
+            trending_ids = [item["classId"] for item in trending_data]
+
+            # 3. Date Night Collection
+            date_night_slug = "date-night"
+            date_night_qs = base_qs.filter(collections__slug=date_night_slug)
+            if trending_ids:
+                date_night_qs = date_night_qs.exclude(pk__in=trending_ids)
+            date_night_qs = date_night_qs.order_by("?")[:10]
+            data["date_night"] = HomepageClassSerializer(
+                date_night_qs, many=True, context=context
+            ).data
+
+            # 3b. Next Week
+            today = timezone.now().date()
+            days_until_next_monday = (7 - today.weekday()) % 7
+            if days_until_next_monday == 0:
+                days_until_next_monday = 7
+            next_week_start = today + timedelta(days=days_until_next_monday)
+            next_week_end = next_week_start + timedelta(days=6)
+            next_week_instances = ScheduleInstance.objects.filter(
+                schedule__option__classId=OuterRef("pk"),
+                date__gte=next_week_start,
+                date__lte=next_week_end,
+                status="scheduled",
+            )
+            next_week_qs = base_qs.filter(Exists(next_week_instances)).order_by(
+                "-review_count", "-average_rating", "-classId"
+            )[:10]
+            next_week_class_ids = list(next_week_qs.values_list("pk", flat=True))
+            soonest_per_class = {}
+            if next_week_class_ids:
+                soonest_instances = (
+                    ScheduleInstance.objects.filter(
+                        schedule__option__classId__in=next_week_class_ids,
+                        date__gte=next_week_start,
+                        date__lte=next_week_end,
+                        status="scheduled",
+                    )
+                    .order_by("schedule__option__classId", "date", "time")
+                    .distinct("schedule__option__classId")
+                    .values("schedule__option__classId", "date", "time")
+                )
+                for row in soonest_instances:
+                    soonest_per_class[row["schedule__option__classId"]] = {
+                        "date": row["date"],
+                        "time": row["time"],
+                    }
+            next_week_context = {**context, "soonest_per_class": soonest_per_class}
+            data["next_week"] = HomepageClassSerializer(
+                next_week_qs, many=True, context=next_week_context
+            ).data
+
+            if not request.user.is_authenticated:
+                _safe_cache_set(
+                    HOMEPAGE_SECTIONS_CACHE_KEY,
+                    {
+                        "trending": data["trending"],
+                        "date_night": data["date_night"],
+                        "next_week": data["next_week"],
+                    },
+                    timeout=HOMEPAGE_SECTIONS_CACHE_TIMEOUT,
+                )
+
+        context = self.get_serializer_context()
 
         # 4. Mode Selection: only collections are used (categories removed from platform)
         if mode == "collections":
-            collections_qs = ClassCollection.objects.filter(is_active=True).order_by("sort_order")
-            data["collections"] = PublicCollectionSerializer(
-                collections_qs, many=True, context=context
+            child_prefetch = Prefetch(
+                "children",
+                queryset=ClassCollection.objects.filter(is_active=True).order_by(
+                    "sort_order", "name"
+                ),
+            )
+            base_coll = ClassCollection.objects.filter(
+                is_active=True, parent__isnull=True
+            )
+            featured_qs = (
+                base_coll.filter(show_in_featured_categories=True)
+                .order_by("sort_order", "name")
+                .prefetch_related(child_prefetch)
+            )
+            if not featured_qs.exists():
+                featured_qs = base_coll.order_by("sort_order", "name").prefetch_related(
+                    child_prefetch
+                )
+            serialized_collections = PublicCollectionSerializer(
+                featured_qs, many=True, context=context
+            ).data
+
+            def _is_duplicate_all_chip(row):
+                slug = (row.get("slug") or "").strip().lower()
+                name = (row.get("name") or "").strip().lower()
+                return slug in ("", "all") or name == "all"
+
+            filtered_collections = [
+                row for row in serialized_collections if not _is_duplicate_all_chip(row)
+            ]
+            # Synthetic "All" chip must use empty slug so URL with no `collection` param matches selection.
+            all_chip = {
+                "id": None,
+                "name": "All",
+                "slug": "",
+                "key": "",
+                "parent_id": None,
+                "has_children": False,
+                "children": [],
+                "description": "",
+                "image_medium_url": None,
+                "sort_order": -1,
+                "search_aliases": [],
+                "is_searchable": True,
+                "show_in_i_want": False,
+                "show_in_featured_categories": True,
+                "show_on_homepage_rows": True,
+                "icon_name": "",
+                "color": "",
+                "is_all": True,
+            }
+            data["collections"] = [all_chip] + filtered_collections
+            data["collections_i_want"] = PublicCollectionSerializer(
+                base_coll.filter(show_in_i_want=True)
+                .order_by("sort_order", "name")
+                .prefetch_related(child_prefetch),
+                many=True,
+                context=context,
             ).data
             _safe_cache_set(
                 HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY,
@@ -895,15 +1039,16 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()
         queryset = self._calculate_relevance_score(queryset)
-        queryset = queryset.order_by("-relevance_score", "-createdAt")
+        # "-classId" tiebreaker — see search() for rationale (stable pagination).
+        queryset = queryset.order_by("-relevance_score", "-createdAt", "-classId")
         page = self.paginate_queryset(queryset)
         if page is not None:
             serializer = self.get_serializer(
-                page, many=True, context={"request": request}
+                page, many=True, context=self.get_serializer_context()
             )
             return self.get_paginated_response(serializer.data)
         serializer = self.get_serializer(
-            queryset, many=True, context={"request": request}
+            queryset, many=True, context=self.get_serializer_context()
         )
         return Response(serializer.data)
 
@@ -955,7 +1100,21 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 "location"
             ) or request.query_params.get("location_search", "")
             search_name = location_param_text.split(",")[0].strip()
-            collection_slug = request.query_params.get("collection")
+            _collection_params_raw = request.query_params.getlist("collection")
+            _collection_slugs = []
+            _seen_coll = set()
+            for _s in _collection_params_raw:
+                if not _s:
+                    continue
+                _t = str(_s).strip()
+                if not _t:
+                    continue
+                _k = _t.lower()
+                if _k not in _seen_coll:
+                    _seen_coll.add(_k)
+                    _collection_slugs.append(_t)
+            # Single slug for cache keys / preset shuffle; None when 0 or multiple explicit collections
+            collection_slug = _collection_slugs[0] if len(_collection_slugs) == 1 else None
 
             # Preset location + collection cache (e.g. Toronto + trending): return cached if available
             preset_collection_cache_key = None
@@ -965,6 +1124,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 and not request.query_params.get("keyword")
                 and not request.query_params.get("tag")
                 and not request.query_params.get("price_max")
+                and not request.query_params.getlist("sub")
             ):
                 preset_collection_cache_key = _build_preset_location_collection_cache_key(
                     request, search_name, collection_slug
@@ -980,6 +1140,9 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                         shuffled = _shuffle_preset_results(
                             cached, search_name, collection_slug
                         )
+                        cor = _count_only_response_if_applicable(request, shuffled)
+                        if cor is not None:
+                            return cor
                         return Response(shuffled)
 
             # Preset (banner) location cache only (no collection): return cached if available
@@ -993,6 +1156,9 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                         shuffled = _shuffle_preset_results(
                             cached, search_name, None
                         )
+                        cor = _count_only_response_if_applicable(request, shuffled)
+                        if cor is not None:
+                            return cor
                         return Response(shuffled)
 
             logger.info(f"--- PUBLIC CLASS SEARCH INITIATED ---")
@@ -1002,6 +1168,17 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             keyword_query_text = request.query_params.get("keyword")
             tag_filter = request.query_params.get("tag")
             price_max_str = request.query_params.get("price_max")
+
+            resolved_collection_meta = None
+            effective_collection_slugs = list(_collection_slugs)
+            if keyword_query_text and not _collection_slugs:
+                _matched_coll = match_collection_by_alias(keyword_query_text.strip())
+                if _matched_coll:
+                    effective_collection_slugs = [_matched_coll.slug]
+                    resolved_collection_meta = {
+                        "slug": _matched_coll.slug,
+                        "name": _matched_coll.name,
+                    }
             
             # --- DATE PARAMETERS ---
             req_date_str = request.query_params.get("date")
@@ -1026,6 +1203,9 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                         shuffled = _shuffle_preset_results(
                             cached, None, collection_slug
                         )
+                        cor = _count_only_response_if_applicable(request, shuffled)
+                        if cor is not None:
+                            return cor
                         return Response(shuffled)
 
             # Get Base Queryset
@@ -1041,18 +1221,37 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             queryset = queryset.filter(Exists(has_future_instances))
 
             # --- COLLECTION FILTERING ---
-            if collection_slug:
-                logger.info(f"Applying Collection Filter: '{collection_slug}'")
-                queryset = queryset.filter(collections__slug=collection_slug)
-                # Ensure distinctness after M2M filter just in case
+            if effective_collection_slugs:
+                if len(effective_collection_slugs) == 1:
+                    _slug_one = effective_collection_slugs[0]
+                    logger.info(
+                        f"Applying Collection Filter: '{_slug_one}'"
+                        + (
+                            f" (resolved from keyword)"
+                            if resolved_collection_meta
+                            else ""
+                        )
+                    )
+                    queryset = queryset.filter(collections__slug=_slug_one)
+                else:
+                    logger.info(
+                        "Applying Collection Filter (OR): %s",
+                        effective_collection_slugs,
+                    )
+                    queryset = queryset.filter(
+                        collections__slug__in=effective_collection_slugs
+                    )
+
                 queryset = queryset.distinct()
-                
-                # Check count after collection filter
-                count_after_collection = queryset.count()
-                logger.info(f"QuerySet Count after Collection Filter: {count_after_collection}")
-                
-                if count_after_collection == 0:
-                    logger.warning(f"Collection filter '{collection_slug}' returned 0 results. Check if slug exists in DB.")
+
+            sub_slugs = [
+                s.strip()
+                for s in request.query_params.getlist("sub")
+                if s and str(s).strip()
+            ]
+            if sub_slugs:
+                logger.info("Applying sub-collection filter: %s", sub_slugs)
+                queryset = queryset.filter(collections__slug__in=sub_slugs).distinct()
 
             user_location_point = None
             is_province_search = False
@@ -1271,38 +1470,61 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     distance=Distance("point", user_location_point)
                 )
 
+            # NOTE: every branch below appends "-classId" as a deterministic
+            # tiebreaker. Without it, ties in non-unique fields (relevance_score,
+            # rating, price, distance, etc.) combined with LIMIT/OFFSET +
+            # DISTINCT cause classes to be skipped or duplicated between pages,
+            # which made infinite scroll silently drop results.
             if sort_by == "distance" and user_location_point:
-                queryset = queryset.order_by("distance")
+                queryset = queryset.order_by("distance", "-classId")
             elif sort_by == "price_asc":
                 queryset = queryset.order_by(
                     F("min_session_price").asc(nulls_last=True),
                     F("min_course_price").asc(nulls_last=True),
+                    "-classId",
                 )
             elif sort_by == "price_desc":
                 queryset = queryset.order_by(
                     F("min_session_price").desc(nulls_first=True),
                     F("min_course_price").desc(nulls_first=True),
+                    "-classId",
                 )
             elif sort_by == "rating":
-                queryset = queryset.order_by("-average_rating", "-review_count")
+                queryset = queryset.order_by(
+                    "-average_rating", "-review_count", "-classId"
+                )
             elif sort_by == "reviews":
-                queryset = queryset.order_by("-review_count", "-average_rating")
+                queryset = queryset.order_by(
+                    "-review_count", "-average_rating", "-classId"
+                )
             elif sort_by == "newest":
-                queryset = queryset.order_by("-createdAt")
+                queryset = queryset.order_by("-createdAt", "-classId")
             else:  # Default sort is 'relevance'
-                order_fields = ["-relevance_score", "-createdAt"]
+                order_fields = ["-relevance_score", "-createdAt", "-classId"]
                 if keyword_query_text:
                     order_fields.insert(0, "-rank")
                 queryset = queryset.order_by(*order_fields)
 
+            primary_collection_for_shuffle = (
+                effective_collection_slugs[0] if effective_collection_slugs else None
+            )
+
             # --- 6. Pagination and Response ---
             final_count = queryset.count()
             logger.info(f"Final queryset count before pagination: {final_count}")
-            
+            if final_count == 0 and effective_collection_slugs:
+                logger.warning(
+                    "Collection filter %s returned 0 results. Check if slugs exist in DB.",
+                    effective_collection_slugs,
+                )
+
+            if _is_count_only_request(request):
+                return Response({"count": final_count})
+
             page = self.paginate_queryset(queryset)
             if page is not None:
                 serializer = self.get_serializer(
-                    page, many=True, context={"request": request}
+                    page, many=True, context=self.get_serializer_context()
                 )
                 response = self.get_paginated_response(serializer.data)
                 if preset_collection_cache_key:
@@ -1322,13 +1544,22 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     collection_cache_key,
                 ]):
                     shuffled = _shuffle_preset_results(
-                        response.data, search_name, collection_slug
+                        response.data,
+                        search_name,
+                        primary_collection_for_shuffle,
+                    )
+                    shuffled = _attach_resolved_collection_to_search_payload(
+                        shuffled, resolved_collection_meta
                     )
                     return Response(shuffled)
+                if resolved_collection_meta and isinstance(response.data, dict):
+                    response.data = _attach_resolved_collection_to_search_payload(
+                        response.data, resolved_collection_meta
+                    )
                 return response
 
             serializer = self.get_serializer(
-                queryset, many=True, context={"request": request}
+                queryset, many=True, context=self.get_serializer_context()
             )
             response = Response(serializer.data)
             if preset_collection_cache_key:
@@ -1348,9 +1579,18 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 collection_cache_key,
             ]):
                 shuffled = _shuffle_preset_results(
-                    response.data, search_name, collection_slug
+                    response.data,
+                    search_name,
+                    primary_collection_for_shuffle,
+                )
+                shuffled = _attach_resolved_collection_to_search_payload(
+                    shuffled, resolved_collection_meta
                 )
                 return Response(shuffled)
+            if resolved_collection_meta and isinstance(response.data, dict):
+                response.data = _attach_resolved_collection_to_search_payload(
+                    response.data, resolved_collection_meta
+                )
             return response
 
         except Exception as e:
@@ -1478,49 +1718,97 @@ def paginated_class_reviews(request, identifier):
         else:
             class_obj = get_object_or_404(queryset, slug=identifier)
 
-        # Fetch platform reviews
-        platform_reviews = (
-            Reviews.objects.filter(classId=class_obj, status="approved")
-            .select_related("userId")
-            .order_by("-createdAt")
-        )
-
-        # Fetch Google reviews
-        google_reviews = ImportedGoogleReview.objects.filter(
+        # Cheap totals — do not load all rows into memory (fixes timeouts on large imports).
+        platform_base = Reviews.objects.filter(classId=class_obj, status="approved")
+        google_base = ImportedGoogleReview.objects.filter(
             business=class_obj.businessId
-        ).order_by("-review_date")
+        )
+        platform_count = platform_base.count()
+        google_count = google_base.count()
+        total_count = platform_count + google_count
 
-        # Format reviews with source tags
-        formatted_platform_reviews = [
-            {
-                **PublicReviewSerializer(review).data,
-                "source": "classeasily",
-                "id": f"p-{review.reviewId}",
-                "date": review.createdAt.isoformat(),
-            }
-            for review in platform_reviews
-        ]
+        if total_count == 0:
+            return Response(
+                {
+                    "reviews": [],
+                    "pagination": {
+                        "page": page,
+                        "page_size": page_size,
+                        "total_count": 0,
+                        "has_more": False,
+                        "total_pages": 0,
+                    },
+                    "counts": {
+                        "platform_reviews": 0,
+                        "google_reviews": 0,
+                        "total_reviews": 0,
+                    },
+                }
+            )
 
-        formatted_google_reviews = [
-            {
-                **ImportedGoogleReviewSerializer(review).data,
-                "source": "google",
-                "id": f"g-{review.google_review_id}",
-                "date": review.review_date.isoformat(),
-            }
-            for review in google_reviews
-        ]
+        # Merge-sort keys in the database: UNION ALL + ORDER BY + LIMIT/OFFSET for this page only.
+        platform_keys = platform_base.annotate(
+            sort_date=F("createdAt"),
+            kind=Value("p", output_field=CharField(max_length=1)),
+            rid=Cast(F("reviewId"), CharField(max_length=36)),
+        ).values("sort_date", "kind", "rid")
 
-        # Combine and sort all reviews by date
-        all_reviews = formatted_platform_reviews + formatted_google_reviews
-        all_reviews.sort(key=lambda x: x["date"], reverse=True)
+        google_keys = google_base.annotate(
+            sort_date=Coalesce(F("review_date"), F("created_at")),
+            kind=Value("g", output_field=CharField(max_length=1)),
+            rid=Cast(F("id"), CharField(max_length=36)),
+        ).values("sort_date", "kind", "rid")
 
-        # Calculate pagination
-        total_count = len(all_reviews)
+        combined = platform_keys.union(google_keys, all=True).order_by("-sort_date")
+
         start_index = (page - 1) * page_size
         end_index = start_index + page_size
+        page_rows = list(combined[start_index:end_index])
 
-        paginated_reviews = all_reviews[start_index:end_index]
+        platform_ids = []
+        google_ids = []
+        for row in page_rows:
+            if row["kind"] == "p":
+                platform_ids.append(int(row["rid"]))
+            else:
+                google_ids.append(UUID(row["rid"]))
+
+        platform_by_pk = {}
+        if platform_ids:
+            for rev in Reviews.objects.filter(reviewId__in=platform_ids).select_related(
+                "userId"
+            ):
+                platform_by_pk[rev.reviewId] = rev
+
+        google_by_pk = {}
+        if google_ids:
+            for rev in ImportedGoogleReview.objects.filter(id__in=google_ids):
+                google_by_pk[rev.id] = rev
+
+        paginated_reviews = []
+        for row in page_rows:
+            if row["kind"] == "p":
+                review = platform_by_pk[int(row["rid"])]
+                paginated_reviews.append(
+                    {
+                        **PublicReviewSerializer(review).data,
+                        "source": "classeasily",
+                        "id": f"p-{review.reviewId}",
+                        "date": review.createdAt.isoformat(),
+                    }
+                )
+            else:
+                review = google_by_pk[UUID(row["rid"])]
+                date_val = review.review_date or review.created_at
+                paginated_reviews.append(
+                    {
+                        **ImportedGoogleReviewSerializer(review).data,
+                        "source": "google",
+                        "id": f"g-{review.google_review_id}",
+                        "date": date_val.isoformat() if date_val else "",
+                    }
+                )
+
         has_more = end_index < total_count
 
         return Response(
@@ -1534,8 +1822,8 @@ def paginated_class_reviews(request, identifier):
                     "total_pages": (total_count + page_size - 1) // page_size,
                 },
                 "counts": {
-                    "platform_reviews": len(formatted_platform_reviews),
-                    "google_reviews": len(formatted_google_reviews),
+                    "platform_reviews": platform_count,
+                    "google_reviews": google_count,
                     "total_reviews": total_count,
                 },
             }
