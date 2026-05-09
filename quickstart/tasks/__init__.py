@@ -8,6 +8,7 @@ from .user_tasks import *
 from .business_tasks import *
 from .booking_tasks import *
 from .cache_tasks import *  # prewarm_class_search_cache_task (registered by name for workers)
+from . import search_index_tasks  # noqa: F401
 from .giftcard_tasks import *
 from .notification_tasks import send_sms_task, send_campaign_task
 from . import corporate_tasks  # noqa: F401 — register send_corporate_inquiry_emails on workers

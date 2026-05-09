@@ -36,6 +36,9 @@ if [ "$CONTAINER_ROLE" = "web" ]; then
     echo "--- [WEB] enhance_permissions (once per build) ---"
     python manage.py enhance_permissions --once-per-build || true
 
+    echo "--- [WEB] Scheduling Typesense bootstrap (Celery, if enabled) ---"
+    python manage.py schedule_typesense_bootstrap || true
+
     echo "--- [WEB] Starting Gunicorn server ---"
     # The 'exec "$@"' will run the CMD from the ECS Task Definition (e.g., gunicorn)
     exec "$@"

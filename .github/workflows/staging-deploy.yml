@@ -81,6 +81,15 @@ jobs:
             CACHE_URL=${{ secrets.CACHE_URL }}
             CELERY_BROKER_URL=${{ secrets.CELERY_BROKER_URL }}
             CELERY_RESULT_BACKEND=${{ secrets.CELERY_RESULT_BACKEND }}
+
+            # --- Typesense (search engine; container hostname `typesense` on classeasily-net) ---
+            TYPESENSE_HOST=typesense
+            TYPESENSE_PORT=8108
+            TYPESENSE_PROTOCOL=http
+            TYPESENSE_API_KEY=${{ secrets.TYPESENSE_API_KEY }}
+            TYPESENSE_COLLECTION_ALIAS=classes_live
+            TYPESENSE_AUTO_BOOTSTRAP=true
+            SEARCH_ENGINE_ENABLED=${{ secrets.SEARCH_ENGINE_ENABLED }}
             AWS_STORAGE_BUCKET_NAME=${{ secrets.AWS_STORAGE_BUCKET_NAME }}
             AWS_S3_REGION_NAME=${{ secrets.AWS_S3_REGION_NAME }}
             CLOUDFRONT_DOMAIN=${{ secrets.CLOUDFRONT_DOMAIN }}
@@ -134,6 +143,39 @@ jobs:
             # 2. SETUP DOCKER NETWORK
             echo "--- Ensuring Docker network '$NETWORK_NAME' exists... ---"
             docker network create $NETWORK_NAME || true
+
+            # 2b. TYPESENSE (persistent volume; not restarted on app deploy)
+            TYPESENSE_CONTAINER_NAME="typesense"
+            TYPESENSE_VOLUME="classeasily-typesense-data"
+            docker volume create "$TYPESENSE_VOLUME" || true
+            if [ -n "${{ secrets.TYPESENSE_API_KEY }}" ]; then
+              if docker ps -a --format '{{.Names}}' | grep -qx "$TYPESENSE_CONTAINER_NAME"; then
+                echo "--- Starting existing Typesense container... ---"
+                docker start "$TYPESENSE_CONTAINER_NAME" || true
+                docker network connect "$NETWORK_NAME" "$TYPESENSE_CONTAINER_NAME" 2>/dev/null || true
+              else
+                echo "--- Creating Typesense container... ---"
+                docker run -d --restart unless-stopped \
+                  --name "$TYPESENSE_CONTAINER_NAME" \
+                  --network "$NETWORK_NAME" \
+                  -p 127.0.0.1:8108:8108 \
+                  -v "$TYPESENSE_VOLUME:/data" \
+                  -e TYPESENSE_DATA_DIR=/data \
+                  -e TYPESENSE_API_KEY="${{ secrets.TYPESENSE_API_KEY }}" \
+                  -e TYPESENSE_ENABLE_CORS=true \
+                  typesense/typesense:26.0
+              fi
+              echo "--- Waiting for Typesense HTTP... ---"
+              for i in $(seq 1 45); do
+                if curl -sf http://127.0.0.1:8108/health >/dev/null 2>&1; then
+                  echo "--- Typesense healthy ---"
+                  break
+                fi
+                sleep 1
+              done
+            else
+              echo "--- WARNING: TYPESENSE_API_KEY GitHub secret unset; skipping Typesense container. ---"
+            fi
 
             # 3. STOP AND REMOVE OLD CONTAINERS
             echo "--- Stopping all old containers... ---"

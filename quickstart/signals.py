@@ -9,7 +9,7 @@ from django.db import transaction
 
 from allauth.account.signals import email_changed
 
-from django.db.models.signals import pre_save, post_save, post_delete
+from django.db.models.signals import pre_save, post_save, post_delete, m2m_changed
 from django.contrib.contenttypes.models import ContentType
 from django.utils import timezone
 from django.contrib.postgres.search import SearchVector
@@ -27,12 +27,14 @@ from .models import (
     BusinessStaff,
     ClassCollection,
     ClassCategory,
+    ClassImage,
     ClassSubcategory,
     Contact,
     Reviews,
     Payment,
     Notification,
     BusinessInfo,
+    GeographicBoundary,
     CustomUser,
     BlogPost,
     ClassesMain,
@@ -1166,3 +1168,113 @@ def nextjs_revalidate_on_collection(sender, instance, **kwargs):
         ["collections", "homepage-content", "classes-search"]
     )
     _bust_homepage_sections_cache()
+
+
+# ----- Typesense class search indexing (debounced via Celery on_commit) -----
+
+
+@receiver(post_save, sender=ClassesMain)
+def typesense_reindex_class_save(sender, instance, **kwargs):
+    if kwargs.get("raw"):
+        return
+    from quickstart.tasks.search_index_tasks import enqueue_reindex_class
+
+    enqueue_reindex_class(instance.pk)
+
+
+@receiver(post_delete, sender=ClassesMain)
+def typesense_reindex_class_delete(sender, instance, **kwargs):
+    from quickstart.tasks.search_index_tasks import enqueue_reindex_class
+
+    enqueue_reindex_class(instance.pk)
+
+
+@receiver(post_save, sender=BusinessInfo)
+def typesense_reindex_business_classes(sender, instance, **kwargs):
+    if kwargs.get("raw"):
+        return
+    from quickstart.tasks.search_index_tasks import enqueue_reindex_class
+
+    try:
+        for cid in instance.classes.values_list("classId", flat=True)[:800]:
+            enqueue_reindex_class(cid)
+    except Exception as e:
+        logger.debug("typesense_reindex_business_classes: %s", e)
+
+
+@receiver(post_save, sender=ClassOption)
+@receiver(post_delete, sender=ClassOption)
+def typesense_reindex_from_option(sender, instance, **kwargs):
+    from quickstart.tasks.search_index_tasks import enqueue_reindex_classes_for_option
+
+    enqueue_reindex_classes_for_option(instance.pk)
+
+
+@receiver(post_save, sender=Schedule)
+@receiver(post_delete, sender=Schedule)
+def typesense_reindex_from_schedule(sender, instance, **kwargs):
+    from quickstart.tasks.search_index_tasks import enqueue_reindex_classes_for_schedule
+
+    enqueue_reindex_classes_for_schedule(instance.pk)
+
+
+@receiver(post_save, sender=ScheduleInstance)
+@receiver(post_delete, sender=ScheduleInstance)
+def typesense_reindex_from_instance(sender, instance, **kwargs):
+    from quickstart.tasks.search_index_tasks import enqueue_reindex_classes_for_instance
+
+    enqueue_reindex_classes_for_instance(instance.pk)
+
+
+@receiver(post_save, sender=ClassImage)
+@receiver(post_delete, sender=ClassImage)
+def typesense_reindex_from_image(sender, instance, **kwargs):
+    from quickstart.tasks.search_index_tasks import enqueue_reindex_class
+
+    enqueue_reindex_class(instance.classId_id)
+
+
+@receiver(m2m_changed, sender=ClassesMain.collections.through)
+def typesense_reindex_collections_m2m(sender, instance, action, pk_set, **kwargs):
+    if kwargs.get("raw"):
+        return
+    if action not in ("post_add", "post_remove", "post_clear"):
+        return
+    from quickstart.tasks.search_index_tasks import enqueue_reindex_class
+
+    try:
+        if isinstance(instance, ClassesMain):
+            enqueue_reindex_class(instance.pk)
+            return
+        if isinstance(instance, ClassCollection):
+            if pk_set:
+                for cid in pk_set:
+                    enqueue_reindex_class(int(cid))
+            else:
+                for cid in instance.classes.values_list("classId", flat=True)[:800]:
+                    enqueue_reindex_class(cid)
+    except Exception as e:
+        logger.debug("typesense_reindex_collections_m2m: %s", e)
+
+
+@receiver(post_save, sender=ClassCollection)
+def typesense_reindex_collection_members(sender, instance, **kwargs):
+    if kwargs.get("raw"):
+        return
+    from quickstart.tasks.search_index_tasks import enqueue_reindex_class
+
+    try:
+        for cid in instance.classes.values_list("classId", flat=True)[:800]:
+            enqueue_reindex_class(cid)
+    except Exception as e:
+        logger.debug("typesense_reindex_collection_members: %s", e)
+
+
+@receiver(post_save, sender=GeographicBoundary)
+def typesense_rebuild_boundary_buffer(sender, instance, **kwargs):
+    if kwargs.get("raw"):
+        return
+    from quickstart.tasks.search_index_tasks import rebuild_boundary_buffer_for_id_task
+
+    bid = str(instance.pk)
+    transaction.on_commit(lambda b=bid: rebuild_boundary_buffer_for_id_task.delay(b))

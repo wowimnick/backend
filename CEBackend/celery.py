@@ -29,6 +29,11 @@ _EXTRA_REQUIRED_CELERY_TASKS = frozenset(
         "quickstart.tasks.corporate_booking_tasks.send_shortlist_to_corporate",
         "quickstart.tasks.email_marketing_tasks.send_business_marketing_campaign_task",
         "quickstart.tasks.cache_tasks.prewarm_class_search_cache",
+        "quickstart.tasks.search_index_tasks.rebuild_all_boundary_buffers_task",
+        "quickstart.tasks.search_index_tasks.reindex_dirty_classes_task",
+        "quickstart.tasks.search_index_tasks.reindex_class_task",
+        "quickstart.tasks.search_index_tasks.rebuild_boundary_buffer_for_id_task",
+        "quickstart.tasks.search_index_tasks.bootstrap_typesense_search_index_task",
     }
 )
 
@@ -61,6 +66,16 @@ def on_worker_ready(sender, **kwargs):
         raise RuntimeError(
             "Celery worker is missing registered tasks (redeploy worker with current code): "
             + ", ".join(missing)
+        )
+
+    try:
+        from quickstart.tasks.search_index_tasks import enqueue_typesense_bootstrap_check
+
+        enqueue_typesense_bootstrap_check()
+        logger.info("Scheduled Typesense bootstrap check (if TYPESENSE_AUTO_BOOTSTRAP).")
+    except Exception as e:
+        logger.warning(
+            "Could not schedule Typesense bootstrap check: %s", e, exc_info=True
         )
 
     # In production, prewarm class search shortly after worker is ready. Running this

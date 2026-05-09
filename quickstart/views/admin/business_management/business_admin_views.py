@@ -53,7 +53,6 @@ from quickstart.models import (
     ClassesMain,
     Payment,
     Reviews,
-    ImportedGoogleReview,
     GeographicBoundary,
     Role,
     SearchLog,
@@ -206,13 +205,6 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
             .values("c"),
             output_field=IntegerField(),
         )
-        google_review_count_subquery = Subquery(
-            ImportedGoogleReview.objects.filter(business=OuterRef("pk"))
-            .values("business")
-            .annotate(c=Count("pk"))
-            .values("c"),
-            output_field=IntegerField(),
-        )
         rating_subquery = Subquery(
             Reviews.objects.filter(businessId=OuterRef("pk"), status="approved")
             .values("businessId")
@@ -270,7 +262,6 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
             revenue=Coalesce(revenue_subquery, Value(Decimal("0.00"))),
             rating=Coalesce(rating_subquery, Value(0.0)),
             review_count=Coalesce(review_count_subquery, 0),
-            google_review_count=Coalesce(google_review_count_subquery, 0),
             status=Case(
                 When(
                     Q(isActive=True) & Q(has_active_schedules=True),

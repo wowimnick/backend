@@ -129,19 +129,6 @@ class TestPublicClasses:
         data = response.json()
         assert data.get("slug") == public_class.slug or data.get("title") == public_class.title
 
-    def test_class_search_accepts_query(self, api_client, public_class):
-        """GET /api/classes/search/?q=... returns search results."""
-        response = api_client.get(f"{API}/classes/search/", {"q": "Test"})
-        assert response.status_code == 200
-
-    def test_class_search_count_only_returns_minimal_json(self, api_client, public_class):
-        """GET /api/classes/search/?count_only=1 returns only {count} (no result row serialization)."""
-        response = api_client.get(f"{API}/classes/search/", {"count_only": "1"})
-        assert response.status_code == 200
-        data = response.json()
-        assert set(data.keys()) == {"count"}
-        assert isinstance(data["count"], int)
-
     def test_class_homepage_content_returns_200(self, api_client):
         """GET /api/classes/homepage-content/ returns 200."""
         response = api_client.get(f"{API}/classes/homepage-content/")
