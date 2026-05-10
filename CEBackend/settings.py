@@ -755,3 +755,10 @@ TYPESENSE_AUTO_BOOTSTRAP = _env_truthy(
 TYPESENSE_BOOTSTRAP_DELAY_SECONDS = int(
     os.environ.get("TYPESENSE_BOOTSTRAP_DELAY_SECONDS", "90")
 )
+# When True (default), web startup runs a full Typesense reindex once per deploy/build id (BUILD_ID,
+# IMAGE_TAG, or GIT_SHA). Other web tasks for the same build skip via Redis marker. Set false to only
+# bootstrap when the index is missing or empty (faster deploys for large catalogs).
+TYPESENSE_FULL_REINDEX_EACH_DEPLOY = _env_truthy(
+    "TYPESENSE_FULL_REINDEX_EACH_DEPLOY",
+    default=True,
+)

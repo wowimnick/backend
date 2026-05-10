@@ -26,11 +26,19 @@ from quickstart.serializers.public.public_class_serializers import (
 from quickstart.services.search_ranking import compute_search_relevance_score
 from quickstart.services.search_schema import CLASS_SEARCH_SCHEMA_BODY
 from quickstart.services.typesense_client import get_typesense_client
+from quickstart.utils.deploy_build_id import get_deploy_build_id
 from quickstart.utils.url_utils import build_cloudfront_resized_webp_from_original_key
 
 logger = logging.getLogger(__name__)
 
 WEEKDAY_ABBR = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+# Date–time correlation facet tokens (avoid '|': Typesense filter syntax treats '|' as OR outside quotes).
+AVAILABILITY_SLOT_SEP = "::"
+
+
+def format_availability_slot(date_iso: str, bucket_label: str) -> str:
+    return f"{date_iso}{AVAILABILITY_SLOT_SEP}{bucket_label}"
 
 TIME_BUCKET_LABELS = {
     "morning": "Morning (6am-12pm)",
@@ -182,7 +190,7 @@ def build_typesense_document_for_class(class_id: int) -> dict[str, Any] | None:
         label = instance_time_bucket_label(i.time)
         if label:
             time_buckets.add(label)
-            availability_slots.add(f"{i.date.isoformat()}|{label}")
+            availability_slots.add(format_availability_slot(i.date.isoformat(), label))
         max_cap = max(max_cap, i.max_participants)
         durations.append(i.duration)
 
@@ -446,6 +454,9 @@ def needs_typesense_full_reindex() -> tuple[bool, str]:
 BOOTSTRAP_LOCK_KEY = "typesense_bootstrap_job_lock"
 BOOTSTRAP_LOCK_TTL = 7200
 
+_TYPESENSE_FULL_REINDEX_BUILD_KEY_PREFIX = "typesense_full_reindexed_build"
+_TYPESENSE_FULL_REINDEX_BUILD_TTL = 30 * 24 * 3600  # 30 days (same idea as clear_public_caches)
+
 
 def execute_typesense_bootstrap_if_needed() -> bool:
     """If the index is missing or empty, run a full reindex. Caller must hold BOOTSTRAP_LOCK_KEY."""
@@ -499,6 +510,121 @@ def sync_typesense_bootstrap_at_web_startup(
         "Typesense startup: timed out after %ss waiting for index",
         max_wait_peer_seconds,
     )
+
+
+def sync_typesense_full_reindex_once_per_build(
+    *,
+    max_wait_peer_seconds: int = 3600,
+    poll_seconds: float = 4.0,
+) -> None:
+    """
+    Run a full Typesense reindex once per deploy build id (BUILD_ID / IMAGE_TAG / GIT_SHA).
+
+    Uses the same Redis lock as bootstrap so Celery cannot overlap; sets a build marker so scaled-out
+    web tasks skip. Waits on the marker if another task holds the lock.
+    """
+    from django.core.cache import cache
+
+    from quickstart.services.typesense_client import typesense_available
+
+    if not getattr(settings, "TYPESENSE_AUTO_BOOTSTRAP", False):
+        return
+    if not typesense_available():
+        return
+
+    build_id = get_deploy_build_id()
+    env = getattr(settings, "DJANGO_ENV", "local")
+    if not build_id:
+        logger.warning(
+            "Typesense full reindex each deploy requires BUILD_ID, IMAGE_TAG, or GIT_SHA; "
+            "falling back to bootstrap-only startup sync."
+        )
+        sync_typesense_bootstrap_at_web_startup(
+            max_wait_peer_seconds=max_wait_peer_seconds,
+            poll_seconds=poll_seconds,
+        )
+        return
+
+    marker_key = f"{_TYPESENSE_FULL_REINDEX_BUILD_KEY_PREFIX}:{env}:{build_id}"
+    try:
+        if cache.get(marker_key):
+            logger.info(
+                "Typesense deploy full reindex skipped (already completed for build=%s)",
+                build_id,
+            )
+            return
+    except Exception as e:
+        logger.warning("Typesense deploy sync: could not read build marker: %s", e)
+        return
+
+    if cache.add(BOOTSTRAP_LOCK_KEY, 1, timeout=BOOTSTRAP_LOCK_TTL):
+        try:
+            logger.warning("Typesense deploy full reindex starting (build=%s)", build_id)
+            run_full_typesense_reindex()
+            try:
+                cache.set(marker_key, "1", timeout=_TYPESENSE_FULL_REINDEX_BUILD_TTL)
+            except Exception as e:
+                logger.warning("Typesense deploy sync: could not set build marker: %s", e)
+        except Exception as e:
+            logger.warning(
+                "Typesense deploy full reindex failed: %s",
+                e,
+                exc_info=True,
+            )
+        finally:
+            cache.delete(BOOTSTRAP_LOCK_KEY)
+        return
+
+    logger.info("Typesense deploy sync: waiting for peer full reindex (build=%s)...", build_id)
+    deadline = time.monotonic() + max_wait_peer_seconds
+    while time.monotonic() < deadline:
+        time.sleep(poll_seconds)
+        try:
+            if cache.get(marker_key):
+                logger.info("Typesense deploy full reindex complete (peer marker seen)")
+                return
+        except Exception:
+            pass
+        need2, _ = needs_typesense_full_reindex()
+        if not need2:
+            logger.info("Typesense deploy sync: index ready (peer completed)")
+            return
+
+    need3, _ = needs_typesense_full_reindex()
+    if not need3:
+        logger.info(
+            "Typesense deploy sync: index healthy after waiting for peer (marker timeout)"
+        )
+        return
+    logger.warning(
+        "Typesense deploy sync: timed out after %ss waiting for full reindex marker",
+        max_wait_peer_seconds,
+    )
+
+
+def sync_typesense_at_web_deploy_startup(
+    *,
+    max_wait_peer_seconds: int = 3600,
+    poll_seconds: float = 4.0,
+) -> None:
+    """Web entrypoint: full reindex each deploy when enabled, else bootstrap-if-needed only."""
+    from quickstart.services.typesense_client import typesense_available
+
+    if not getattr(settings, "TYPESENSE_AUTO_BOOTSTRAP", False):
+        return
+    if not typesense_available():
+        return
+
+    if getattr(settings, "TYPESENSE_FULL_REINDEX_EACH_DEPLOY", True):
+        sync_typesense_full_reindex_once_per_build(
+            max_wait_peer_seconds=max_wait_peer_seconds,
+            poll_seconds=poll_seconds,
+        )
+    else:
+        sync_typesense_bootstrap_at_web_startup(
+            max_wait_peer_seconds=max_wait_peer_seconds,
+            poll_seconds=poll_seconds,
+        )
 
 
 def run_full_typesense_reindex(batch_size: int = 200) -> dict[str, Any]:

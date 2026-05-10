@@ -7,12 +7,13 @@ from django.core.management.base import BaseCommand
 
 class Command(BaseCommand):
     help = (
-        "If Typesense auto-bootstrap is enabled and the index is missing or empty, "
-        "run a full reindex before serving traffic (waits on Redis lock if another task builds)."
+        "Prepare Typesense before serving traffic. With TYPESENSE_FULL_REINDEX_EACH_DEPLOY (default), "
+        "runs a full reindex once per deploy build id (BUILD_ID/IMAGE_TAG/GIT_SHA); other web tasks skip. "
+        "Otherwise only bootstraps when the index is missing or empty. Uses Redis lock / peer wait."
     )
 
     def handle(self, *args, **options):
-        from quickstart.services.search_index_service import sync_typesense_bootstrap_at_web_startup
+        from quickstart.services.search_index_service import sync_typesense_at_web_deploy_startup
 
-        sync_typesense_bootstrap_at_web_startup()
+        sync_typesense_at_web_deploy_startup()
 

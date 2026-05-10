@@ -30,7 +30,7 @@ from quickstart.services.search_geo_params import (
     toronto_gta_center_point,
 )
 from quickstart.services.search_filter_params import normalize_booking_type_query
-from quickstart.services.search_index_service import WEEKDAY_ABBR
+from quickstart.services.search_index_service import AVAILABILITY_SLOT_SEP, WEEKDAY_ABBR
 from quickstart.services.search_suggest_service import match_collection_by_alias
 from quickstart.services.typesense_client import get_typesense_client
 from quickstart.utils.url_utils import build_cloudfront_resized_webp_from_original_key
@@ -42,6 +42,11 @@ _TIME_PREFS = {
     "Afternoon (12pm-5pm)",
     "Evening (5pm-10pm)",
 }
+
+# Precise availability_slots filters explode when the calendar span × prefs is large (e.g.
+# time-of-day only ⇒ ~365 days × 3 buckets). Fall back to available_dates && time_buckets.
+_AVAIL_SLOT_MAX_CALENDAR_DAYS = 62
+_AVAIL_SLOT_MAX_PAIRS = 240
 
 
 def _hydrate_card_row_image_medium_urls(row: dict) -> None:
@@ -425,10 +430,25 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
     if availability_impossible:
         filter_parts.append("class_id:<0")
     elif days_list and prefs:
-        combo_values = [f"{d}|{p}" for d in days_list for p in prefs]
-        slot_fo = _facet_or("availability_slots", combo_values)
-        if slot_fo:
-            filter_parts.append(slot_fo)
+        pair_count = len(days_list) * len(prefs)
+        use_precise_slots = (
+            len(days_list) <= _AVAIL_SLOT_MAX_CALENDAR_DAYS
+            and pair_count <= _AVAIL_SLOT_MAX_PAIRS
+        )
+        if use_precise_slots:
+            combo_values = [
+                f"{d}{AVAILABILITY_SLOT_SEP}{p}" for d in days_list for p in prefs
+            ]
+            slot_fo = _facet_or("availability_slots", combo_values)
+            if slot_fo:
+                filter_parts.append(slot_fo)
+        else:
+            date_fo = _facet_or("available_dates", days_list)
+            tb_fo = _facet_or("time_buckets", prefs)
+            if date_fo:
+                filter_parts.append(date_fo)
+            if tb_fo:
+                filter_parts.append(tb_fo)
     elif days_list:
         date_fo = _facet_or("available_dates", days_list)
         if date_fo:

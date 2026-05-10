@@ -54,6 +54,7 @@ jobs:
             # --- Meta ---
             IS_DOCKER=true
             DJANGO_ENV=staging
+            GIT_SHA=${{ github.sha }}
 
             # --- Core & Security ---
             DJANGO_SECRET_KEY=${{ secrets.DJANGO_SECRET_KEY }}
