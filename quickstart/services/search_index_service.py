@@ -9,9 +9,10 @@ from decimal import Decimal
 from typing import Any
 
 from django.conf import settings
-from django.core.cache import cache
 from django.db.models import Exists, OuterRef, Prefetch
 from django.utils import timezone
+
+from typesense.exceptions import ObjectNotFound
 
 from quickstart.models import (
     BusinessInfo,
@@ -36,11 +37,6 @@ WEEKDAY_ABBR = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 # Date–time correlation facet tokens (avoid '|': Typesense filter syntax treats '|' as OR outside quotes).
 AVAILABILITY_SLOT_SEP = "::"
-
-
-def date_to_yyyymmdd(d) -> int:
-    """Compact date as YYYYMMDD int (sorts/compares correctly for search filters)."""
-    return d.year * 10000 + d.month * 100 + d.day
 
 
 def format_availability_slot(date_iso: str, bucket_label: str) -> str:
@@ -185,8 +181,10 @@ def build_typesense_document_for_class(class_id: int) -> dict[str, Any] | None:
         ).select_related("schedule")
     )
     avail_dates = sorted({i.date.isoformat() for i in instances})[:180]
-    max_avail = max(i.date for i in instances)
-    max_available_date_compact = date_to_yyyymmdd(max_avail)
+    first_future_date = min((i.date for i in instances), default=None)
+    min_available_date = (
+        int(first_future_date.strftime("%Y%m%d")) if first_future_date else None
+    )
 
     time_buckets: set[str] = set()
     availability_slots: set[str] = set()
@@ -323,7 +321,7 @@ def build_typesense_document_for_class(class_id: int) -> dict[str, Any] | None:
         "min_session_price": min_sess_d,
         "min_course_price": min_course_d,
         "available_dates": avail_dates,
-        "max_available_date": max_available_date_compact,
+        "min_available_date": min_available_date,
         "time_buckets": sorted(time_buckets),
         "availability_slots": sorted(availability_slots),
         "weekdays": sorted(weekdays),
@@ -338,63 +336,28 @@ def build_typesense_document_for_class(class_id: int) -> dict[str, Any] | None:
     return doc
 
 
-def typesense_max_avail_filter_cache_key(physical_collection: str) -> str:
-    return f"typesense_max_avail_ok:{physical_collection}"
-
-
 def ensure_physical_collection(name: str) -> None:
     client = get_typesense_client()
     if not client:
         raise RuntimeError("Typesense client not configured")
     body = dict(CLASS_SEARCH_SCHEMA_BODY)
     body["name"] = name
-
-    from typesense.exceptions import ObjectNotFound
-
     try:
         existing = client.collections[name].retrieve()
     except ObjectNotFound:
         client.collections.create(body)
         return
 
-    # retrieve().fields omits the built-in document id; do not try to PATCH it (400: cannot be altered).
     existing_fields = {f["name"] for f in existing.get("fields", [])}
-    existing_fields.add("id")
-
-    missing = [f for f in body["fields"] if f["name"] not in existing_fields]
-    if not missing:
-        return
-
-    try:
+    # Never PATCH a field named `id`: Typesense rejects it with
+    # "Field `id` cannot be altered." (document ids are separate from custom fields).
+    missing = [
+        f
+        for f in body["fields"]
+        if f["name"] not in existing_fields and f["name"] != "id"
+    ]
+    if missing:
         client.collections[name].update({"fields": missing})
-    except Exception as e:
-        logger.warning(
-            "Typesense schema patch failed for collection %r (add fields %s): %s",
-            name,
-            [m.get("name") for m in missing],
-            e,
-            exc_info=True,
-        )
-        raise
-
-    try:
-        cache.delete(typesense_max_avail_filter_cache_key(name))
-    except Exception:
-        pass
-    if any(f.get("name") == "max_available_date" for f in missing):
-        try:
-            if cache.add("typesense_reconcile_after_max_avail_schema", 1, timeout=3600):
-                from quickstart.tasks.search_index_tasks import (
-                    reconcile_typesense_classes_task,
-                )
-
-                reconcile_typesense_classes_task.delay()
-        except Exception as e:
-            logger.warning(
-                "Could not enqueue reconcile after max_available_date schema patch: %s",
-                e,
-                exc_info=True,
-            )
 
 
 def upsert_alias_to_collection(alias_name: str, physical_name: str) -> None:
@@ -705,10 +668,6 @@ def run_full_typesense_reindex(batch_size: int = 200) -> dict[str, Any]:
     if buf:
         import_documents(physical, buf)
     upsert_alias_to_collection(alias, physical)
-    try:
-        cache.set(typesense_max_avail_filter_cache_key(physical), 1, timeout=7 * 86400)
-    except Exception as e:
-        logger.debug("typesense max_avail cache set failed: %s", e)
     logger.info(
         "Typesense full reindex complete alias=%s physical=%s indexed=%s scanned=%s",
         alias,

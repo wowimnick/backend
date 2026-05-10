@@ -53,41 +53,22 @@ def rebuild_all_boundary_buffers_task():
 @shared_task(ignore_result=True)
 def reconcile_typesense_classes_task():
     """
-    Daily sweep: re-upsert or delete each active class document so Typesense matches
-    current schedule eligibility (index is not updated on calendar rollover alone).
+    Daily sweep: upsert or delete each active verified class in Typesense so docs
+    match "has future scheduled instance" after calendar rolls (no DB write).
     """
-    from django.conf import settings
-    from django.core.cache import cache
-
     from quickstart.models import ClassesMain
-    from quickstart.services.search_index_service import (
-        index_single_class,
-        typesense_max_avail_filter_cache_key,
-    )
-    from quickstart.services.typesense_client import get_typesense_client
+    from quickstart.services.search_index_service import index_single_class
 
-    qs = ClassesMain.objects.filter(
+    ids = ClassesMain.objects.filter(
         status="active",
         businessId__isActive=True,
         businessId__verificationStatus="verified",
     ).values_list("classId", flat=True)
-    for cid in qs.iterator(chunk_size=500):
+    for cid in ids.iterator(chunk_size=500):
         try:
             index_single_class(int(cid))
         except Exception as e:
             logger.debug("reconcile_typesense_classes_task skip %s: %s", cid, e)
-
-    try:
-        client = get_typesense_client()
-        if client:
-            alias = getattr(settings, "TYPESENSE_COLLECTION_ALIAS", "classes_live")
-            physical = client.aliases[alias].retrieve().get("collection_name")
-            if physical:
-                cache.set(
-                    typesense_max_avail_filter_cache_key(physical), 1, timeout=7 * 86400
-                )
-    except Exception as e:
-        logger.debug("reconcile_typesense_classes_task: could not set max_avail cache: %s", e)
 
 
 @shared_task(ignore_result=True)

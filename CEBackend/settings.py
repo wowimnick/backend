@@ -461,13 +461,13 @@ CELERY_BEAT_SCHEDULE = {
         "task": "quickstart.tasks.search_index_tasks.reindex_dirty_classes_task",
         "schedule": crontab(minute=22),
     },
-    "search-index-reconcile-daily": {
-        "task": "quickstart.tasks.search_index_tasks.reconcile_typesense_classes_task",
-        "schedule": crontab(hour=1, minute=10),
-    },
     "typesense-bootstrap-health-hourly": {
         "task": "quickstart.tasks.search_index_tasks.bootstrap_typesense_search_index_task",
         "schedule": crontab(minute=47),
+    },
+    "search-index-reconcile-daily": {
+        "task": "quickstart.tasks.search_index_tasks.reconcile_typesense_classes_task",
+        "schedule": crontab(hour=1, minute=10),
     },
 }
 

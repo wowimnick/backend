@@ -30,13 +30,7 @@ from quickstart.services.search_geo_params import (
     toronto_gta_center_point,
 )
 from quickstart.services.search_filter_params import normalize_booking_type_query
-from quickstart.services.search_index_service import (
-    AVAILABILITY_SLOT_SEP,
-    WEEKDAY_ABBR,
-    date_to_yyyymmdd,
-    ensure_physical_collection,
-    typesense_max_avail_filter_cache_key,
-)
+from quickstart.services.search_index_service import AVAILABILITY_SLOT_SEP, WEEKDAY_ABBR
 from quickstart.services.search_suggest_service import match_collection_by_alias
 from quickstart.services.typesense_client import get_typesense_client
 from quickstart.utils.url_utils import build_cloudfront_resized_webp_from_original_key
@@ -93,46 +87,6 @@ def _physical_collection_name(client) -> str:
             return alias
         except Exception:
             return alias
-
-
-def _should_apply_max_available_date_filter(client, coll: str) -> bool:
-    """
-    Use max_available_date:>=today only when essentially all documents have the field.
-    Right after a schema patch, legacy rows lack the field; filtering would yield 0 hits.
-    """
-    ck = typesense_max_avail_filter_cache_key(coll)
-    if cache.get(ck):
-        return True
-    try:
-        meta = client.collections[coll].retrieve()
-    except Exception:
-        return False
-    field_names = {f.get("name") for f in meta.get("fields") or []}
-    if "max_available_date" not in field_names:
-        return False
-    total = int(meta.get("num_documents") or 0)
-    if total == 0:
-        return True
-    floor = 19000101
-    try:
-        r = client.collections[coll].documents.search(
-            {
-                "q": "*",
-                "query_by": "title",
-                "per_page": 0,
-                "filter_by": f"max_available_date:>={floor}",
-            }
-        )
-    except Exception:
-        return False
-    found = int(r.get("found") or 0)
-    if found >= total:
-        try:
-            cache.set(ck, 1, timeout=7 * 86400)
-        except Exception:
-            pass
-        return True
-    return False
 
 
 def _canonical_cache_key(request) -> str:
@@ -234,9 +188,6 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
         hit = cache.get(ck)
         if hit is not None:
             return _patch_favorites(hit, favorited_ids)
-
-    coll = _physical_collection_name(client)
-    ensure_physical_collection(coll)
 
     qp = request.query_params
     req_lat_str = qp.get("lat")
@@ -431,12 +382,14 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
         except (InvalidOperation, ValueError):
             logger.warning("Invalid price_max for Typesense search: %s", price_max_str)
 
-    # Calendar window only when the client sends explicit date params — not when only
-    # time_preference is set (pairing prefs with a synthetic 365-day OR on available_dates
-    # broke far-future classes and was slow).
-    apply_dates = bool(req_date_str or req_start_date_str or req_end_date_str)
+    # Only build a concrete calendar day list when the user supplied date params.
+    # time_preference alone must filter on time_buckets only — do not imply a 365-day
+    # available_dates window (that hid classes scheduled beyond the window and was slow).
+    date_range_requested = bool(
+        req_date_str or req_start_date_str or req_end_date_str
+    )
     days_list: list[str] = []
-    if apply_dates:
+    if date_range_requested:
         today = timezone.now().date()
         if req_start_date_str and req_end_date_str:
             try:
@@ -453,8 +406,6 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
                 sd = today
                 ed = today + timedelta(days=365)
         else:
-            # Partial/malformed date params (e.g. only start_date): use same wide default
-            # as legacy behaviour for date filtering.
             sd = today
             ed = today + timedelta(days=365)
         cur = sd
@@ -466,7 +417,7 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
 
     weekday_requested = [str(d).strip() for d in days_params if str(d).strip()]
     availability_impossible = False
-    if apply_dates and weekday_requested:
+    if date_range_requested and weekday_requested:
         want = set(weekday_requested)
         narrowed = []
         for d_str in days_list:
@@ -510,10 +461,10 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
         if tb_fo:
             filter_parts.append(tb_fo)
 
-    if _should_apply_max_available_date_filter(client, coll):
-        filter_parts.append(
-            f"max_available_date:>={date_to_yyyymmdd(timezone.now().date())}"
-        )
+    # Hide stale index rows: numeric min schedule date >= today (Typesense does not
+    # reliably support >= on string[] facets). Reconcile task removes obsolete docs.
+    today_compact = int(timezone.now().date().strftime("%Y%m%d"))
+    filter_parts.append(f"min_available_date:>={today_compact}")
 
     if (
         req_participants_str
@@ -522,7 +473,7 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
     ):
         filter_parts.append(f"max_capacity:>={int(req_participants_str)}")
 
-    if weekday_requested and not apply_dates:
+    if weekday_requested and not date_range_requested:
         wd_fo = _facet_or("weekdays", weekday_requested)
         if wd_fo:
             filter_parts.append(wd_fo)
@@ -573,6 +524,7 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
                 "relevance_score:desc,created_at_ts:desc,class_id:desc"
             )
 
+    coll = _physical_collection_name(client)
     try:
         result = _typesense_search_collection(client, coll, search_params)
     except Exception as exc:

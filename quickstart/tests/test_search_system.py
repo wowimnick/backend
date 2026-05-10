@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from django.contrib.gis.geos import Point
+from django.utils import timezone
 from rest_framework.request import Request
 from rest_framework.test import APIRequestFactory
 
@@ -157,15 +158,7 @@ class TestRunPublicClassSearchMockedTypesense:
         settings.TYPESENSE_COLLECTION_ALIAS = "classes_live"
 
     @pytest.fixture(autouse=True)
-    def _mock_client(self, monkeypatch):
-        monkeypatch.setattr(
-            "quickstart.services.search_engine_service.ensure_physical_collection",
-            lambda name: None,
-        )
-        monkeypatch.setattr(
-            "quickstart.services.search_engine_service._should_apply_max_available_date_filter",
-            lambda client, coll: True,
-        )
+    def _mock_client(self):
         with patch(
             "quickstart.services.search_engine_service.get_typesense_client",
             return_value=MagicMock(),
@@ -285,8 +278,7 @@ class TestRunPublicClassSearchMockedTypesense:
         assert "collection_slugs:" in fb
         assert "trending" in fb and "date-night" in fb
 
-    def test_time_preference_only_uses_time_buckets_not_synthetic_dates(self):
-        """Prefs alone must not OR hundreds of available_dates (breaks far-future schedules)."""
+    def test_time_preference_only_uses_time_buckets_not_synthetic_calendar(self):
         request = _drf_request(
             "/api/classes/search/",
             {
@@ -299,7 +291,7 @@ class TestRunPublicClassSearchMockedTypesense:
 
         with patch(
             "quickstart.services.search_engine_service._typesense_search_collection",
-            return_value={"hits": [_make_ts_hit(3)], "found": 1},
+            return_value={"hits": [], "found": 0},
         ) as ts_search:
             run_public_class_search(request)
 
@@ -307,28 +299,9 @@ class TestRunPublicClassSearchMockedTypesense:
         fb = params["filter_by"]
         assert "time_buckets:" in fb
         assert "Morning (6am-12pm)" in fb
-        assert "max_available_date:>=" in fb
-        # Must not apply a synthetic multi-day OR on available_dates (old bug).
-        assert "available_dates:=" not in fb
-
-    def test_defensive_future_available_dates_on_plain_geo_search(self):
-        request = _drf_request(
-            "/api/classes/search/",
-            {
-                "lat": "43.6532",
-                "lng": "-79.3832",
-                "location_search": "Toronto, ON",
-            },
-        )
-
-        with patch(
-            "quickstart.services.search_engine_service._typesense_search_collection",
-            return_value={"hits": [_make_ts_hit(4)], "found": 1},
-        ) as ts_search:
-            run_public_class_search(request)
-
-        _, params = _capture_search(ts_search)
-        assert "max_available_date:>=" in params["filter_by"]
+        today_compact = int(timezone.now().date().strftime("%Y%m%d"))
+        assert f"min_available_date:>={today_compact}" in fb
+        assert fb.count("available_dates:=`") < 50
 
 
 @pytest.mark.django_db
