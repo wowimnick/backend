@@ -283,8 +283,7 @@ class TestPublicClassSearchViewEnginePaths:
     """HTTP integration with Typesense path mocked."""
 
     @pytest.fixture(autouse=True)
-    def _engine_settings(self, settings):
-        settings.SEARCH_ENGINE_ENABLED = True
+    def _search_settings(self, settings):
         settings.SEARCH_RESULTS_CACHE_SECONDS = 0
 
     def test_typesense_unavailable_returns_503(self, api_client):
@@ -344,11 +343,7 @@ class TestPublicClassSearchViewEnginePaths:
 
 @pytest.mark.django_db
 class TestPublicClassSearchForceDb:
-    """Engine on but force_db_search uses Postgres path."""
-
-    @pytest.fixture(autouse=True)
-    def _engine_on(self, settings):
-        settings.SEARCH_ENGINE_ENABLED = True
+    """force_db_search uses Postgres path while Typesense stays available."""
 
     def test_force_db_search_skips_typesense(self, api_client):
         biz = BusinessFactory(
@@ -515,23 +510,23 @@ class TestPublicClassSearchForceDb:
 
 
 @pytest.mark.django_db
-class TestPublicClassSearchDbOnlyDefault:
-    """When engine flag is off, search uses DB without Typesense."""
+class TestPublicClassSearchTypesenseResponseShape:
+    """Default search path uses Typesense (mocked here for stable CI)."""
 
     @pytest.fixture(autouse=True)
-    def _engine_off(self, settings):
-        settings.SEARCH_ENGINE_ENABLED = False
+    def _cache_off(self, settings):
+        settings.SEARCH_RESULTS_CACHE_SECONDS = 0
 
     def test_search_returns_paginated_results(self, api_client):
         biz = BusinessFactory(
             isActive=True,
             verificationStatus="verified",
-            slug="db-only-biz",
+            slug="ts-shape-biz",
         )
         cls = ClassMainFactory(
             businessId=biz,
             status="active",
-            slug="db-only-class",
+            slug="ts-shape-class",
             coordinates="43.6532,-79.3832",
         )
         cls.point = Point(-79.3832, 43.6532, srid=4326)
@@ -540,30 +535,45 @@ class TestPublicClassSearchDbOnlyDefault:
         sch = ScheduleFactory(option=opt)
         ScheduleInstanceFactory(schedule=sch, status="scheduled")
 
-        response = api_client.get(
-            f"{API}/classes/search/",
-            {
-                "lat": "43.6532",
-                "lng": "-79.3832",
-                "location_search": "Toronto, ON",
-                "page_size": "24",
-            },
-        )
+        fake = {
+            "count": 1,
+            "next": None,
+            "previous": None,
+            "results": [{"classId": cls.classId, "slug": "x"}],
+        }
+        with patch(
+            "quickstart.services.typesense_client.typesense_available",
+            return_value=True,
+        ):
+            with patch(
+                "quickstart.services.search_engine_service.run_public_class_search",
+                return_value=fake,
+            ):
+                response = api_client.get(
+                    f"{API}/classes/search/",
+                    {
+                        "lat": "43.6532",
+                        "lng": "-79.3832",
+                        "location_search": "Toronto, ON",
+                        "page_size": "24",
+                    },
+                )
         assert response.status_code == 200
         body = response.json()
         assert "count" in body and "results" in body
         assert isinstance(body["count"], int)
+        assert body["results"]
 
     def test_count_only_returns_count_key_only(self, api_client):
         biz = BusinessFactory(
             isActive=True,
             verificationStatus="verified",
-            slug="db-count-biz",
+            slug="ts-count-biz",
         )
         cls = ClassMainFactory(
             businessId=biz,
             status="active",
-            slug="db-count-class",
+            slug="ts-count-class",
             coordinates="43.6532,-79.3832",
         )
         cls.point = Point(-79.3832, 43.6532, srid=4326)
@@ -572,16 +582,26 @@ class TestPublicClassSearchDbOnlyDefault:
         sch = ScheduleFactory(option=opt)
         ScheduleInstanceFactory(schedule=sch, status="scheduled")
 
-        response = api_client.get(
-            f"{API}/classes/search/",
-            {
-                "lat": "43.6532",
-                "lng": "-79.3832",
-                "location_search": "Toronto, ON",
-                "count_only": "1",
-            },
-        )
+        fake = {"count": 3, "next": None, "previous": None, "results": []}
+        with patch(
+            "quickstart.services.typesense_client.typesense_available",
+            return_value=True,
+        ):
+            with patch(
+                "quickstart.services.search_engine_service.run_public_class_search",
+                return_value=fake,
+            ):
+                response = api_client.get(
+                    f"{API}/classes/search/",
+                    {
+                        "lat": "43.6532",
+                        "lng": "-79.3832",
+                        "location_search": "Toronto, ON",
+                        "count_only": "1",
+                    },
+                )
         assert response.status_code == 200
         data = response.json()
         assert set(data.keys()) == {"count"}
         assert isinstance(data["count"], int)
+        assert data["count"] == 3

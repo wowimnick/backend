@@ -89,7 +89,6 @@ jobs:
             TYPESENSE_API_KEY=${{ secrets.TYPESENSE_API_KEY }}
             TYPESENSE_COLLECTION_ALIAS=classes_live
             TYPESENSE_AUTO_BOOTSTRAP=true
-            SEARCH_ENGINE_ENABLED=${{ secrets.SEARCH_ENGINE_ENABLED }}
             AWS_STORAGE_BUCKET_NAME=${{ secrets.AWS_STORAGE_BUCKET_NAME }}
             AWS_S3_REGION_NAME=${{ secrets.AWS_S3_REGION_NAME }}
             CLOUDFRONT_DOMAIN=${{ secrets.CLOUDFRONT_DOMAIN }}
@@ -98,6 +97,7 @@ jobs:
 
             # --- API & Service Keys (Including Stripe) ---
             RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
+            TYPESENSE_API_KEY=${{ secrets.TYPESENSE_API_KEY }}
             GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
             GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
             STRIPE_PUBLIC_KEY=${{ secrets.STRIPE_PUBLIC_KEY }}

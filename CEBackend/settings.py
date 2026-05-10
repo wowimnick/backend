@@ -717,9 +717,6 @@ NOTIFICATION_SETTINGS = {
 CORPORATE_LEADS_EMAIL = os.environ.get("CORPORATE_LEADS_EMAIL", "").strip()
 
 # --- Typesense / public class search ---
-SEARCH_ENGINE_ENABLED = (
-    os.environ.get("SEARCH_ENGINE_ENABLED", "False").lower() == "true"
-)
 SEARCH_SHADOW_SAMPLE_RATE = float(os.environ.get("SEARCH_SHADOW_SAMPLE_RATE", "0.05"))
 TYPESENSE_HOST = os.environ.get("TYPESENSE_HOST", "localhost")
 TYPESENSE_PORT = os.environ.get("TYPESENSE_PORT", "8108")

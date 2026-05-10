@@ -687,39 +687,8 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         return response
 
     def _maybe_shadow_compare_db_primary(self, request, response):
-        import random
-
-        if getattr(settings, "SEARCH_ENGINE_ENABLED", False):
-            return
-        if _is_count_only_request(request):
-            return
-        rate = getattr(settings, "SEARCH_SHADOW_SAMPLE_RATE", 0.05) or 0.0
-        if rate <= 0 or random.random() > rate:
-            return
-        from quickstart.services.typesense_client import typesense_available
-        from quickstart.services.search_engine_service import (
-            log_search_shadow_diff,
-            normalize_db_search_payload,
-            run_public_class_search,
-        )
-
-        if not typesense_available():
-            return
-
-        ctx = self.get_serializer_context()
-        fav = ctx.get("favorited_ids") or set()
-        db_payload = normalize_db_search_payload(response)
-
-        def _worker():
-            try:
-                ts_payload = run_public_class_search(request, favorited_ids=fav)
-                log_search_shadow_diff(
-                    ts_payload, db_payload, dict(request.query_params)
-                )
-            except Exception as e:
-                logger.debug("search_shadow db_primary worker skipped: %s", e)
-
-        threading.Thread(target=_worker, daemon=True).start()
+        """DB search is only used with force_db_search; Typesense is primary, no TS-vs-DB shadow here."""
+        return
 
     def _schedule_search_shadow_compare(self, request, favorited_ids, ts_payload):
         """Sampled Postgres comparison when Typesense is primary (background)."""
@@ -1199,15 +1168,15 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         - "Toronto" / "Toronto (...)" uses a fixed GTA-wide radius from downtown (no merged polygon).
         - Handles province-wide searches.
         - Falls back to a radius search for specific addresses or landmarks.
-        - When SEARCH_ENGINE_ENABLED is true (and not force_db_search), Typesense is the only path:
-          no silent Postgres fallback on failure or misconfiguration.
+        - Unless force_db_search is set, Typesense is the only path: no silent Postgres fallback
+          on failure or misconfiguration.
         - Caches results for preset (banner) locations; cache invalidates when classes/schedules change.
         """
         try:
             force_db = str(
                 request.query_params.get("force_db_search", "")
             ).lower() in ("1", "true", "yes")
-            if getattr(settings, "SEARCH_ENGINE_ENABLED", False) and not force_db:
+            if not force_db:
                 from quickstart.services.typesense_client import typesense_available
                 from quickstart.services.search_engine_service import (
                     run_public_class_search,

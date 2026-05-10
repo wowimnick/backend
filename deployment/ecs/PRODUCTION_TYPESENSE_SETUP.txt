@@ -8,7 +8,6 @@ A) Typesense Cloud (simplest ops)
    - Create a cluster in Typesense Cloud; set on web + worker task definitions:
      TYPESENSE_HOST, TYPESENSE_PORT, TYPESENSE_PROTOCOL=https (if applicable),
      TYPESENSE_API_KEY, TYPESENSE_COLLECTION_ALIAS=classes_live
-     SEARCH_ENGINE_ENABLED=true (when ready)
      TYPESENSE_AUTO_BOOTSTRAP=true (optional; full rebuild if index empty — OK on Cloud with persistence)
 
 B) Self-hosted on ECS (this repo adds typesense-ecs-deploy.yml for image bumps)
@@ -28,13 +27,12 @@ B) Self-hosted on ECS (this repo adds typesense-ecs-deploy.yml for image bumps)
       Alternatively use the service’s internal load balancer / NLB DNS name.
    4) On BOTH web and worker ECS task definitions, add the same Django env vars as staging:
       TYPESENSE_HOST, TYPESENSE_PORT, TYPESENSE_PROTOCOL, TYPESENSE_API_KEY,
-      TYPESENSE_COLLECTION_ALIAS, TYPESENSE_AUTO_BOOTSTRAP, SEARCH_ENGINE_ENABLED
+      TYPESENSE_COLLECTION_ALIAS, TYPESENSE_AUTO_BOOTSTRAP
    5) To upgrade Typesense image later: Actions → “Deploy Typesense (ECS)” → workflow_dispatch.
 
 Staging (EC2) — automated in staging-deploy.yml
 =================================================
 - Add GitHub secret: TYPESENSE_API_KEY (required for the Typesense container).
-- Optional secret: SEARCH_ENGINE_ENABLED (set to “true” when you want engine-backed search on staging).
 - Deploy workflow starts container `typesense` on Docker network classeasily-net with volume classeasily-typesense-data.
 - Django uses TYPESENSE_HOST=typesense (Docker DNS).
 
