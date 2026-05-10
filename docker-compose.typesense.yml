@@ -1,0 +1,31 @@
+# Optional local Typesense with persistent disk (same image/version as staging EC2 + ECS workflows).
+#
+# Local dev from backend/:
+#   docker compose -f docker-compose.typesense.yml up -d
+#
+# Staging: pushing `main` runs `.github/workflows/staging-deploy.yml`, which starts Typesense on the EC2
+# host (Docker volume classeasily-typesense-data) when GitHub secret TYPESENSE_API_KEY is set.
+## Then set on your Django/Celery processes (e.g. .env.local):
+#   TYPESENSE_HOST=127.0.0.1
+#   TYPESENSE_PORT=8108
+#   TYPESENSE_PROTOCOL=http
+#   TYPESENSE_API_KEY=local-typesense-dev-key
+#
+# With TYPESENSE_API_KEY set, TYPESENSE_AUTO_BOOTSTRAP defaults to true: after deploy (or when
+# Celery workers boot), a task full-reindexes only if the alias is missing or the index is empty.
+
+services:
+  typesense:
+    image: typesense/typesense:26.0
+    restart: unless-stopped
+    ports:
+      - "8108:8108"
+    environment:
+      TYPESENSE_DATA_DIR: /data
+      TYPESENSE_API_KEY: ${TYPESENSE_API_KEY:-local-typesense-dev-key}
+      TYPESENSE_ENABLE_CORS: "true"
+    volumes:
+      - typesense-data:/data
+
+volumes:
+  typesense-data:

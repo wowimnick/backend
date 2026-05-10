@@ -1,0 +1,52 @@
+{
+  "family": "classeasily-prod-typesense-task",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::459929160817:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::459929160817:role/classeasily-prod-typesense-task-role",
+  "volumes": [
+    {
+      "name": "typesense-data",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "fs-022624328107e5b42",
+        "transitEncryption": "ENABLED",
+        "authorizationConfig": { "iam": "ENABLED" }
+      }
+    }
+  ],
+  "containerDefinitions": [
+    {
+      "name": "typesense",
+      "image": "typesense/typesense:26.0",
+      "essential": true,
+      "portMappings": [{ "containerPort": 8108, "protocol": "tcp" }],
+      "environment": [
+        { "name": "TYPESENSE_DATA_DIR", "value": "/data" },
+        { "name": "TYPESENSE_ENABLE_CORS", "value": "true" }
+      ],
+      "secrets": [
+        {
+          "name": "TYPESENSE_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:us-east-2:459929160817:secret:classeasily/prod/env-BsWyGd:TYPESENSE_API_KEY::"
+        }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "typesense-data",
+          "containerPath": "/data",
+          "readOnly": false
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/classeasily-prod-typesense",
+          "awslogs-region": "us-east-2",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}

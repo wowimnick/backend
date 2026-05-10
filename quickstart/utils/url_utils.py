@@ -6,6 +6,7 @@ Ensures paths are properly encoded for URLs so that special characters
 in URLs; S3 expects + to be encoded as %2B.
 """
 
+import os
 from urllib.parse import quote
 
 from django.conf import settings
@@ -35,6 +36,22 @@ def build_cloudfront_url(path):
     path = path.lstrip("/")
     encoded_path = quote(path, safe="/")
     return f"{domain}/{encoded_path}"
+
+
+def build_cloudfront_resized_webp_from_original_key(
+    original_path: str | None, size_name: str
+) -> str | None:
+    """
+    Full CloudFront URL for public/{size_name}/*.webp given an originals/ object key.
+
+    Used for class card images (list/search + Typesense card_json hydration).
+    """
+    if not original_path or not original_path.startswith("originals/"):
+        return None
+    base_path, _ = os.path.splitext(original_path)
+    resized_base_path = base_path.replace("originals/", f"public/{size_name}/", 1)
+    final_path = resized_base_path + ".webp"
+    return build_cloudfront_url(final_path)
 
 
 def sanitize_filename_for_s3(filename):

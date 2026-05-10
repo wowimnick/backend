@@ -1467,6 +1467,11 @@ class ClassesMain(models.Model):
     )
     createdAt = models.DateTimeField(auto_now_add=True)
     updatedAt = models.DateTimeField(auto_now=True)
+    search_relevance_score = models.FloatField(
+        default=0.0,
+        db_index=True,
+        help_text="Denormalized ranking score for public explore (Typesense + DB list).",
+    )
 
     def _generate_unique_slug(self):
         """Generates a unique slug from the business city and class title."""
@@ -1975,6 +1980,7 @@ class Schedule(models.Model):
         indexes = [
             models.Index(fields=["option", "day", "time"]),
             models.Index(fields=["name"]),
+            models.Index(fields=["option", "date", "price"]),
         ]
 
 

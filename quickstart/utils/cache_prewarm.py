@@ -8,10 +8,8 @@ import time
 from django.test import Client
 
 from quickstart.models import ClassCollection
-from quickstart.views.public.public_class_views import (
-    PRESET_LOCATIONS,
-    PRESET_PREWARM_PAGE_SIZE,
-)
+from quickstart.services.search_geo_params import PRESET_LOCATIONS
+from quickstart.views.public.public_class_views import PRESET_PREWARM_PAGE_SIZE
 
 logger = logging.getLogger(__name__)
 

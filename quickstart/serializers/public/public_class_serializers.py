@@ -1,8 +1,7 @@
-import os
 from django.conf import settings
 from rest_framework import serializers
 
-from quickstart.utils.url_utils import build_cloudfront_url
+from quickstart.utils.url_utils import build_cloudfront_resized_webp_from_original_key
 from quickstart.models import (
     ClassCollection,
     ClassesMain,
@@ -63,15 +62,7 @@ class PublicClassImageKeySerializer(serializers.ModelSerializer):
         if not getattr(settings, "CLOUDFRONT_DOMAIN", None):
             return None
         if obj.image and obj.image.name:
-            original_path = obj.image.name
-            if not original_path.startswith("originals/"):
-                return None
-            base_path, _ = os.path.splitext(original_path)
-            resized_base_path = base_path.replace(
-                "originals/", f"public/{size_name}/", 1
-            )
-            final_path = resized_base_path + ".webp"
-            return build_cloudfront_url(final_path)
+            return build_cloudfront_resized_webp_from_original_key(obj.image.name, size_name)
         return None
 
     def get_medium_url(self, obj):
@@ -109,17 +100,7 @@ class PublicClassImageSerializer(serializers.ModelSerializer):
             return None
 
         if obj.image and obj.image.name:
-            original_path = obj.image.name
-
-            if not original_path.startswith("originals/"):
-                return None
-
-            base_path, _ = os.path.splitext(original_path)
-            resized_base_path = base_path.replace(
-                "originals/", f"public/{size_name}/", 1
-            )
-            final_path = resized_base_path + ".webp"
-            return build_cloudfront_url(final_path)
+            return build_cloudfront_resized_webp_from_original_key(obj.image.name, size_name)
 
         return None
 
@@ -662,17 +643,7 @@ class PublicCollectionSerializer(serializers.ModelSerializer):
             return None
 
         if obj.image and obj.image.name:
-            original_path = obj.image.name
-
-            if not original_path.startswith("originals/"):
-                return None
-
-            base_path, _ = os.path.splitext(original_path)
-            resized_base_path = base_path.replace(
-                "originals/", f"public/{size_name}/", 1
-            )
-            final_path = resized_base_path + ".webp"
-            return build_cloudfront_url(final_path)
+            return build_cloudfront_resized_webp_from_original_key(obj.image.name, size_name)
 
         return None
     

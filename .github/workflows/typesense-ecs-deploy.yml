@@ -1,0 +1,77 @@
+# Bump the Typesense Docker image on an existing ECS service (Fargate).
+# One-time: create task definition + service in AWS (see deployment/ecs/PRODUCTION_TYPESENSE_SETUP.txt).
+# Then run this workflow when you want to roll forward the Typesense server image.
+
+name: Deploy Typesense (ECS)
+
+on:
+  workflow_dispatch:
+    inputs:
+      typesense_image:
+        description: "Official Typesense image from Docker Hub"
+        default: "typesense/typesense:26.0"
+        type: string
+      task_family:
+        description: "Existing ECS task definition family (must contain a container named typesense)"
+        default: "classeasily-prod-typesense-task"
+        type: string
+      cluster:
+        description: "ECS cluster name"
+        default: "classeasily-prod-cluster"
+        type: string
+      service:
+        description: "ECS service name running Typesense"
+        default: "classeasily-prod-typesense-service"
+        type: string
+
+env:
+  AWS_REGION: us-east-2
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy-typesense:
+    name: Register task definition and rolling deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition ${{ github.event.inputs.task_family }} \
+            --query taskDefinition > td.json
+
+      - name: Patch Typesense image and register new revision
+        id: reg
+        env:
+          IMG: ${{ github.event.inputs.typesense_image }}
+        run: |
+          jq --arg IMG "$IMG" '
+            .containerDefinitions |= map(
+              if .name == "typesense" then .image = $IMG else . end
+            )
+            | if (.containerDefinitions | map(select(.name == "typesense")) | length) == 0 then
+                error("Task definition has no container named \"typesense\". Fix AWS or rename container.")
+              else . end
+            | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy, .deregisteredAt)
+          ' td.json > td-new.json
+          OUT=$(aws ecs register-task-definition --cli-input-json file://td-new.json)
+          echo "arn=$(echo "$OUT" | jq -r .taskDefinition.taskDefinitionArn)" >> "$GITHUB_OUTPUT"
+
+      - name: Update ECS service
+        run: |
+          aws ecs update-service \
+            --cluster ${{ github.event.inputs.cluster }} \
+            --service ${{ github.event.inputs.service }} \
+            --task-definition "${{ steps.reg.outputs.arn }}" \
+            --force-new-deployment

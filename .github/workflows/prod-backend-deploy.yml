@@ -1,5 +1,9 @@
 name: Deploy Backend to Production
 
+# Typesense (class search engine) is NOT defined in this workflow. Web/worker images are updated only.
+# Configure Typesense on ECS + env vars on BOTH task definitions (see deployment/ecs/PRODUCTION_TYPESENSE_SETUP.txt),
+# or use Typesense Cloud. To roll the Typesense server image: workflow "Deploy Typesense (ECS)" (workflow_dispatch).
+
 on:
   push:
     branches:

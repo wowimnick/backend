@@ -42,6 +42,7 @@ resend
 
 # Utilities & Helpers
 python-dotenv
+typesense==0.21.0
 python-slugify
 geopy
 Pillow

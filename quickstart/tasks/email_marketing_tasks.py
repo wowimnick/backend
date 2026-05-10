@@ -292,10 +292,15 @@ def dispatch_due_scheduled_marketing_campaigns():
         ).values_list("id", flat=True)[:40]
     )
     for cid in due_ids:
+        cid_str = str(cid)
+
+        def _queue_send(campaign_id=cid_str):
+            send_business_marketing_campaign_task.delay(campaign_id)
+
         with transaction.atomic():
             n = BusinessEmailCampaign.objects.filter(pk=cid, status="scheduled").update(
                 status="sending",
                 error_message="",
             )
-        if n:
-            send_business_marketing_campaign_task.delay(str(cid))
+            if n:
+                transaction.on_commit(_queue_send)

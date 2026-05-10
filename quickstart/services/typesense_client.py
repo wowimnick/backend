@@ -1,0 +1,41 @@
+"""Singleton Typesense client."""
+
+from __future__ import annotations
+
+import logging
+
+from django.conf import settings
+
+logger = logging.getLogger(__name__)
+
+_client = None
+
+
+def get_typesense_client():
+    global _client
+    if _client is not None:
+        return _client
+    api_key = getattr(settings, "TYPESENSE_API_KEY", "") or ""
+    if not api_key.strip():
+        return None
+    try:
+        import typesense
+    except ImportError:
+        logger.warning("typesense package not installed")
+        return None
+
+    host = getattr(settings, "TYPESENSE_HOST", "localhost")
+    port = getattr(settings, "TYPESENSE_PORT", "8108")
+    protocol = getattr(settings, "TYPESENSE_PROTOCOL", "http")
+    _client = typesense.Client(
+        {
+            "nodes": [{"host": host, "port": port, "protocol": protocol}],
+            "api_key": api_key,
+            "connection_timeout_seconds": 15,
+        }
+    )
+    return _client
+
+
+def typesense_available() -> bool:
+    return get_typesense_client() is not None

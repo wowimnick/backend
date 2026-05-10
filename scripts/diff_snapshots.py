@@ -19,7 +19,6 @@ ROOT = Path(__file__).resolve().parents[1]
 INVENTORY = ROOT / "quickstart" / "tests" / "perf" / "endpoint_inventory.json"
 SNAP_DIR = ROOT / "quickstart" / "tests" / "perf" / "snapshots"
 
-# Import normalizer by exec minimal duplicate to avoid package path issues
 REVIEW_PLACEHOLDER = "<REVIEW_COUNT_NORMALIZED>"
 
 

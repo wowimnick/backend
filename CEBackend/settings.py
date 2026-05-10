@@ -453,6 +453,22 @@ CELERY_BEAT_SCHEDULE = {
         "task": "quickstart.tasks.corporate_booking_tasks.dispatch_corporate_event_reminders",
         "schedule": crontab(hour=12, minute=0),
     },
+    "rebuild-geographic-boundary-buffers-nightly": {
+        "task": "quickstart.tasks.search_index_tasks.rebuild_all_boundary_buffers_task",
+        "schedule": crontab(hour=4, minute=15),
+    },
+    "search-index-dirty-classes-sweep-hourly": {
+        "task": "quickstart.tasks.search_index_tasks.reindex_dirty_classes_task",
+        "schedule": crontab(minute=22),
+    },
+    "typesense-bootstrap-health-hourly": {
+        "task": "quickstart.tasks.search_index_tasks.bootstrap_typesense_search_index_task",
+        "schedule": crontab(minute=47),
+    },
+    "search-index-reconcile-daily": {
+        "task": "quickstart.tasks.search_index_tasks.reconcile_typesense_classes_task",
+        "schedule": crontab(hour=1, minute=10),
+    },
 }
 
 # Celery Worker Settings - Prevent prefetch issues
@@ -703,3 +719,50 @@ NOTIFICATION_SETTINGS = {
 
 # Comma-separated list ok; first address used for B2B /corporate form notifications.
 CORPORATE_LEADS_EMAIL = os.environ.get("CORPORATE_LEADS_EMAIL", "").strip()
+
+# --- Typesense / public class search ---
+SEARCH_SHADOW_SAMPLE_RATE = float(os.environ.get("SEARCH_SHADOW_SAMPLE_RATE", "0.05"))
+TYPESENSE_HOST = os.environ.get("TYPESENSE_HOST", "localhost")
+TYPESENSE_PORT = os.environ.get("TYPESENSE_PORT", "8108")
+TYPESENSE_PROTOCOL = os.environ.get("TYPESENSE_PROTOCOL", "http")
+TYPESENSE_API_KEY = os.environ.get("TYPESENSE_API_KEY", "")
+TYPESENSE_COLLECTION_ALIAS = os.environ.get(
+    "TYPESENSE_COLLECTION_ALIAS", "classes_live"
+)
+GEO_BOUNDARY_BUFFER_METERS = int(os.environ.get("GEO_BOUNDARY_BUFFER_METERS", "5000"))
+GEO_BOUNDARY_SIMPLIFY_TOLERANCE = float(
+    os.environ.get("GEO_BOUNDARY_SIMPLIFY_TOLERANCE", "0.00005")
+)
+BOUNDARY_POLYGON_CACHE_SECONDS = int(
+    os.environ.get("BOUNDARY_POLYGON_CACHE_SECONDS", 604800)
+)  # 7 days
+SEARCH_EDGE_CACHE_CONTROL = os.environ.get(
+    "SEARCH_EDGE_CACHE_CONTROL",
+    "public, max-age=60, stale-while-revalidate=300, stale-if-error=86400",
+)
+SEARCH_RESULTS_CACHE_SECONDS = int(os.environ.get("SEARCH_RESULTS_CACHE_SECONDS", "10"))
+
+
+def _env_truthy(key: str, *, default: bool = False) -> bool:
+    v = os.environ.get(key)
+    if v is None:
+        return default
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
+# When True (default if TYPESENSE_API_KEY is set), Celery + deploy entrypoint queue a bootstrap task
+# that full-reindexes if the alias is missing or Typesense has 0 docs while Postgres has indexable classes.
+TYPESENSE_AUTO_BOOTSTRAP = _env_truthy(
+    "TYPESENSE_AUTO_BOOTSTRAP",
+    default=bool((os.environ.get("TYPESENSE_API_KEY") or "").strip()),
+)
+TYPESENSE_BOOTSTRAP_DELAY_SECONDS = int(
+    os.environ.get("TYPESENSE_BOOTSTRAP_DELAY_SECONDS", "90")
+)
+# When True (default), web startup runs a full Typesense reindex once per deploy/build id (BUILD_ID,
+# IMAGE_TAG, or GIT_SHA). Other web tasks for the same build skip via Redis marker. Set false to only
+# bootstrap when the index is missing or empty (faster deploys for large catalogs).
+TYPESENSE_FULL_REINDEX_EACH_DEPLOY = _env_truthy(
+    "TYPESENSE_FULL_REINDEX_EACH_DEPLOY",
+    default=True,
+)

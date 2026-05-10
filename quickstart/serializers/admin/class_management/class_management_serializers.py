@@ -4,6 +4,9 @@ from rest_framework import serializers
 from decimal import Decimal  # Ensure Decimal is imported
 
 from quickstart.utils.url_utils import build_cloudfront_url
+from quickstart.serializers.business.business_location_serializers import (
+    BusinessLocationSerializer,
+)
 from ....models import (
     ClassCategory,
     ClassCollection,
@@ -15,6 +18,7 @@ from ....models import (
     Schedule,
     ScheduleInstance,
     BusinessInfo,
+    BusinessLocation,
 )
 
 
@@ -74,6 +78,9 @@ class AdminClassOptionSerializer(serializers.ModelSerializer):
         fields = [
             "optionId",
             "parent_class_title",
+            "title",
+            "description",
+            "schedule_mode",
             "booking_type",
             "level",
             "price_type",
@@ -82,6 +89,10 @@ class AdminClassOptionSerializer(serializers.ModelSerializer):
             "cancellationPolicy",
             "cancellationCustomHours",
             "cancellationRefundPercentage",
+            "allowMidCourseDrops",
+            "midCourseCancellationPolicy",
+            "midCourseCancellationCustomHours",
+            "midCourseCancellationRefundPercentage",
             "schedules",
             "price_range",
             "total_students",
@@ -125,10 +136,20 @@ class AdminClassImageSerializer(serializers.ModelSerializer):
 
     image_thumb_url = serializers.SerializerMethodField()
     image_medium_url = serializers.SerializerMethodField()
+    image_original_url = serializers.ImageField(
+        source="image", read_only=True, use_url=True
+    )
 
     class Meta:
         model = ClassImage
-        fields = ["imageId", "image_thumb_url", "image_medium_url", "createdAt"]
+        fields = [
+            "imageId",
+            "image_thumb_url",
+            "image_medium_url",
+            "image_original_url",
+            "isCover",
+            "createdAt",
+        ]
 
     def _get_resized_url(self, obj, size):
         if not obj.image or not hasattr(obj.image, "name") or not obj.image.name:
@@ -222,6 +243,7 @@ class AdminClassSerializer(serializers.ModelSerializer):
         model = ClassesMain
         fields = [
             "classId",
+            "slug",
             "title",
             "description",
             "location",
@@ -356,11 +378,19 @@ class AdminClassDetailSerializer(AdminClassSerializer):
 
     options = AdminClassOptionSerializer(many=True, read_only=True)
     reviews = AdminReviewSerializer(many=True, read_only=True)
+    business_locations = serializers.SerializerMethodField(read_only=True)
+    # Plain UUID read — avoids DRF PrimaryKeyRelatedField + ModelSerializer merging
+    # queryset with read_only (AssertionError at import time in some DRF versions).
+    location_ref = serializers.UUIDField(
+        source="location_ref_id",
+        read_only=True,
+        allow_null=True,
+    )
 
     class Meta(AdminClassSerializer.Meta):
         fields = list(AdminClassSerializer.Meta.fields) + [
             "options",
-            "reviews",  # Keep 'reviews' here
+            "reviews",
             "studentContactEmail",
             "studentContactPhone",
             "features",
@@ -369,9 +399,18 @@ class AdminClassDetailSerializer(AdminClassSerializer):
             "saltLocation",
             "city",
             "state",
+            "location_ref",
+            "business_locations",
         ]
-        # Read-only fields are inherited, add new ones if needed
-        read_only_fields = fields  # Keep detail view read-only for now
+        read_only_fields = fields
+
+    def get_business_locations(self, obj):
+        if not getattr(obj, "businessId_id", None):
+            return []
+        qs = BusinessLocation.objects.filter(
+            business_id=obj.businessId_id, is_active=True
+        ).order_by("-is_primary", "name")
+        return BusinessLocationSerializer(qs, many=True).data
 
 
 # --- AdminClassCreateSerializer ---

@@ -346,8 +346,21 @@ class ScheduleSerializer(serializers.ModelSerializer):
                         }
                     )
 
-        if data.get("price", 0) < 0:
-            raise serializers.ValidationError({"price": "Price cannot be negative."})
+        price_val = data.get("price")
+        if instance is not None and price_val is None:
+            price_val = getattr(instance, "price", None)
+        if price_val is None:
+            raise serializers.ValidationError({"price": "Price is required."})
+        try:
+            price_dec = Decimal(str(price_val))
+        except (InvalidOperation, TypeError, ValueError):
+            raise serializers.ValidationError({"price": "Invalid price."})
+        if price_dec <= 0:
+            raise serializers.ValidationError(
+                {
+                    "price": "Price must be greater than zero. Free sessions are not supported."
+                }
+            )
 
         min_p = data.get("minParticipants", getattr(instance, "minParticipants", 1))
         max_p = data.get("maxParticipants", getattr(instance, "maxParticipants", 10))
@@ -418,7 +431,7 @@ class BulkScheduleCreateSerializer(serializers.Serializer):
     )
     duration = serializers.IntegerField(required=True, min_value=15)
     price = serializers.DecimalField(
-        required=True, max_digits=10, decimal_places=2, min_value=Decimal("0.00")
+        required=True, max_digits=10, decimal_places=2, min_value=Decimal("0.01")
     )
     maxParticipants = serializers.IntegerField(required=True, min_value=1)
     # --- FIX: Removed 'default=1' ---
@@ -433,15 +446,18 @@ class BulkScheduleCreateSerializer(serializers.Serializer):
         user = request.user
         option = data["option"]
 
-        business = BusinessInfo.objects.filter(
-            Q(owner=user)
-            | Q(staff_members__user=user, staff_members__status="accepted")
-        ).first()
+        if user.has_perm("quickstart.access_class_admin"):
+            pass
+        else:
+            business = BusinessInfo.objects.filter(
+                Q(owner=user)
+                | Q(staff_members__user=user, staff_members__status="accepted")
+            ).first()
 
-        if not business or option.classId.businessId != business:
-            raise PermissionDenied(
-                "You do not have permission to create schedules for this class option."
-            )
+            if not business or option.classId.businessId != business:
+                raise PermissionDenied(
+                    "You do not have permission to create schedules for this class option."
+                )
         if data["start_date"] > data["end_date"]:
             raise serializers.ValidationError(
                 {"end_date": "End date must be on or after start date."}
@@ -672,6 +688,12 @@ class ManagedClassSerializer(serializers.ModelSerializer):
         if business is not None:
             self.fields["location_ref"].queryset = BusinessLocation.objects.filter(
                 business=business
+            )
+        elif getattr(self, "instance", None) is not None and getattr(
+            self.instance, "businessId_id", None
+        ):
+            self.fields["location_ref"].queryset = BusinessLocation.objects.filter(
+                business_id=self.instance.businessId_id
             )
         else:
             self.fields["location_ref"].queryset = BusinessLocation.objects.none()
