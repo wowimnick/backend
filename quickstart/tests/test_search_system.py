@@ -167,7 +167,10 @@ class TestRunPublicClassSearchMockedTypesense:
                 "quickstart.services.search_engine_service._physical_collection_name",
                 return_value="physical_coll",
             ):
-                yield
+                with patch(
+                    "quickstart.services.search_engine_service.ensure_physical_collection",
+                ):
+                    yield
 
     def test_count_only_uses_single_hit_and_excludes_card_json(self):
         request = _drf_request(

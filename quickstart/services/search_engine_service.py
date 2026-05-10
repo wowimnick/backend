@@ -30,9 +30,14 @@ from quickstart.services.search_geo_params import (
     toronto_gta_center_point,
 )
 from quickstart.services.search_filter_params import normalize_booking_type_query
-from quickstart.services.search_index_service import AVAILABILITY_SLOT_SEP, WEEKDAY_ABBR
+from quickstart.services.search_index_service import (
+    AVAILABILITY_SLOT_SEP,
+    WEEKDAY_ABBR,
+    ensure_physical_collection,
+)
 from quickstart.services.search_suggest_service import match_collection_by_alias
 from quickstart.services.typesense_client import get_typesense_client
+from typesense.exceptions import ObjectNotFound, RequestMalformed
 from quickstart.utils.url_utils import build_cloudfront_resized_webp_from_original_key
 
 logger = logging.getLogger(__name__)
@@ -464,7 +469,8 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
     # Hide stale index rows: numeric min schedule date >= today (Typesense does not
     # reliably support >= on string[] facets). Reconcile task removes obsolete docs.
     today_compact = int(timezone.now().date().strftime("%Y%m%d"))
-    filter_parts.append(f"min_available_date:>={today_compact}")
+    defensive_min_date_clause = f"min_available_date:>={today_compact}"
+    filter_parts.append(defensive_min_date_clause)
 
     if (
         req_participants_str
@@ -526,11 +532,42 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
 
     coll = _physical_collection_name(client)
     try:
+        ensure_physical_collection(coll)
+    except Exception as e:
+        logger.warning(
+            "ensure_physical_collection(%s) before search failed: %s",
+            coll,
+            e,
+            exc_info=True,
+        )
+
+    try:
         result = _typesense_search_collection(client, coll, search_params)
-    except Exception as exc:
-        _name = type(exc).__name__
-        if _name != "ObjectNotFound":
+    except RequestMalformed as exc:
+        err_l = str(exc).lower()
+        if (
+            "min_available_date" in err_l
+            and "filter field" in err_l
+            and "could not find" in err_l
+        ):
+            logger.error(
+                "Typesense collection %r has no min_available_date field (deploy/reindex "
+                "drift). Run `manage.py reindex_classes` on this environment. Retrying "
+                "search once without the defensive date filter.",
+                coll,
+                exc_info=True,
+            )
+            retry_parts = [p for p in filter_parts if p != defensive_min_date_clause]
+            retry_filter_by = " && ".join(retry_parts) if retry_parts else ""
+            search_params_retry = dict(search_params)
+            if retry_filter_by:
+                search_params_retry["filter_by"] = retry_filter_by
+            else:
+                search_params_retry.pop("filter_by", None)
+            result = _typesense_search_collection(client, coll, search_params_retry)
+        else:
             raise
+    except ObjectNotFound:
         from quickstart.services.search_index_service import (
             needs_typesense_full_reindex,
             sync_typesense_bootstrap_at_web_startup,
