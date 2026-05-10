@@ -30,7 +30,11 @@ from quickstart.services.search_geo_params import (
     toronto_gta_center_point,
 )
 from quickstart.services.search_filter_params import normalize_booking_type_query
-from quickstart.services.search_index_service import AVAILABILITY_SLOT_SEP, WEEKDAY_ABBR
+from quickstart.services.search_index_service import (
+    AVAILABILITY_SLOT_SEP,
+    WEEKDAY_ABBR,
+    date_to_yyyymmdd,
+)
 from quickstart.services.search_suggest_service import match_collection_by_alias
 from quickstart.services.typesense_client import get_typesense_client
 from quickstart.utils.url_utils import build_cloudfront_resized_webp_from_original_key
@@ -382,9 +386,10 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
         except (InvalidOperation, ValueError):
             logger.warning("Invalid price_max for Typesense search: %s", price_max_str)
 
-    apply_dates = bool(
-        req_date_str or req_start_date_str or req_end_date_str or time_preferences
-    )
+    # Calendar window only when the client sends explicit date params — not when only
+    # time_preference is set (pairing prefs with a synthetic 365-day OR on available_dates
+    # broke far-future classes and was slow).
+    apply_dates = bool(req_date_str or req_start_date_str or req_end_date_str)
     days_list: list[str] = []
     if apply_dates:
         today = timezone.now().date()
@@ -403,6 +408,8 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
                 sd = today
                 ed = today + timedelta(days=365)
         else:
+            # Partial/malformed date params (e.g. only start_date): use same wide default
+            # as legacy behaviour for date filtering.
             sd = today
             ed = today + timedelta(days=365)
         cur = sd
@@ -457,6 +464,11 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
         tb_fo = _facet_or("time_buckets", prefs)
         if tb_fo:
             filter_parts.append(tb_fo)
+
+    # Hide stale index rows (no Typesense range filter on string[]; use int YYYYMMDD).
+    filter_parts.append(
+        f"max_available_date:>={date_to_yyyymmdd(timezone.now().date())}"
+    )
 
     if (
         req_participants_str

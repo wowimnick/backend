@@ -37,6 +37,11 @@ WEEKDAY_ABBR = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 AVAILABILITY_SLOT_SEP = "::"
 
 
+def date_to_yyyymmdd(d) -> int:
+    """Compact date as YYYYMMDD int (sorts/compares correctly for search filters)."""
+    return d.year * 10000 + d.month * 100 + d.day
+
+
 def format_availability_slot(date_iso: str, bucket_label: str) -> str:
     return f"{date_iso}{AVAILABILITY_SLOT_SEP}{bucket_label}"
 
@@ -179,6 +184,8 @@ def build_typesense_document_for_class(class_id: int) -> dict[str, Any] | None:
         ).select_related("schedule")
     )
     avail_dates = sorted({i.date.isoformat() for i in instances})[:180]
+    max_avail = max(i.date for i in instances)
+    max_available_date_compact = date_to_yyyymmdd(max_avail)
 
     time_buckets: set[str] = set()
     availability_slots: set[str] = set()
@@ -315,6 +322,7 @@ def build_typesense_document_for_class(class_id: int) -> dict[str, Any] | None:
         "min_session_price": min_sess_d,
         "min_course_price": min_course_d,
         "available_dates": avail_dates,
+        "max_available_date": max_available_date_compact,
         "time_buckets": sorted(time_buckets),
         "availability_slots": sorted(availability_slots),
         "weekdays": sorted(weekdays),

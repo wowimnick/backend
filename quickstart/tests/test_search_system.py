@@ -277,6 +277,51 @@ class TestRunPublicClassSearchMockedTypesense:
         assert "collection_slugs:" in fb
         assert "trending" in fb and "date-night" in fb
 
+    def test_time_preference_only_uses_time_buckets_not_synthetic_dates(self):
+        """Prefs alone must not OR hundreds of available_dates (breaks far-future schedules)."""
+        request = _drf_request(
+            "/api/classes/search/",
+            {
+                "lat": "43.6532",
+                "lng": "-79.3832",
+                "location_search": "Toronto, ON",
+                "time_preference": "Morning (6am-12pm)",
+            },
+        )
+
+        with patch(
+            "quickstart.services.search_engine_service._typesense_search_collection",
+            return_value={"hits": [_make_ts_hit(3)], "found": 1},
+        ) as ts_search:
+            run_public_class_search(request)
+
+        _, params = _capture_search(ts_search)
+        fb = params["filter_by"]
+        assert "time_buckets:" in fb
+        assert "Morning (6am-12pm)" in fb
+        assert "max_available_date:>=" in fb
+        # Must not apply a synthetic multi-day OR on available_dates (old bug).
+        assert "available_dates:=" not in fb
+
+    def test_defensive_future_available_dates_on_plain_geo_search(self):
+        request = _drf_request(
+            "/api/classes/search/",
+            {
+                "lat": "43.6532",
+                "lng": "-79.3832",
+                "location_search": "Toronto, ON",
+            },
+        )
+
+        with patch(
+            "quickstart.services.search_engine_service._typesense_search_collection",
+            return_value={"hits": [_make_ts_hit(4)], "found": 1},
+        ) as ts_search:
+            run_public_class_search(request)
+
+        _, params = _capture_search(ts_search)
+        assert "max_available_date:>=" in params["filter_by"]
+
 
 @pytest.mark.django_db
 class TestPublicClassSearchViewEnginePaths:

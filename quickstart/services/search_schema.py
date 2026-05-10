@@ -20,6 +20,12 @@ CLASS_SEARCH_SCHEMA_BODY = {
         {"name": "min_session_price", "type": "float", "optional": True},
         {"name": "min_course_price", "type": "float", "optional": True},
         {"name": "available_dates", "type": "string[]", "facet": True, "optional": True},
+        {
+            "name": "max_available_date",
+            "type": "int32",
+            "facet": False,
+            "optional": True,
+        },
         {"name": "time_buckets", "type": "string[]", "facet": True, "optional": True},
         {
             "name": "availability_slots",

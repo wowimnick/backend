@@ -51,6 +51,27 @@ def rebuild_all_boundary_buffers_task():
 
 
 @shared_task(ignore_result=True)
+def reconcile_typesense_classes_task():
+    """
+    Daily sweep: re-upsert or delete each active class document so Typesense matches
+    current schedule eligibility (index is not updated on calendar rollover alone).
+    """
+    from quickstart.models import ClassesMain
+    from quickstart.services.search_index_service import index_single_class
+
+    qs = ClassesMain.objects.filter(
+        status="active",
+        businessId__isActive=True,
+        businessId__verificationStatus="verified",
+    ).values_list("classId", flat=True)
+    for cid in qs.iterator(chunk_size=500):
+        try:
+            index_single_class(int(cid))
+        except Exception as e:
+            logger.debug("reconcile_typesense_classes_task skip %s: %s", cid, e)
+
+
+@shared_task(ignore_result=True)
 def reindex_dirty_classes_task():
     """Re-push rows touched recently so Typesense stays near-real-time."""
     from datetime import timedelta
