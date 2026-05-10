@@ -348,32 +348,53 @@ def ensure_physical_collection(name: str) -> None:
         raise RuntimeError("Typesense client not configured")
     body = dict(CLASS_SEARCH_SCHEMA_BODY)
     body["name"] = name
+
+    from typesense.exceptions import ObjectNotFound
+
     try:
         existing = client.collections[name].retrieve()
-        existing_fields = {f["name"] for f in existing.get("fields", [])}
-        missing = [f for f in body["fields"] if f["name"] not in existing_fields]
-        if missing:
-            client.collections[name].update({"fields": missing})
-            try:
-                cache.delete(typesense_max_avail_filter_cache_key(name))
-            except Exception:
-                pass
-            if any(f.get("name") == "max_available_date" for f in missing):
-                try:
-                    if cache.add("typesense_reconcile_after_max_avail_schema", 1, timeout=3600):
-                        from quickstart.tasks.search_index_tasks import (
-                            reconcile_typesense_classes_task,
-                        )
-
-                        reconcile_typesense_classes_task.delay()
-                except Exception as e:
-                    logger.warning(
-                        "Could not enqueue reconcile after max_available_date schema patch: %s",
-                        e,
-                        exc_info=True,
-                    )
-    except Exception:
+    except ObjectNotFound:
         client.collections.create(body)
+        return
+
+    # retrieve().fields omits the built-in document id; do not try to PATCH it (400: cannot be altered).
+    existing_fields = {f["name"] for f in existing.get("fields", [])}
+    existing_fields.add("id")
+
+    missing = [f for f in body["fields"] if f["name"] not in existing_fields]
+    if not missing:
+        return
+
+    try:
+        client.collections[name].update({"fields": missing})
+    except Exception as e:
+        logger.warning(
+            "Typesense schema patch failed for collection %r (add fields %s): %s",
+            name,
+            [m.get("name") for m in missing],
+            e,
+            exc_info=True,
+        )
+        raise
+
+    try:
+        cache.delete(typesense_max_avail_filter_cache_key(name))
+    except Exception:
+        pass
+    if any(f.get("name") == "max_available_date" for f in missing):
+        try:
+            if cache.add("typesense_reconcile_after_max_avail_schema", 1, timeout=3600):
+                from quickstart.tasks.search_index_tasks import (
+                    reconcile_typesense_classes_task,
+                )
+
+                reconcile_typesense_classes_task.delay()
+        except Exception as e:
+            logger.warning(
+                "Could not enqueue reconcile after max_available_date schema patch: %s",
+                e,
+                exc_info=True,
+            )
 
 
 def upsert_alias_to_collection(alias_name: str, physical_name: str) -> None:
