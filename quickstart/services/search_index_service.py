@@ -424,6 +424,65 @@ def needs_typesense_full_reindex() -> tuple[bool, str]:
     return False, "index looks healthy"
 
 
+# Redis lock shared with Celery bootstrap_typesense_search_index_task.
+BOOTSTRAP_LOCK_KEY = "typesense_bootstrap_job_lock"
+BOOTSTRAP_LOCK_TTL = 7200
+
+
+def execute_typesense_bootstrap_if_needed() -> bool:
+    """If the index is missing or empty, run a full reindex. Caller must hold BOOTSTRAP_LOCK_KEY."""
+    need, reason = needs_typesense_full_reindex()
+    if not need:
+        return False
+    logger.warning("Typesense bootstrap executing (%s)", reason)
+    run_full_typesense_reindex()
+    return True
+
+
+def sync_typesense_bootstrap_at_web_startup(
+    *, max_wait_peer_seconds: int = 3600, poll_seconds: float = 4.0
+) -> None:
+    """
+    Block until Typesense has a usable search index (or timeout).
+
+    Runs on web container startup so search works without waiting for Celery.
+    Uses BOOTSTRAP_LOCK_KEY so multiple web tasks / Celery do not double-reindex.
+    """
+    from django.core.cache import cache
+
+    from quickstart.services.typesense_client import typesense_available
+
+    if not getattr(settings, "TYPESENSE_AUTO_BOOTSTRAP", False):
+        return
+    if not typesense_available():
+        return
+    need, _reason = needs_typesense_full_reindex()
+    if not need:
+        return
+
+    if cache.add(BOOTSTRAP_LOCK_KEY, 1, timeout=BOOTSTRAP_LOCK_TTL):
+        try:
+            execute_typesense_bootstrap_if_needed()
+        except Exception as e:
+            logger.warning("Typesense startup bootstrap failed: %s", e, exc_info=True)
+        finally:
+            cache.delete(BOOTSTRAP_LOCK_KEY)
+        return
+
+    logger.info("Typesense startup: waiting for peer bootstrap lock...")
+    deadline = time.monotonic() + max_wait_peer_seconds
+    while time.monotonic() < deadline:
+        time.sleep(poll_seconds)
+        need2, _ = needs_typesense_full_reindex()
+        if not need2:
+            logger.info("Typesense startup: index ready (peer completed)")
+            return
+    logger.warning(
+        "Typesense startup: timed out after %ss waiting for index",
+        max_wait_peer_seconds,
+    )
+
+
 def run_full_typesense_reindex(batch_size: int = 200) -> dict[str, Any]:
     """Create a new physical collection, import all indexable docs, swap alias (same as reindex_classes)."""
     client = get_typesense_client()

@@ -472,7 +472,26 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
             )
 
     coll = _physical_collection_name(client)
-    result = _typesense_search_collection(client, coll, search_params)
+    try:
+        result = _typesense_search_collection(client, coll, search_params)
+    except Exception as exc:
+        _name = type(exc).__name__
+        if _name != "ObjectNotFound":
+            raise
+        from quickstart.services.search_index_service import (
+            needs_typesense_full_reindex,
+            sync_typesense_bootstrap_at_web_startup,
+        )
+
+        need_heal, heal_reason = needs_typesense_full_reindex()
+        if not need_heal:
+            raise
+        logger.warning(
+            "Typesense search got missing collection; healing (%s)", heal_reason
+        )
+        sync_typesense_bootstrap_at_web_startup(max_wait_peer_seconds=900)
+        coll = _physical_collection_name(client)
+        result = _typesense_search_collection(client, coll, search_params)
 
     hits = result.get("hits") or []
     found = int(result.get("found") or 0)

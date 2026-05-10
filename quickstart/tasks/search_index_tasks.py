@@ -130,10 +130,6 @@ def enqueue_reindex_classes_for_instance(instance_id: int) -> None:
         logger.debug("enqueue_reindex_classes_for_instance: %s", e)
 
 
-BOOTSTRAP_LOCK_KEY = "typesense_bootstrap_job_lock"
-BOOTSTRAP_LOCK_TTL = 7200
-
-
 @shared_task(ignore_result=True)
 def bootstrap_typesense_search_index_task():
     """Create/populate Typesense when alias is missing or index is empty but DB has classes."""
@@ -141,8 +137,9 @@ def bootstrap_typesense_search_index_task():
     from django.core.cache import cache
 
     from quickstart.services.search_index_service import (
-        needs_typesense_full_reindex,
-        run_full_typesense_reindex,
+        BOOTSTRAP_LOCK_KEY,
+        BOOTSTRAP_LOCK_TTL,
+        execute_typesense_bootstrap_if_needed,
     )
     from quickstart.services.typesense_client import typesense_available
 
@@ -154,12 +151,8 @@ def bootstrap_typesense_search_index_task():
         logger.info("typesense bootstrap skipped (another job holds the lock)")
         return
     try:
-        need, reason = needs_typesense_full_reindex()
-        if not need:
-            logger.debug("typesense bootstrap not needed: %s", reason)
-            return
-        logger.warning("typesense bootstrap starting (%s)", reason)
-        run_full_typesense_reindex()
+        if not execute_typesense_bootstrap_if_needed():
+            logger.debug("typesense bootstrap not needed")
     except Exception as e:
         logger.warning("typesense bootstrap failed: %s", e, exc_info=True)
     finally:

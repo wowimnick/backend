@@ -36,7 +36,10 @@ if [ "$CONTAINER_ROLE" = "web" ]; then
     echo "--- [WEB] enhance_permissions (once per build) ---"
     python manage.py enhance_permissions --once-per-build || true
 
-    echo "--- [WEB] Scheduling Typesense bootstrap (Celery, if enabled) ---"
+    echo "--- [WEB] Typesense index ready (blocking bootstrap if needed) ---"
+    python manage.py sync_typesense_at_startup || true
+
+    echo "--- [WEB] Scheduling Typesense bootstrap (Celery backup, if enabled) ---"
     python manage.py schedule_typesense_bootstrap || true
 
     echo "--- [WEB] Starting Gunicorn server ---"
