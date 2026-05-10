@@ -55,6 +55,8 @@ Stable DNS for Django: TYPESENSE_HOST=typesense.classeasily.local (Cloud Map nam
 - IAM task role (EFS): classeasily-prod-typesense-task-role (+ inline policy on file system above)
 - Prod Django env secret classeasily/prod/env includes TYPESENSE_* keys; web/worker task defs reference them via secrets
 
+prod-backend-deploy.yml sets ECS_WEB_HEALTH_CHECK_GRACE_PERIOD_SECONDS (default 900) on classeasily-prod-web-service so the ALB does not fail tasks during long web startup (migrate + Typesense full reindex per deploy). Raise ECS_WEB_HEALTH_CHECK_GRACE_PERIOD_SECONDS in the workflow if the catalog grows.
+
 Ops helpers in deployment/ecs/
 - merge_prod_typesense_env.py — merge TYPESENSE_* into classeasily/prod/env (generates API key only if missing)
 - patch_ecs_prod_django_typesense_secrets.py web|worker — register new task revision with TYPESENSE_* ASM refs and force deploy

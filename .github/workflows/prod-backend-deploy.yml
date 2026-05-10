@@ -19,6 +19,9 @@ env:
   # Define the two separate task definition families
   ECS_TASK_DEFINITION_WEB: classeasily-prod-backend-web-task
   ECS_TASK_DEFINITION_WORKER: classeasily-prod-backend-task-worker
+  # Seconds ECS ignores failing ALB health checks after a new task starts (entrypoint: migrate,
+  # clear_public_caches, enhance_permissions, sync_typesense_at_startup full reindex, then Gunicorn).
+  ECS_WEB_HEALTH_CHECK_GRACE_PERIOD_SECONDS: 900
 
 permissions:
   id-token: write
@@ -75,7 +78,12 @@ jobs:
         run: |
           NEW_TASK_INFO=$(aws ecs register-task-definition --cli-input-json file://${{ steps.task-def-web.outputs.task_definition_path }})
           NEW_REVISION_ARN=$(echo $NEW_TASK_INFO | jq -r .taskDefinition.taskDefinitionArn)
-          aws ecs update-service --cluster ${{ env.ECS_CLUSTER }} --service ${{ env.ECS_SERVICE_WEB }} --task-definition "${NEW_REVISION_ARN}" --force-new-deployment
+          aws ecs update-service \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --service ${{ env.ECS_SERVICE_WEB }} \
+            --task-definition "${NEW_REVISION_ARN}" \
+            --health-check-grace-period-seconds ${{ env.ECS_WEB_HEALTH_CHECK_GRACE_PERIOD_SECONDS }} \
+            --force-new-deployment
 
       # --- Deploy Worker Service ---
       - name: 4. Download WORKER Task Definition
