@@ -103,6 +103,12 @@ def _canonical_cache_key(request) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _typesense_search_result_cache_key(request) -> str:
+    """Scope search result cache by DJANGO_ENV when staging and prod share Redis."""
+    env = str(getattr(settings, "DJANGO_ENV", "local") or "local")
+    return f"{env}:typesense_search:" + _canonical_cache_key(request)
+
+
 def _build_page_url(request, page: int) -> str:
     q = request.GET.copy()
     q["page"] = str(page)
@@ -189,7 +195,7 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
 
     ttl = getattr(settings, "SEARCH_RESULTS_CACHE_SECONDS", 10)
     if ttl > 0:
-        ck = "typesense_search:" + _canonical_cache_key(request)
+        ck = _typesense_search_result_cache_key(request)
         hit = cache.get(ck)
         if hit is not None:
             return _patch_favorites(hit, favorited_ids)
@@ -615,7 +621,7 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
 
     if ttl > 0:
         cache.set(
-            "typesense_search:" + _canonical_cache_key(request),
+            _typesense_search_result_cache_key(request),
             json.loads(json.dumps(payload)),
             ttl,
         )

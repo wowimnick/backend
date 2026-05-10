@@ -466,15 +466,26 @@ def needs_typesense_full_reindex() -> tuple[bool, str]:
 
 
 # Redis lock shared with Celery bootstrap_typesense_search_index_task.
-BOOTSTRAP_LOCK_KEY = "typesense_bootstrap_job_lock"
+# Prefixed with DJANGO_ENV so staging and prod can share Valkey without blocking each other.
 BOOTSTRAP_LOCK_TTL = 7200
 
-_TYPESENSE_FULL_REINDEX_BUILD_KEY_PREFIX = "typesense_full_reindexed_build"
 _TYPESENSE_FULL_REINDEX_BUILD_TTL = 30 * 24 * 3600  # 30 days (same idea as clear_public_caches)
 
 
+def _typesense_redis_env() -> str:
+    return str(getattr(settings, "DJANGO_ENV", "local") or "local")
+
+
+def typesense_bootstrap_lock_cache_key() -> str:
+    return f"{_typesense_redis_env()}:typesense_bootstrap_job_lock"
+
+
+def typesense_full_reindex_build_marker_key(build_id: str) -> str:
+    return f"{_typesense_redis_env()}:typesense_full_reindexed_build:{build_id}"
+
+
 def execute_typesense_bootstrap_if_needed() -> bool:
-    """If the index is missing or empty, run a full reindex. Caller must hold BOOTSTRAP_LOCK_KEY."""
+    """If the index is missing or empty, run a full reindex. Caller must hold bootstrap lock key."""
     need, reason = needs_typesense_full_reindex()
     if not need:
         return False
@@ -490,7 +501,7 @@ def sync_typesense_bootstrap_at_web_startup(
     Block until Typesense has a usable search index (or timeout).
 
     Runs on web container startup so search works without waiting for Celery.
-    Uses BOOTSTRAP_LOCK_KEY so multiple web tasks / Celery do not double-reindex.
+    Uses the env-scoped bootstrap lock so multiple web tasks / Celery do not double-reindex.
     """
     from django.core.cache import cache
 
@@ -504,13 +515,13 @@ def sync_typesense_bootstrap_at_web_startup(
     if not need:
         return
 
-    if cache.add(BOOTSTRAP_LOCK_KEY, 1, timeout=BOOTSTRAP_LOCK_TTL):
+    if cache.add(typesense_bootstrap_lock_cache_key(), 1, timeout=BOOTSTRAP_LOCK_TTL):
         try:
             execute_typesense_bootstrap_if_needed()
         except Exception as e:
             logger.warning("Typesense startup bootstrap failed: %s", e, exc_info=True)
         finally:
-            cache.delete(BOOTSTRAP_LOCK_KEY)
+            cache.delete(typesense_bootstrap_lock_cache_key())
         return
 
     logger.info("Typesense startup: waiting for peer bootstrap lock...")
@@ -548,7 +559,6 @@ def sync_typesense_full_reindex_once_per_build(
         return
 
     build_id = get_deploy_build_id()
-    env = getattr(settings, "DJANGO_ENV", "local")
     if not build_id:
         logger.warning(
             "Typesense full reindex each deploy requires BUILD_ID, IMAGE_TAG, or GIT_SHA; "
@@ -560,7 +570,7 @@ def sync_typesense_full_reindex_once_per_build(
         )
         return
 
-    marker_key = f"{_TYPESENSE_FULL_REINDEX_BUILD_KEY_PREFIX}:{env}:{build_id}"
+    marker_key = typesense_full_reindex_build_marker_key(build_id)
     try:
         if cache.get(marker_key):
             logger.info(
@@ -572,7 +582,7 @@ def sync_typesense_full_reindex_once_per_build(
         logger.warning("Typesense deploy sync: could not read build marker: %s", e)
         return
 
-    if cache.add(BOOTSTRAP_LOCK_KEY, 1, timeout=BOOTSTRAP_LOCK_TTL):
+    if cache.add(typesense_bootstrap_lock_cache_key(), 1, timeout=BOOTSTRAP_LOCK_TTL):
         try:
             logger.warning("Typesense deploy full reindex starting (build=%s)", build_id)
             run_full_typesense_reindex()
@@ -587,7 +597,7 @@ def sync_typesense_full_reindex_once_per_build(
                 exc_info=True,
             )
         finally:
-            cache.delete(BOOTSTRAP_LOCK_KEY)
+            cache.delete(typesense_bootstrap_lock_cache_key())
         return
 
     logger.info("Typesense deploy sync: waiting for peer full reindex (build=%s)...", build_id)

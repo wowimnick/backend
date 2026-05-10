@@ -158,9 +158,9 @@ def bootstrap_typesense_search_index_task():
     from django.core.cache import cache
 
     from quickstart.services.search_index_service import (
-        BOOTSTRAP_LOCK_KEY,
         BOOTSTRAP_LOCK_TTL,
         execute_typesense_bootstrap_if_needed,
+        typesense_bootstrap_lock_cache_key,
     )
     from quickstart.services.typesense_client import typesense_available
 
@@ -168,7 +168,8 @@ def bootstrap_typesense_search_index_task():
         return
     if not typesense_available():
         return
-    if not cache.add(BOOTSTRAP_LOCK_KEY, 1, timeout=BOOTSTRAP_LOCK_TTL):
+    lock_key = typesense_bootstrap_lock_cache_key()
+    if not cache.add(lock_key, 1, timeout=BOOTSTRAP_LOCK_TTL):
         logger.info("typesense bootstrap skipped (another job holds the lock)")
         return
     try:
@@ -177,7 +178,7 @@ def bootstrap_typesense_search_index_task():
     except Exception as e:
         logger.warning("typesense bootstrap failed: %s", e, exc_info=True)
     finally:
-        cache.delete(BOOTSTRAP_LOCK_KEY)
+        cache.delete(lock_key)
 
 
 def enqueue_typesense_bootstrap_check(delay: int | None = None) -> None:
