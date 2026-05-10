@@ -9,6 +9,7 @@ from decimal import Decimal
 from typing import Any
 
 from django.conf import settings
+from django.core.cache import cache
 from django.db.models import Exists, OuterRef, Prefetch
 from django.utils import timezone
 
@@ -337,6 +338,10 @@ def build_typesense_document_for_class(class_id: int) -> dict[str, Any] | None:
     return doc
 
 
+def typesense_max_avail_filter_cache_key(physical_collection: str) -> str:
+    return f"typesense_max_avail_ok:{physical_collection}"
+
+
 def ensure_physical_collection(name: str) -> None:
     client = get_typesense_client()
     if not client:
@@ -349,6 +354,24 @@ def ensure_physical_collection(name: str) -> None:
         missing = [f for f in body["fields"] if f["name"] not in existing_fields]
         if missing:
             client.collections[name].update({"fields": missing})
+            try:
+                cache.delete(typesense_max_avail_filter_cache_key(name))
+            except Exception:
+                pass
+            if any(f.get("name") == "max_available_date" for f in missing):
+                try:
+                    if cache.add("typesense_reconcile_after_max_avail_schema", 1, timeout=3600):
+                        from quickstart.tasks.search_index_tasks import (
+                            reconcile_typesense_classes_task,
+                        )
+
+                        reconcile_typesense_classes_task.delay()
+                except Exception as e:
+                    logger.warning(
+                        "Could not enqueue reconcile after max_available_date schema patch: %s",
+                        e,
+                        exc_info=True,
+                    )
     except Exception:
         client.collections.create(body)
 
@@ -661,6 +684,10 @@ def run_full_typesense_reindex(batch_size: int = 200) -> dict[str, Any]:
     if buf:
         import_documents(physical, buf)
     upsert_alias_to_collection(alias, physical)
+    try:
+        cache.set(typesense_max_avail_filter_cache_key(physical), 1, timeout=7 * 86400)
+    except Exception as e:
+        logger.debug("typesense max_avail cache set failed: %s", e)
     logger.info(
         "Typesense full reindex complete alias=%s physical=%s indexed=%s scanned=%s",
         alias,

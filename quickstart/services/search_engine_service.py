@@ -34,6 +34,8 @@ from quickstart.services.search_index_service import (
     AVAILABILITY_SLOT_SEP,
     WEEKDAY_ABBR,
     date_to_yyyymmdd,
+    ensure_physical_collection,
+    typesense_max_avail_filter_cache_key,
 )
 from quickstart.services.search_suggest_service import match_collection_by_alias
 from quickstart.services.typesense_client import get_typesense_client
@@ -91,6 +93,46 @@ def _physical_collection_name(client) -> str:
             return alias
         except Exception:
             return alias
+
+
+def _should_apply_max_available_date_filter(client, coll: str) -> bool:
+    """
+    Use max_available_date:>=today only when essentially all documents have the field.
+    Right after a schema patch, legacy rows lack the field; filtering would yield 0 hits.
+    """
+    ck = typesense_max_avail_filter_cache_key(coll)
+    if cache.get(ck):
+        return True
+    try:
+        meta = client.collections[coll].retrieve()
+    except Exception:
+        return False
+    field_names = {f.get("name") for f in meta.get("fields") or []}
+    if "max_available_date" not in field_names:
+        return False
+    total = int(meta.get("num_documents") or 0)
+    if total == 0:
+        return True
+    floor = 19000101
+    try:
+        r = client.collections[coll].documents.search(
+            {
+                "q": "*",
+                "query_by": "title",
+                "per_page": 0,
+                "filter_by": f"max_available_date:>={floor}",
+            }
+        )
+    except Exception:
+        return False
+    found = int(r.get("found") or 0)
+    if found >= total:
+        try:
+            cache.set(ck, 1, timeout=7 * 86400)
+        except Exception:
+            pass
+        return True
+    return False
 
 
 def _canonical_cache_key(request) -> str:
@@ -192,6 +234,9 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
         hit = cache.get(ck)
         if hit is not None:
             return _patch_favorites(hit, favorited_ids)
+
+    coll = _physical_collection_name(client)
+    ensure_physical_collection(coll)
 
     qp = request.query_params
     req_lat_str = qp.get("lat")
@@ -465,10 +510,10 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
         if tb_fo:
             filter_parts.append(tb_fo)
 
-    # Hide stale index rows (no Typesense range filter on string[]; use int YYYYMMDD).
-    filter_parts.append(
-        f"max_available_date:>={date_to_yyyymmdd(timezone.now().date())}"
-    )
+    if _should_apply_max_available_date_filter(client, coll):
+        filter_parts.append(
+            f"max_available_date:>={date_to_yyyymmdd(timezone.now().date())}"
+        )
 
     if (
         req_participants_str
@@ -528,7 +573,6 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
                 "relevance_score:desc,created_at_ts:desc,class_id:desc"
             )
 
-    coll = _physical_collection_name(client)
     try:
         result = _typesense_search_collection(client, coll, search_params)
     except Exception as exc:

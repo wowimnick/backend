@@ -157,7 +157,15 @@ class TestRunPublicClassSearchMockedTypesense:
         settings.TYPESENSE_COLLECTION_ALIAS = "classes_live"
 
     @pytest.fixture(autouse=True)
-    def _mock_client(self):
+    def _mock_client(self, monkeypatch):
+        monkeypatch.setattr(
+            "quickstart.services.search_engine_service.ensure_physical_collection",
+            lambda name: None,
+        )
+        monkeypatch.setattr(
+            "quickstart.services.search_engine_service._should_apply_max_available_date_filter",
+            lambda client, coll: True,
+        )
         with patch(
             "quickstart.services.search_engine_service.get_typesense_client",
             return_value=MagicMock(),
