@@ -39,6 +39,21 @@ TIME_BUCKET_LABELS = {
 }
 
 
+def instance_time_bucket_label(t) -> str | None:
+    """Match PublicClassViewSet._public_class_search_database time_ranges (time-of-day filter)."""
+    from datetime import time as dt_time
+
+    ranges = (
+        (TIME_BUCKET_LABELS["morning"], dt_time(6, 0), dt_time(11, 59, 59)),
+        (TIME_BUCKET_LABELS["afternoon"], dt_time(12, 0), dt_time(16, 59, 59)),
+        (TIME_BUCKET_LABELS["evening"], dt_time(17, 0), dt_time(21, 59, 59)),
+    )
+    for label, start, end in ranges:
+        if start <= t <= end:
+            return label
+    return None
+
+
 def _image_medium_dict(img: ClassImage) -> dict[str, Any]:
     image_key = img.image.name if img.image and img.image.name else None
     medium_url = (
@@ -158,18 +173,16 @@ def build_typesense_document_for_class(class_id: int) -> dict[str, Any] | None:
     avail_dates = sorted({i.date.isoformat() for i in instances})[:180]
 
     time_buckets: set[str] = set()
+    availability_slots: set[str] = set()
     weekdays: set[str] = set()
     max_cap = 0
     durations: list[int] = []
     for i in instances:
         weekdays.add(WEEKDAY_ABBR[i.date.weekday()])
-        h = i.time.hour
-        if 6 <= h < 12:
-            time_buckets.add(TIME_BUCKET_LABELS["morning"])
-        elif 12 <= h < 17:
-            time_buckets.add(TIME_BUCKET_LABELS["afternoon"])
-        elif 17 <= h < 22:
-            time_buckets.add(TIME_BUCKET_LABELS["evening"])
+        label = instance_time_bucket_label(i.time)
+        if label:
+            time_buckets.add(label)
+            availability_slots.add(f"{i.date.isoformat()}|{label}")
         max_cap = max(max_cap, i.max_participants)
         durations.append(i.duration)
 
@@ -295,6 +308,7 @@ def build_typesense_document_for_class(class_id: int) -> dict[str, Any] | None:
         "min_course_price": min_course_d,
         "available_dates": avail_dates,
         "time_buckets": sorted(time_buckets),
+        "availability_slots": sorted(availability_slots),
         "weekdays": sorted(weekdays),
         "max_capacity": int(max_cap),
         "relevance_score": relevance,
@@ -314,7 +328,11 @@ def ensure_physical_collection(name: str) -> None:
     body = dict(CLASS_SEARCH_SCHEMA_BODY)
     body["name"] = name
     try:
-        client.collections[name].retrieve()
+        existing = client.collections[name].retrieve()
+        existing_fields = {f["name"] for f in existing.get("fields", [])}
+        missing = [f for f in body["fields"] if f["name"] not in existing_fields]
+        if missing:
+            client.collections[name].update({"fields": missing})
     except Exception:
         client.collections.create(body)
 

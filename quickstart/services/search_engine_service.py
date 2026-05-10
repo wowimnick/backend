@@ -30,6 +30,7 @@ from quickstart.services.search_geo_params import (
     toronto_gta_center_point,
 )
 from quickstart.services.search_filter_params import normalize_booking_type_query
+from quickstart.services.search_index_service import WEEKDAY_ABBR
 from quickstart.services.search_suggest_service import match_collection_by_alias
 from quickstart.services.typesense_client import get_typesense_client
 from quickstart.utils.url_utils import build_cloudfront_resized_webp_from_original_key
@@ -376,7 +377,10 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
         except (InvalidOperation, ValueError):
             logger.warning("Invalid price_max for Typesense search: %s", price_max_str)
 
-    apply_dates = bool(req_date_str or req_start_date_str or req_end_date_str or time_preferences)
+    apply_dates = bool(
+        req_date_str or req_start_date_str or req_end_date_str or time_preferences
+    )
+    days_list: list[str] = []
     if apply_dates:
         today = timezone.now().date()
         if req_start_date_str and req_end_date_str:
@@ -396,22 +400,43 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
         else:
             sd = today
             ed = today + timedelta(days=365)
-        days_list: list[str] = []
         cur = sd
         safety = 0
         while cur <= ed and safety < 400:
             days_list.append(cur.isoformat())
             cur += timedelta(days=1)
             safety += 1
-        date_filters = _facet_or("available_dates", days_list)
-        if date_filters:
-            filter_parts.append(date_filters)
 
-    if time_preferences:
-        prefs = [p for p in time_preferences if p in _TIME_PREFS]
-        fo = _facet_or("time_buckets", prefs)
-        if fo:
-            filter_parts.append(fo)
+    weekday_requested = [str(d).strip() for d in days_params if str(d).strip()]
+    availability_impossible = False
+    if apply_dates and weekday_requested:
+        want = set(weekday_requested)
+        narrowed = []
+        for d_str in days_list:
+            wd = WEEKDAY_ABBR[datetime.strptime(d_str, "%Y-%m-%d").date().weekday()]
+            if wd in want:
+                narrowed.append(d_str)
+        days_list = narrowed
+        if not days_list:
+            availability_impossible = True
+
+    prefs = [p for p in time_preferences if p in _TIME_PREFS]
+
+    if availability_impossible:
+        filter_parts.append("class_id:<0")
+    elif days_list and prefs:
+        combo_values = [f"{d}|{p}" for d in days_list for p in prefs]
+        slot_fo = _facet_or("availability_slots", combo_values)
+        if slot_fo:
+            filter_parts.append(slot_fo)
+    elif days_list:
+        date_fo = _facet_or("available_dates", days_list)
+        if date_fo:
+            filter_parts.append(date_fo)
+    elif prefs:
+        tb_fo = _facet_or("time_buckets", prefs)
+        if tb_fo:
+            filter_parts.append(tb_fo)
 
     if (
         req_participants_str
@@ -420,10 +445,10 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
     ):
         filter_parts.append(f"max_capacity:>={int(req_participants_str)}")
 
-    if days_params:
-        fo = _facet_or("weekdays", days_params)
-        if fo:
-            filter_parts.append(fo)
+    if weekday_requested and not apply_dates:
+        wd_fo = _facet_or("weekdays", weekday_requested)
+        if wd_fo:
+            filter_parts.append(wd_fo)
 
     filter_by = " && ".join(filter_parts) if filter_parts else ""
 
