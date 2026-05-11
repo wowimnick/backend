@@ -32,6 +32,11 @@ from django.db.models.functions import (
     Substr,
     ATan2,
     Least,
+    Extract,
+    Length,
+    Log,
+    Now,
+    Power,
 )
 from django.contrib.postgres.search import SearchVector, SearchQuery, SearchRank
 from django.utils.decorators import method_decorator
@@ -78,6 +83,18 @@ from django.contrib.gis.measure import D
 from django.conf import settings
 
 from quickstart.services.search_filter_params import normalize_booking_type_query
+from quickstart.services.search_ranking import (
+    QUALITY_SCORE_BASE_IMAGES,
+    QUALITY_SCORE_IDEAL_IMAGES,
+    QUALITY_SCORE_MAX_DESCRIPTION_LEN,
+    RECENCY_HALFLIFE_DAYS,
+    REVIEW_COUNT_FOR_MAX_SCORE,
+    W_FEATURED,
+    W_NEWNESS,
+    W_QUALITY,
+    W_RATING,
+    W_REVIEW_COUNT,
+)
 from quickstart.services.search_suggest_service import match_collection_by_alias
 from quickstart.services.search_geo_params import (
     CANADIAN_PROVINCES,
@@ -409,7 +426,114 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             )
 
         return queryset.distinct()
-    
+
+    def _calculate_relevance_score(self, queryset):
+        """
+        Live relevance (same formula as Typesense denorm / search_ranking.compute_search_relevance_score).
+
+        Homepage rows still use this so trending reflects current ratings and listing quality.
+        ``search_relevance_score`` on ClassesMain is updated only when the search index runs.
+        """
+        days_old = ExpressionWrapper(
+            Extract(Now() - F("createdAt"), "epoch")
+            / Cast(Value(86400.0), FloatField()),
+            output_field=FloatField(),
+        )
+
+        image_score_numerator = Log(
+            Cast(Value(10), FloatField()),
+            Cast(F("image_count"), FloatField())
+            - Cast(Value(QUALITY_SCORE_BASE_IMAGES), FloatField())
+            + Cast(Value(1), FloatField()),
+        )
+        image_score_denominator = Log(
+            Cast(Value(10), FloatField()),
+            Cast(
+                Value(QUALITY_SCORE_IDEAL_IMAGES - QUALITY_SCORE_BASE_IMAGES),
+                FloatField(),
+            )
+            + Cast(Value(1), FloatField()),
+        )
+
+        image_score = Case(
+            When(
+                image_count__gte=QUALITY_SCORE_IDEAL_IMAGES,
+                then=Cast(Value(1.0), FloatField()),
+            ),
+            When(
+                image_count__gt=QUALITY_SCORE_BASE_IMAGES,
+                then=ExpressionWrapper(
+                    image_score_numerator / image_score_denominator,
+                    output_field=FloatField(),
+                ),
+            ),
+            default=Cast(Value(0.0), FloatField()),
+            output_field=FloatField(),
+        )
+
+        description_score = ExpressionWrapper(
+            Log(
+                Cast(Value(10), FloatField()),
+                Length("description") + Cast(Value(1), FloatField()),
+            )
+            / Log(
+                Cast(Value(10), FloatField()),
+                Cast(Value(QUALITY_SCORE_MAX_DESCRIPTION_LEN + 1), FloatField()),
+            ),
+            output_field=FloatField(),
+        )
+
+        quality_score = ExpressionWrapper(
+            (description_score + image_score) / Cast(Value(2.0), FloatField()),
+            output_field=FloatField(),
+        )
+
+        rating_score = ExpressionWrapper(
+            F("average_rating") / Cast(Value(5.0), FloatField()),
+            output_field=FloatField(),
+        )
+
+        review_count_score = ExpressionWrapper(
+            Log(
+                Cast(Value(10), FloatField()),
+                Cast(F("review_count"), FloatField()) + Cast(Value(1), FloatField()),
+            )
+            / Log(
+                Cast(Value(10), FloatField()),
+                Cast(Value(REVIEW_COUNT_FOR_MAX_SCORE + 1), FloatField()),
+            ),
+            output_field=FloatField(),
+        )
+
+        newness_score = ExpressionWrapper(
+            Power(
+                Cast(Value(2), FloatField()),
+                Cast(Value(-1), FloatField())
+                * days_old
+                / Cast(Value(RECENCY_HALFLIFE_DAYS), FloatField()),
+            ),
+            output_field=FloatField(),
+        )
+
+        featured_multiplier = Case(
+            When(businessId__featured=True, then=Cast(Value(W_FEATURED), FloatField())),
+            default=Cast(Value(1.0), FloatField()),
+            output_field=FloatField(),
+        )
+
+        relevance_score = ExpressionWrapper(
+            (
+                (Cast(Value(W_QUALITY), FloatField()) * quality_score)
+                + (Cast(Value(W_RATING), FloatField()) * rating_score)
+                + (Cast(Value(W_REVIEW_COUNT), FloatField()) * review_count_score)
+                + (Cast(Value(W_NEWNESS), FloatField()) * newness_score)
+            )
+            * featured_multiplier,
+            output_field=FloatField(),
+        )
+
+        return queryset.annotate(relevance_score=relevance_score)
+
     def collection_children(self, request, parent_slug=None):
         """
         Active sub-collections for a top-level collection (explore page tags).
@@ -464,7 +588,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             )
             base_qs = base_qs.filter(Exists(future_instances))
 
-            base_qs = base_qs.annotate(relevance_score=F("search_relevance_score"))
+            base_qs = self._calculate_relevance_score(base_qs)
 
             context = self.get_serializer_context()
 
