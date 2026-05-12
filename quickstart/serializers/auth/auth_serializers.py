@@ -84,6 +84,7 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
             "favorited_ids",
             "permissions",
             "has_business",
+            "is_superuser",
         )
         read_only_fields = (
             "userId",
@@ -96,6 +97,7 @@ class CustomUserDetailsSerializer(serializers.ModelSerializer):
             "favorited_ids",
             "permissions",
             "has_business",
+            "is_superuser",
         )
         extra_kwargs = {"email": {"read_only": True}, "username": {"read_only": True}}
 
