@@ -67,9 +67,32 @@ class AdminScheduleSerializer(serializers.ModelSerializer):
         ]
 
 
+class AdminScheduleSummarySerializer(serializers.ModelSerializer):
+    """
+    Schedule rows for admin class detail / edit payloads.
+    Omits `instances` — loading every past/future instance made retrieve timeout.
+    """
+
+    class Meta:
+        model = Schedule
+        fields = [
+            "id",
+            "day",
+            "time",
+            "duration",
+            "price",
+            "minParticipants",
+            "maxParticipants",
+            "start_date",
+            "end_date",
+            "date",
+            "allow_late_enrollment",
+        ]
+
+
 # --- AdminClassOptionSerializer ---
 class AdminClassOptionSerializer(serializers.ModelSerializer):
-    schedules = AdminScheduleSerializer(many=True, read_only=True)
+    schedules = AdminScheduleSummarySerializer(many=True, read_only=True)
     price_range = serializers.SerializerMethodField()
     total_students = serializers.IntegerField(read_only=True, default=0)
     parent_class_title = serializers.CharField(source="classId.title", read_only=True)
@@ -370,6 +393,10 @@ class AdminReviewSerializer(serializers.ModelSerializer):
         }
 
 
+# Max reviews embedded in admin class detail (full list lives in Class Reviews admin).
+ADMIN_CLASS_DETAIL_REVIEW_LIMIT = 300
+
+
 # --- AdminClassDetailSerializer ---
 class AdminClassDetailSerializer(AdminClassSerializer):
     """
@@ -378,7 +405,7 @@ class AdminClassDetailSerializer(AdminClassSerializer):
     """
 
     options = AdminClassOptionSerializer(many=True, read_only=True)
-    reviews = AdminReviewSerializer(many=True, read_only=True)
+    reviews = serializers.SerializerMethodField()
     business_locations = serializers.SerializerMethodField(read_only=True)
     # Plain UUID read — avoids DRF PrimaryKeyRelatedField + ModelSerializer merging
     # queryset with read_only (AssertionError at import time in some DRF versions).
@@ -404,6 +431,14 @@ class AdminClassDetailSerializer(AdminClassSerializer):
             "business_locations",
         ]
         read_only_fields = fields
+
+    def get_reviews(self, obj):
+        qs = (
+            Reviews.objects.filter(classId_id=obj.pk)
+            .select_related("userId")
+            .order_by("-createdAt")[:ADMIN_CLASS_DETAIL_REVIEW_LIMIT]
+        )
+        return AdminReviewSerializer(qs, many=True).data
 
     def get_business_locations(self, obj):
         if not getattr(obj, "businessId_id", None):

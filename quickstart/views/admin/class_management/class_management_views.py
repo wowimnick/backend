@@ -15,22 +15,24 @@ from django.db.models import (
     Min,
     Max,
     Avg,
+    Case,
     Count,
-    F,
-    Value,
-    Subquery,
-    Exists,
-    Prefetch,
-    OuterRef,
-    DecimalField,
-    FloatField,
-    ExpressionWrapper,
-    fields,
-    Sum,
     DateField,
+    DecimalField,
+    Exists,
+    ExpressionWrapper,
+    F,
+    FloatField,
+    OuterRef,
+    Prefetch,
+    Subquery,
+    Sum,
+    Value,
+    When,
+    fields,
 )
 from decimal import Decimal
-from django.db.models.functions import Coalesce
+from django.db.models.functions import Cast, Coalesce
 from django.utils import timezone
 from django.http import HttpResponse  # For CSV export
 import csv  # For CSV export
@@ -140,26 +142,33 @@ class AdminClassViewSet(viewsets.ModelViewSet):
             return ClassesMain.objects.none()
 
         try:
-            queryset = (
-                ClassesMain.objects.select_related(
-                    "businessId", "businessId__owner"
-                )
-                .prefetch_related(
-                    Prefetch(
-                        "options__schedules",
-                        queryset=Schedule.objects.filter(price__isnull=False),
-                    ),
-                    "options__schedules__instances",
-                    "reviews",
-                    # ADD THIS LINE HERE:
+            queryset = ClassesMain.objects.select_related(
+                "businessId", "businessId__owner"
+            ).distinct()
+
+            # Avoid loading options/schedules/instances for list — not present on list serializer
+            # and was the main cause of slow admin class retrieve (huge JSON + DB work).
+            action = getattr(self, "action", None) or ""
+            if action == "list":
+                queryset = queryset.prefetch_related(
                     "collections",
                     Prefetch(
                         "images",
                         queryset=ClassImage.objects.order_by("-isCover", "createdAt"),
                     ),
                 )
-                .distinct()
-            )
+            else:
+                queryset = queryset.prefetch_related(
+                    Prefetch(
+                        "options__schedules",
+                        queryset=Schedule.objects.filter(price__isnull=False),
+                    ),
+                    "collections",
+                    Prefetch(
+                        "images",
+                        queryset=ClassImage.objects.order_by("-isCover", "createdAt"),
+                    ),
+                )
 
             # --- Annotations ---
             approved_rating_subquery = Subquery(
@@ -180,6 +189,14 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 .annotate(count=Count("id"))
                 .values("count")[:1],
                 output_field=fields.IntegerField(),
+            )
+
+            google_avg_rating_subquery = Subquery(
+                ImportedGoogleReview.objects.filter(business=OuterRef("businessId"))
+                .values("business")
+                .annotate(avg=Avg("rating"))
+                .values("avg")[:1],
+                output_field=FloatField(),
             )
 
             min_price_subquery = Subquery(
@@ -227,8 +244,10 @@ class AdminClassViewSet(viewsets.ModelViewSet):
             queryset = queryset.annotate(
                 business_name=F("businessId__businessName"),
                 business_featured=F("businessId__featured"),
-                average_rating=Coalesce(
-                    approved_rating_subquery, Value(0.0), output_field=FloatField()
+                google_avg_rating=Coalesce(
+                    google_avg_rating_subquery,
+                    Value(0.0),
+                    output_field=FloatField(),
                 ),
                 google_review_count=Coalesce(
                     google_review_count_subquery,
@@ -258,6 +277,30 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                     platform_revenue_subquery,
                     Value(Decimal("0.00")),
                     output_field=DecimalField(),
+                ),
+            )
+            # Weighted average: approved platform reviews (this class) + Google reviews (business).
+            queryset = queryset.annotate(
+                average_rating=Case(
+                    When(
+                        review_count__gt=0,
+                        then=ExpressionWrapper(
+                            (
+                                Coalesce(
+                                    approved_rating_subquery,
+                                    Value(0.0),
+                                    output_field=FloatField(),
+                                )
+                                * Cast(F("platform_review_count"), FloatField())
+                                + F("google_avg_rating")
+                                * Cast(F("google_review_count"), FloatField())
+                            )
+                            / Cast(F("review_count"), FloatField()),
+                            output_field=FloatField(),
+                        ),
+                    ),
+                    default=Value(0.0),
+                    output_field=FloatField(),
                 ),
             )
 
