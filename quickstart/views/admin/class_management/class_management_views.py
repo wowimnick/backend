@@ -276,6 +276,17 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 except (TypeError, ValueError):
                     pass
 
+            # Multi-collection filter: class is included if it belongs to ANY selected collection.
+            collection_ids = []
+            for val in self.request.query_params.getlist("collection_ids"):
+                for piece in str(val).split(","):
+                    piece = piece.strip()
+                    if piece.isdigit():
+                        collection_ids.append(int(piece))
+            collection_ids = list(dict.fromkeys(collection_ids))
+            if collection_ids:
+                queryset = queryset.filter(collections__id__in=collection_ids).distinct()
+
             return queryset
 
         except Exception as e:

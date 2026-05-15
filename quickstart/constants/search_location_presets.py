@@ -4,6 +4,7 @@ in classeasily-frontend-next/src/context/SearchContext.jsx.
 """
 
 EXPLORE_LOCATION_PRESET_LABELS = (
+    "Anywhere",
     "Toronto, ON",
     "Mississauga, ON",
     "Brampton, ON",

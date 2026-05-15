@@ -99,6 +99,7 @@ from quickstart.services.search_suggest_service import match_collection_by_alias
 from quickstart.services.search_geo_params import (
     CANADIAN_PROVINCES,
     DEFAULT_SEARCH_RADIUS_KM,
+    business_states_for_province_field,
     normalize_province_name,
     is_toronto_gta_search_name as _is_toronto_gta_search_name,
     toronto_gta_center_point as _toronto_gta_center_point,
@@ -864,7 +865,9 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 _collection_slugs.append(_t)
         logger.info(f"--- PUBLIC CLASS SEARCH INITIATED ---")
         logger.info(f"Params: {request.query_params}")
-            
+
+        self._geo_search_notice_candidate = None
+
         req_radius_km_str = request.query_params.get("radius")
         keyword_query_text = request.query_params.get("keyword")
         tag_filter = request.query_params.get("tag")
@@ -1017,12 +1020,13 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             ).first()
 
         if not metro_area_handled and boundary:
-            queryset_in_boundary = queryset.filter(point__within=boundary.geom)
-            if queryset_in_boundary.exists():
+            within_q = queryset.filter(point__within=boundary.geom)
+            if within_q.exists():
+                queryset = within_q
                 logger.info(
-                    f"Performing precise boundary search for: '{boundary.name}' using its stored polygon."
+                    "Performing boundary polygon search for %r.",
+                    boundary.name,
                 )
-                queryset = queryset_in_boundary
                 if req_lat_str and req_lng_str:
                     try:
                         user_location_point = Point(
@@ -1030,41 +1034,44 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                         )
                     except (ValueError, TypeError):
                         user_location_point = None
+                if user_location_point is None:
+                    try:
+                        c = boundary.geom.centroid
+                        if c:
+                            user_location_point = Point(float(c.x), float(c.y), srid=4326)
+                    except Exception:
+                        user_location_point = None
             else:
-                # No classes inside boundary (e.g. Newmarket); show classes in nearby areas
-                queryset_before_fallback = queryset
-                try:
-                    centroid = boundary.geom.centroid
-                    if centroid:
-                        nearby_radius_km = (
-                            float(req_radius_km_str)
-                            if req_radius_km_str
-                            and req_radius_km_str.replace(".", "", 1).isdigit()
-                            else DEFAULT_SEARCH_RADIUS_KM
-                        )
-                        queryset = queryset.filter(
-                            point__distance_lte=(
-                                centroid,
-                                D(km=nearby_radius_km),
+                states = business_states_for_province_field(boundary.province)
+                if not states:
+                    queryset = queryset.none()
+                    logger.warning(
+                        "Boundary %r has empty province; cannot run nearest-in-province fallback.",
+                        boundary.name,
+                    )
+                else:
+                    prov_q = Q()
+                    for st in states:
+                        prov_q |= Q(businessId__businessState__iexact=st)
+                    queryset = queryset.filter(prov_q)
+                    sort_by = "distance"
+                    try:
+                        cen = boundary.geom.centroid
+                        if cen:
+                            user_location_point = Point(
+                                float(cen.x), float(cen.y), srid=4326
                             )
-                        )
-                        logger.info(
-                            f"No classes in '{boundary.name}'; showing classes within "
-                            f"{nearby_radius_km}km of area (nearby neighborhoods)."
-                        )
-                        # Use user's lat/lng for distance sort when available
-                        if req_lat_str and req_lng_str:
-                            try:
-                                user_location_point = Point(
-                                    float(req_lng_str), float(req_lat_str), srid=4326
-                                )
-                            except (ValueError, TypeError):
-                                user_location_point = centroid
-                        else:
-                            user_location_point = centroid
-                except Exception as e:
-                    logger.warning(f"Boundary fallback failed: {e}")
-                    queryset = queryset_before_fallback
+                    except Exception:
+                        user_location_point = None
+                    self._geo_search_notice_candidate = {
+                        "kind": "boundary_empty_nearest_in_province",
+                        "area_label": boundary.name,
+                    }
+                    logger.info(
+                        "No classes in boundary %r; nearest matches in province %s",
+                        boundary.name,
+                        states,
+                    )
 
         elif not metro_area_handled and req_lat_str and req_lng_str and not is_province_search:
             try:
@@ -1253,7 +1260,14 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     "Collection filter %s returned 0 results. Check if slugs exist in DB.",
                     effective_collection_slugs,
                 )
-            return self._finalize_db_search_response(request, Response({"count": final_count}))
+            cand = getattr(self, "_geo_search_notice_candidate", None)
+            payload_co = {"count": final_count}
+            if cand and final_count > 0:
+                payload_co["geo_search_notice"] = cand
+            self._geo_search_notice_candidate = None
+            return self._finalize_db_search_response(
+                request, Response(payload_co)
+            )
 
         page = self.paginate_queryset(queryset)
         if page is not None:
@@ -1272,6 +1286,10 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 response.data = _attach_resolved_collection_to_search_payload(
                     response.data, resolved_collection_meta
                 )
+            cand = getattr(self, "_geo_search_notice_candidate", None)
+            if cand and total > 0 and isinstance(response.data, dict):
+                response.data["geo_search_notice"] = cand
+            self._geo_search_notice_candidate = None
             return self._finalize_db_search_response(request, response)
 
         serializer = self.get_serializer(
@@ -1282,6 +1300,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             response.data = _attach_resolved_collection_to_search_payload(
                 response.data, resolved_collection_meta
             )
+        self._geo_search_notice_candidate = None
         return self._finalize_db_search_response(request, response)
 
     @action(detail=False, methods=["get"], url_path="search")

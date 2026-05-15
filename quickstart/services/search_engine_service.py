@@ -14,10 +14,10 @@ from typing import Any
 
 from django.conf import settings
 from django.core.cache import cache
-from django.db.models import Exists, OuterRef, Q
+from django.db.models import Q
 from django.utils import timezone
 
-from quickstart.models import ClassesMain, GeographicBoundary, ScheduleInstance
+from quickstart.models import GeographicBoundary
 from quickstart.services.boundary_geometry_service import (
     format_typesense_polygon_filter,
     get_cached_boundary_polygon_coords,
@@ -25,6 +25,7 @@ from quickstart.services.boundary_geometry_service import (
 from quickstart.services.search_geo_params import (
     CANADIAN_PROVINCES,
     DEFAULT_SEARCH_RADIUS_KM,
+    business_states_for_province_field,
     is_toronto_gta_search_name,
     normalize_province_name,
     toronto_gta_center_point,
@@ -113,42 +114,6 @@ def _build_page_url(request, page: int) -> str:
     q = request.GET.copy()
     q["page"] = str(page)
     return request.build_absolute_uri(request.path) + "?" + q.urlencode()
-
-
-def _classes_queryset_collections_and_sub(
-    effective_collection_slugs: list[str],
-    sub_slugs: list[str],
-    booking_type: str | None = None,
-):
-    """Same collection/sub/booking filtering Postgres applies before named-boundary geo."""
-    today = timezone.now().date()
-    qs = (
-        ClassesMain.objects.filter(
-            status="active",
-            businessId__isActive=True,
-            businessId__verificationStatus="verified",
-        )
-        .filter(
-            Exists(
-                ScheduleInstance.objects.filter(
-                    schedule__option__classId=OuterRef("pk"),
-                    date__gte=today,
-                    status="scheduled",
-                )
-            )
-        )
-    )
-    if effective_collection_slugs:
-        if len(effective_collection_slugs) == 1:
-            qs = qs.filter(collections__slug=effective_collection_slugs[0])
-        else:
-            qs = qs.filter(collections__slug__in=effective_collection_slugs)
-        qs = qs.distinct()
-    if sub_slugs:
-        qs = qs.filter(collections__slug__in=sub_slugs).distinct()
-    if booking_type:
-        qs = qs.filter(options__booking_type=booking_type).distinct()
-    return qs
 
 
 def _facet_or(field: str, values: list[str]) -> str | None:
@@ -261,6 +226,8 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
         sort_lat = sort_lng = None
 
     metro_handled = False
+    named_boundary_for_fallback: GeographicBoundary | None = None
+    named_boundary_polygon_clause: str | None = None
     if normalized_province:
         prov_full = normalized_province.title()
         prov_abbr = CANADIAN_PROVINCES.get(normalized_province, "").upper()
@@ -304,32 +271,17 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
             )
             centroid = boundary.geom.centroid
             coords = get_cached_boundary_polygon_coords(boundary.id)
-            used_polygon = False
             if coords:
-                qs_chk = _classes_queryset_collections_and_sub(
-                    effective_collection_slugs,
-                    sub_slugs,
-                    booking_type=bt_norm,
+                named_boundary_for_fallback = boundary
+                named_boundary_polygon_clause = (
+                    "location:" + format_typesense_polygon_filter(coords)
                 )
-                if qs_chk.filter(point__within=boundary.geom).exists():
-                    filter_parts.append(
-                        "location:" + format_typesense_polygon_filter(coords)
-                    )
-                    used_polygon = True
-                else:
-                    logger.info(
-                        "Typesense: no classes in raw boundary %r; centroid+radius %.1fkm (Postgres parity).",
-                        boundary.name,
-                        nearby_radius_km,
-                    )
-                    filter_parts.append(
-                        f"location:({centroid.y:.6f}, {centroid.x:.6f}, {nearby_radius_km} km)"
-                    )
-            else:
+                filter_parts.append(named_boundary_polygon_clause)
+            elif centroid:
                 filter_parts.append(
                     f"location:({centroid.y:.6f}, {centroid.x:.6f}, {nearby_radius_km} km)"
                 )
-            if sort_lat is None and centroid and not used_polygon:
+            if sort_lat is None and centroid:
                 sort_lat, sort_lng = float(centroid.y), float(centroid.x)
 
     if (
@@ -589,6 +541,61 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
         coll = _physical_collection_name(client)
         result = _typesense_search_collection(client, coll, search_params)
 
+    geo_search_notice: dict[str, Any] | None = None
+    if (
+        named_boundary_for_fallback is not None
+        and named_boundary_polygon_clause is not None
+        and int(result.get("found") or 0) == 0
+    ):
+        fb_parts = [
+            p for p in filter_parts if p != named_boundary_polygon_clause
+        ]
+        states = business_states_for_province_field(
+            named_boundary_for_fallback.province
+        )
+        if not states:
+            logger.warning(
+                "Typesense boundary fallback skipped for %r: missing province on boundary.",
+                getattr(named_boundary_for_fallback, "name", None),
+            )
+        else:
+            fo = _facet_or("business_state", states)
+            if fo:
+                fb_parts.append(fo)
+            fb_filter_by = " && ".join(fb_parts) if fb_parts else ""
+            search_params_fb = dict(search_params)
+            if fb_filter_by:
+                search_params_fb["filter_by"] = fb_filter_by
+            else:
+                search_params_fb.pop("filter_by", None)
+            cen = named_boundary_for_fallback.geom.centroid
+            sort_yy = float(cen.y)
+            sort_xx = float(cen.x)
+            search_params_fb["sort_by"] = (
+                f"location({sort_yy:.6f},{sort_xx:.6f}):asc,class_id:desc"
+            )
+            try:
+                result_fb = _typesense_search_collection(client, coll, search_params_fb)
+                found_fb = int(result_fb.get("found") or 0)
+                if found_fb > 0:
+                    result = result_fb
+                    geo_search_notice = {
+                        "kind": "boundary_empty_nearest_in_province",
+                        "area_label": named_boundary_for_fallback.name,
+                    }
+                    logger.info(
+                        "Typesense: boundary %r had 0 hits in polygon; showing %s nearest in-province via distance sort.",
+                        named_boundary_for_fallback.name,
+                        found_fb,
+                    )
+            except Exception as e:
+                logger.warning(
+                    "Typesense boundary-empty fallback failed for %r: %s",
+                    getattr(named_boundary_for_fallback, "name", None),
+                    e,
+                    exc_info=True,
+                )
+
     hits = result.get("hits") or []
     found = int(result.get("found") or 0)
     results = []
@@ -618,6 +625,9 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
     }
     if resolved_collection_meta:
         payload["resolved_collection"] = resolved_collection_meta
+
+    if geo_search_notice:
+        payload["geo_search_notice"] = geo_search_notice
 
     if ttl > 0:
         cache.set(

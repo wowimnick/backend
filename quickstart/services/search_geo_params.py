@@ -24,6 +24,28 @@ CANADIAN_PROVINCES = {
 
 PROVINCE_ABBREVIATIONS = {v: k for k, v in CANADIAN_PROVINCES.items()}
 
+
+def business_states_for_province_field(province_field: str | None) -> list[str]:
+    """
+    Values aligned with ClassesMain.businessId.businessState and Typesense business_state:
+    full province name + postal abbreviation when known (e.g. Ontario + ON).
+    """
+    if province_field is None:
+        return []
+    raw = str(province_field).strip()
+    if not raw:
+        return []
+    pl = raw.lower()
+    if pl in CANADIAN_PROVINCES:
+        abbr = CANADIAN_PROVINCES[pl]
+        return [pl.title(), abbr.upper()]
+    upper = raw.upper()
+    if upper in PROVINCE_ABBREVIATIONS:
+        full_key = PROVINCE_ABBREVIATIONS[upper]
+        return [full_key.title(), upper]
+    return [raw]
+
+
 PRESET_LOCATIONS = {
     "Toronto": (43.6532, -79.3832),
     "Mississauga": (43.589, -79.6441),
