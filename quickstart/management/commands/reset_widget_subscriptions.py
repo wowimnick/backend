@@ -11,7 +11,7 @@ import logging
 from django.core.management.base import BaseCommand
 from django.conf import settings
 
-from quickstart.models import WidgetSubscription, BusinessAddonSubscription
+from quickstart.models import WidgetSubscription, BusinessAddonSubscription, BusinessInfo
 
 logger = logging.getLogger(__name__)
 
@@ -86,12 +86,35 @@ class Command(BaseCommand):
             ),
         )
 
+        parser.add_argument(
+            "--clear-business-flags",
+            action="store_true",
+            help=(
+                "After deleting subscriptions, set email_marketing_enabled=False on all businesses "
+                "that had widget or addon rows (testing cleanup)."
+            ),
+        )
+        parser.add_argument(
+            "--clear-business-stripe-customers",
+            action="store_true",
+            help=(
+                "Clear business_info.stripe_customer_id for businesses touched by deleted "
+                "widget/addon rows (destructive; for isolated test DBs)."
+            ),
+        )
+
     def handle(self, *args, **options):
         dry_run = options["dry_run"]
         cancel_stripe = options["cancel_stripe"]
+        clear_business_flags = options["clear_business_flags"]
+        clear_business_stripe_customers = options["clear_business_stripe_customers"]
 
         widget_qs = WidgetSubscription.objects.all()
         addon_qs = BusinessAddonSubscription.objects.all()
+        touched_business_ids = set(
+            list(widget_qs.values_list("business_id", flat=True))
+            + list(addon_qs.values_list("business_id", flat=True))
+        )
         widget_count = widget_qs.count()
         addon_count = addon_qs.count()
 
@@ -169,5 +192,24 @@ class Command(BaseCommand):
         widget_deleted, _ = widget_qs.delete()
         if widget_deleted:
             self.stdout.write(self.style.SUCCESS(f"Deleted {widget_deleted} widget subscription(s)."))
+
+        if clear_business_flags and touched_business_ids:
+            updated = BusinessInfo.objects.filter(
+                businessId__in=touched_business_ids
+            ).update(email_marketing_enabled=False)
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"Cleared email_marketing_enabled on {updated} business(es)."
+                )
+            )
+        if clear_business_stripe_customers and touched_business_ids:
+            updated = BusinessInfo.objects.filter(
+                businessId__in=touched_business_ids
+            ).update(stripe_customer_id=None)
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"Cleared stripe_customer_id on {updated} business(es)."
+                )
+            )
 
         self.stdout.write(self.style.SUCCESS("Billing and subscriptions reset. You can test from scratch now."))

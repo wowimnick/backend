@@ -57,6 +57,7 @@ class AdminScheduleSerializer(serializers.ModelSerializer):
             "time",
             "duration",
             "price",
+            "minParticipants",
             "maxParticipants",
             "start_date",
             "end_date",

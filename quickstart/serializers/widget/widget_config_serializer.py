@@ -83,10 +83,18 @@ class WidgetSubscriptionSerializer(serializers.ModelSerializer):
             "plan_id",
             "status",
             "current_period_end",
+            "payment_grace_until",
             "cancel_at_period_end",
+            "comp_reason",
             "created_at",
         ]
-        read_only_fields = ["id", "status", "current_period_end", "created_at"]
+        read_only_fields = [
+            "id",
+            "status",
+            "current_period_end",
+            "payment_grace_until",
+            "created_at",
+        ]
 
     def to_representation(self, instance):
         data = super().to_representation(instance)

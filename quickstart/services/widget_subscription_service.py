@@ -36,6 +36,25 @@ def get_widget_subscription(business):
     return getattr(business, "widget_subscription", None)
 
 
+def widget_subscription_grants_platform_access(sub):
+    """
+    True if the business should have widget/API access for this subscription row.
+    Allows past_due during payment_grace_until window (set from invoice.payment_failed).
+    """
+    if not sub:
+        return False
+    now = timezone.now()
+    st = (sub.status or "").strip().lower()
+    period_ok = sub.current_period_end is None or sub.current_period_end > now
+    if st in ("active", "trialing") and period_ok:
+        return True
+    if st == "past_due" and period_ok:
+        grace = getattr(sub, "payment_grace_until", None)
+        if grace and grace > now:
+            return True
+    return False
+
+
 def _price_map():
     return {
         "basic": getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_BASIC", None),

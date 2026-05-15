@@ -15,6 +15,9 @@ from django.db.models import Q, Count, Sum, Subquery, OuterRef, IntegerField, Pr
 from django.db.models.functions import Coalesce
 
 from quickstart.utils.stripe_processing_fee import estimate_stripe_processing_fee
+from django.core.cache import cache
+from urllib.parse import urlparse
+
 from quickstart.models import (
     BusinessInfo,
     BusinessStaff,
@@ -135,15 +138,15 @@ def _business_has_active_widget_subscription(business):
         return True
     if not getattr(settings, "WIDGET_SUBSCRIPTION_REQUIRED", False):
         return True
-    from quickstart.services.widget_subscription_service import get_widget_subscription
+    from quickstart.services.widget_subscription_service import (
+        get_widget_subscription,
+        widget_subscription_grants_platform_access,
+    )
 
     sub = get_widget_subscription(business)
     if not sub:
         return False
-    now = timezone.now()
-    return (sub.status or "").strip().lower() in ("active", "trialing") and (
-        sub.current_period_end is None or sub.current_period_end > now
-    )
+    return widget_subscription_grants_platform_access(sub)
 
 
 def _business_has_growth_or_advanced_widget_plan(business):
@@ -164,18 +167,17 @@ def _get_widget_plan_fee_percentage(business):
     if getattr(business, "is_demo", False):
         return Decimal("4.00")
     now = timezone.now()
+    from quickstart.services.widget_subscription_service import (
+        widget_subscription_grants_platform_access,
+    )
+
     sub = (
-        WidgetSubscription.objects.filter(
-            business=business,
-            status__in=["active", "trialing"],
-        )
-        .filter(
-            Q(current_period_end__isnull=True) | Q(current_period_end__gt=now)
-        )
+        WidgetSubscription.objects.filter(business=business)
+        .filter(Q(current_period_end__isnull=True) | Q(current_period_end__gt=now))
         .order_by("-current_period_end")
         .first()
     )
-    if not sub or not sub.plan_id:
+    if not sub or not sub.plan_id or not widget_subscription_grants_platform_access(sub):
         return Decimal("4.00")
     return WIDGET_PLAN_FEE_PERCENT.get((sub.plan_id or "").lower(), Decimal("4.00"))
 
@@ -1691,3 +1693,127 @@ class WidgetMembershipStatusView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+def _normalize_widget_origin_host(origin_or_url: str) -> str:
+    if not origin_or_url:
+        return ""
+    s = (origin_or_url or "").strip().lower()
+    if "://" in s:
+        try:
+            p = urlparse(s)
+            return (p.hostname or "").lower()
+        except Exception:
+            return ""
+    return s.split("/")[0].strip().lower()
+
+
+def _business_allowed_widget_origins_list(business) -> list:
+    """Normalize stored allowlist (newline string, JSON list, or list) to a list of raw entries."""
+    raw = getattr(business, "allowed_widget_origins", None)
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    if isinstance(raw, str):
+        return [x.strip() for x in raw.replace("\r", "").split("\n") if x.strip()]
+    return []
+
+
+def build_widget_diagnostics_data(business, raw_ref: str = "") -> dict:
+    """Shared payload for widget install diagnostics (public widget key or business dashboard)."""
+    allowed_raw = _business_allowed_widget_origins_list(business)
+    host = _normalize_widget_origin_host(raw_ref)
+    norm_allow = {_normalize_widget_origin_host(x) for x in allowed_raw if x}
+    norm_allow.discard("")
+    if not norm_allow:
+        allowed = True
+    else:
+        allowed = bool(host) and host in norm_allow
+    events = list(
+        WidgetFunnelEvent.objects.filter(business=business)
+        .order_by("-created_at")[:10]
+        .values(
+            "event",
+            "step",
+            "session_id",
+            "class_id",
+            "created_at",
+        )
+    )
+    for e in events:
+        ts = e.get("created_at")
+        if ts is not None:
+            e["created_at"] = ts.isoformat()
+    return {
+        "business_id": business.businessId,
+        "allowed_widget_origins": allowed_raw,
+        "referrer_host": host or None,
+        "referrer_matches_allowlist": allowed,
+        "last_booking_date": business.last_booking_date.isoformat()
+        if business.last_booking_date
+        else None,
+        "recent_widget_events": events,
+    }
+
+
+class WidgetPublicPlansView(APIView):
+    """Public Stripe-backed prices for widget SaaS plans (cached 1h)."""
+
+    authentication_classes = []
+    permission_classes = []
+
+    def get(self, request):
+        cache_key = "widget_v1_public_plans_v3"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
+        payload = {"plans": [], "currency": None}
+        pairs = [
+            ("basic", getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_BASIC", None)),
+            ("growth", getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_GROWTH", None)),
+            ("advanced", getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_ADVANCED", None)),
+        ]
+        for plan_id, price_id in pairs:
+            if not price_id:
+                continue
+            try:
+                price = stripe.Price.retrieve(str(price_id))
+                unit = getattr(price, "unit_amount", None) or 0
+                cur = (getattr(price, "currency", None) or "cad").upper()
+                payload["currency"] = payload["currency"] or cur
+                rec = getattr(price, "recurring", None)
+                interval = None
+                if rec is not None:
+                    interval = getattr(rec, "interval", None)
+                    if isinstance(rec, dict):
+                        interval = rec.get("interval")
+                payload["plans"].append(
+                    {
+                        "plan_id": plan_id,
+                        "stripe_price_id": getattr(price, "id", None),
+                        "amount": float(unit) / 100.0,
+                        "currency": cur,
+                        "interval": interval,
+                    }
+                )
+            except stripe.StripeError as e:
+                logger.warning("WidgetPublicPlansView retrieve %s: %s", price_id, e)
+        cache.set(cache_key, payload, timeout=3600)
+        return Response(payload)
+
+
+class WidgetDiagnosticsView(APIView):
+    """Self-serve diagnostics for embed + recent funnel activity (widget API key)."""
+
+    permission_classes = [IsValidWidgetRequest]
+    throttle_classes = [WidgetRateThrottle]
+
+    def get(self, request):
+        business = request.business_context
+        raw_ref = (
+            request.query_params.get("referrer")
+            or request.query_params.get("origin")
+            or ""
+        )
+        return Response(build_widget_diagnostics_data(business, raw_ref))

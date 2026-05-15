@@ -1,5 +1,6 @@
 import traceback
 from unittest.mock import MagicMock
+from datetime import timedelta
 import uuid
 import json
 from rest_framework.exceptions import ValidationError as DRFValidationError
@@ -92,6 +93,34 @@ from quickstart.utils.widget_booking_source import is_widget_booking_source
 from quickstart.utils.stripe_processing_fee import estimate_stripe_processing_fee
 
 logger = logging.getLogger(__name__)
+
+
+def _record_processed_stripe_webhook_event(event, layer="webhook"):
+    """Persist Stripe event id so webhook retries are idempotent."""
+    eid = getattr(event, "id", None) or ""
+    if not eid:
+        return
+    try:
+        ProcessedStripeEvent.objects.update_or_create(
+            event_id=eid,
+            defaults={"event_type": getattr(event, "type", "") or ""},
+        )
+    except Exception as exc:
+        logger.error(
+            "ProcessedStripeEvent persist failed event_id=%s: %s",
+            eid,
+            exc,
+            exc_info=True,
+        )
+        try:
+            import sentry_sdk
+
+            sentry_sdk.set_context(
+                "stripe_webhook", {"event_id": eid, "layer": layer}
+            )
+            sentry_sdk.capture_exception(exc)
+        except Exception:
+            pass
 
 
 def _stripe_subscription_first_price_id(subscription_obj):
@@ -1419,6 +1448,16 @@ class ProcessBookingWebhook(APIView):
             logger.warning("[%s] Webhook signature verification failed: %s", webhook_id, e)
             return Response(status=status.HTTP_400_BAD_REQUEST)
 
+        try:
+            import sentry_sdk
+
+            sentry_sdk.set_tag(
+                "stripe.event_type", getattr(event, "type", "") or ""
+            )
+            sentry_sdk.set_tag("subscription.layer", "payments_webhook")
+        except Exception:
+            pass
+
         logger.info(
             "[%s] Booking webhook received: event_type=%s event_id=%s",
             webhook_id,
@@ -1705,6 +1744,16 @@ class ProcessBookingWebhook(APIView):
         elif event.type == "invoice.payment_failed":
             # Subscription payment failed: notify relevant parties once per invoice.
             logger.info("[%s] invoice.payment_failed received", webhook_id)
+            payfail_eid = getattr(event, "id", None) or ""
+            if payfail_eid and ProcessedStripeEvent.objects.filter(
+                event_id=payfail_eid
+            ).exists():
+                logger.info(
+                    "[%s] invoice.payment_failed duplicate event_id=%s",
+                    webhook_id,
+                    payfail_eid,
+                )
+                return Response(status=status.HTTP_200_OK)
             invoice = event.data.object
             inv_id = getattr(invoice, "id", None) or (invoice.get("id") if isinstance(invoice, dict) else None)
             sub_id = getattr(invoice, "subscription", None) or (
@@ -1718,7 +1767,11 @@ class ProcessBookingWebhook(APIView):
                     try:
                         stripe_sub = stripe.Subscription.retrieve(sub_id)
                         meta = _subscription_metadata(stripe_sub)
-                        if _obj_get(meta, "business_id") and not _obj_get(meta, "addon_type"):
+                        if (
+                            _obj_get(meta, "business_id")
+                            and not _obj_get(meta, "addon_type")
+                            and not _obj_get(meta, "membership_product_id")
+                        ):
                             business_id = _obj_get(meta, "business_id")
                             try:
                                 business = BusinessInfo.objects.get(businessId=int(business_id))
@@ -1758,6 +1811,21 @@ class ProcessBookingWebhook(APIView):
                                         "[%s] Sent widget subscription payment failed email to %s for invoice %s",
                                         webhook_id, owner.email, inv_id,
                                     )
+                                    ws = WidgetSubscription.objects.filter(
+                                        business=business
+                                    ).first()
+                                    if ws:
+                                        ws.payment_grace_until = (
+                                            timezone.now()
+                                            + timedelta(
+                                                days=getattr(
+                                                    settings,
+                                                    "WIDGET_SUBSCRIPTION_PAYMENT_FAILED_GRACE_DAYS",
+                                                    7,
+                                                )
+                                            )
+                                        )
+                                        ws.save(update_fields=["payment_grace_until"])
                         elif _obj_get(meta, "addon_type"):
                             addon_type = _obj_get(meta, "addon_type")
                             business_id = _obj_get(meta, "business_id")
@@ -1816,18 +1884,29 @@ class ProcessBookingWebhook(APIView):
                         logger.warning(
                             "[%s] invoice.payment_failed handling failed: %s", webhook_id, e, exc_info=True,
                         )
+            _record_processed_stripe_webhook_event(event, layer="invoice.payment_failed")
             return Response(status=status.HTTP_200_OK)
 
         elif event.type == "invoice.paid":
             # Single source of truth: full sync from Stripe after any invoice.paid (widget or addon).
             logger.info("[%s] invoice.paid received", webhook_id)
+            inv_paid_eid = getattr(event, "id", None) or ""
+            if inv_paid_eid and ProcessedStripeEvent.objects.filter(
+                event_id=inv_paid_eid
+            ).exists():
+                logger.info(
+                    "[%s] invoice.paid duplicate event_id=%s",
+                    webhook_id,
+                    inv_paid_eid,
+                )
+                return Response(status=status.HTTP_200_OK)
             invoice = event.data.object
             from quickstart.payments.corporate_stripe_webhooks import (
                 handle_corporate_balance_invoice_paid,
             )
 
             corp_r = handle_corporate_balance_invoice_paid(
-                invoice, getattr(event, "id", None), webhook_id
+                invoice, inv_paid_eid or None, webhook_id
             )
             if corp_r is not None:
                 return corp_r
@@ -1883,6 +1962,7 @@ class ProcessBookingWebhook(APIView):
                     logger.warning(
                         "[%s] invoice.paid subscription sync failed: %s", webhook_id, e
                     )
+            _record_processed_stripe_webhook_event(event, layer="invoice.paid")
             return Response(status=status.HTTP_200_OK)
 
         elif event.type in (
@@ -1891,6 +1971,16 @@ class ProcessBookingWebhook(APIView):
             "customer.subscription.deleted",
         ):
             logger.info("[%s] Subscription event: %s", webhook_id, event.type)
+            sub_stripe_eid = getattr(event, "id", None) or ""
+            if sub_stripe_eid and ProcessedStripeEvent.objects.filter(
+                event_id=sub_stripe_eid
+            ).exists():
+                logger.info(
+                    "[%s] Subscription duplicate event_id=%s",
+                    webhook_id,
+                    sub_stripe_eid,
+                )
+                return Response(status=status.HTTP_200_OK)
             subscription = event.data.object
             metadata = _subscription_metadata(subscription)
             business_id = _obj_get(metadata, "business_id")
@@ -1898,6 +1988,7 @@ class ProcessBookingWebhook(APIView):
                 logger.warning(
                     f"[{webhook_id}] Subscription {subscription.id} has no business_id in metadata; skipping."
                 )
+                _record_processed_stripe_webhook_event(event, layer="customer.subscription")
                 return Response(status=status.HTTP_200_OK)
             try:
                 business = BusinessInfo.objects.get(businessId=int(business_id))
@@ -1905,6 +1996,7 @@ class ProcessBookingWebhook(APIView):
                 logger.warning(
                     f"[{webhook_id}] Business {business_id} not found for subscription {subscription.id}."
                 )
+                _record_processed_stripe_webhook_event(event, layer="customer.subscription")
                 return Response(status=status.HTTP_200_OK)
 
             addon_type = _obj_get(metadata, "addon_type")
@@ -1963,11 +2055,12 @@ class ProcessBookingWebhook(APIView):
                                 addon_current_plan = None
                                 if addon_type == ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING:
                                     addon_current_plan = "active"
-                            send_business_subscription_lifecycle_email(
-                                owner,
-                                business_name=getattr(business, "businessName", None) or "Your business",
-                                subscription_name=subscription_name,
-                                lifecycle_event="activated",
+                                send_business_subscription_lifecycle_email(
+                                    owner,
+                                    business_name=getattr(business, "businessName", None)
+                                    or "Your business",
+                                    subscription_name=subscription_name,
+                                    lifecycle_event="activated",
                                     current_plan=addon_current_plan,
                                     next_billing_date=after_addon.current_period_end,
                                     price_display=format_addon_price_display(
@@ -2009,6 +2102,7 @@ class ProcessBookingWebhook(APIView):
                                     ),
                                     manage_billing_url=f"{settings.FRONTEND_BASE_URL or ''}/business/dashboard?tab=settings",
                                 )
+                _record_processed_stripe_webhook_event(event, layer="customer.subscription")
                 return Response(status=status.HTTP_200_OK)
 
             # Customer membership subscription (end-customer pays business)
@@ -2106,6 +2200,7 @@ class ProcessBookingWebhook(APIView):
                                 after_membership,
                                 lifecycle_event="reactivated",
                             )
+                _record_processed_stripe_webhook_event(event, layer="customer.subscription")
                 return Response(status=status.HTTP_200_OK)
 
             # Widget subscription: single source of truth via sync module
@@ -2209,6 +2304,7 @@ class ProcessBookingWebhook(APIView):
                                 next_billing_date=after_widget.current_period_end,
                                 manage_billing_url=f"{settings.FRONTEND_BASE_URL or ''}/business/dashboard?tab=settings",
                             )
+            _record_processed_stripe_webhook_event(event, layer="customer.subscription")
             return Response(status=status.HTTP_200_OK)
 
         return Response(status=status.HTTP_200_OK)

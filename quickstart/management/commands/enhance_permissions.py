@@ -291,6 +291,10 @@ class Command(BaseCommand):
                     "group": business_group,
                     "description": "General access to the Business Administration section",
                 },
+                "view_widgetsubscription": {
+                    "group": business_group,
+                    "description": "View widget SaaS subscriptions and apply complimentary overrides",
+                },
                 "view_all_verificationrequests": {
                     "group": business_group,
                     "description": "View all verification requests (Admin)",

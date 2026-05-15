@@ -22,6 +22,7 @@ from quickstart.models import (
     MembershipProduct,
     StripeCheckoutAttempt,
     WidgetSubscription,
+    AuditLog,
 )
 from quickstart.models import ADDON_TYPE_EMAIL_MARKETING, ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING
 from quickstart.services.email_marketing_config import list_public_tiers, price_id_to_tier
@@ -30,7 +31,10 @@ from quickstart.serializers.widget.widget_config_serializer import (
     BusinessWidgetConfigSerializer,
     WidgetSubscriptionSerializer,
 )
-from quickstart.views.widget.widget_views import _business_has_active_widget_subscription
+from quickstart.views.widget.widget_views import (
+    _business_has_active_widget_subscription,
+    build_widget_diagnostics_data,
+)
 from quickstart.services.subscription_sync import (
     sync_widget_subscription_from_stripe,
     sync_addon_subscription_from_stripe,
@@ -59,6 +63,23 @@ stripe.api_key = settings.STRIPE_SECRET_KEY
 
 # Plan order for upgrade/downgrade: lower index = lower tier
 PLAN_ORDER = ["basic", "growth", "advanced"]
+
+
+def _audit_widget_subscription_action(request, business, details: str):
+    """Best-effort audit entry for SaaS widget subscription changes."""
+    try:
+        user = getattr(request, "user", None)
+        AuditLog.objects.create(
+            user=user if user and user.is_authenticated else None,
+            user_email=getattr(user, "email", None) or "unknown",
+            action="system_setting_change",
+            details=(details or "")[:2000],
+            target_model="WidgetSubscription",
+            target_id=str(getattr(business, "businessId", "") or ""),
+            metadata={"business_id": getattr(business, "businessId", None)},
+        )
+    except Exception as exc:
+        logger.warning("Widget subscription audit log failed: %s", exc)
 
 
 def _is_downgrade(from_plan_id, to_plan_id):
@@ -833,8 +854,14 @@ def _subscription_response_from_sub(sub):
         "currentPeriodEnd": (
             sub.current_period_end.isoformat() if sub.current_period_end else None
         ),
+        "paymentGraceUntil": (
+            sub.payment_grace_until.isoformat()
+            if getattr(sub, "payment_grace_until", None)
+            else None
+        ),
         "cancelAtPeriodEnd": sub.cancel_at_period_end,
         "stripeSubscriptionId": sub.stripe_subscription_id or None,
+        "compReason": (getattr(sub, "comp_reason", None) or None),
     }
 
 
@@ -907,6 +934,21 @@ def _client_secret_from_stripe_invoice(invoice):
         return None
 
 
+class BusinessWidgetDiagnosticsView(APIView):
+    """Widget install diagnostics for the authenticated business (session auth)."""
+
+    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+
+    def get(self, request, *args, **kwargs):
+        business = _get_business_for_subscription(request.user)
+        raw_ref = (
+            request.query_params.get("referrer")
+            or request.query_params.get("origin")
+            or ""
+        )
+        return Response(build_widget_diagnostics_data(business, raw_ref))
+
+
 class WidgetSubscriptionView(APIView):
     """
     GET: Return current widget subscription for the authenticated business.
@@ -949,7 +991,14 @@ class WidgetSubscriptionView(APIView):
                 status=status.HTTP_200_OK,
             )
         plan_id = (sub.plan_id or "").strip().lower()
-        has_membership_access = has_widget_access and plan_id in ("growth", "advanced")
+        sub_status = (sub.status or "").strip().lower()
+        # Memberships require an entitled SaaS tier *and* a healthy billing state (not past_due grace).
+        membership_billing_ok = sub_status in ("active", "trialing")
+        has_membership_access = (
+            has_widget_access
+            and plan_id in ("growth", "advanced")
+            and membership_billing_ok
+        )
         payload = {
             "subscription": _subscription_response_from_sub(sub),
             "widget_subscription_required": subscription_required,
@@ -1172,6 +1221,9 @@ class WidgetSubscriptionCancelView(APIView):
         if not sub.stripe_subscription_id:
             sub.cancel_at_period_end = True
             sub.save(update_fields=["cancel_at_period_end"])
+            _audit_widget_subscription_action(
+                request, business, "Widget subscription: cancel_at_period_end set (no Stripe id)"
+            )
             return Response(
                 {"subscription": _subscription_response_from_sub(sub)},
                 status=status.HTTP_200_OK,
@@ -1183,6 +1235,9 @@ class WidgetSubscriptionCancelView(APIView):
                 status=status.HTTP_502_BAD_GATEWAY,
             )
         sub = synced or sub
+        _audit_widget_subscription_action(
+            request, business, "Widget subscription: cancel at period end requested in Stripe"
+        )
         return Response(
             {"subscription": _subscription_response_from_sub(sub)},
             status=status.HTTP_200_OK,
@@ -1205,6 +1260,9 @@ class WidgetSubscriptionReactivateView(APIView):
         if not sub.stripe_subscription_id:
             sub.cancel_at_period_end = False
             sub.save(update_fields=["cancel_at_period_end"])
+            _audit_widget_subscription_action(
+                request, business, "Widget subscription: reactivate (cleared cancel_at_period_end, no Stripe)"
+            )
             return Response(
                 {"subscription": _subscription_response_from_sub(sub)},
                 status=status.HTTP_200_OK,
@@ -1216,6 +1274,9 @@ class WidgetSubscriptionReactivateView(APIView):
                 status=status.HTTP_502_BAD_GATEWAY,
             )
         sub = synced or sub
+        _audit_widget_subscription_action(
+            request, business, "Widget subscription: reactivate in Stripe (cleared cancel_at_period_end)"
+        )
         return Response(
             {"subscription": _subscription_response_from_sub(sub)},
             status=status.HTTP_200_OK,

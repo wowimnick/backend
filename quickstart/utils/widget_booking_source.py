@@ -24,14 +24,14 @@ def business_has_growth_or_advanced_widget_plan(business) -> bool:
         return False
     if getattr(business, "is_demo", False):
         return True
-    from quickstart.services.widget_subscription_service import get_widget_subscription
+    from quickstart.services.widget_subscription_service import (
+        get_widget_subscription,
+        widget_subscription_grants_platform_access,
+    )
 
     sub = get_widget_subscription(business)
     if not sub or not sub.plan_id:
         return False
-    now = timezone.now()
-    if (sub.status or "").strip().lower() not in ("active", "trialing"):
-        return False
-    if sub.current_period_end is not None and sub.current_period_end <= now:
+    if not widget_subscription_grants_platform_access(sub):
         return False
     return (sub.plan_id or "").lower() in ("growth", "advanced")

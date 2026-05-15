@@ -26,6 +26,62 @@ from quickstart.utils.email_utils import (
 logger = logging.getLogger(__name__)
 
 
+def _membership_resolve_stripe_customer_id(business, contact, email, first_name, last_name):
+    """Reuse Contact or prior memberships' Stripe customer when possible."""
+    stripe.api_key = settings.STRIPE_SECRET_KEY
+    cid = (contact.stripe_customer_id or "").strip() or None
+    if cid:
+        try:
+            stripe.Customer.retrieve(cid)
+            return cid
+        except stripe.StripeError:
+            pass
+    prior = (
+        CustomerMembership.objects.filter(contact=contact)
+        .exclude(stripe_customer_id__isnull=True)
+        .exclude(stripe_customer_id="")
+        .order_by("-updated_at")
+        .first()
+    )
+    if prior and prior.stripe_customer_id:
+        try:
+            stripe.Customer.retrieve(prior.stripe_customer_id)
+            cid = prior.stripe_customer_id
+            contact.stripe_customer_id = cid
+            contact.save(update_fields=["stripe_customer_id"])
+            return cid
+        except stripe.StripeError:
+            pass
+    try:
+        existing = stripe.Customer.list(email=email, limit=10)
+        for c in getattr(existing, "data", []) or []:
+            md = getattr(c, "metadata", None) or {}
+            if isinstance(md, dict):
+                bid = md.get("business_id")
+            else:
+                bid = getattr(md, "business_id", None)
+            if str(bid or "") == str(business.businessId):
+                cid = c.id
+                contact.stripe_customer_id = cid
+                contact.save(update_fields=["stripe_customer_id"])
+                return cid
+    except stripe.StripeError as e:
+        logger.warning("membership_service: Customer.list failed: %s", e)
+
+    display_name = f"{first_name or ''} {last_name or ''}".strip() or email
+    cust = stripe.Customer.create(
+        email=email,
+        name=display_name,
+        metadata={
+            "business_id": str(business.businessId),
+            "contact_id": str(contact.id),
+        },
+    )
+    contact.stripe_customer_id = cust.id
+    contact.save(update_fields=["stripe_customer_id"])
+    return cust.id
+
+
 def create_stripe_price(product):
     """
     Create or ensure Stripe Product + Price for this MembershipProduct.
@@ -102,19 +158,9 @@ def create_customer_membership_subscription(
         contact.last_name = last_name or contact.last_name
         contact.save(update_fields=["first_name", "last_name"])
 
-    # Create or get Stripe Customer for this contact (one per contact per platform)
-    stripe_customer_id = None
-    if not stripe_customer_id:
-        stripe_customer = stripe.Customer.create(
-            email=email,
-            name=f"{first_name or ''} {last_name or ''}".strip() or email,
-            metadata={
-                "business_id": str(business.businessId),
-                "membership_product_id": str(product.id),
-                "contact_id": str(contact.id),
-            },
-        )
-        stripe_customer_id = stripe_customer.id
+    stripe_customer_id = _membership_resolve_stripe_customer_id(
+        business, contact, email, first_name, last_name
+    )
 
     create_params = {
         "customer": stripe_customer_id,

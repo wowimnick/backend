@@ -25,6 +25,7 @@ from quickstart.views.widget.widget_config_views import (
     WidgetSubscriptionCancelView,
     WidgetSubscriptionReactivateView,
     WidgetSubscriptionInvoicesView,
+    BusinessWidgetDiagnosticsView,
     CreateUpdatePaymentMethodSetupIntentView,
     SetDefaultPaymentMethodView,
     DefaultPaymentMethodView,
@@ -245,6 +246,8 @@ from quickstart.views.widget.widget_views import (
     WidgetMembershipProductsView,
     WidgetMembershipSubscribeView,
     WidgetMembershipStatusView,
+    WidgetPublicPlansView,
+    WidgetDiagnosticsView,
 )
 
 # =============================================================================
@@ -436,6 +439,7 @@ def business_id_redirect_view(request, business_id):
 # =============================================================================
 
 widget_urlpatterns = [
+    path("plans/", WidgetPublicPlansView.as_view(), name="widget-public-plans"),
     path("config/", WidgetConfigView.as_view(), name="widget-config"),
     path("classes/", WidgetClassListView.as_view(), name="widget-classes"),
     path("availability/", WidgetAvailabilityView.as_view(), name="widget-availability"),
@@ -455,6 +459,7 @@ widget_urlpatterns = [
     path("membership-products/", WidgetMembershipProductsView.as_view(), name="widget-membership-products"),
     path("membership-subscribe/", WidgetMembershipSubscribeView.as_view(), name="widget-membership-subscribe"),
     path("membership-status/", WidgetMembershipStatusView.as_view(), name="widget-membership-status"),
+    path("diagnostics/", WidgetDiagnosticsView.as_view(), name="widget-diagnostics"),
 ]
 
 urlpatterns = [
@@ -739,6 +744,11 @@ urlpatterns = [
         "my-business/widget-config/",
         WidgetConfigManagementView.as_view(),
         name="my-business-widget-config",
+    ),
+    path(
+        "my-business/widget-diagnostics/",
+        BusinessWidgetDiagnosticsView.as_view(),
+        name="my-business-widget-diagnostics",
     ),
     path(
         "my-business/email-branding/preview/",

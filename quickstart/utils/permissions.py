@@ -127,6 +127,41 @@ class CanManageEmailMarketing(BasePermission):
         )
 
 
+class CanViewBusinessMemberships(BasePermission):
+    """Read membership products/members (view_business_members or class managers)."""
+
+    message = "You do not have permission to view memberships."
+
+    def has_permission(self, request, view):
+        user = request.user
+        return (
+            user
+            and user.is_authenticated
+            and (
+                user.has_perm("quickstart.view_business_members")
+                or user.has_perm("quickstart.manage_business_members")
+                or user.has_perm("quickstart.manage_own_classes")
+            )
+        )
+
+
+class CanMutateBusinessMemberships(BasePermission):
+    """Create/update/cancel memberships (finance or class managers)."""
+
+    message = "You do not have permission to manage memberships."
+
+    def has_permission(self, request, view):
+        user = request.user
+        return (
+            user
+            and user.is_authenticated
+            and (
+                user.has_perm("quickstart.manage_business_members")
+                or user.has_perm("quickstart.manage_own_classes")
+            )
+        )
+
+
 class CanManageOwnClasses(BasePermission):
     """
     Allows access if user has 'manage_own_classes' permission AND

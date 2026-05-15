@@ -148,6 +148,10 @@ def sync_widget_subscription_from_stripe(stripe_subscription_id, subscription_ob
     customer_id = _obj_get(subscription_obj, "customer")
     stripe_customer_id = str(customer_id) if customer_id else ""
 
+    grace_clear = {}
+    if status in ("active", "trialing"):
+        grace_clear["payment_grace_until"] = None
+
     defaults = {
         "business": business,
         "plan_id": plan_id,
@@ -156,6 +160,7 @@ def sync_widget_subscription_from_stripe(stripe_subscription_id, subscription_ob
         "status": status,
         "current_period_end": current_period_end,
         "cancel_at_period_end": cancel_at_period_end,
+        **grace_clear,
     }
 
     # Lookup: by stripe_subscription_id first; if not found, by business (webhook may arrive before API set it).

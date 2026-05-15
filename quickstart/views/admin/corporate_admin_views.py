@@ -184,6 +184,7 @@ class AdminCorporateShortlistViewSet(
         host = (d.get("host_name") or "").strip() or (
             cls.businessId.businessName if cls.businessId else ""
         )
+        tagline_val = (d.get("tagline") or "").strip()[:500]
         opt = CorporateShortlistOption.objects.create(
             shortlist=sl,
             position=d["position"],
@@ -191,15 +192,15 @@ class AdminCorporateShortlistViewSet(
             source_class=cls,
             title=title[:200],
             host_name=host[:200],
-            tagline="",
+            tagline=tagline_val,
             description=desc[:8000],
             inclusions=d.get("inclusions") or [],
             cover_image_url=cover,
             gallery_urls=[],
             location_text=cls.location or "",
-            duration_minutes=None,
-            min_headcount=None,
-            max_headcount=None,
+            duration_minutes=d.get("duration_minutes"),
+            min_headcount=d.get("min_headcount"),
+            max_headcount=d.get("max_headcount"),
             price_total_cents=d["price_total_cents"],
             price_per_person_cents=d.get("price_per_person_cents"),
             proposed_date_options=d.get("proposed_date_options") or [],

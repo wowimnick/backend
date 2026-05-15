@@ -853,6 +853,14 @@ class BusinessInfo(models.Model):
                 "manage_email_marketing",
                 "Can create and send email marketing campaigns for own business",
             ),
+            (
+                "view_business_members",
+                "Can view membership products and members for own business",
+            ),
+            (
+                "manage_business_members",
+                "Can create, approve, and cancel memberships for own business",
+            ),
         ]
 
 
@@ -945,6 +953,8 @@ class BusinessRole(models.Model):
                 "access_business_dashboard",
                 "receive_booking_notifications",
                 "manage_email_marketing",
+                "view_business_members",
+                "manage_business_members",
             ],
         },
     )
@@ -1064,6 +1074,14 @@ class Contact(models.Model):
         content_type_field="content_type",
         object_id_field="object_id",
         related_query_name="contact",  # Optional but good practice
+    )
+
+    stripe_customer_id = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        db_index=True,
+        help_text="Stripe Customer id for this contact (membership subscriptions).",
     )
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -3165,6 +3183,16 @@ class WidgetSubscription(models.Model):
         db_index=True,
     )
     current_period_end = models.DateTimeField(null=True, blank=True)
+    payment_grace_until = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="While status is past_due, platform access may continue until this timestamp.",
+    )
+    comp_reason = models.TextField(
+        blank=True,
+        default="",
+        help_text="If set, subscription was comped/overridden by admin (no Stripe subscription).",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -3173,6 +3201,12 @@ class WidgetSubscription(models.Model):
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["business", "status"]),
+        ]
+        permissions = [
+            (
+                "view_widgetsubscription",
+                "Can view widget subscription admin data",
+            ),
         ]
 
     def __str__(self):

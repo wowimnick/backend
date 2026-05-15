@@ -267,7 +267,7 @@ class AddOptionFromClassSerializer(serializers.Serializer):
 
     position = serializers.IntegerField(min_value=1, max_value=3)
     class_id = serializers.IntegerField()
-    price_total_cents = serializers.IntegerField(min_value=0)
+    price_total_cents = serializers.IntegerField(min_value=1)
     price_per_person_cents = serializers.IntegerField(
         min_value=0, allow_null=True, required=False
     )
@@ -288,6 +288,18 @@ class AddOptionFromClassSerializer(serializers.Serializer):
     )
     cover_image_url_override = serializers.CharField(
         allow_blank=True, required=False, default=""
+    )
+    tagline = serializers.CharField(
+        max_length=500, allow_blank=True, required=False, default=""
+    )
+    duration_minutes = serializers.IntegerField(
+        allow_null=True, required=False, min_value=1
+    )
+    min_headcount = serializers.IntegerField(
+        allow_null=True, required=False, min_value=1
+    )
+    max_headcount = serializers.IntegerField(
+        allow_null=True, required=False, min_value=1
     )
 
     def validate(self, data):

@@ -29,7 +29,10 @@ from quickstart.services.membership_service import (
     get_credits_remaining,
 )
 from quickstart.services.membership_sync import sync_customer_membership_from_stripe
-from quickstart.utils.permissions import CanManageOwnClasses
+from quickstart.utils.permissions import (
+    CanViewBusinessMemberships,
+    CanMutateBusinessMemberships,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +208,10 @@ def _member_to_dict(membership):
 class MembershipProductListCreateView(APIView):
     """GET: List membership products for the business. POST: Create a new product."""
 
-    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [IsAuthenticated(), CanViewBusinessMemberships()]
+        return [IsAuthenticated(), CanMutateBusinessMemberships()]
 
     def get(self, request):
         business = _get_business(request.user)
@@ -289,7 +295,10 @@ class MembershipProductListCreateView(APIView):
 class MembershipProductDetailView(APIView):
     """GET, PATCH, DELETE a single membership product."""
 
-    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [IsAuthenticated(), CanViewBusinessMemberships()]
+        return [IsAuthenticated(), CanMutateBusinessMemberships()]
 
     def _get_product(self, request, product_id):
         business = _get_business(request.user)
@@ -395,7 +404,7 @@ class MembershipProductDetailView(APIView):
 class MembershipProductSyncStripeView(APIView):
     """POST: Create or update Stripe Price for this product."""
 
-    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+    permission_classes = [IsAuthenticated, CanMutateBusinessMemberships]
 
     def post(self, request, product_id):
         business = _get_business(request.user)
@@ -414,7 +423,7 @@ class MembershipProductSyncStripeView(APIView):
 class MemberListView(APIView):
     """GET: List customer memberships with optional filters."""
 
-    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+    permission_classes = [IsAuthenticated, CanViewBusinessMemberships]
 
     def get(self, request):
         business = _get_business(request.user)
@@ -478,7 +487,7 @@ class MemberListView(APIView):
 class MemberDetailView(APIView):
     """GET: Detail for a customer membership (with ledger and payment history)."""
 
-    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+    permission_classes = [IsAuthenticated, CanViewBusinessMemberships]
 
     def get(self, request, member_id):
         business = _get_business(request.user)
@@ -541,7 +550,7 @@ class MemberDetailView(APIView):
 class MemberCancelView(APIView):
     """POST: Set cancel_at_period_end or cancel immediately (for Stripe-backed only)."""
 
-    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+    permission_classes = [IsAuthenticated, CanMutateBusinessMemberships]
 
     def post(self, request, member_id):
         business = _get_business(request.user)
@@ -555,17 +564,20 @@ class MemberCancelView(APIView):
             try:
                 if immediate:
                     stripe.Subscription.cancel(membership.stripe_subscription_id)
-                    membership.status = "canceled"
-                    membership.save(update_fields=["status"])
+                    sync_customer_membership_from_stripe(
+                        membership.stripe_subscription_id,
+                    )
                 else:
                     stripe.Subscription.modify(
                         membership.stripe_subscription_id,
                         cancel_at_period_end=True,
                     )
-                    membership.cancel_at_period_end = True
-                    membership.save(update_fields=["cancel_at_period_end"])
+                    sync_customer_membership_from_stripe(
+                        membership.stripe_subscription_id,
+                    )
             except stripe.StripeError as e:
                 return Response({"error": str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+            membership.refresh_from_db()
         else:
             membership.status = "canceled"
             membership.save(update_fields=["status"])
@@ -575,7 +587,7 @@ class MemberCancelView(APIView):
 class MemberManualAddView(APIView):
     """POST: Create a CustomerMembership with source=manual (no Stripe)."""
 
-    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+    permission_classes = [IsAuthenticated, CanMutateBusinessMemberships]
 
     def post(self, request):
         business = _get_business(request.user)
@@ -637,7 +649,7 @@ class MemberManualAddView(APIView):
 class MemberApproveView(APIView):
     """POST: Approve a pending_approval membership; creates Stripe subscription and emails payment link."""
 
-    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+    permission_classes = [IsAuthenticated, CanMutateBusinessMemberships]
 
     def post(self, request, pk):
         business = _get_business(request.user)
@@ -668,7 +680,7 @@ class MemberApproveView(APIView):
 class MemberDeclineView(APIView):
     """POST: Decline a pending_approval membership; set status to canceled."""
 
-    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+    permission_classes = [IsAuthenticated, CanMutateBusinessMemberships]
 
     def post(self, request, pk):
         business = _get_business(request.user)

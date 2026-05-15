@@ -171,6 +171,10 @@ WIDGET_SUBSCRIPTION_PRICE_GROWTH = os.environ.get("WIDGET_SUBSCRIPTION_PRICE_GRO
 WIDGET_SUBSCRIPTION_PRICE_ADVANCED = os.environ.get("WIDGET_SUBSCRIPTION_PRICE_ADVANCED") or WIDGET_SUBSCRIPTION_PRICE_ID
 # Default True so dashboard shows lock when no subscription; set WIDGET_SUBSCRIPTION_REQUIRED=false for free-widget deployments.
 WIDGET_SUBSCRIPTION_REQUIRED = os.environ.get("WIDGET_SUBSCRIPTION_REQUIRED", "true").lower() == "true"
+# Days businesses keep widget access after Stripe reports past_due (email + payment_grace_until on WidgetSubscription).
+WIDGET_SUBSCRIPTION_PAYMENT_FAILED_GRACE_DAYS = int(
+    os.environ.get("WIDGET_SUBSCRIPTION_PAYMENT_FAILED_GRACE_DAYS", "7")
+)
 
 # Marketplace email branding addon — $7/mo. Set MARKETPLACE_EMAIL_ADDON_PRICE_ID to Stripe Price ID.
 MARKETPLACE_EMAIL_ADDON_PRICE_ID = os.environ.get("MARKETPLACE_EMAIL_ADDON_PRICE_ID")
