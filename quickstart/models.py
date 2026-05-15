@@ -3202,12 +3202,6 @@ class WidgetSubscription(models.Model):
         indexes = [
             models.Index(fields=["business", "status"]),
         ]
-        permissions = [
-            (
-                "view_widgetsubscription",
-                "Can view widget subscription admin data",
-            ),
-        ]
 
     def __str__(self):
         return f"Widget subscription {self.stripe_subscription_id or self.id} ({self.business.businessName})"
