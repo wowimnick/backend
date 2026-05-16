@@ -619,7 +619,8 @@ class AdminClassViewSet(viewsets.ModelViewSet):
             two_weeks_from_now = local_now + timedelta(days=14)
             today = local_now.date()
 
-            # Single-query: annotate each active class with its latest instance date (no N+1)
+            # Schedule warnings: low/no future scheduled instances (< 2 weeks runway).
+            # Includes inactive & suspended classes and inactive businesses (full operational picture).
             latest_instance_date_subquery = Subquery(
                 ScheduleInstance.objects.filter(
                     schedule__option__classId=OuterRef("pk"),
@@ -630,42 +631,58 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 .values("date")[:1],
                 output_field=DateField(),
             )
-            active_classes_with_latest = (
-                base_qs.filter(
-                    status="active", businessId__isActive=True
-                )
-                .select_related("businessId", "businessId__owner")
+            schedule_warn_before = two_weeks_from_now.date()
+            classes_with_latest_instance = (
+                base_qs.select_related("businessId", "businessId__owner")
                 .annotate(latest_instance_date=latest_instance_date_subquery)
+                .filter(
+                    Q(latest_instance_date__isnull=True)
+                    | Q(latest_instance_date__lt=schedule_warn_before)
+                )
             )
             classes_with_low_schedules = []
-            for cls in active_classes_with_latest:
+            for cls in classes_with_latest_instance:
                 latest_date = cls.latest_instance_date
-                if latest_date is None or latest_date < two_weeks_from_now.date():
-                    classes_with_low_schedules.append(
-                        {
-                            "classId": cls.classId,
-                            "title": cls.title,
-                            "businessName": (
-                                cls.businessId.businessName if cls.businessId else "N/A"
-                            ),
-                            "businessEmail": (
-                                cls.businessId.owner.email
-                                if cls.businessId and cls.businessId.owner
-                                else "N/A"
-                            ),
-                            "ownerId": (
-                                cls.businessId.owner.userId
-                                if cls.businessId and cls.businessId.owner
-                                else None
-                            ),
-                            "lastScheduleDate": (
-                                latest_date.isoformat() if latest_date else None
-                            ),
-                            "daysRemaining": (
-                                (latest_date - today).days if latest_date else 0
-                            ),
-                        }
-                    )
+                classes_with_low_schedules.append(
+                    {
+                        "classId": cls.classId,
+                        "title": cls.title,
+                        "status": cls.status,
+                        "businessIsActive": (
+                            bool(cls.businessId.isActive)
+                            if cls.businessId
+                            else False
+                        ),
+                        "businessName": (
+                            cls.businessId.businessName if cls.businessId else "N/A"
+                        ),
+                        "businessEmail": (
+                            cls.businessId.owner.email
+                            if cls.businessId and cls.businessId.owner
+                            else "N/A"
+                        ),
+                        "ownerId": (
+                            cls.businessId.owner.userId
+                            if cls.businessId and cls.businessId.owner
+                            else None
+                        ),
+                        "lastScheduleDate": (
+                            latest_date.isoformat() if latest_date else None
+                        ),
+                        "daysRemaining": (
+                            (latest_date - today).days if latest_date else 0
+                        ),
+                    }
+                )
+
+            # Worst first: no future scheduled instances, then soonest last date.
+            classes_with_low_schedules.sort(
+                key=lambda row: (
+                    0 if row["lastScheduleDate"] is None else 1,
+                    row["lastScheduleDate"] or "",
+                    row["classId"],
+                )
+            )
 
             schedule_warnings_count = len(classes_with_low_schedules)
 
@@ -737,7 +754,7 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                     "platformReviews": platform_review_count,
                     "googleReviews": google_review_count,
                     "scheduleWarningsCount": schedule_warnings_count,
-                    "classesWithLowSchedules": classes_with_low_schedules[:10],
+                    "classesWithLowSchedules": classes_with_low_schedules,
                     "featuredClasses": featured_classes_count,
                     "statusCounts": status_counts,
                     "popularClasses": popular_classes_data,
