@@ -8,8 +8,6 @@ import ssl
 import sys
 from datetime import timedelta
 from decimal import Decimal
-from typing import Optional
-
 from django.template.exceptions import TemplateDoesNotExist
 from celery.schedules import crontab
 from pathlib import Path
@@ -185,29 +183,6 @@ MARKETPLACE_EMAIL_ADDON_PRICE_ID = os.environ.get("MARKETPLACE_EMAIL_ADDON_PRICE
 # Corporate / marketplace-adjacent fees — percent of gross charged (deposit + balance legs).
 CORPORATE_PLATFORM_FEE_PERCENT = Decimal(
     os.environ.get("CORPORATE_PLATFORM_FEE_PERCENT", "13")
-)
-# Monthly SaaS amounts recognized when Stripe invoice ledger rows are unavailable (CAD).
-def _settings_decimal_env(key: str, default: Optional[str] = None):
-    raw = os.environ.get(key)
-    if raw is None or raw.strip() == "":
-        return Decimal(default) if default is not None else None
-    try:
-        return Decimal(raw)
-    except Exception:
-        return Decimal(default) if default is not None else None
-
-
-REVENUE_REPORTING_WIDGET_BASIC_MONTHLY_CAD = _settings_decimal_env(
-    "REVENUE_REPORTING_WIDGET_BASIC_MONTHLY_CAD"
-)
-REVENUE_REPORTING_WIDGET_GROWTH_MONTHLY_CAD = _settings_decimal_env(
-    "REVENUE_REPORTING_WIDGET_GROWTH_MONTHLY_CAD"
-)
-REVENUE_REPORTING_WIDGET_ADVANCED_MONTHLY_CAD = _settings_decimal_env(
-    "REVENUE_REPORTING_WIDGET_ADVANCED_MONTHLY_CAD"
-)
-REVENUE_REPORTING_MARKETPLACE_EMAIL_BRANDING_MONTHLY_CAD = _settings_decimal_env(
-    "REVENUE_REPORTING_MARKETPLACE_EMAIL_BRANDING_MONTHLY_CAD", "7.00"
 )
 
 # Email marketing addon ladder (recurring Price IDs; unset tier is omitted from checkout UI).

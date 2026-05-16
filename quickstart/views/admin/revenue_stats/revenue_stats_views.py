@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import csv
 import logging
+import stripe
+from functools import lru_cache
 from calendar import monthrange
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone as datetime_timezone
@@ -338,14 +340,91 @@ def _spread_monthly_across_calendar(
     return total.quantize(Decimal("0.01"))
 
 
-def _widget_saas_monthly_amount(plan_id: str) -> Decimal | None:
+def _stripe_money_from_price(price) -> Decimal | None:
+    """Stripe Price unit amount -> Decimal dollars."""
+    ud = getattr(price, "unit_amount_decimal", None)
+    if ud not in (None, ""):
+        try:
+            return Decimal(str(ud)).quantize(Decimal("0.01"))
+        except Exception:
+            pass
+    ua = getattr(price, "unit_amount", None)
+    if ua is None:
+        return None
+    return (Decimal(int(ua)) / Decimal("100")).quantize(Decimal("0.01"))
+
+
+def _stripe_price_monthly_amount_from_price(price) -> Decimal | None:
+    rec = getattr(price, "recurring", None)
+    if not rec:
+        return None
+    interval = (getattr(rec, "interval", None) or "").lower()
+    ic_raw = getattr(rec, "interval_count", None) or 1
+    try:
+        ic = Decimal(str(ic_raw))
+    except Exception:
+        ic = Decimal("1")
+    if ic <= 0:
+        ic = Decimal("1")
+
+    unit = _stripe_money_from_price(price)
+    if unit is None or unit <= 0:
+        return None
+
+    if interval == "month":
+        return (unit / ic).quantize(Decimal("0.01"))
+    if interval == "year":
+        return (unit / ic / Decimal("12")).quantize(Decimal("0.01"))
+    if interval == "week":
+        weeks_per_month = Decimal("365") / Decimal("12") / Decimal("7")
+        return (unit / ic * weeks_per_month).quantize(Decimal("0.01"))
+    if interval == "day":
+        days_per_month = Decimal("365") / Decimal("12")
+        return (unit / ic * days_per_month).quantize(Decimal("0.01"))
+    return None
+
+
+@lru_cache(maxsize=512)
+def _stripe_price_monthly_amount(price_id: str) -> Decimal | None:
+    pid = (price_id or "").strip()
+    if not pid:
+        return None
+    secret = getattr(settings, "STRIPE_SECRET_KEY", None)
+    if not secret:
+        logger.warning("Missing STRIPE_SECRET_KEY; cannot resolve Stripe Price %s", pid)
+        return None
+    try:
+        stripe.api_key = secret
+        price = stripe.Price.retrieve(pid)
+        return _stripe_price_monthly_amount_from_price(price)
+    except Exception as e:
+        logger.warning("Stripe Price.retrieve failed for %s: %s", pid, e)
+        return None
+
+
+def _widget_plan_fallback_price_id(plan_id: str | None) -> str | None:
     pid = (plan_id or "basic").strip().lower()
     mapping = {
-        "basic": getattr(settings, "REVENUE_REPORTING_WIDGET_BASIC_MONTHLY_CAD", None),
-        "growth": getattr(settings, "REVENUE_REPORTING_WIDGET_GROWTH_MONTHLY_CAD", None),
-        "advanced": getattr(settings, "REVENUE_REPORTING_WIDGET_ADVANCED_MONTHLY_CAD", None),
+        "basic": getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_BASIC", None) or "",
+        "growth": getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_GROWTH", None) or "",
+        "advanced": getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_ADVANCED", None) or "",
     }
-    return mapping.get(pid)
+    raw = (mapping.get(pid) or "").strip() or (
+        getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_ID", None) or ""
+    ).strip()
+    return raw or None
+
+
+def _widget_subscription_monthly_amount(sub: WidgetSubscription) -> Decimal | None:
+    pid = (sub.stripe_price_id or "").strip() or _widget_plan_fallback_price_id(sub.plan_id)
+    return _stripe_price_monthly_amount(pid) if pid else None
+
+
+def _addon_subscription_monthly_amount(sub: BusinessAddonSubscription) -> Decimal | None:
+    pid = (sub.stripe_price_id or "").strip() or (
+        getattr(settings, "MARKETPLACE_EMAIL_ADDON_PRICE_ID", None) or ""
+    ).strip()
+    return _stripe_price_monthly_amount(pid) if pid else None
 
 
 def _saas_accrual_aggregate(start_d: date, end_d: date) -> dict:
@@ -356,12 +435,10 @@ def _saas_accrual_aggregate(start_d: date, end_d: date) -> dict:
     qs = WidgetSubscription.objects.filter(
         status__in=("active", "trialing", "past_due"),
     )
-    configured_any = False
     for sub in qs.iterator(chunk_size=200):
-        monthly = _widget_saas_monthly_amount(sub.plan_id)
+        monthly = _widget_subscription_monthly_amount(sub)
         if monthly is None or monthly <= 0:
             continue
-        configured_any = True
         span_start = max(start_d, sub.created_at.date())
         span_end = min(end_d, _subscription_end_date(sub, end_d))
         if span_start > span_end:
@@ -385,7 +462,6 @@ def _saas_accrual_aggregate(start_d: date, end_d: date) -> dict:
         "gross_gmv": gross,
         "cnt": contrib,
         "net_after_stripe": net_after,
-        "saas_configured": configured_any,
     }
 
 
@@ -394,26 +470,14 @@ def _addon_accrual_aggregate(start_d: date, end_d: date) -> dict:
     stripe_total = Decimal("0")
     gross = Decimal("0")
     contrib = 0
-    monthly_default = getattr(
-        settings, "REVENUE_REPORTING_MARKETPLACE_EMAIL_BRANDING_MONTHLY_CAD", None
-    )
     qs = BusinessAddonSubscription.objects.filter(
         addon_type=ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING,
         status__in=("active", "trialing", "past_due"),
     )
-    if monthly_default is None or monthly_default <= 0:
-        return {
-            "commission": Decimal("0"),
-            "commission_plus_tax": Decimal("0"),
-            "stripe_processing": Decimal("0"),
-            "gross_gmv": Decimal("0"),
-            "cnt": 0,
-            "net_after_stripe": Decimal("0"),
-            "addon_configured": False,
-        }
-
     for sub in qs.iterator(chunk_size=200):
-        monthly = monthly_default
+        monthly = _addon_subscription_monthly_amount(sub)
+        if monthly is None or monthly <= 0:
+            continue
         span_start = max(start_d, sub.created_at.date())
         span_end = min(end_d, _subscription_end_date(sub, end_d))
         if span_start > span_end:
@@ -437,7 +501,6 @@ def _addon_accrual_aggregate(start_d: date, end_d: date) -> dict:
         "gross_gmv": gross,
         "cnt": contrib,
         "net_after_stripe": net_after,
-        "addon_configured": True,
     }
 
 
@@ -589,7 +652,7 @@ def _sources_totals(start_dt, end_dt, sources: set[str]) -> dict[str, dict]:
 
     if SOURCE_CORPORATE in sources:
         corp = _corporate_aggregate_window(start_dt, end_dt)
-        corp["currency"] = "USD"
+        corp["currency"] = "CAD"
         out[SOURCE_CORPORATE] = corp
 
     if SOURCE_SAAS in sources:
@@ -606,26 +669,11 @@ def _sources_totals(start_dt, end_dt, sources: set[str]) -> dict[str, dict]:
 
 
 def _cad_totals(sources_totals: dict[str, dict]) -> dict:
+    """Roll up all selected revenue streams (labeled CAD for reporting)."""
     merged = _empty_money()
-    for key, row in sources_totals.items():
-        if row.get("currency") != "CAD":
-            continue
+    for row in sources_totals.values():
         _merge_money(merged, row)
     return merged
-
-
-def _usd_corporate_totals(sources_totals: dict[str, dict]) -> dict:
-    row = sources_totals.get(SOURCE_CORPORATE)
-    if not row:
-        return _empty_money()
-    return {
-        "commission": row.get("commission", Decimal("0")),
-        "commission_plus_tax": row.get("commission_plus_tax", Decimal("0")),
-        "stripe_processing": row.get("stripe_processing", Decimal("0")),
-        "gross_gmv": row.get("gross_gmv", Decimal("0")),
-        "net_after_stripe": row.get("net_after_stripe", Decimal("0")),
-        "cnt": row.get("cnt", 0),
-    }
 
 
 def _series_payment_buckets(qs, trunc, field_name: str):
@@ -816,11 +864,16 @@ def _saas_timeseries_daily(start_d: date, end_d: date, granularity: str):
             status__in=("active", "trialing", "past_due"),
         )
     )
+    monthly_by_sub = {}
+    for sub in subs:
+        m = _widget_subscription_monthly_amount(sub)
+        if m is not None and m > 0:
+            monthly_by_sub[sub.pk] = m
     while cur <= end_d:
         piece_total = Decimal("0")
         for sub in subs:
-            monthly = _widget_saas_monthly_amount(sub.plan_id)
-            if monthly is None or monthly <= 0:
+            monthly = monthly_by_sub.get(sub.pk)
+            if monthly is None:
                 continue
             span_start = max(cur, sub.created_at.date())
             span_end = min(cur, _subscription_end_date(sub, end_d))
@@ -893,8 +946,6 @@ class PlatformRevenueOverviewAPIView(APIView):
 
         cad_totals = _cad_totals(curr_sources)
         cad_prev = _cad_totals(prev_sources)
-        usd_corp = _usd_corporate_totals(curr_sources)
-        usd_prev = _usd_corporate_totals(prev_sources)
 
         refunds = _refund_volume(start_dt, end_dt)
 
@@ -965,8 +1016,6 @@ class PlatformRevenueOverviewAPIView(APIView):
             "sources": sorted(sources),
             "kpis_cad": cad_block,
             "kpis_cad_previous_period": cad_prev_block,
-            "kpis_corporate_usd": _serialize_money_block(usd_corp),
-            "kpis_corporate_usd_previous_period": _serialize_money_block(usd_prev),
             "deltas_vs_previous_period_cad": {
                 "commission_pct": _pct_delta(cad_prev["commission"], cad_totals["commission"]),
                 "commission_plus_tax_pct": _pct_delta(
@@ -974,15 +1023,6 @@ class PlatformRevenueOverviewAPIView(APIView):
                 ),
                 "net_after_stripe_pct": _pct_delta(
                     cad_prev["net_after_stripe"], cad_totals["net_after_stripe"]
-                ),
-            },
-            "deltas_vs_previous_period_corporate_usd": {
-                "commission_pct": _pct_delta(usd_prev["commission"], usd_corp["commission"]),
-                "commission_plus_tax_pct": _pct_delta(
-                    usd_prev["commission_plus_tax"], usd_corp["commission_plus_tax"]
-                ),
-                "net_after_stripe_pct": _pct_delta(
-                    usd_prev["net_after_stripe"], usd_corp["net_after_stripe"]
                 ),
             },
             "by_source": serialized_sources,
@@ -1006,18 +1046,9 @@ class PlatformRevenueOverviewAPIView(APIView):
             "meta": {
                 "stripe_processing_estimate": True,
                 "corporate_fee_percent": float(_corp_fee_pct_decimal() * Decimal("100")),
-                "saas_accrual_requires_env": True,
-                "currency_note": "Corporate totals are USD; marketplace/widget/membership/SaaS accruals use CAD. No FX conversion applied.",
+                "currency": "CAD",
             },
         }
-
-        saas_row = curr_sources.get(SOURCE_SAAS)
-        if saas_row:
-            resp["meta"]["saas_monthly_amounts_configured"] = bool(
-                getattr(settings, "REVENUE_REPORTING_WIDGET_BASIC_MONTHLY_CAD", None)
-                or getattr(settings, "REVENUE_REPORTING_WIDGET_GROWTH_MONTHLY_CAD", None)
-                or getattr(settings, "REVENUE_REPORTING_WIDGET_ADVANCED_MONTHLY_CAD", None)
-            )
 
         return Response(resp)
 
@@ -1065,38 +1096,41 @@ class PlatformRevenueTimeseriesAPIView(APIView):
         if SOURCE_ADDON in sources:
             addon_daily = []
             cur = start_d
-            monthly_default = getattr(
-                settings, "REVENUE_REPORTING_MARKETPLACE_EMAIL_BRANDING_MONTHLY_CAD", None
-            )
-            if monthly_default and monthly_default > 0:
-                qs = list(
-                    BusinessAddonSubscription.objects.filter(
-                        addon_type=ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING,
-                        status__in=("active", "trialing", "past_due"),
-                    )
+            qs = list(
+                BusinessAddonSubscription.objects.filter(
+                    addon_type=ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING,
+                    status__in=("active", "trialing", "past_due"),
                 )
-                while cur <= end_d:
-                    piece_total = Decimal("0")
-                    for sub in qs:
-                        monthly = monthly_default
-                        span_start = max(cur, sub.created_at.date())
-                        span_end = min(cur, _subscription_end_date(sub, end_d))
-                        if span_start <= span_end:
-                            dim = monthrange(cur.year, cur.month)[1]
-                            piece_total += monthly / Decimal(dim)
-                    stripe_total = estimate_stripe_processing_fee(piece_total)
-                    addon_daily.append(
-                        {
-                            "bucket": cur.isoformat(),
-                            "commission": piece_total.quantize(Decimal("0.01")),
-                            "commission_plus_tax": piece_total.quantize(Decimal("0.01")),
-                            "stripe_processing": stripe_total,
-                            "net_after_stripe": piece_total - stripe_total,
-                            "gross_gmv": piece_total,
-                            "cnt": 0,
-                        }
-                    )
-                    cur += timedelta(days=1)
+            )
+            monthly_by_addon_sub = {}
+            for sub in qs:
+                m = _addon_subscription_monthly_amount(sub)
+                if m is not None and m > 0:
+                    monthly_by_addon_sub[sub.pk] = m
+            while cur <= end_d:
+                piece_total = Decimal("0")
+                for sub in qs:
+                    monthly = monthly_by_addon_sub.get(sub.pk)
+                    if monthly is None:
+                        continue
+                    span_start = max(cur, sub.created_at.date())
+                    span_end = min(cur, _subscription_end_date(sub, end_d))
+                    if span_start <= span_end:
+                        dim = monthrange(cur.year, cur.month)[1]
+                        piece_total += monthly / Decimal(dim)
+                stripe_total = estimate_stripe_processing_fee(piece_total)
+                addon_daily.append(
+                    {
+                        "bucket": cur.isoformat(),
+                        "commission": piece_total.quantize(Decimal("0.01")),
+                        "commission_plus_tax": piece_total.quantize(Decimal("0.01")),
+                        "stripe_processing": stripe_total,
+                        "net_after_stripe": piece_total - stripe_total,
+                        "gross_gmv": piece_total,
+                        "cnt": 0,
+                    }
+                )
+                cur += timedelta(days=1)
 
             if granularity == "day":
                 by_source[SOURCE_ADDON] = addon_daily
@@ -1274,8 +1308,8 @@ class PlatformRevenueTopAPIView(APIView):
             corp_accum[name] += row["total"] or Decimal("0")
 
         corporate_clients = sorted(
-            [{"name": k, "total_usd": _f(v)} for k, v in corp_accum.items()],
-            key=lambda x: x["total_usd"],
+            [{"name": k, "total": _f(v)} for k, v in corp_accum.items()],
+            key=lambda x: x["total"],
             reverse=True,
         )[:limit]
 
@@ -1306,7 +1340,7 @@ class PlatformRevenueTopAPIView(APIView):
             {
                 "top_businesses_by_booking_revenue": top_businesses,
                 "top_classes": top_classes,
-                "corporate_clients_usd": corporate_clients,
+                "corporate_clients": corporate_clients,
                 "top_membership_businesses": top_membership_businesses,
             }
         )
