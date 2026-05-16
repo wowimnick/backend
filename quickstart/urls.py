@@ -123,6 +123,12 @@ from quickstart.views.admin.notifications.notification_views import (
 )
 from quickstart.views.admin.booking_management.booking_views import AdminBookingViewSet
 from quickstart.views.admin.booking_management.payment_views import AdminPaymentViewSet
+from quickstart.views.admin.revenue_stats.revenue_stats_views import (
+    PlatformRevenueExportAPIView,
+    PlatformRevenueOverviewAPIView,
+    PlatformRevenueTimeseriesAPIView,
+    PlatformRevenueTopAPIView,
+)
 from quickstart.views.admin.class_management.class_management_views import (
     AdminCategoryViewSet,
     AdminClassViewSet,
@@ -511,6 +517,26 @@ urlpatterns = [
     path("impersonate/", include("impersonate.urls")),
     path("accounts/", include("allauth.urls")),
     # --- Routers ---
+    path(
+        "admin/revenue/overview/",
+        PlatformRevenueOverviewAPIView.as_view(),
+        name="admin-revenue-overview",
+    ),
+    path(
+        "admin/revenue/timeseries/",
+        PlatformRevenueTimeseriesAPIView.as_view(),
+        name="admin-revenue-timeseries",
+    ),
+    path(
+        "admin/revenue/top/",
+        PlatformRevenueTopAPIView.as_view(),
+        name="admin-revenue-top",
+    ),
+    path(
+        "admin/revenue/export/",
+        PlatformRevenueExportAPIView.as_view(),
+        name="admin-revenue-export",
+    ),
     path("admin/", include(admin_router.urls)),
     path("business/", include(business_management_router.urls)),
     # Payment and booking-status paths must come before catch-all "" includes

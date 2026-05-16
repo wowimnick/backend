@@ -617,6 +617,19 @@ class CanAccessPaymentAdmin(BasePermission):
         return request.user.has_perm("quickstart.access_payment_admin")
 
 
+class CanViewPlatformRevenue(BasePermission):
+    message = "You do not have permission to view platform revenue statistics."
+
+    def has_permission(self, request, view):
+        if (
+            not request.user
+            or not request.user.is_authenticated
+            or not request.user.is_active
+        ):
+            return False
+        return request.user.has_perm("quickstart.view_platform_revenue")
+
+
 class CanManageTargetPayment(BasePermission):
     message = "You cannot manage this payment due to hierarchy restrictions."
 

@@ -3084,6 +3084,7 @@ class Payment(models.Model):
             ("view_payment_stats", "Can view aggregated payment statistics"),
             ("export_payment_data", "Can export payment data"),
             ("access_payment_admin", "Can access the Payment Administration section"),
+            ("view_platform_revenue", "Can view platform-wide revenue statistics"),
         ]
 
 
