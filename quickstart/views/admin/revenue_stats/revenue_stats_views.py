@@ -5,7 +5,7 @@ import csv
 import logging
 from calendar import monthrange
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone as datetime_timezone
 from decimal import Decimal
 from io import StringIO
 
@@ -110,8 +110,12 @@ def _daterange_params(start_date_str: str | None, end_date_str: str | None):
 
 
 def _to_dt_bounds(start_d: date, end_d: date):
-    start_dt = datetime.combine(start_d, datetime.min.time(), tzinfo=timezone.utc)
-    end_dt = datetime.combine(end_d, datetime.max.time(), tzinfo=timezone.utc)
+    start_dt = datetime.combine(
+        start_d, datetime.min.time(), tzinfo=datetime_timezone.utc
+    )
+    end_dt = datetime.combine(
+        end_d, datetime.max.time(), tzinfo=datetime_timezone.utc
+    )
     return start_dt, end_dt
 
 
