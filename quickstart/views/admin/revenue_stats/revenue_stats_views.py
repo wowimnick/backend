@@ -481,6 +481,20 @@ def _booking_take_rate(marketplace_qs, widget_qs) -> float | None:
     return float((c / g) * Decimal("100"))
 
 
+def _trunc_bucket_to_iso_day(bucket) -> str:
+    """
+    TruncDate may return datetime or date depending on DB backend.
+    Normalize to YYYY-MM-DD for grouping.
+    """
+    if bucket is None:
+        return ""
+    if isinstance(bucket, datetime):
+        return bucket.date().isoformat()
+    if isinstance(bucket, date):
+        return bucket.isoformat()
+    return str(bucket)
+
+
 def _daily_payment_commissions(start_dt, end_dt, marketplace_qs, widget_qs):
     trunc = TruncDate("created_at")
     day_m = {}
@@ -490,7 +504,7 @@ def _daily_payment_commissions(start_dt, end_dt, marketplace_qs, widget_qs):
         .annotate(c=Coalesce(Sum("platform_fee_amount"), Decimal("0")))
     ):
         if row["bucket"]:
-            day_m[row["bucket"].date().isoformat()] = row["c"]
+            day_m[_trunc_bucket_to_iso_day(row["bucket"])] = row["c"]
 
     day_w = {}
     for row in (
@@ -499,7 +513,7 @@ def _daily_payment_commissions(start_dt, end_dt, marketplace_qs, widget_qs):
         .annotate(c=Coalesce(Sum("platform_fee_amount"), Decimal("0")))
     ):
         if row["bucket"]:
-            day_w[row["bucket"].date().isoformat()] = row["c"]
+            day_w[_trunc_bucket_to_iso_day(row["bucket"])] = row["c"]
 
     day_mem = {}
     for row in (
@@ -509,7 +523,7 @@ def _daily_payment_commissions(start_dt, end_dt, marketplace_qs, widget_qs):
         .annotate(c=Coalesce(Sum("platform_fee_amount"), Decimal("0")))
     ):
         if row["bucket"]:
-            day_mem[row["bucket"].date().isoformat()] = row["c"]
+            day_mem[_trunc_bucket_to_iso_day(row["bucket"])] = row["c"]
 
     keys = sorted(set(day_m) | set(day_w) | set(day_mem))
     series = []
