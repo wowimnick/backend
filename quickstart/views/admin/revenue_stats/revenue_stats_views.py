@@ -15,6 +15,7 @@ from django.db.models import (
     DecimalField,
     ExpressionWrapper,
     F,
+    Q,
     Sum,
     Value,
 )
