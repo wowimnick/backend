@@ -42,6 +42,7 @@ from quickstart.utils.permissions import (
     CanAccessBusinessAdmin,
     CanManageTargetBusiness,
     CanAccessClassAdmin,
+    user_can_manage,
 )
 from quickstart.models import (
     AuditLog,

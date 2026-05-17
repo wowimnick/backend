@@ -422,13 +422,14 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         if self.action == "retrieve":
             logger.debug("Action is 'retrieve', prefetching collections for class detail.")
             queryset = queryset.prefetch_related("collections")
-            # Scalar subquery avoids JOIN+GROUP BY on options/schedules (heavy DISTINCT GROUP BY plan).
+            # Shortest schedule duration (minutes). Must call .order_by() with no args first
+            # to clear Schedule.Meta.ordering ("day", "time"); otherwise PostgreSQL raises
+            # GroupingError on the scalar subquery (ORDER BY day conflicts with aggregate).
             listing_duration_sq = Subquery(
                 Schedule.objects.filter(option__classId=OuterRef("pk"))
-                .annotate(_ld_group=Value(1))
-                .values("_ld_group")
-                .annotate(_ld_min=Min("duration"))
-                .values("_ld_min")[:1],
+                .order_by()
+                .order_by("duration")
+                .values("duration")[:1],
                 output_field=IntegerField(null=True),
             )
             queryset = queryset.annotate(listing_duration_minutes=listing_duration_sq)
