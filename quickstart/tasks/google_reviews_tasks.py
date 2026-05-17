@@ -47,6 +47,11 @@ def sync_google_reviews_for_business(self, business_id: int):
 
     url = (business.google_maps_url or "").strip()
     if not url:
+        logger.info(
+            "sync_google_reviews_for_business: skipped business %s (no google_maps_url); "
+            "left status pending — add a Maps URL on the business to scrape.",
+            business_id,
+        )
         BusinessInfo.objects.filter(pk=business_id).update(
             google_reviews_synced_at=timezone.now(),
             google_reviews_sync_status="pending",
@@ -57,6 +62,10 @@ def sync_google_reviews_for_business(self, business_id: int):
         google_reviews_sync_status="running",
     )
 
+    logger.info(
+        "sync_google_reviews_for_business: scraping business %s (Apify)",
+        business_id,
+    )
     try:
         result = fetch_reviews(url)
     except Exception as e:
@@ -80,6 +89,11 @@ def sync_google_reviews_for_business(self, business_id: int):
         return
 
     if scrape_status != "ok":
+        logger.warning(
+            "sync_google_reviews_for_business: business %s scrape finished with status=%s",
+            business_id,
+            scrape_status,
+        )
         BusinessInfo.objects.filter(pk=business_id).update(
             google_reviews_synced_at=timezone.now(),
             google_reviews_sync_status=scrape_status,
@@ -110,6 +124,11 @@ def sync_google_reviews_for_business(self, business_id: int):
         google_reviews_synced_at=timezone.now(),
         google_reviews_sync_status="ok",
         google_reviews_last_scraped_count=len(reviews),
+    )
+    logger.info(
+        "sync_google_reviews_for_business: business %s synced ok (%s reviews from Apify)",
+        business_id,
+        len(reviews),
     )
 
 
