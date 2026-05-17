@@ -43,6 +43,20 @@ from quickstart.utils.widget_booking_source import WIDGET_BOOKING_SOURCES
 
 logger = logging.getLogger(__name__)
 
+# #region agent log
+import json as _json, os as _os, time as _time
+_DEBUG_LOG = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "../../../../debug-5f5f04.log")
+def _dbg(msg, data=None, hypothesis=None):
+    try:
+        entry = {"sessionId":"5f5f04","timestamp":int(_time.time()*1000),"location":"revenue_stats_views.py","message":msg,"data":data or {},"hypothesisId":hypothesis or ""}
+        line = _json.dumps(entry)
+        with open(_DEBUG_LOG,"a") as _f:
+            _f.write(line+"\n")
+        logger.warning("REVDEBUG %s", line)
+    except Exception:
+        pass
+# #endregion
+
 HST_RATE = Decimal("0.13")
 WIDGET_SOURCE_LIST = list(WIDGET_BOOKING_SOURCES)
 
@@ -135,11 +149,26 @@ def _corp_fee_pct_decimal() -> Decimal:
 
 
 def _payment_base_qs(start_dt, end_dt):
-    return Payment.objects.filter(
+    qs = Payment.objects.filter(
         status="succeeded",
         created_at__gte=start_dt,
         created_at__lte=end_dt,
     )
+    # #region agent log
+    total_payments = Payment.objects.count()
+    succeeded_payments = Payment.objects.filter(status="succeeded").count()
+    in_range = qs.count()
+    sample_statuses = list(Payment.objects.values_list("status", flat=True).order_by("-created_at")[:5])
+    sample_dates = list(Payment.objects.order_by("-created_at").values_list("created_at", flat=True)[:3])
+    _dbg("payment_base_qs", {
+        "start_dt": str(start_dt), "end_dt": str(end_dt),
+        "total_payments": total_payments, "succeeded_payments": succeeded_payments,
+        "in_range_count": in_range,
+        "recent_statuses": [str(s) for s in sample_statuses],
+        "recent_created_at": [str(d) for d in sample_dates],
+    }, hypothesis="H-A,H-B")
+    # #endregion
+    return qs
 
 
 def _merge_money(dst: dict, src: dict):
@@ -196,11 +225,21 @@ def _membership_aggregate(qs):
 
 
 def _membership_base_qs(start_dt, end_dt):
-    return MembershipPayment.objects.filter(
+    qs = MembershipPayment.objects.filter(
         status="paid",
         created_at__gte=start_dt,
         created_at__lte=end_dt,
     )
+    # #region agent log
+    total_mem = MembershipPayment.objects.count()
+    in_range_mem = qs.count()
+    _dbg("membership_base_qs", {
+        "start_dt": str(start_dt), "end_dt": str(end_dt),
+        "total_membership_payments": total_mem,
+        "in_range_count": in_range_mem,
+    }, hypothesis="H-D")
+    # #endregion
+    return qs
 
 
 def _deposit_corporate_exprs():
@@ -434,9 +473,20 @@ def _saas_accrual_aggregate(start_d: date, end_d: date) -> dict:
     qs = WidgetSubscription.objects.filter(
         status__in=("active", "trialing", "past_due"),
     )
+    # #region agent log
+    total_widget_subs = WidgetSubscription.objects.count()
+    active_widget_subs = qs.count()
+    _dbg("saas_accrual_start", {
+        "total_widget_subscriptions": total_widget_subs,
+        "active_widget_subscriptions": active_widget_subs,
+        "start_d": str(start_d), "end_d": str(end_d),
+    }, hypothesis="H-D,H-E")
+    # #endregion
+    skipped_no_price = 0
     for sub in qs.iterator(chunk_size=200):
         monthly = _widget_subscription_monthly_amount(sub)
         if monthly is None or monthly <= 0:
+            skipped_no_price += 1
             continue
         span_start = max(start_d, sub.created_at.date())
         span_end = min(end_d, _subscription_end_date(sub, end_d))
@@ -450,6 +500,12 @@ def _saas_accrual_aggregate(start_d: date, end_d: date) -> dict:
         stripe_total += estimate_stripe_processing_fee(piece)
         contrib += 1
 
+    # #region agent log
+    _dbg("saas_accrual_result", {
+        "contrib": contrib, "skipped_no_price": skipped_no_price,
+        "commission": str(commission),
+    }, hypothesis="H-E")
+    # #endregion
     commission = commission.quantize(Decimal("0.01"))
     stripe_total = stripe_total.quantize(Decimal("0.01"))
     gross = gross.quantize(Decimal("0.01"))
@@ -554,6 +610,14 @@ def _sources_totals(start_dt, end_dt, sources: set[str]) -> dict[str, dict]:
         corp = _corporate_aggregate_window(start_dt, end_dt)
         corp["currency"] = "CAD"
         out[SOURCE_CORPORATE] = corp
+        # #region agent log
+        total_corp = CorporateBooking.objects.count()
+        _dbg("corporate_aggregate", {
+            "total_corporate_bookings": total_corp,
+            "corp_cnt": corp.get("cnt", 0),
+            "corp_commission": str(corp.get("commission", 0)),
+        }, hypothesis="H-D")
+        # #endregion
 
     if SOURCE_SAAS in sources:
         saas = _saas_accrual_aggregate(start_dt.date(), end_dt.date())
@@ -841,6 +905,15 @@ class PlatformRevenueOverviewAPIView(APIView):
         except ValueError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+        # #region agent log
+        _dbg("overview_request", {
+            "start_d": str(start_d), "end_d": str(end_d),
+            "start_dt": str(start_dt), "end_dt": str(end_dt),
+            "sources": sorted(sources),
+            "USE_TZ": str(getattr(settings, "USE_TZ", "NOT_SET")),
+            "TIME_ZONE": str(getattr(settings, "TIME_ZONE", "NOT_SET")),
+        }, hypothesis="H-A,H-C")
+        # #endregion
         curr_sources = _sources_totals(start_dt, end_dt, sources)
         prev_sources = _sources_totals(prev_start_dt, prev_end_dt, sources)
 
