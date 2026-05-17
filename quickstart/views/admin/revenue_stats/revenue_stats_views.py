@@ -160,13 +160,20 @@ def _payment_base_qs(start_dt, end_dt):
     in_range = qs.count()
     sample_statuses = list(Payment.objects.values_list("status", flat=True).order_by("-created_at")[:5])
     sample_dates = list(Payment.objects.order_by("-created_at").values_list("created_at", flat=True)[:3])
+    # Check how many in-range payments have the JSON path present vs absent
+    has_booking_source = qs.exclude(metadata__original_stripe_metadata__booking_source__isnull=True).count()
+    no_booking_source = qs.filter(metadata__original_stripe_metadata__booking_source__isnull=True).count()
+    sample_metadata_keys = list(qs.order_by("-created_at").values_list("metadata", flat=True)[:2])
     _dbg("payment_base_qs", {
         "start_dt": str(start_dt), "end_dt": str(end_dt),
         "total_payments": total_payments, "succeeded_payments": succeeded_payments,
         "in_range_count": in_range,
+        "has_booking_source_in_meta": has_booking_source,
+        "no_booking_source_in_meta": no_booking_source,
         "recent_statuses": [str(s) for s in sample_statuses],
         "recent_created_at": [str(d) for d in sample_dates],
-    }, hypothesis="H-A,H-B")
+        "sample_metadata_keys": [list(m.keys()) if isinstance(m, dict) else str(m) for m in sample_metadata_keys],
+    }, hypothesis="H-A,H-B,H-C")
     # #endregion
     return qs
 
