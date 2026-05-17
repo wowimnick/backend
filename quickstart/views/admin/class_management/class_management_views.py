@@ -690,7 +690,11 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                             if cls.businessId and cls.businessId.owner
                             else None
                         ),
+                        # Furthest future scheduled instance (schedule "runway" end), not "next occurrence".
                         "lastScheduleDate": (
+                            latest_date.isoformat() if latest_date else None
+                        ),
+                        "furthestScheduledSessionDate": (
                             latest_date.isoformat() if latest_date else None
                         ),
                         "daysRemaining": (

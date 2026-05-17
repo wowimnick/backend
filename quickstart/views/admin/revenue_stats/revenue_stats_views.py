@@ -17,7 +17,6 @@ from django.db.models import (
     DecimalField,
     ExpressionWrapper,
     F,
-    Q,
     Sum,
     Value,
 )
@@ -528,105 +527,6 @@ def _refund_volume(start_dt, end_dt) -> Decimal:
     ).aggregate(t=Coalesce(Sum("refunded_amount"), Decimal("0")))["t"]
 
 
-def _booking_take_rate(marketplace_qs, widget_qs) -> float | None:
-    agg_m = marketplace_qs.aggregate(
-        c=Coalesce(Sum("platform_fee_amount"), Decimal("0")),
-        g=Coalesce(Sum("amount"), Decimal("0")),
-    )
-    agg_w = widget_qs.aggregate(
-        c=Coalesce(Sum("platform_fee_amount"), Decimal("0")),
-        g=Coalesce(Sum("amount"), Decimal("0")),
-    )
-    c = agg_m["c"] + agg_w["c"]
-    g = agg_m["g"] + agg_w["g"]
-    if g <= 0:
-        return None
-    return float((c / g) * Decimal("100"))
-
-
-def _trunc_bucket_to_iso_day(bucket) -> str:
-    """
-    TruncDate may return datetime or date depending on DB backend.
-    Normalize to YYYY-MM-DD for grouping.
-    """
-    if bucket is None:
-        return ""
-    if isinstance(bucket, datetime):
-        return bucket.date().isoformat()
-    if isinstance(bucket, date):
-        return bucket.isoformat()
-    return str(bucket)
-
-
-def _daily_payment_commissions(start_dt, end_dt, marketplace_qs, widget_qs):
-    trunc = TruncDate("created_at")
-    day_m = {}
-    for row in (
-        marketplace_qs.annotate(bucket=trunc)
-        .values("bucket")
-        .annotate(c=Coalesce(Sum("platform_fee_amount"), Decimal("0")))
-    ):
-        if row["bucket"]:
-            day_m[_trunc_bucket_to_iso_day(row["bucket"])] = row["c"]
-
-    day_w = {}
-    for row in (
-        widget_qs.annotate(bucket=trunc)
-        .values("bucket")
-        .annotate(c=Coalesce(Sum("platform_fee_amount"), Decimal("0")))
-    ):
-        if row["bucket"]:
-            day_w[_trunc_bucket_to_iso_day(row["bucket"])] = row["c"]
-
-    day_mem = {}
-    for row in (
-        _membership_base_qs(start_dt, end_dt)
-        .annotate(bucket=trunc)
-        .values("bucket")
-        .annotate(c=Coalesce(Sum("platform_fee_amount"), Decimal("0")))
-    ):
-        if row["bucket"]:
-            day_mem[_trunc_bucket_to_iso_day(row["bucket"])] = row["c"]
-
-    keys = sorted(set(day_m) | set(day_w) | set(day_mem))
-    series = []
-    for k in keys:
-        series.append(
-            {
-                "day": k,
-                "commission": _f(day_m.get(k, Decimal("0")) + day_w.get(k, Decimal("0")) + day_mem.get(k, Decimal("0"))),
-            }
-        )
-    return series
-
-
-def _rollup_daily_to_buckets(daily_series: list[dict], granularity: str, start_d: date, end_d: date):
-    """Roll iso-day commissions into week/month buckets aligned to trunc semantics."""
-    if not daily_series:
-        return []
-
-    by_day = {row["day"]: Decimal(str(row["commission"])) for row in daily_series}
-
-    def bucket_for(d: date) -> str:
-        if granularity == "day":
-            return d.isoformat()
-        if granularity == "week":
-            year, week, _ = d.isocalendar()
-            return f"{year}-W{week:02d}"
-        return f"{d.year}-{d.month:02d}"
-
-    buckets = defaultdict(lambda: Decimal("0"))
-    cur = start_d
-    while cur <= end_d:
-        buckets[bucket_for(cur)] += by_day.get(cur.isoformat(), Decimal("0"))
-        cur += timedelta(days=1)
-
-    out = []
-    for k in sorted(buckets.keys()):
-        out.append({"bucket": k, "commission": _f(buckets[k])})
-    return out
-
-
 def _sources_totals(start_dt, end_dt, sources: set[str]) -> dict[str, dict]:
     out: dict[str, dict] = {}
     base = _payment_base_qs(start_dt, end_dt)
@@ -949,59 +849,6 @@ class PlatformRevenueOverviewAPIView(APIView):
 
         refunds = _refund_volume(start_dt, end_dt)
 
-        base_curr = _payment_base_qs(start_dt, end_dt)
-        marketplace_qs = base_curr.exclude(
-            metadata__original_stripe_metadata__booking_source__in=WIDGET_SOURCE_LIST
-        )
-        widget_qs = base_curr.filter(
-            metadata__original_stripe_metadata__booking_source__in=WIDGET_SOURCE_LIST
-        )
-
-        take_rate = _booking_take_rate(marketplace_qs, widget_qs)
-
-        daily_series = _daily_payment_commissions(
-            start_dt, end_dt, marketplace_qs, widget_qs
-        )
-
-        rolling_7 = None
-        rolling_30 = None
-        if len(daily_series) >= 7:
-            rolling_7 = sum(row["commission"] for row in daily_series[-7:]) / 7.0
-        if len(daily_series) >= 30:
-            rolling_30 = sum(row["commission"] for row in daily_series[-30:]) / 30.0
-
-        best_day = None
-        worst_day = None
-        if daily_series:
-            best = max(daily_series, key=lambda r: r["commission"])
-            worst = min(daily_series, key=lambda r: r["commission"])
-            best_day = {"day": best["day"], "commission": best["commission"]}
-            worst_day = {"day": worst["day"], "commission": worst["commission"]}
-
-        new_biz_commission = Decimal("0")
-        established_commission = Decimal("0")
-        if SOURCE_MARKETPLACE in sources or SOURCE_WIDGET in sources:
-            nb_filter = Q(
-                booking__schedule_instance__schedule__option__classId__businessId__createdAt__gte=start_dt,
-                booking__schedule_instance__schedule__option__classId__businessId__createdAt__lte=end_dt,
-            )
-            new_rows = marketplace_qs.filter(nb_filter) | widget_qs.filter(nb_filter)
-            new_biz_commission = new_rows.aggregate(
-                v=Coalesce(Sum("platform_fee_amount"), Decimal("0"))
-            )["v"]
-            all_rows = marketplace_qs | widget_qs
-            established_commission = (
-                all_rows.aggregate(v=Coalesce(Sum("platform_fee_amount"), Decimal("0")))["v"]
-                - new_biz_commission
-            )
-
-        nb_pct = None
-        total_booking_comm = marketplace_qs.aggregate(
-            v=Coalesce(Sum("platform_fee_amount"), Decimal("0"))
-        )["v"] + widget_qs.aggregate(v=Coalesce(Sum("platform_fee_amount"), Decimal("0")))["v"]
-        if total_booking_comm > 0:
-            nb_pct = float((new_biz_commission / total_booking_comm) * Decimal("100"))
-
         serialized_sources = {}
         for sk, sv in curr_sources.items():
             serialized_sources[sk] = _serialize_money_block(sv)
@@ -1033,16 +880,6 @@ class PlatformRevenueOverviewAPIView(APIView):
                 ),
             },
             "refunds_volume": _f(refunds),
-            "advanced": {
-                "booking_take_rate_percent": take_rate,
-                "rolling_avg_commission_per_day_7d": rolling_7,
-                "rolling_avg_commission_per_day_30d": rolling_30,
-                "best_day": best_day,
-                "worst_day": worst_day,
-                "new_business_booking_commission": _f(new_biz_commission),
-                "established_business_booking_commission": _f(established_commission),
-                "new_business_booking_commission_pct_of_bookings": nb_pct,
-            },
             "meta": {
                 "stripe_processing_estimate": True,
                 "corporate_fee_percent": float(_corp_fee_pct_decimal() * Decimal("100")),
