@@ -2,7 +2,7 @@ from rest_framework import viewsets, filters, status, pagination
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from django.utils import timezone
-from django.db.models import Count, Prefetch
+from django.db.models import Count
 from django.contrib.auth import get_user_model
 import datetime
 import csv
@@ -40,7 +40,12 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         # Create base queryset with optimized joins to reduce N+1 queries
-        queryset = AuditLog.objects.select_related("user", "target_user")
+        queryset = AuditLog.objects.select_related(
+            "user",
+            "user__role",
+            "target_user",
+            "target_user__role",
+        )
 
         # Filter by action
         action = self.request.query_params.get("action")
@@ -95,7 +100,12 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
         )
 
         # Optimize by fetching all data in a single query and then processing
-        logs = queryset.select_related("user", "target_user").values_list(
+        logs = queryset.select_related(
+            "user",
+            "user__role",
+            "target_user",
+            "target_user__role",
+        ).values_list(
             "timestamp",
             "user__first_name",
             "user__last_name",

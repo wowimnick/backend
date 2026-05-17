@@ -328,6 +328,9 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
         elif engaged_query in ("false", "0", "no"):
             queryset = queryset.filter(is_engaged=False)
 
+        if self.action in ("retrieve", "update", "partial_update", "metrics"):
+            queryset = queryset.prefetch_related("managers")
+
         return queryset
 
     def list(self, request, *args, **kwargs):
@@ -1498,15 +1501,14 @@ class AdminGeographicalDataView(generics.ListAPIView):
 # ---------------------------------------------------------------------------
 
 import json
-import os
-import tempfile
 from io import StringIO
 
-from django.core.management import call_command
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser, FormParser
+
+from quickstart.services.google_reviews_importer import import_reviews_for_business
 
 
 def _csv_row_to_review(raw):
@@ -1609,15 +1611,27 @@ class ImportGoogleReviewsAdminView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        fd, path = tempfile.mkstemp(suffix=".json")
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(reviews_data, f, ensure_ascii=False, indent=0)
-            out = StringIO()
-            call_command("import_google_reviews", business_id, path, skip_images=False, stdout=out)
-            output = out.getvalue()
+            business = BusinessInfo.objects.get(businessId=business_id)
+        except BusinessInfo.DoesNotExist:
             return Response(
-                {"success": True, "message": "Import completed.", "output": output},
+                {"error": "Business not found.", "success": False},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        try:
+            stats = import_reviews_for_business(
+                business,
+                reviews_data,
+                skip_images=False,
+                full_refresh=True,
+            )
+            return Response(
+                {
+                    "success": True,
+                    "message": "Import completed.",
+                    "stats": stats,
+                },
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
@@ -1626,8 +1640,155 @@ class ImportGoogleReviewsAdminView(APIView):
                 {"error": str(e), "success": False},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-        finally:
+
+
+class AdminBusinessGoogleReviewsSyncView(APIView):
+    """
+    Admin-only: enqueue Apify Google reviews sync for a business (uses google_maps_url).
+    """
+
+    permission_classes = [IsAuthenticated, CanAccessBusinessAdmin]
+
+    def post(self, request, business_id):
+        try:
+            bid = int(business_id)
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "Invalid business_id.", "success": False},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not BusinessInfo.objects.filter(businessId=bid).exists():
+            return Response(
+                {"error": "Business not found.", "success": False},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        from quickstart.tasks.google_reviews_tasks import (
+            sync_google_reviews_for_business,
+        )
+
+        sync_google_reviews_for_business.delay(bid)
+        return Response({"success": True, "queued": True}, status=status.HTTP_200_OK)
+
+
+class AdminGoogleReviewsSyncQueueView(APIView):
+    """
+    Admin-only: queue Google reviews Apify sync for all businesses with a Maps URL,
+    or for a single business (by business_id).
+    POST JSON: { "all": true } or { "business_id": 123 }
+    """
+
+    permission_classes = [IsAuthenticated, CanAccessBusinessAdmin]
+
+    def post(self, request):
+        from quickstart.tasks.google_reviews_tasks import (
+            sync_google_reviews_enqueue_all,
+            sync_google_reviews_for_business,
+        )
+
+        all_flag = request.data.get("all") is True
+        business_id = request.data.get("business_id")
+
+        if all_flag:
+            sync_google_reviews_enqueue_all.delay()
+            return Response(
+                {
+                    "success": True,
+                    "queued": "all",
+                    "message": "Queued Google reviews sync for all businesses with a Google Maps URL.",
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        if business_id is not None and business_id != "":
             try:
-                os.unlink(path)
-            except OSError:
-                pass
+                bid = int(business_id)
+            except (TypeError, ValueError):
+                return Response(
+                    {"error": "business_id must be an integer.", "success": False},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if not BusinessInfo.objects.filter(businessId=bid).exists():
+                return Response(
+                    {"error": "Business not found.", "success": False},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            sync_google_reviews_for_business.delay(bid)
+            return Response(
+                {
+                    "success": True,
+                    "queued": "business",
+                    "business_id": bid,
+                    "message": f"Queued Google reviews sync for business {bid}.",
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        return Response(
+            {
+                "error": "Provide all: true or business_id (integer).",
+                "success": False,
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+
+class AdminInstagramFollowersSyncQueueView(APIView):
+    """
+    Admin-only: queue Instagram follower Apify sync for all businesses with an
+    Instagram link, or for a single business.
+    POST JSON: { "all": true } or { "business_id": 123 }
+    """
+
+    permission_classes = [IsAuthenticated, CanAccessBusinessAdmin]
+
+    def post(self, request):
+        from quickstart.tasks.instagram_tasks import (
+            sync_instagram_followers_enqueue_all,
+            sync_instagram_followers_for_business,
+        )
+
+        all_flag = request.data.get("all") is True
+        business_id = request.data.get("business_id")
+
+        if all_flag:
+            sync_instagram_followers_enqueue_all.delay()
+            return Response(
+                {
+                    "success": True,
+                    "queued": "all",
+                    "message": "Queued Instagram follower sync for all businesses with an Instagram URL.",
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        if business_id is not None and business_id != "":
+            try:
+                bid = int(business_id)
+            except (TypeError, ValueError):
+                return Response(
+                    {"error": "business_id must be an integer.", "success": False},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if not BusinessInfo.objects.filter(businessId=bid).exists():
+                return Response(
+                    {"error": "Business not found.", "success": False},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            sync_instagram_followers_for_business.delay(bid)
+            return Response(
+                {
+                    "success": True,
+                    "queued": "business",
+                    "business_id": bid,
+                    "message": f"Queued Instagram follower sync for business {bid}.",
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        return Response(
+            {
+                "error": "Provide all: true or business_id (integer).",
+                "success": False,
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )

@@ -270,6 +270,9 @@ class PublicClassSerializer(serializers.ModelSerializer):
         default=False,
     )
     location_name = serializers.SerializerMethodField(read_only=True)
+    business_instagram_follower_count = serializers.IntegerField(
+        source="businessId.instagram_follower_count", read_only=True, allow_null=True
+    )
 
     class Meta:
         model = ClassesMain
@@ -303,6 +306,7 @@ class PublicClassSerializer(serializers.ModelSerializer):
             "student_contact_email",
             "student_contact_phone",
             "require_participant_names",
+            "business_instagram_follower_count",
         ]
         read_only_fields = fields
 
@@ -482,6 +486,7 @@ class HomepageClassSerializer(PublicClassSerializer):
             "images",  # Single cover image for card
             "is_favorited",
             "soonest_next_week",
+            "business_instagram_follower_count",
         ]
 
     def get_images(self, obj):

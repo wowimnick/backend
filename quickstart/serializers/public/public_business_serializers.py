@@ -68,6 +68,9 @@ class PublicBusinessInfoSerializer(serializers.ModelSerializer):
     partner_tier_name = serializers.CharField(
         source="partner_tier.name", read_only=True, allow_null=True
     )
+    instagram_follower_count = serializers.IntegerField(read_only=True, allow_null=True)
+    instagram_followers_synced_at = serializers.DateTimeField(read_only=True, allow_null=True)
+    instagram_sync_status = serializers.CharField(read_only=True)
 
     class Meta:
         model = BusinessInfo
@@ -95,6 +98,9 @@ class PublicBusinessInfoSerializer(serializers.ModelSerializer):
             "founding_year",
             "createdAt",
             "partner_tier_name",
+            "instagram_follower_count",
+            "instagram_followers_synced_at",
+            "instagram_sync_status",
         ]
         read_only_fields = fields
 

@@ -149,7 +149,10 @@ from quickstart.views.admin.user_management.verification_views import (
 )
 from quickstart.views.admin.user_management.audit_views import AuditLogViewSet
 from quickstart.views.admin.business_management.business_admin_views import (
+    AdminBusinessGoogleReviewsSyncView,
     AdminGeographicalDataView,
+    AdminGoogleReviewsSyncQueueView,
+    AdminInstagramFollowersSyncQueueView,
     BusinessAdminViewSet,
     ImportGoogleReviewsAdminView,
 )
@@ -193,6 +196,7 @@ from quickstart.views import (
     StudentBookingViewSet,
     BusinessDashboardViewSet,
     MyBusinessProfileView,
+    MyBusinessInstagramFollowersSyncView,
     PublicBusinessInfoViewSet,
     register_business,
     PlatformClassReviews,
@@ -513,6 +517,21 @@ urlpatterns = [
         "admin/import-google-reviews/",
         ImportGoogleReviewsAdminView.as_view(),
         name="admin-import-google-reviews",
+    ),
+    path(
+        "admin/businesses/<int:business_id>/google-reviews-sync/",
+        AdminBusinessGoogleReviewsSyncView.as_view(),
+        name="admin-business-google-reviews-sync",
+    ),
+    path(
+        "admin/sync-google-reviews-queue/",
+        AdminGoogleReviewsSyncQueueView.as_view(),
+        name="admin-sync-google-reviews-queue",
+    ),
+    path(
+        "admin/sync-instagram-followers-queue/",
+        AdminInstagramFollowersSyncQueueView.as_view(),
+        name="admin-sync-instagram-followers-queue",
     ),
     path("impersonate/", include("impersonate.urls")),
     path("accounts/", include("allauth.urls")),
@@ -1080,6 +1099,11 @@ urlpatterns = [
         "my-business/profile/",
         MyBusinessProfileView.as_view(),
         name="my-business-profile",
+    ),
+    path(
+        "my-business/instagram-followers-sync/",
+        MyBusinessInstagramFollowersSyncView.as_view(),
+        name="my-business-instagram-followers-sync",
     ),
     path(
         "business/classes/<int:pk>/options/<int:option_id>/",

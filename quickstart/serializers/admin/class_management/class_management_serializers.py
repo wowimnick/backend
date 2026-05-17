@@ -252,6 +252,9 @@ class AdminClassSerializer(serializers.ModelSerializer):
     average_rating = serializers.FloatField(read_only=True, default=0.0)
     review_count = serializers.IntegerField(read_only=True, default=0)
     active_schedules_count = serializers.IntegerField(read_only=True, default=0)
+    furthest_future_instance_date = serializers.DateField(
+        read_only=True, allow_null=True
+    )
     min_price = serializers.DecimalField(
         max_digits=10, decimal_places=2, read_only=True, allow_null=True
     )
@@ -276,6 +279,7 @@ class AdminClassSerializer(serializers.ModelSerializer):
             "price_range",
             "status",
             "active_schedules_count",
+            "furthest_future_instance_date",
             "business_featured",
             "images",
             "business",

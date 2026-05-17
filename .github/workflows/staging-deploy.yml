@@ -98,6 +98,7 @@ jobs:
 
             # --- API & Service Keys (Including Stripe) ---
             RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
+            APIFY_TOKEN=${{ secrets.APIFY_TOKEN }}
             TYPESENSE_API_KEY=${{ secrets.TYPESENSE_API_KEY }}
             GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
             GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}

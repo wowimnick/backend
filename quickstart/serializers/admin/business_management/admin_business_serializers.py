@@ -5,6 +5,7 @@ from django.conf import settings
 from rest_framework import serializers
 
 from quickstart.utils.url_utils import build_cloudfront_url
+# Avoid importing quickstart.tasks at module level (see ManagedBusinessInfoSerializer).
 from ....models import BusinessInfo, ClassCategory
 from decimal import Decimal
 from rest_framework_gis.serializers import GeoFeatureModelSerializer
@@ -138,6 +139,15 @@ class AdminBusinessDetailSerializer(serializers.ModelSerializer):
     classFormats_list = serializers.SerializerMethodField(read_only=True)
     skillLevels_list = serializers.SerializerMethodField(read_only=True)
     ageGroups_list = serializers.SerializerMethodField(read_only=True)
+    instagram_follower_count = serializers.IntegerField(read_only=True, allow_null=True)
+    instagram_followers_synced_at = serializers.DateTimeField(read_only=True, allow_null=True)
+    instagram_sync_status = serializers.CharField(read_only=True)
+    google_maps_url = serializers.URLField(
+        required=False, allow_blank=True, allow_null=True, max_length=500
+    )
+    google_reviews_synced_at = serializers.DateTimeField(read_only=True, allow_null=True)
+    google_reviews_sync_status = serializers.CharField(read_only=True)
+    google_reviews_last_scraped_count = serializers.IntegerField(read_only=True)
 
     business_image_medium_url = serializers.SerializerMethodField()
 
@@ -185,6 +195,13 @@ class AdminBusinessDetailSerializer(serializers.ModelSerializer):
             "classFormats_list",
             "skillLevels_list",
             "ageGroups_list",
+            "instagram_follower_count",
+            "instagram_followers_synced_at",
+            "instagram_sync_status",
+            "google_maps_url",
+            "google_reviews_synced_at",
+            "google_reviews_sync_status",
+            "google_reviews_last_scraped_count",
         ]
         read_only_fields = [
             "businessId",
@@ -203,7 +220,32 @@ class AdminBusinessDetailSerializer(serializers.ModelSerializer):
             "classFormats_list",
             "skillLevels_list",
             "ageGroups_list",
+            "instagram_follower_count",
+            "instagram_followers_synced_at",
+            "instagram_sync_status",
+            "google_reviews_synced_at",
+            "google_reviews_sync_status",
+            "google_reviews_last_scraped_count",
         ]
+
+    def update(self, instance, validated_data):
+        from quickstart.tasks.instagram_tasks import (
+            schedule_instagram_sync_if_instagram_changed,
+        )
+        from quickstart.tasks.google_reviews_tasks import (
+            schedule_google_reviews_sync_if_url_changed,
+        )
+
+        old_ig = ((instance.social_media_links or {}).get("instagram") or "").strip()
+        old_gmaps = (instance.google_maps_url or "").strip()
+        instance = super().update(instance, validated_data)
+        new_ig = ((instance.social_media_links or {}).get("instagram") or "").strip()
+        schedule_instagram_sync_if_instagram_changed(instance.businessId, old_ig, new_ig)
+        new_gmaps = (instance.google_maps_url or "").strip()
+        schedule_google_reviews_sync_if_url_changed(
+            instance.businessId, old_gmaps, new_gmaps
+        )
+        return instance
 
     def get_business_image_medium_url(self, obj):
         """Safely get the medium-sized business image URL."""

@@ -293,6 +293,7 @@ def build_typesense_document_for_class(class_id: int) -> dict[str, Any] | None:
         "student_contact_email": None,
         "student_contact_phone": None,
         "require_participant_names": bool(business.require_participant_names),
+        "business_instagram_follower_count": business.instagram_follower_count,
     }
     privacy = getattr(business, "contact_privacy", None)
     if privacy in ("public", "public_with_chat"):

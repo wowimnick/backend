@@ -10,6 +10,7 @@ from .auth.auth_views import (
 from .business.business_management_views import (
     BusinessDashboardViewSet,
     MyBusinessProfileView,
+    MyBusinessInstagramFollowersSyncView,
     register_business,
     get_user_businesses,
     MyBusinessOverviewView,
@@ -116,6 +117,7 @@ __all__ = [
     "get_user_businesses",
     "register_business",
     "MyBusinessProfileView",
+    "MyBusinessInstagramFollowersSyncView",
     "PublicBusinessInfoViewSet",
     "ImportedGoogleReviewsView",
     "MyBusinessOverviewView",

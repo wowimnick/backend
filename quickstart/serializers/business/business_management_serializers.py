@@ -4,6 +4,8 @@ import string
 from django.conf import settings
 from rest_framework import serializers
 
+# Do not import quickstart.tasks at module level: tasks/__init__ pulls in business_tasks
+# -> public_class_views -> quickstart.serializers (circular import). Import inside update().
 from quickstart.utils.url_utils import build_cloudfront_url
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import validate_email, URLValidator, RegexValidator
@@ -473,6 +475,9 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
     )
     businessHours = serializers.JSONField(required=False, allow_null=True)
     locations = BusinessLocationSerializer(many=True, read_only=True)
+    instagram_follower_count = serializers.IntegerField(read_only=True, allow_null=True)
+    instagram_followers_synced_at = serializers.DateTimeField(read_only=True, allow_null=True)
+    instagram_sync_status = serializers.CharField(read_only=True)
 
     class Meta:
         model = BusinessInfo
@@ -521,6 +526,9 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "average_rating",
             "totalReviews",
             "locations",
+            "instagram_follower_count",
+            "instagram_followers_synced_at",
+            "instagram_sync_status",
         ]
         read_only_fields = (
             "businessId",
@@ -534,6 +542,9 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "updatedAt",
             "average_rating",
             "totalReviews",
+            "instagram_follower_count",
+            "instagram_followers_synced_at",
+            "instagram_sync_status",
             "classFormats",
             "skillLevels",
             "ageGroups",
@@ -857,6 +868,11 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
         return data
 
     def update(self, instance, validated_data):
+        from quickstart.tasks.instagram_tasks import (
+            schedule_instagram_sync_if_instagram_changed,
+        )
+
+        old_ig = ((instance.social_media_links or {}).get("instagram") or "").strip()
         s3_key = validated_data.pop("businessImage_s3_key", "NOT_PROVIDED")
 
         if s3_key is None:
@@ -872,6 +888,10 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             setattr(instance, attr, value)
 
         instance.save()
+        new_ig = ((instance.social_media_links or {}).get("instagram") or "").strip()
+        schedule_instagram_sync_if_instagram_changed(
+            instance.businessId, old_ig, new_ig
+        )
         sync_primary_location_from_business_profile(instance)
         return instance
 

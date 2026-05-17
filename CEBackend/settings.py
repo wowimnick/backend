@@ -156,6 +156,8 @@ GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
 STRIPE_PUBLIC_KEY = os.environ["STRIPE_PUBLIC_KEY"]
 STRIPE_SECRET_KEY = os.environ["STRIPE_SECRET_KEY"]
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
+# Apify (Instagram profile follower counts; optional — scraper skips if unset)
+APIFY_TOKEN = os.environ.get("APIFY_TOKEN", "")
 # Secret for the endpoint at /api/webhooks/stripe-connect/
 STRIPE_CONNECT_WEBHOOK_SECRET = os.environ.get("STRIPE_CONNECT_WEBHOOK_SECRET")
 
@@ -479,6 +481,14 @@ CELERY_BEAT_SCHEDULE = {
     "search-index-reconcile-daily": {
         "task": "quickstart.tasks.search_index_tasks.reconcile_typesense_classes_task",
         "schedule": crontab(hour=1, minute=10),
+    },
+    "sync-instagram-followers-weekly": {
+        "task": "quickstart.tasks.instagram_tasks.sync_instagram_followers_all",
+        "schedule": crontab(hour=3, minute=0, day_of_week="sunday"),
+    },
+    "sync-google-reviews-biweekly": {
+        "task": "quickstart.tasks.google_reviews_tasks.sync_google_reviews_all",
+        "schedule": crontab(hour=4, minute=0, day_of_month="1,15"),
     },
 }
 

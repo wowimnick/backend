@@ -536,6 +536,28 @@ class BusinessInfo(models.Model):
         default=Decimal("0.00"),
         help_text="Denormalized average rating from imported Google reviews.",
     )
+    google_maps_url = models.URLField(
+        max_length=500,
+        blank=True,
+        null=True,
+        help_text="Google Maps URL for Apify review scraper input.",
+    )
+    google_reviews_synced_at = models.DateTimeField(null=True, blank=True)
+    google_reviews_sync_status = models.CharField(
+        max_length=20,
+        default="pending",
+        choices=[
+            ("pending", "pending"),
+            ("ok", "ok"),
+            ("not_found", "not_found"),
+            ("error", "error"),
+            ("running", "running"),
+        ],
+    )
+    google_reviews_last_scraped_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Number of review items returned by Apify in the most recent run.",
+    )
     isActive = models.BooleanField(default=False)
     createdAt = models.DateTimeField(auto_now_add=True)
     updatedAt = models.DateTimeField(auto_now=True)
@@ -662,6 +684,19 @@ class BusinessInfo(models.Model):
         blank=True,
         help_text="e.g. {'facebook': 'url', 'instagram': 'url'}",
     )  # ADDED
+    instagram_follower_count = models.PositiveIntegerField(null=True, blank=True)
+    instagram_followers_synced_at = models.DateTimeField(null=True, blank=True)
+    instagram_sync_status = models.CharField(
+        max_length=20,
+        default="pending",
+        choices=[
+            ("pending", "pending"),
+            ("ok", "ok"),
+            ("not_found", "not_found"),
+            ("private", "private"),
+            ("error", "error"),
+        ],
+    )
     tags_keywords = models.JSONField(
         default=list, blank=True, help_text="List of keywords for searchability"
     )  # ADDED

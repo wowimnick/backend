@@ -1124,6 +1124,33 @@ class MyBusinessProfileView(generics.RetrieveUpdateDestroyAPIView):
             )
 
 
+class MyBusinessInstagramFollowersSyncView(APIView):
+    """
+    POST: enqueue Celery task to refresh Instagram follower count via Apify.
+    """
+
+    permission_classes = [IsAuthenticated, CanManageOwnBusinessProfile]
+
+    def post(self, request, *args, **kwargs):
+        user = request.user
+        business = (
+            BusinessInfo.objects.filter(
+                Q(owner=user)
+                | Q(staff_members__user=user, staff_members__status="accepted")
+            ).first()
+        )
+        if not business:
+            raise NotFound("No business profile associated with this user found.")
+
+        from quickstart.tasks.instagram_tasks import sync_instagram_followers_for_business
+
+        sync_instagram_followers_for_business.delay(business.businessId)
+        return Response(
+            {"detail": "Instagram follower sync scheduled."},
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+
 class BusinessDiscountViewSet(viewsets.ModelViewSet):
     """
     ViewSet for Business Users to manage their own Discounts and Coupons.

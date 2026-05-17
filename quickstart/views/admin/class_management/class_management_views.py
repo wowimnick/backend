@@ -23,6 +23,7 @@ from django.db.models import (
     ExpressionWrapper,
     F,
     FloatField,
+    IntegerField,
     OuterRef,
     Prefetch,
     Subquery,
@@ -142,13 +143,16 @@ class AdminClassViewSet(viewsets.ModelViewSet):
             return ClassesMain.objects.none()
 
         try:
+            action = getattr(self, "action", None) or ""
             queryset = ClassesMain.objects.select_related(
                 "businessId", "businessId__owner"
-            ).distinct()
+            )
+
+            # Avoid DISTINCT on list/search paths: Postgres pays a steep sort/hash penalty for
+            # DISTINCT × SearchFilter OR; only collapse duplicates from M2M collection filter.
 
             # Avoid loading options/schedules/instances for list — not present on list serializer
             # and was the main cause of slow admin class retrieve (huge JSON + DB work).
-            action = getattr(self, "action", None) or ""
             if action == "list":
                 queryset = queryset.prefetch_related(
                     "collections",
@@ -171,34 +175,33 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 )
 
             # --- Annotations ---
-            approved_rating_subquery = Subquery(
-                Reviews.objects.filter(classId=OuterRef("pk"), status="approved")
-                .values("classId")
-                .annotate(avg=Avg("rating"))
-                .values("avg"),
-                output_field=FloatField(),
+            raw_ord = (
+                self.request.query_params.get(filters.OrderingFilter.ordering_param) or ""
+            ).strip()
+            if raw_ord:
+                ordering_tokens_lower = {
+                    tok.lstrip("-").strip().lower()
+                    for tok in raw_ord.split(",")
+                    if tok.strip()
+                }
+            else:
+                ordering_tokens_lower = {
+                    str(o).lstrip("-").lower()
+                    for o in (
+                        self.ordering
+                        if isinstance(self.ordering, (list, tuple))
+                        else [self.ordering]
+                    )
+                }
+
+            # Paying correlated Payment subqueries only when sorting revenue (otherwise list UX
+            # shows 0.00 lifetime platform fees — acceptable vs 7s waits on every keystroke/search).
+            annotate_platform_revenue = (
+                action != "list" or "platform_revenue" in ordering_tokens_lower
             )
 
-            # Platform review counts use ClassesMain.platform_review_count (denormalized).
-            # Google counts use a subquery (see also BusinessInfo.google_review_count denorm).
-
-            # NEW: Google review count per business for this queryset
-            google_review_count_subquery = Subquery(
-                ImportedGoogleReview.objects.filter(business=OuterRef("businessId"))
-                .values("business")
-                .annotate(count=Count("id"))
-                .values("count")[:1],
-                output_field=fields.IntegerField(),
-            )
-
-            google_avg_rating_subquery = Subquery(
-                ImportedGoogleReview.objects.filter(business=OuterRef("businessId"))
-                .values("business")
-                .annotate(avg=Avg("rating"))
-                .values("avg")[:1],
-                output_field=FloatField(),
-            )
-
+            # Platform/Google rollups rely on stored denorms (same as marketplace) so list rows
+            # avoid ImportedGoogleReviews + Reviews AVG correlated subqueries per class.
             min_price_subquery = Subquery(
                 Schedule.objects.filter(
                     option__classId=OuterRef("pk"), price__isnull=False
@@ -222,10 +225,23 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                     date__gte=timezone.now().date(),
                     status="scheduled",
                 )
-                .values("schedule__option__classId")
-                .annotate(c=Count("pk", distinct=True))
-                .values("c"),
-                output_field=Count("pk").output_field,
+                .values(ai_group=Value(1))
+                .annotate(c=Count("id"))
+                .values("c")[:1],
+                output_field=IntegerField(),
+            )
+
+            # Latest booked day among future instances (listing horizon for admin UX).
+            furthest_future_instance_subquery = Subquery(
+                ScheduleInstance.objects.filter(
+                    schedule__option__classId=OuterRef("pk"),
+                    date__gte=timezone.now().date(),
+                    status="scheduled",
+                )
+                .values(ff_group=Value(1))
+                .annotate(maxd=Max("date"))
+                .values("maxd")[:1],
+                output_field=DateField(),
             )
 
             platform_revenue_subquery = Subquery(
@@ -238,19 +254,19 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 .values("booking__schedule_instance__schedule__option__classId")
                 .annotate(total_fees=Sum("platform_fee_amount"))
                 .values("total_fees")[:1],
-                output_field=DecimalField(),
+                output_field=DecimalField(max_digits=12, decimal_places=2),
             )
 
             queryset = queryset.annotate(
                 business_name=F("businessId__businessName"),
                 business_featured=F("businessId__featured"),
                 google_avg_rating=Coalesce(
-                    google_avg_rating_subquery,
+                    Cast(F("businessId__google_avg_rating"), FloatField()),
                     Value(0.0),
                     output_field=FloatField(),
                 ),
                 google_review_count=Coalesce(
-                    google_review_count_subquery,
+                    F("businessId__google_review_count"),
                     Value(0),
                     output_field=fields.IntegerField(),
                 ),
@@ -271,15 +287,23 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 active_schedules_count=Coalesce(
                     active_instances_subquery,
                     Value(0),
-                    output_field=Count("pk").output_field,
+                    output_field=IntegerField(),
                 ),
-                platform_revenue=Coalesce(
-                    platform_revenue_subquery,
-                    Value(Decimal("0.00")),
-                    output_field=DecimalField(),
+                furthest_future_instance_date=furthest_future_instance_subquery,
+                platform_revenue=(
+                    Coalesce(
+                        platform_revenue_subquery,
+                        Value(Decimal("0.00")),
+                        output_field=DecimalField(max_digits=12, decimal_places=2),
+                    )
+                    if annotate_platform_revenue
+                    else Value(
+                        Decimal("0.00"),
+                        output_field=DecimalField(max_digits=12, decimal_places=2),
+                    )
                 ),
             )
-            # Weighted average: approved platform reviews (this class) + Google reviews (business).
+            # Combined average from denormalized platform class stats + imported Google rollup on business.
             queryset = queryset.annotate(
                 average_rating=Case(
                     When(
@@ -287,7 +311,7 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                         then=ExpressionWrapper(
                             (
                                 Coalesce(
-                                    approved_rating_subquery,
+                                    Cast(F("platform_avg_rating"), FloatField()),
                                     Value(0.0),
                                     output_field=FloatField(),
                                 )

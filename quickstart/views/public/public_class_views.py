@@ -422,9 +422,16 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         if self.action == "retrieve":
             logger.debug("Action is 'retrieve', prefetching collections for class detail.")
             queryset = queryset.prefetch_related("collections")
-            queryset = queryset.annotate(
-                listing_duration_minutes=Min("options__schedules__duration"),
+            # Scalar subquery avoids JOIN+GROUP BY on options/schedules (heavy DISTINCT GROUP BY plan).
+            listing_duration_sq = Subquery(
+                Schedule.objects.filter(option__classId=OuterRef("pk"))
+                .annotate(_ld_group=Value(1))
+                .values("_ld_group")
+                .annotate(_ld_min=Min("duration"))
+                .values("_ld_min")[:1],
+                output_field=IntegerField(null=True),
             )
+            queryset = queryset.annotate(listing_duration_minutes=listing_duration_sq)
 
         return queryset.distinct()
 
