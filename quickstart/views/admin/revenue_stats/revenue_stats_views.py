@@ -164,14 +164,18 @@ def _payment_base_qs(start_dt, end_dt):
     has_booking_source = qs.exclude(metadata__original_stripe_metadata__booking_source__isnull=True).count()
     no_booking_source = qs.filter(metadata__original_stripe_metadata__booking_source__isnull=True).count()
     sample_metadata_keys = list(qs.order_by("-created_at").values_list("metadata", flat=True)[:2])
+    # Compute marketplace/widget counts with the FIXED queryset for post-fix verification
+    widget_qs_check = qs.filter(metadata__original_stripe_metadata__booking_source__in=WIDGET_SOURCE_LIST)
+    marketplace_qs_check = qs.exclude(pk__in=widget_qs_check.values("pk"))
     _dbg("payment_base_qs", {
+        "runId": "post-fix",
         "start_dt": str(start_dt), "end_dt": str(end_dt),
         "total_payments": total_payments, "succeeded_payments": succeeded_payments,
         "in_range_count": in_range,
         "has_booking_source_in_meta": has_booking_source,
         "no_booking_source_in_meta": no_booking_source,
-        "recent_statuses": [str(s) for s in sample_statuses],
-        "recent_created_at": [str(d) for d in sample_dates],
+        "fixed_marketplace_count": marketplace_qs_check.count(),
+        "fixed_widget_count": widget_qs_check.count(),
         "sample_metadata_keys": [list(m.keys()) if isinstance(m, dict) else str(m) for m in sample_metadata_keys],
     }, hypothesis="H-A,H-B,H-C")
     # #endregion
@@ -593,12 +597,14 @@ def _refund_volume(start_dt, end_dt) -> Decimal:
 def _sources_totals(start_dt, end_dt, sources: set[str]) -> dict[str, dict]:
     out: dict[str, dict] = {}
     base = _payment_base_qs(start_dt, end_dt)
-    marketplace_qs = base.exclude(
-        metadata__original_stripe_metadata__booking_source__in=WIDGET_SOURCE_LIST
-    )
+    # widget_qs must be defined first; marketplace uses pk exclusion so that
+    # payments where booking_source is absent/null (JSON path returns NULL) are
+    # correctly treated as marketplace instead of being silently dropped by
+    # Django's exclude(__in=) NULL-unsafe behaviour on JSON traversal paths.
     widget_qs = base.filter(
         metadata__original_stripe_metadata__booking_source__in=WIDGET_SOURCE_LIST
     )
+    marketplace_qs = base.exclude(pk__in=widget_qs.values("pk"))
 
     if SOURCE_MARKETPLACE in sources:
         out[SOURCE_MARKETPLACE] = _payment_aggregate(marketplace_qs)
@@ -989,12 +995,10 @@ class PlatformRevenueTimeseriesAPIView(APIView):
         by_source: dict[str, list] = {}
 
         base = _payment_base_qs(start_dt, end_dt)
-        marketplace_qs = base.exclude(
-            metadata__original_stripe_metadata__booking_source__in=WIDGET_SOURCE_LIST
-        )
         widget_qs = base.filter(
             metadata__original_stripe_metadata__booking_source__in=WIDGET_SOURCE_LIST
         )
+        marketplace_qs = base.exclude(pk__in=widget_qs.values("pk"))
 
         if SOURCE_MARKETPLACE in sources:
             by_source[SOURCE_MARKETPLACE] = _series_payment_buckets(
