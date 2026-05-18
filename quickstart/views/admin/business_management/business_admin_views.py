@@ -329,6 +329,23 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
         elif engaged_query in ("false", "0", "no"):
             queryset = queryset.filter(is_engaged=False)
 
+        collection_ids = []
+        for val in self.request.query_params.getlist("collection_ids"):
+            for piece in str(val).split(","):
+                piece = piece.strip()
+                if piece.isdigit():
+                    collection_ids.append(int(piece))
+        collection_ids = list(dict.fromkeys(collection_ids))
+        if collection_ids:
+            queryset = queryset.filter(
+                Exists(
+                    ClassesMain.objects.filter(
+                        businessId=OuterRef("pk"),
+                        collections__id__in=collection_ids,
+                    )
+                )
+            )
+
         if self.action in ("retrieve", "update", "partial_update", "metrics"):
             queryset = queryset.prefetch_related("managers")
 
