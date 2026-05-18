@@ -336,6 +336,7 @@ class MyBusinessOverviewView(APIView):
         )
 
         monthly_revenue = None
+        gross_total_revenue = None
         revenue_trend_data = []
 
         if can_view_revenue:
@@ -351,6 +352,16 @@ class MyBusinessOverviewView(APIView):
                     "value": current_revenue_metrics["total_gross_revenue"],
                     "change": current_revenue_metrics["revenue_growth"],
                 }
+                all_time_start_utc = timezone.make_aware(
+                    datetime(2000, 1, 1, 0, 0, 0), pytz.utc
+                )
+                all_time_metrics = revenue_view.calculate_metrics(
+                    business, all_time_start_utc, now_utc, source="all"
+                )
+                gross_total_revenue = {
+                    "value": all_time_metrics["total_gross_revenue"],
+                    "change": 0.0,
+                }
                 revenue_trend_data = revenue_view.get_revenue_trends(
                     business, thirty_days_ago_utc_dt_start_of_day, now_utc
                 )
@@ -361,6 +372,7 @@ class MyBusinessOverviewView(APIView):
                 )
                 # Fallback for authorized user if an error occurs
                 monthly_revenue = {"value": 0, "change": 0}
+                gross_total_revenue = {"value": 0, "change": 0}
                 revenue_trend_data = []
 
         # --- Guest spots this month (paid bookings): sum participants, not booking rows ---
@@ -712,6 +724,8 @@ class MyBusinessOverviewView(APIView):
         # Only add revenue data to the payload if the user has permission
         if can_view_revenue and monthly_revenue is not None:
             metrics_payload["monthly_revenue"] = monthly_revenue
+        if can_view_revenue and gross_total_revenue is not None:
+            metrics_payload["gross_total_revenue"] = gross_total_revenue
 
         payload = {
             "metrics": metrics_payload,

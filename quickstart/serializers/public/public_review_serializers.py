@@ -160,6 +160,9 @@ class PublicReviewSerializer(serializers.ModelSerializer):
 class ImportedGoogleReviewSerializer(serializers.ModelSerializer):
     """Serializer for displaying imported Google Reviews."""
 
+    business_name = serializers.CharField(
+        source="business.businessName", read_only=True, allow_null=True
+    )
     # FIXED: Changed field names to match frontend expectations
     reviewer_avatar_url = (
         serializers.SerializerMethodField()
@@ -182,6 +185,7 @@ class ImportedGoogleReviewSerializer(serializers.ModelSerializer):
             "comment",
             "review_date",
             "owner_response",
+            "business_name",
             "image_urls",  # CHANGED - primary field
             "image_thumb_urls",
             "image_medium_urls",

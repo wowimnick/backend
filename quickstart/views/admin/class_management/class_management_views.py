@@ -81,6 +81,10 @@ from quickstart.serializers.admin.class_management.class_management_serializers 
     SubcategorySerializer,
 )
 
+from quickstart.serializers.public.public_review_serializers import (
+    ImportedGoogleReviewSerializer,
+)
+
 from quickstart.serializers import ManagedClassOptionSerializer, ManagedClassSerializer
 
 logger = logging.getLogger(__name__)
@@ -1488,12 +1492,55 @@ class AdminReviewViewSet(viewsets.ModelViewSet):
             serializer = self.get_serializer(
                 page, many=True, context={"request": request}
             )
-            return self.get_paginated_response(serializer.data)
+            response = self.get_paginated_response(serializer.data)
+        else:
+            serializer = self.get_serializer(
+                queryset, many=True, context={"request": request}
+            )
+            response = Response(serializer.data)
 
-        serializer = self.get_serializer(
-            queryset, many=True, context={"request": request}
-        )
-        return Response(serializer.data)
+        if str(request.query_params.get("include_google", "")).lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            st = request.query_params.get("status")
+            if st and st not in ("all", ""):
+                if st != "approved":
+                    if isinstance(response.data, dict):
+                        response.data["google_reviews"] = []
+                    return response
+            rep = request.query_params.get("reported")
+            if str(rep).lower() in ("true", "1", "yes"):
+                if isinstance(response.data, dict):
+                    response.data["google_reviews"] = []
+                return response
+
+            g_qs = ImportedGoogleReview.objects.select_related("business").order_by(
+                "-review_date"
+            )
+            search_term = (request.query_params.get("search") or "").strip()
+            if search_term:
+                g_qs = g_qs.filter(
+                    Q(reviewer_name__icontains=search_term)
+                    | Q(comment__icontains=search_term)
+                    | Q(business__businessName__icontains=search_term)
+                )
+            business_id = request.query_params.get("business_id")
+            if business_id:
+                try:
+                    g_qs = g_qs.filter(business_id=int(business_id))
+                except (TypeError, ValueError):
+                    pass
+            rating_filter = request.query_params.get("rating")
+            if rating_filter and str(rating_filter).isdigit():
+                g_qs = g_qs.filter(rating=int(rating_filter))
+            g_qs = g_qs[:300]
+            payload = ImportedGoogleReviewSerializer(g_qs, many=True).data
+            if isinstance(response.data, dict):
+                response.data["google_reviews"] = payload
+
+        return response
 
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()

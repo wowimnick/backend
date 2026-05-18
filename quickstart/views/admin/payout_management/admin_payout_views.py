@@ -199,13 +199,15 @@ class AdminPayoutViewSet(viewsets.ReadOnlyModelViewSet):
                 writer.writerow(
                     [
                         str(payout.id),
-                        payout.stripe_transfer_id,
+                        payout.stripe_transfer_id or "",
                         payout.business.businessName,
                         payout.amount,
                         payout.currency,
                         payout.status,
                         payout.created_at.strftime("%Y-%m-%d %H:%M"),
-                        payout.arrival_date.strftime("%Y-%m-%d"),
+                        payout.arrival_date.strftime("%Y-%m-%d")
+                        if payout.arrival_date
+                        else "",
                         payout.bookings.count(),
                     ]
                 )

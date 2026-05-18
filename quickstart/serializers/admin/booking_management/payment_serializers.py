@@ -8,6 +8,65 @@ from quickstart.utils.url_utils import build_cloudfront_url
 from ....models import Payment, Booking, CustomUser
 
 
+def humanize_payment_method_type(payment_method_type):
+    if not payment_method_type:
+        return None
+    key = str(payment_method_type).strip().lower()
+    labels = {
+        "card": "Card",
+        "link": "Stripe Link",
+        "us_bank_account": "US bank account (ACH)",
+        "acss_debit": "Pre-authorized debit",
+        "ideal": "iDEAL",
+        "sepa_debit": "SEPA Direct Debit",
+        "bancontact": "Bancontact",
+        "sofort": "Sofort",
+        "afterpay_clearpay": "Afterpay / Clearpay",
+        "klarna": "Klarna",
+        "affirm": "Affirm",
+        "cashapp": "Cash App Pay",
+        "paypal": "PayPal",
+        "amazon_pay": "Amazon Pay",
+        "interac_present": "Interac (present)",
+    }
+    return labels.get(key, str(payment_method_type).replace("_", " ").title())
+
+
+def build_card_details_payload(obj):
+    """Card-specific display, or a readable fallback from payment_method_type."""
+    if obj.card_brand and obj.card_last4:
+        return {
+            "brand": obj.card_brand,
+            "last4": obj.card_last4,
+            "exp_month": obj.card_exp_month,
+            "exp_year": obj.card_exp_year,
+            "display_name": f"{obj.card_brand.title()} •••• {obj.card_last4}",
+            "expiry": (
+                f"{obj.card_exp_month}/{obj.card_exp_year}"
+                if obj.card_exp_month and obj.card_exp_year
+                else None
+            ),
+        }
+    label = humanize_payment_method_type(obj.payment_method_type)
+    if label:
+        return {
+            "brand": None,
+            "last4": None,
+            "exp_month": None,
+            "exp_year": None,
+            "display_name": label,
+            "expiry": None,
+        }
+    return None
+
+
+def build_stripe_dashboard_payment_url(stripe_payment_intent_id):
+    pi = (stripe_payment_intent_id or "").strip()
+    if not pi or pi.startswith("internal_") or pi.startswith("temp_"):
+        return None
+    return f"https://dashboard.stripe.com/payments/{pi}"
+
+
 class AdminPaymentSerializer(serializers.ModelSerializer):
     user_name = serializers.SerializerMethodField()
     user_email = serializers.SerializerMethodField()
@@ -15,6 +74,7 @@ class AdminPaymentSerializer(serializers.ModelSerializer):
     class_name = serializers.SerializerMethodField()
     booking_id = serializers.SerializerMethodField()
     card_details = serializers.SerializerMethodField()
+    stripe_dashboard_url = serializers.SerializerMethodField()
     formatted_status = serializers.ReadOnlyField()
     available_refund_amount = serializers.ReadOnlyField()
 
@@ -23,6 +83,7 @@ class AdminPaymentSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "stripe_payment_intent_id",
+            "stripe_dashboard_url",
             "stripe_charge_id",
             "amount",
             "platform_fee_amount",  # FIX: Renamed from service_fee_amount
@@ -55,20 +116,10 @@ class AdminPaymentSerializer(serializers.ModelSerializer):
         ]
 
     def get_card_details(self, obj):
-        if obj.card_brand and obj.card_last4:
-            return {
-                "brand": obj.card_brand,
-                "last4": obj.card_last4,
-                "exp_month": obj.card_exp_month,
-                "exp_year": obj.card_exp_year,
-                "display_name": f"{obj.card_brand.title()} •••• {obj.card_last4}",
-                "expiry": (
-                    f"{obj.card_exp_month}/{obj.card_exp_year}"
-                    if obj.card_exp_month and obj.card_exp_year
-                    else None
-                ),
-            }
-        return None
+        return build_card_details_payload(obj)
+
+    def get_stripe_dashboard_url(self, obj):
+        return build_stripe_dashboard_payment_url(obj.stripe_payment_intent_id)
 
     def get_booking_id(self, obj):
         if obj.booking:
@@ -115,15 +166,15 @@ class AdminBookingPaymentSerializer(serializers.ModelSerializer):
     available_refund_amount = serializers.ReadOnlyField()
     formatted_status = serializers.ReadOnlyField()
 
-    # --- ADD THIS ---
     card_details = serializers.SerializerMethodField()
-    # --- END ADD ---
+    stripe_dashboard_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Payment
         fields = [
             "id",
             "stripe_payment_intent_id",
+            "stripe_dashboard_url",
             "amount",
             "platform_fee_amount",
             "stripe_processing_fee",
@@ -142,20 +193,10 @@ class AdminBookingPaymentSerializer(serializers.ModelSerializer):
         ]
 
     def get_card_details(self, obj):
-        if obj.card_brand and obj.card_last4:
-            return {
-                "brand": obj.card_brand,
-                "last4": obj.card_last4,
-                "exp_month": obj.card_exp_month,
-                "exp_year": obj.card_exp_year,
-                "display_name": f"{obj.card_brand.title()} •••• {obj.card_last4}",
-                "expiry": (
-                    f"{obj.card_exp_month}/{obj.card_exp_year}"
-                    if obj.card_exp_month and obj.card_exp_year
-                    else None
-                ),
-            }
-        return None
+        return build_card_details_payload(obj)
+
+    def get_stripe_dashboard_url(self, obj):
+        return build_stripe_dashboard_payment_url(obj.stripe_payment_intent_id)
 
 
 class AdminBookingListSerializer(serializers.ModelSerializer):

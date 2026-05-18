@@ -7,6 +7,9 @@ from quickstart.utils.url_utils import build_cloudfront_url
 from quickstart.serializers.business.business_location_serializers import (
     BusinessLocationSerializer,
 )
+from quickstart.serializers.public.public_review_serializers import (
+    ImportedGoogleReviewSerializer,
+)
 from ....models import (
     ClassCategory,
     ClassCollection,
@@ -19,6 +22,7 @@ from ....models import (
     ScheduleInstance,
     BusinessInfo,
     BusinessLocation,
+    ImportedGoogleReview,
 )
 
 
@@ -437,12 +441,54 @@ class AdminClassDetailSerializer(AdminClassSerializer):
         read_only_fields = fields
 
     def get_reviews(self, obj):
-        qs = (
+        platform_rows = list(
             Reviews.objects.filter(classId_id=obj.pk)
             .select_related("userId")
             .order_by("-createdAt")[:ADMIN_CLASS_DETAIL_REVIEW_LIMIT]
         )
-        return AdminReviewSerializer(qs, many=True).data
+        platform_data = AdminReviewSerializer(platform_rows, many=True).data
+        for item in platform_data:
+            item["review_source"] = "platform"
+
+        biz_id = getattr(obj, "businessId_id", None)
+        google_data = []
+        if biz_id:
+            g_qs = (
+                ImportedGoogleReview.objects.filter(business_id=biz_id)
+                .select_related("business")
+                .order_by("-review_date")[:ADMIN_CLASS_DETAIL_REVIEW_LIMIT]
+            )
+            g_raw = ImportedGoogleReviewSerializer(g_qs, many=True).data
+            biz_name = None
+            if getattr(obj, "businessId", None):
+                biz_name = obj.businessId.businessName
+            for g in g_raw:
+                google_data.append(
+                    {
+                        "reviewId": f"google:{g['google_review_id']}",
+                        "review_source": "google",
+                        "user": {
+                            "id": None,
+                            "name": g.get("reviewer_name") or "Google reviewer",
+                            "avatar_thumb_url": g.get("reviewer_avatar_url"),
+                        },
+                        "rating": g["rating"],
+                        "comment": g.get("comment") or "",
+                        "business_response": g.get("owner_response"),
+                        "status": "approved",
+                        "reported": False,
+                        "createdAt": g.get("review_date"),
+                        "businessName": g.get("business_name") or biz_name,
+                        "className": None,
+                    }
+                )
+
+        combined = platform_data + google_data
+        combined.sort(
+            key=lambda x: str(x.get("createdAt") or ""),
+            reverse=True,
+        )
+        return combined[:ADMIN_CLASS_DETAIL_REVIEW_LIMIT]
 
     def get_business_locations(self, obj):
         if not getattr(obj, "businessId_id", None):

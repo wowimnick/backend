@@ -905,6 +905,108 @@ class PlatformRevenueOverviewAPIView(APIView):
         return Response(resp)
 
 
+def _build_timeseries_payload(
+    start_d: date, end_d: date, sources: set[str], granularity: str
+) -> dict:
+    """Shared builder for chart API and CSV export (same bucketing logic)."""
+    granularity = _parse_granularity(granularity)
+    start_dt, end_dt = _to_dt_bounds(start_d, end_d)
+    trunc = _trunc_cls(granularity)
+    by_source: dict[str, list] = {}
+
+    base = _payment_base_qs(start_dt, end_dt)
+    marketplace_qs, widget_qs = _marketplace_widget_payment_qs(base)
+
+    if SOURCE_MARKETPLACE in sources:
+        by_source[SOURCE_MARKETPLACE] = _series_payment_buckets(
+            marketplace_qs, trunc, "created_at"
+        )
+    if SOURCE_WIDGET in sources:
+        by_source[SOURCE_WIDGET] = _series_payment_buckets(widget_qs, trunc, "created_at")
+    if SOURCE_MEMBERSHIP in sources:
+        by_source[SOURCE_MEMBERSHIP] = _series_membership_buckets(start_dt, end_dt, trunc)
+    if SOURCE_CORPORATE in sources:
+        by_source[SOURCE_CORPORATE] = _series_corporate_buckets(start_dt, end_dt, trunc)
+
+    if SOURCE_SAAS in sources:
+        by_source[SOURCE_SAAS] = _saas_timeseries_daily(start_d, end_d, granularity)
+
+    if SOURCE_ADDON in sources:
+        addon_daily = []
+        cur = start_d
+        qs = list(
+            BusinessAddonSubscription.objects.filter(
+                addon_type=ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING,
+                status__in=("active", "trialing", "past_due"),
+            )
+        )
+        monthly_by_addon_sub = {}
+        for sub in qs:
+            m = _addon_subscription_monthly_amount(sub)
+            if m is not None and m > 0:
+                monthly_by_addon_sub[sub.pk] = m
+        while cur <= end_d:
+            piece_total = Decimal("0")
+            for sub in qs:
+                monthly = monthly_by_addon_sub.get(sub.pk)
+                if monthly is None:
+                    continue
+                span_start = max(cur, sub.created_at.date())
+                span_end = min(cur, _subscription_end_date(sub, end_d))
+                if span_start <= span_end:
+                    dim = monthrange(cur.year, cur.month)[1]
+                    piece_total += monthly / Decimal(dim)
+            stripe_total = estimate_stripe_processing_fee(piece_total)
+            addon_daily.append(
+                {
+                    "bucket": cur.isoformat(),
+                    "commission": piece_total.quantize(Decimal("0.01")),
+                    "commission_plus_tax": piece_total.quantize(Decimal("0.01")),
+                    "stripe_processing": stripe_total,
+                    "net_after_stripe": piece_total - stripe_total,
+                    "gross_gmv": piece_total,
+                    "cnt": 0,
+                }
+            )
+            cur += timedelta(days=1)
+
+        if granularity == "day":
+            by_source[SOURCE_ADDON] = addon_daily
+        else:
+            merged_addon = defaultdict(
+                lambda: {
+                    "commission": Decimal("0"),
+                    "commission_plus_tax": Decimal("0"),
+                    "stripe_processing": Decimal("0"),
+                    "gross_gmv": Decimal("0"),
+                    "cnt": 0,
+                    "net_after_stripe": Decimal("0"),
+                }
+            )
+
+            for row in addon_daily:
+                bk = _bucket_label_from_date(
+                    date.fromisoformat(row["bucket"]), granularity
+                )
+                merged_addon[bk]["commission"] += row["commission"]
+                merged_addon[bk]["commission_plus_tax"] += row["commission_plus_tax"]
+                merged_addon[bk]["stripe_processing"] += row["stripe_processing"]
+                merged_addon[bk]["gross_gmv"] += row["gross_gmv"]
+                merged_addon[bk]["net_after_stripe"] += row["net_after_stripe"]
+
+            by_source[SOURCE_ADDON] = [
+                {"bucket": bk, **vals} for bk, vals in sorted(merged_addon.items())
+            ]
+
+    rows = _merge_timeseries(by_source)
+    return {
+        "granularity": granularity,
+        "start_date": start_d.isoformat(),
+        "end_date": end_d.isoformat(),
+        "rows": rows,
+    }
+
+
 class PlatformRevenueTimeseriesAPIView(APIView):
     permission_classes = [IsAuthenticated, CanViewPlatformRevenue]
 
@@ -915,107 +1017,11 @@ class PlatformRevenueTimeseriesAPIView(APIView):
                 request.query_params.get("end_date"),
             )
             sources = _parse_sources(request.query_params.get("sources"))
-            granularity = _parse_granularity(request.query_params.get("granularity"))
-            start_dt, end_dt = _to_dt_bounds(start_d, end_d)
+            granularity = request.query_params.get("granularity")
         except ValueError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
-        trunc = _trunc_cls(granularity)
-        by_source: dict[str, list] = {}
-
-        base = _payment_base_qs(start_dt, end_dt)
-        marketplace_qs, widget_qs = _marketplace_widget_payment_qs(base)
-
-        if SOURCE_MARKETPLACE in sources:
-            by_source[SOURCE_MARKETPLACE] = _series_payment_buckets(
-                marketplace_qs, trunc, "created_at"
-            )
-        if SOURCE_WIDGET in sources:
-            by_source[SOURCE_WIDGET] = _series_payment_buckets(widget_qs, trunc, "created_at")
-        if SOURCE_MEMBERSHIP in sources:
-            by_source[SOURCE_MEMBERSHIP] = _series_membership_buckets(start_dt, end_dt, trunc)
-        if SOURCE_CORPORATE in sources:
-            by_source[SOURCE_CORPORATE] = _series_corporate_buckets(start_dt, end_dt, trunc)
-
-        if SOURCE_SAAS in sources:
-            by_source[SOURCE_SAAS] = _saas_timeseries_daily(start_d, end_d, granularity)
-
-        if SOURCE_ADDON in sources:
-            addon_daily = []
-            cur = start_d
-            qs = list(
-                BusinessAddonSubscription.objects.filter(
-                    addon_type=ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING,
-                    status__in=("active", "trialing", "past_due"),
-                )
-            )
-            monthly_by_addon_sub = {}
-            for sub in qs:
-                m = _addon_subscription_monthly_amount(sub)
-                if m is not None and m > 0:
-                    monthly_by_addon_sub[sub.pk] = m
-            while cur <= end_d:
-                piece_total = Decimal("0")
-                for sub in qs:
-                    monthly = monthly_by_addon_sub.get(sub.pk)
-                    if monthly is None:
-                        continue
-                    span_start = max(cur, sub.created_at.date())
-                    span_end = min(cur, _subscription_end_date(sub, end_d))
-                    if span_start <= span_end:
-                        dim = monthrange(cur.year, cur.month)[1]
-                        piece_total += monthly / Decimal(dim)
-                stripe_total = estimate_stripe_processing_fee(piece_total)
-                addon_daily.append(
-                    {
-                        "bucket": cur.isoformat(),
-                        "commission": piece_total.quantize(Decimal("0.01")),
-                        "commission_plus_tax": piece_total.quantize(Decimal("0.01")),
-                        "stripe_processing": stripe_total,
-                        "net_after_stripe": piece_total - stripe_total,
-                        "gross_gmv": piece_total,
-                        "cnt": 0,
-                    }
-                )
-                cur += timedelta(days=1)
-
-            if granularity == "day":
-                by_source[SOURCE_ADDON] = addon_daily
-            else:
-                merged_addon = defaultdict(
-                    lambda: {
-                        "commission": Decimal("0"),
-                        "commission_plus_tax": Decimal("0"),
-                        "stripe_processing": Decimal("0"),
-                        "gross_gmv": Decimal("0"),
-                        "cnt": 0,
-                        "net_after_stripe": Decimal("0"),
-                    }
-                )
-
-                for row in addon_daily:
-                    bk = _bucket_label_from_date(
-                        date.fromisoformat(row["bucket"]), granularity
-                    )
-                    merged_addon[bk]["commission"] += row["commission"]
-                    merged_addon[bk]["commission_plus_tax"] += row["commission_plus_tax"]
-                    merged_addon[bk]["stripe_processing"] += row["stripe_processing"]
-                    merged_addon[bk]["gross_gmv"] += row["gross_gmv"]
-                    merged_addon[bk]["net_after_stripe"] += row["net_after_stripe"]
-
-                by_source[SOURCE_ADDON] = [
-                    {"bucket": bk, **vals} for bk, vals in sorted(merged_addon.items())
-                ]
-
-        rows = _merge_timeseries(by_source)
-        return Response(
-            {
-                "granularity": granularity,
-                "start_date": start_d.isoformat(),
-                "end_date": end_d.isoformat(),
-                "rows": rows,
-            }
-        )
+        return Response(_build_timeseries_payload(start_d, end_d, sources, granularity))
 
 
 class PlatformRevenueTopAPIView(APIView):
@@ -1206,10 +1212,12 @@ class PlatformRevenueExportAPIView(APIView):
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         totals_by_source = _sources_totals(start_dt, end_dt, sources)
+        cad_roll = _cad_totals(totals_by_source)
         buf = StringIO()
         writer = csv.writer(buf)
         writer.writerow(
             [
+                "section",
                 "source",
                 "currency",
                 "commission",
@@ -1221,15 +1229,68 @@ class PlatformRevenueExportAPIView(APIView):
         )
         for src in sorted(totals_by_source.keys()):
             row = totals_by_source[src]
+            block = _serialize_money_block(row)
             writer.writerow(
                 [
+                    "summary",
                     src,
                     row.get("currency", ""),
-                    row["commission"],
-                    row["commission_plus_tax"],
-                    row["net_after_stripe"],
-                    row["gross_gmv"],
-                    row["cnt"],
+                    block["commission"],
+                    block["commission_plus_tax"],
+                    block["net_after_stripe"],
+                    block["gross_gmv"],
+                    block["transactions"],
+                ]
+            )
+        total_block = _serialize_money_block(cad_roll)
+        writer.writerow(
+            [
+                "summary",
+                "TOTAL_SELECTED_SOURCES",
+                "CAD",
+                total_block["commission"],
+                total_block["commission_plus_tax"],
+                total_block["net_after_stripe"],
+                total_block["gross_gmv"],
+                total_block["transactions"],
+            ]
+        )
+
+        granularity = _parse_granularity(body.get("granularity"))
+        ts = _build_timeseries_payload(start_d, end_d, sources, granularity)
+        writer.writerow([])
+        writer.writerow(
+            [
+                f"# timeseries granularity={ts['granularity']} {ts['start_date']}..{ts['end_date']}",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+            ]
+        )
+        writer.writerow(
+            [
+                "bucket",
+                "source",
+                "commission",
+                "commission_plus_tax",
+                "net_after_stripe",
+                "gross_gmv",
+                "transactions",
+            ]
+        )
+        for r in ts["rows"]:
+            writer.writerow(
+                [
+                    r["bucket"],
+                    r["source"],
+                    r["commission"],
+                    r["commission_plus_tax"],
+                    r["net_after_stripe"],
+                    r["gross_gmv"],
+                    r["cnt"],
                 ]
             )
 

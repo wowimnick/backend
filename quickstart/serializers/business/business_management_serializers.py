@@ -93,6 +93,7 @@ class MetricsContainerSerializer(serializers.Serializer):
     total_students = MetricSerializer()
     active_classes = MetricSerializer()
     monthly_revenue = MetricSerializer(required=False)
+    gross_total_revenue = MetricSerializer(required=False)
     average_rating = MetricSerializer()
 
 
