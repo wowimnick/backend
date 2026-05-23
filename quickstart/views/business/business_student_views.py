@@ -36,6 +36,7 @@ from quickstart.models import (
     BusinessInfo,
     Contact,
     CustomUser,
+    CustomerMembership,
     StudentNote,
     ScheduleInstance,
     ClassesMain,
@@ -61,6 +62,35 @@ class StudentPagination(PageNumberPagination):
     page_size = 12
     page_size_query_param = "page_size"
     max_page_size = 48
+
+
+def _business_bookings_for(business):
+    return Booking.objects.filter(
+        schedule_instance__schedule__option__classId__businessId=business.businessId,
+    ).exclude(status="cancelled")
+
+
+def _contact_has_business_booking_exists(business):
+    business_bookings = _business_bookings_for(business)
+    return Exists(
+        business_bookings.filter(
+            Q(contact=OuterRef("pk")) | Q(user=OuterRef("user"))
+        )
+    )
+
+
+def _contact_has_membership_exists(business):
+    return Exists(
+        CustomerMembership.objects.filter(
+            contact=OuterRef("pk"),
+            product__business=business,
+        )
+    )
+
+
+def _listable_guest_q():
+    """CRM imports/manual entries may appear without a class booking."""
+    return Q(source__in=["import", "manual_entry"])
 
 
 class BusinessStudentViewSet(
@@ -102,19 +132,33 @@ class BusinessStudentViewSet(
     def get_queryset(self):
         business = self.get_business_context()
 
-        # Base queryset is now Contact
-        queryset = Contact.objects.filter(business=business).select_related(
-            "user", "user__role"
+        has_business_booking = _contact_has_business_booking_exists(business)
+        has_membership = _contact_has_membership_exists(business)
+
+        # Base queryset: contacts who booked here, have a membership, or were added via CRM import.
+        queryset = (
+            Contact.objects.filter(business=business)
+            .select_related("user", "user__role")
+            .annotate(
+                _has_business_booking=has_business_booking,
+                _has_membership=has_membership,
+            )
+            .filter(
+                Q(_has_business_booking=True)
+                | Q(_has_membership=True)
+                | _listable_guest_q()
+            )
         )
 
         # Annotations now pull data from the linked user, coalescing to 0/null if no user is linked
         thirty_days_ago_date = (timezone.now() - timezone.timedelta(days=30)).date()
 
+        business_bookings = _business_bookings_for(business)
+
         # Subqueries to correctly fetch data for GUESTS (where user is null)
         last_booking_subquery = Subquery(
-            Booking.objects.filter(
+            business_bookings.filter(
                 contact=OuterRef("pk"),
-                schedule_instance__schedule__option__classId__businessId=business.businessId,
             )
             .order_by("-booking_date")
             .values("booking_date")[:1],
@@ -122,10 +166,9 @@ class BusinessStudentViewSet(
         )
 
         total_classes_subquery = Subquery(
-            Booking.objects.filter(
+            business_bookings.filter(
                 contact=OuterRef("pk"),
                 status="completed",
-                schedule_instance__schedule__option__classId__businessId=business.businessId,
             )
             .values("contact")
             .annotate(count=Count("pk"))
@@ -134,10 +177,9 @@ class BusinessStudentViewSet(
         )
 
         total_spent_subquery = Subquery(
-            Booking.objects.filter(
+            business_bookings.filter(
                 contact=OuterRef("pk"),
                 payment_status="paid",
-                schedule_instance__schedule__option__classId__businessId=business.businessId,
             )
             .values("contact")
             .annotate(total=Sum("amount_paid"))
@@ -197,7 +239,10 @@ class BusinessStudentViewSet(
         # Apply status filter
         status_filter_param = self.request.query_params.get("status_filter", "all")
         if status_filter_param == "active":
-            queryset = queryset.filter(user__isnull=False)
+            # Platform users who have actually booked with this business
+            queryset = queryset.filter(
+                user__isnull=False, _has_business_booking=True
+            )
         elif status_filter_param == "inactive":
             queryset = queryset.filter(user__isnull=True)
 

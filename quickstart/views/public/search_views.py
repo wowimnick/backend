@@ -274,3 +274,38 @@ class SearchSuggestView(APIView):
         payload = build_payload()
         cache.set(cache_key, payload, 60)
         return Response(payload)
+
+
+LOCATION_PRESETS_CACHE_KEY = "public:location_presets:v1"
+LOCATION_PRESETS_CACHE_SECONDS = 600
+
+
+class LocationPresetsView(APIView):
+    """
+    Explore location shortcuts with at least one bookable class inside the
+    census boundary polygon (no radius fallback).
+    """
+
+    permission_classes = [AllowAny]
+    throttle_classes = [SearchSuggestAnonThrottle, SearchSuggestUserThrottle]
+
+    def get(self, request):
+        from django.utils import timezone
+
+        from quickstart.services.location_preset_service import (
+            get_location_presets_with_coverage,
+            serialize_presets_for_api,
+        )
+
+        cached = cache.get(LOCATION_PRESETS_CACHE_KEY)
+        if cached is not None:
+            return Response(cached)
+
+        presets = serialize_presets_for_api(get_location_presets_with_coverage())
+        payload = {
+            "generatedAt": timezone.now().isoformat(),
+            "presets": presets,
+        }
+        cache.set(LOCATION_PRESETS_CACHE_KEY, payload, LOCATION_PRESETS_CACHE_SECONDS)
+        return Response(payload)
+

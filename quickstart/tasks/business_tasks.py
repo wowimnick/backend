@@ -26,6 +26,21 @@ import resend
 
 logger = logging.getLogger(__name__)
 
+
+def _revalidate_class_detail_tags(class_instance) -> None:
+    """Revalidate Next.js class-detail cache tags (same tags as business class saves)."""
+    if not class_instance:
+        return
+    try:
+        slug = getattr(class_instance, "slug", None)
+        if slug:
+            trigger_nextjs_revalidation(tag=f"class-{slug}")
+        trigger_nextjs_revalidation(tag=f"class-{class_instance.classId}")
+        trigger_nextjs_revalidation(tag="classes")
+    except Exception as e:
+        logger.warning("Post-Gemini class detail revalidation failed: %s", e)
+
+
 @shared_task
 def classify_class_task(class_id):
     """
@@ -36,6 +51,7 @@ def classify_class_task(class_id):
         instance = ClassesMain.objects.get(pk=class_id)
         assigner = CollectionAutoAssigner()
         assigner.process_class(instance)
+        _revalidate_class_detail_tags(instance)
     except ClassesMain.DoesNotExist:
         logger.warning(f"Class {class_id} not found during classification task.")
     except Exception as e:
@@ -77,6 +93,7 @@ def format_class_description_task(self, class_id, force=False):
             description_ai_status="ready",
             description_ai_generated_at=timezone.now(),
         )
+        _revalidate_class_detail_tags(instance)
         return
 
     new_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -109,6 +126,8 @@ def format_class_description_task(self, class_id, force=False):
             len(instance.description_summary or ""),
             len(instance.description_sections or []),
         )
+        if instance.description_ai_status == "ready":
+            _revalidate_class_detail_tags(instance)
     except Exception as e:
         logger.exception(
             "format_class_description_task failed for class_id=%s", class_id

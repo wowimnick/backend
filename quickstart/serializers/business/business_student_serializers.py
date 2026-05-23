@@ -139,9 +139,13 @@ class BusinessStudentProfileSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_type(self, obj):
-        if obj.user:
+        has_booked = getattr(obj, "_has_business_booking", None)
+        if has_booked is None:
+            has_booked = bool(getattr(obj, "last_booking_date_this_business", None))
+
+        if obj.user and has_booked:
             return "user"
-        if obj.source == "guest_booking":
+        if has_booked and not obj.user:
             return "guest"
         return "contact"
 

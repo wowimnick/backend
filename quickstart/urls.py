@@ -167,6 +167,7 @@ from quickstart.views.public.public_global_discount_views import (
 )
 from quickstart.views.public.search_log_views import SearchLogCreateView
 from quickstart.views.public.search_views import (
+    LocationPresetsView,
     PublicCollectionPlacementListView,
     SearchSuggestView,
 )
@@ -501,6 +502,11 @@ urlpatterns = [
         name="corporate-booking-status-public",
     ),
     path("search/suggest/", SearchSuggestView.as_view(), name="search-suggest"),
+    path(
+        "search/location-presets/",
+        LocationPresetsView.as_view(),
+        name="search-location-presets",
+    ),
     path(
         "collections/placement/",
         PublicCollectionPlacementListView.as_view(),
