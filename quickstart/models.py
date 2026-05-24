@@ -1526,29 +1526,37 @@ class ClassesMain(models.Model):
         help_text="Denormalized ranking score for public explore (Typesense + DB list).",
     )
 
-    def _generate_unique_slug(self):
-        """Generates a unique slug from the business city and class title."""
-        if self.slug:  # Do not regenerate if a slug already exists
-            return
+    def _slug_city_prefix(self) -> str:
+        city = ""
+        business = getattr(self, "businessId", None)
+        if business is not None:
+            city = getattr(business, "businessCity", None) or ""
+        if not city:
+            city = self.city or ""
+        return str(city).strip()
 
-        # Create a base slug from city and title for better SEO
-        base_slug = django_slugify(f"{self.businessId.businessCity} {self.title}")
-
-        # If the base slug is empty, fallback to a generic one
+    def _build_unique_slug(self) -> str:
+        """Build a unique slug from business city + title."""
+        base_slug = django_slugify(f"{self._slug_city_prefix()} {self.title}".strip())
         if not base_slug:
             base_slug = "class"
 
         slug = base_slug
-        # Use a transaction to ensure atomic check and creation
-        with transaction.atomic():
-            # Check for uniqueness and append a suffix if necessary
-            while ClassesMain.objects.filter(slug=slug).exists():
-                random_suffix = uuid.uuid4().hex[:6]
-                slug = f"{base_slug}-{random_suffix}"
-        self.slug = slug
+        qs = ClassesMain.objects.all()
+        if self.pk:
+            qs = qs.exclude(pk=self.pk)
+        while qs.filter(slug=slug).exists():
+            random_suffix = uuid.uuid4().hex[:6]
+            slug = f"{base_slug}-{random_suffix}"
+        return slug
+
+    def _generate_unique_slug(self):
+        """Generates a unique slug from the business city and class title."""
+        self.slug = self._build_unique_slug()
 
     def save(self, *args, **kwargs):
         """Override save to generate a slug and update the GIS point field."""
+        self._old_slug_for_redirect = None
 
         if self.coordinates:
             try:
@@ -1564,7 +1572,15 @@ class ClassesMain(models.Model):
         else:
             self.point = None
 
-        if not self.slug:
+        if self.pk:
+            try:
+                prev = ClassesMain.objects.only("title", "slug").get(pk=self.pk)
+                if prev.title != self.title:
+                    self._old_slug_for_redirect = prev.slug
+                    self.slug = self._build_unique_slug()
+            except ClassesMain.DoesNotExist:
+                pass
+        elif not self.slug:
             self._generate_unique_slug()
 
         super().save(*args, **kwargs)
@@ -1589,6 +1605,24 @@ class ClassesMain(models.Model):
 
     def __str__(self):
         return self.title
+
+
+class ClassSlugRedirect(models.Model):
+    """Maps a retired class slug to the current ClassesMain row (title renames)."""
+
+    slug = models.SlugField(max_length=255, unique=True, db_index=True)
+    class_ref = models.ForeignKey(
+        ClassesMain,
+        on_delete=models.CASCADE,
+        related_name="slug_redirects",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "class_slug_redirects"
+
+    def __str__(self):
+        return f"{self.slug} -> class {self.class_ref_id}"
 
 
 class GeographicBoundary(models.Model):

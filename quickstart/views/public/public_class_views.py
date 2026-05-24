@@ -103,6 +103,7 @@ from quickstart.services.search_geo_params import (
     normalize_province_name,
     is_toronto_gta_search_name as _is_toronto_gta_search_name,
     toronto_gta_center_point as _toronto_gta_center_point,
+    toronto_gta_radius_km as _toronto_gta_radius_km,
 )
 
 logger = logging.getLogger(__name__)
@@ -258,9 +259,14 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         identifier = self.kwargs.get(self.lookup_field)
         if identifier.isdigit():
             filter_kwargs = {"pk": identifier}
+            obj = get_object_or_404(queryset, **filter_kwargs)
         else:
-            filter_kwargs = {"slug": identifier}
-        obj = get_object_or_404(queryset, **filter_kwargs)
+            from quickstart.utils.class_slug_utils import resolve_class_by_slug
+
+            try:
+                obj = resolve_class_by_slug(queryset, identifier)
+            except ClassesMain.DoesNotExist:
+                raise Http404
         self.check_object_permissions(self.request, obj)
         return obj
 
@@ -997,12 +1003,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             # No single GTA geometry in DB: radius from downtown Toronto (matches PRESET_LOCATIONS).
             metro_area_handled = True
             metro_point = _toronto_gta_center_point()
-            metro_radius_km = (
-                float(req_radius_km_str)
-                if req_radius_km_str
-                and req_radius_km_str.replace(".", "", 1).isdigit()
-                else float(DEFAULT_SEARCH_RADIUS_KM)
-            )
+            metro_radius_km = _toronto_gta_radius_km(req_radius_km_str)
             queryset = queryset.filter(
                 point__distance_lte=(metro_point, D(km=metro_radius_km))
             )

@@ -398,6 +398,7 @@ class AdminClassViewSet(viewsets.ModelViewSet):
 
         instance = self.get_object()
         request_data = request.data
+        old_slug = instance.slug
 
         # Use a transaction to ensure all or no changes are saved
         with transaction.atomic():
@@ -536,7 +537,10 @@ class AdminClassViewSet(viewsets.ModelViewSet):
 
         # --- Trigger Revalidation ---
         if hasattr(self, '_trigger_class_revalidation'):
-            self._trigger_class_revalidation(updated_instance)
+            self._trigger_class_revalidation(
+                updated_instance,
+                old_slug=old_slug if old_slug != updated_instance.slug else None,
+            )
 
         # Return the fully updated object (detail serializer includes collections)
         detail_serializer = AdminClassDetailSerializer(
@@ -800,7 +804,7 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
     
-    def _trigger_class_revalidation(self, class_instance):
+    def _trigger_class_revalidation(self, class_instance, old_slug=None):
         """Helper to trigger all necessary revalidations for a class."""
         if not class_instance:
             return
@@ -808,6 +812,10 @@ class AdminClassViewSet(viewsets.ModelViewSet):
         # 1. Revalidate the class detail page by tags
         if hasattr(class_instance, "slug") and class_instance.slug:
             trigger_nextjs_revalidation(tag=f"class-{class_instance.slug}")
+
+        if old_slug and old_slug != getattr(class_instance, "slug", None):
+            trigger_nextjs_revalidation(tag=f"class-{old_slug}")
+            trigger_nextjs_revalidation(path=f"/classes/{old_slug}")
 
         trigger_nextjs_revalidation(tag=f"class-{class_instance.classId}")
 

@@ -289,7 +289,7 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
             .distinct()
         )
 
-    def _trigger_class_revalidation(self, class_instance):
+    def _trigger_class_revalidation(self, class_instance, old_slug=None):
         """Helper to trigger all necessary revalidations for a class."""
         if not class_instance:
             return
@@ -297,6 +297,10 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
         # 1. Revalidate by TAG (this is what actually works for cached pages)
         if hasattr(class_instance, "slug") and class_instance.slug:
             trigger_nextjs_revalidation(tag=f"class-{class_instance.slug}")
+
+        if old_slug and old_slug != getattr(class_instance, "slug", None):
+            trigger_nextjs_revalidation(tag=f"class-{old_slug}")
+            trigger_nextjs_revalidation(path=f"/classes/{old_slug}")
 
         # 2. Also revalidate by class ID tag (if your fetcher uses it)
         trigger_nextjs_revalidation(tag=f"class-{class_instance.classId}")
@@ -460,6 +464,7 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
         request_data = self.request.data
 
         with transaction.atomic():
+            old_slug = instance.slug
             updated_instance = serializer.save()
             logger.info(
                 f"Class '{updated_instance.title}' (ID: {updated_instance.pk}) base fields updated by user {user.email}"
@@ -592,7 +597,10 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
                     )
 
         # --- Trigger revalidation for the updated class ---
-        self._trigger_class_revalidation(updated_instance)
+        self._trigger_class_revalidation(
+            updated_instance,
+            old_slug=old_slug if old_slug != updated_instance.slug else None,
+        )
 
     def perform_destroy(self, instance):
         # --- Capture instance data before modification ---

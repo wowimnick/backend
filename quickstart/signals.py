@@ -727,37 +727,88 @@ def trigger_classification(sender, instance, created, update_fields, **kwargs):
 def classes_main_track_description_before(sender, instance, **kwargs):
     if not instance.pk:
         instance._description_before = None
+        instance._status_before = None
         return
     try:
-        instance._description_before = ClassesMain.objects.only("description").get(
-            pk=instance.pk
-        ).description
+        row = ClassesMain.objects.only("description", "status").get(pk=instance.pk)
+        instance._description_before = row.description
+        instance._status_before = row.status
     except ClassesMain.DoesNotExist:
         instance._description_before = None
+        instance._status_before = None
+
+
+def _queue_description_format_task(class_pk: int, *, force: bool = False) -> None:
+    from CEBackend.celery import app as celery_app
+
+    celery_app.send_task(
+        "quickstart.tasks.business_tasks.format_class_description_task",
+        args=[class_pk],
+        kwargs={"force": force},
+    )
 
 
 @receiver(post_save, sender=ClassesMain)
 def queue_description_ai_formatting(sender, instance, created, **kwargs):
-    """Queue Gemini description structuring when description text changes."""
+    """Queue Gemini description structuring when description needs AI output."""
     if instance.status != "active":
         return
-    prev = getattr(instance, "_description_before", object())
+
+    prev_desc = getattr(instance, "_description_before", object())
     desc = instance.description or ""
-    if not created:
-        if prev is not object() and prev == desc:
-            return
-    elif not (desc or "").strip():
+    if not (desc or "").strip():
+        return
+
+    desc_changed = created or not (prev_desc is not object() and prev_desc == desc)
+    prev_status = getattr(instance, "_status_before", None)
+    became_active = (
+        not created
+        and prev_status is not None
+        and prev_status != "active"
+        and instance.status == "active"
+    )
+
+    # Read persisted AI fields (instance may be stale vs .update() on prior saves).
+    ai_row = (
+        ClassesMain.objects.filter(pk=instance.pk)
+        .values(
+            "description_ai_status",
+            "description_summary",
+            "description_sections",
+        )
+        .first()
+    )
+    if ai_row:
+        instance.description_ai_status = ai_row["description_ai_status"]
+        instance.description_summary = ai_row["description_summary"] or ""
+        instance.description_sections = ai_row["description_sections"] or []
+
+    from quickstart.utils.description_ai import (
+        description_ai_needs_processing,
+        description_ai_task_force,
+    )
+
+    if not description_ai_needs_processing(
+        instance,
+        description_changed=desc_changed,
+        became_active=became_active,
+    ):
         return
 
     class_pk = instance.pk
+    force = description_ai_task_force(instance)
     ClassesMain.objects.filter(pk=class_pk).update(description_ai_status="pending")
 
     def _queue():
-        from CEBackend.celery import app as celery_app
-
-        celery_app.send_task(
-            "quickstart.tasks.business_tasks.format_class_description_task",
-            args=[class_pk],
+        _queue_description_format_task(class_pk, force=force)
+        logger.info(
+            "Queued format_class_description_task class_id=%s force=%s "
+            "(desc_changed=%s became_active=%s ai_status=%s)",
+            class_pk,
+            force,
+            desc_changed,
+            became_active,
+            getattr(instance, "description_ai_status", None),
         )
 
     transaction.on_commit(_queue)
@@ -1122,6 +1173,27 @@ def _schedule_next_revalidate(tags):
             logger.warning("Next.js cache revalidate skipped: %s", e)
 
     transaction.on_commit(_run)
+
+
+@receiver(post_save, sender=ClassesMain)
+def classes_main_slug_redirect_on_rename(sender, instance, created, **kwargs):
+    """Keep old class URLs working after title changes regenerate the slug."""
+    if created:
+        return
+    old_slug = getattr(instance, "_old_slug_for_redirect", None)
+    if not old_slug or old_slug == instance.slug:
+        return
+
+    from quickstart.utils.class_slug_utils import record_class_slug_redirect
+    from quickstart.utils.revalidation import trigger_nextjs_revalidation
+
+    record_class_slug_redirect(old_slug, instance)
+
+    def _revalidate_old():
+        trigger_nextjs_revalidation(tag=f"class-{old_slug}")
+        trigger_nextjs_revalidation(path=f"/classes/{old_slug}")
+
+    transaction.on_commit(_revalidate_old)
 
 
 @receiver(post_save, sender=ClassesMain)

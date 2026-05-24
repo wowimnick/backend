@@ -642,6 +642,7 @@ class ManagedClassSerializer(serializers.ModelSerializer):
         model = ClassesMain
         fields = [
             "classId",
+            "slug",
             "businessId",
             "title",
             "description",
@@ -670,6 +671,7 @@ class ManagedClassSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             "classId",
+            "slug",
             "businessId",
             "createdAt",
             "updatedAt",

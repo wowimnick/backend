@@ -25,6 +25,7 @@ from quickstart.services.search_filter_params import (
     BOOKING_TYPE_SINGLE_SESSION,
     normalize_booking_type_query,
 )
+from quickstart.services.search_geo_params import toronto_gta_typesense_location_clause
 from quickstart.tests.factories import (
     BusinessFactory,
     ClassMainFactory,
@@ -92,6 +93,17 @@ def _capture_search(mock_ts):
     assert call is not None
     _client, coll, params = call[0]
     return coll, params
+
+
+class TestTorontoGtaGeoParams:
+    def test_typesense_location_clause_uses_default_radius(self):
+        clause = toronto_gta_typesense_location_clause(None)
+        assert clause.startswith("location:(")
+        assert "100.0 km" in clause
+
+    def test_typesense_location_clause_honors_custom_radius(self):
+        clause = toronto_gta_typesense_location_clause("50")
+        assert "50.0 km" in clause
 
 
 class TestNormalizeBookingTypeQuery:
@@ -263,6 +275,30 @@ class TestRunPublicClassSearchMockedTypesense:
 
         _, params = _capture_search(ts_search)
         assert "max_capacity:>=4" in params["filter_by"]
+
+    def test_toronto_gta_uses_radius_not_city_polygon(self):
+        """Toronto preset must match Postgres: 100km radius, not Toronto boundary polygon."""
+        request = _drf_request(
+            "/api/classes/search/",
+            {
+                "lat": "43.6532",
+                "lng": "-79.3832",
+                "location_search": "Toronto, ON",
+                "participants": "1",
+                "page_size": "24",
+            },
+        )
+
+        with patch(
+            "quickstart.services.search_engine_service._typesense_search_collection",
+            return_value={"hits": [], "found": 0},
+        ) as ts_search:
+            run_public_class_search(request)
+
+        _, params = _capture_search(ts_search)
+        fb = params["filter_by"]
+        assert "100.0 km" in fb
+        assert "43.7000000,-79.4000000" not in fb
 
     def test_multiple_collections_or_semantics_in_slugs(self):
         request = _drf_request(

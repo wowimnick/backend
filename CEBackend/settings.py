@@ -445,6 +445,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "quickstart.tasks.booking_tasks.release_expired_spots",
         "schedule": crontab(minute="*/5"),  # Run every 5 minutes
     },
+    "reconcile-stuck-description-ai-every-10-min": {
+        "task": "quickstart.tasks.business_tasks.reconcile_stuck_description_ai_task",
+        "schedule": crontab(minute="*/10"),
+    },
     "process-scheduled-gift-cards-daily": {
         "task": "quickstart.tasks.giftcard_tasks.process_scheduled_gift_cards",
         "schedule": crontab(hour=8, minute=0),

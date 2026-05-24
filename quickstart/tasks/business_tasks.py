@@ -21,6 +21,7 @@ from quickstart.utils.experience_theme_coverage import (
     ensure_preset_collection_memberships,
 )
 from quickstart.utils.description_formatter import DescriptionFormatter
+from quickstart.utils.description_ai import description_ai_has_output
 from quickstart.utils.blog_ai_service import generate_blog_draft
 import resend
 
@@ -97,15 +98,35 @@ def format_class_description_task(self, class_id, force=False):
         return
 
     new_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    has_output = description_ai_has_output(instance)
     if (
         not force
         and instance.description_ai_status == "ready"
         and instance.description_ai_source_hash == new_hash
+        and has_output
     ):
         logger.info(
             "format_class_description_task SKIP class_id=%s unchanged hash matches ready",
             class_id,
         )
+        return
+
+    if (
+        not force
+        and instance.description_ai_source_hash == new_hash
+        and has_output
+        and instance.description_ai_status != "ready"
+    ):
+        logger.info(
+            "format_class_description_task class_id=%s normalizing ai_status=%s -> ready (hash+output match)",
+            class_id,
+            instance.description_ai_status,
+        )
+        ClassesMain.objects.filter(pk=class_id).update(
+            description_ai_status="ready",
+            description_ai_generated_at=timezone.now(),
+        )
+        _revalidate_class_detail_tags(instance)
         return
 
     try:
@@ -132,8 +153,46 @@ def format_class_description_task(self, class_id, force=False):
         logger.exception(
             "format_class_description_task failed for class_id=%s", class_id
         )
-        ClassesMain.objects.filter(pk=class_id).update(description_ai_status="failed")
+        retries = getattr(self.request, "retries", 0) or 0
+        max_retries = getattr(self, "max_retries", 3) or 3
+        if retries >= max_retries:
+            ClassesMain.objects.filter(pk=class_id).update(
+                description_ai_status="failed"
+            )
+            return
         raise self.retry(exc=e)
+
+
+@shared_task
+def reconcile_stuck_description_ai_task():
+    """
+    Re-queue active classes stuck on ``stale`` or ``pending`` with no summary/sections.
+
+    - ``stale``: never processed (e.g. predates the feature, or inactive at creation)
+    - ``pending``: task was queued but worker never finished (crash / lost message)
+    """
+    from quickstart.utils.description_ai import description_ai_stuck_queryset
+
+    stuck_ids = list(
+        description_ai_stuck_queryset()
+        .order_by("updatedAt")
+        .values_list("classId", flat=True)[:100]
+    )
+    if not stuck_ids:
+        return "ok (0 stuck)"
+
+    ClassesMain.objects.filter(classId__in=stuck_ids).update(
+        description_ai_status="pending"
+    )
+    for pk in stuck_ids:
+        format_class_description_task.delay(pk, force=True)
+
+    logger.warning(
+        "reconcile_stuck_description_ai_task re-queued %s class(es): %s",
+        len(stuck_ids),
+        stuck_ids[:20],
+    )
+    return f"requeued={len(stuck_ids)}"
 
 
 @shared_task

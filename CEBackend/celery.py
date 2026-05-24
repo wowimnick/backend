@@ -25,6 +25,9 @@ app.autodiscover_tasks()
 # Tasks invoked from views (not listed in CELERY_BEAT_SCHEDULE) must still exist on workers.
 _EXTRA_REQUIRED_CELERY_TASKS = frozenset(
     {
+        "quickstart.tasks.business_tasks.classify_class_task",
+        "quickstart.tasks.business_tasks.format_class_description_task",
+        "quickstart.tasks.business_tasks.reconcile_stuck_description_ai_task",
         "quickstart.tasks.corporate_booking_tasks.send_shortlist_sent_to_admins",
         "quickstart.tasks.corporate_booking_tasks.send_shortlist_to_corporate",
         "quickstart.tasks.email_marketing_tasks.send_business_marketing_campaign_task",

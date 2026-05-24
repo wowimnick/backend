@@ -60,6 +60,28 @@ def toronto_gta_center_point() -> Point:
     return Point(float(lng), float(lat), srid=4326)
 
 
+def toronto_gta_radius_km(radius_km_str: str | None) -> float:
+    """GTA explore radius (matches Postgres public search)."""
+    if (
+        radius_km_str
+        and str(radius_km_str).replace(".", "", 1).replace("-", "", 1).isdigit()
+    ):
+        return float(radius_km_str)
+    return float(DEFAULT_SEARCH_RADIUS_KM)
+
+
+def toronto_gta_typesense_location_clause(radius_km_str: str | None) -> str:
+    """
+    Typesense geo filter for Toronto/GTA preset searches.
+
+    Uses a fixed radius from downtown Toronto — not the Toronto city polygon —
+    so Typesense counts and pagination match Postgres explore (see PublicClassViewSet.search).
+    """
+    metro_radius_km = toronto_gta_radius_km(radius_km_str)
+    c = toronto_gta_center_point()
+    return f"location:({c.y:.6f}, {c.x:.6f}, {metro_radius_km} km)"
+
+
 def normalize_province_name(location_text: str | None) -> str | None:
     if not location_text:
         return None

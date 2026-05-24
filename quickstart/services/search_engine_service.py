@@ -29,6 +29,7 @@ from quickstart.services.search_geo_params import (
     is_toronto_gta_search_name,
     normalize_province_name,
     toronto_gta_center_point,
+    toronto_gta_typesense_location_clause,
 )
 from quickstart.services.search_filter_params import normalize_booking_type_query
 from quickstart.services.search_index_service import (
@@ -238,22 +239,9 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
         if fo:
             filter_parts.append(fo)
     elif search_name and is_toronto_gta_search_name(search_name):
+        # Match Postgres: GTA-wide radius from downtown, not the Toronto city polygon.
         metro_handled = True
-        tb = GeographicBoundary.objects.filter(name__iexact="Toronto").first()
-        coords = get_cached_boundary_polygon_coords(tb.id) if tb else None
-        if coords:
-            filter_parts.append("location:" + format_typesense_polygon_filter(coords))
-        else:
-            metro_radius_km = (
-                float(req_radius_km_str)
-                if req_radius_km_str
-                and req_radius_km_str.replace(".", "", 1).replace("-", "", 1).isdigit()
-                else float(DEFAULT_SEARCH_RADIUS_KM)
-            )
-            c = toronto_gta_center_point()
-            filter_parts.append(
-                f"location:({c.y:.6f}, {c.x:.6f}, {metro_radius_km} km)"
-            )
+        filter_parts.append(toronto_gta_typesense_location_clause(req_radius_km_str))
         if sort_lat is None:
             c = toronto_gta_center_point()
             sort_lat, sort_lng = float(c.y), float(c.x)
