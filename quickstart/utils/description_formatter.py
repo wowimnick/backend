@@ -222,7 +222,7 @@ Return strict JSON only (no markdown fences around the whole answer — the JSON
   "sections": [
     {{
       "title": "<exactly ONE Unicode emoji at the very start, then a short heading (keep the full title reasonable length, ~40 chars max). Example: \\"📖 Overview\\" or \\"🍳 What you'll make\\">",
-      "body": "<section text. Use **double asterisks** for bold phrases. Split ideas into multiple paragraphs: put a blank line (two newlines) between paragraphs where it helps readability — never one dense wall of text unless the source is truly short. Use lines starting with '- ' for bullet lists; add a blank line before a list when it follows a paragraph.>"
+      "body": "<section text. Use **double asterisks** for bold phrases. Use \\n for line breaks inside this JSON string — never put literal newline characters inside quoted values. Split ideas into paragraphs with \\n\\n; use lines starting with '- ' for bullet lists.>"
     }}
   ]
 }}
@@ -238,30 +238,18 @@ Tone and content rules:
 """
 
     def _parse_json(self, raw_text: str) -> dict | None:
-        if not raw_text or not raw_text.strip():
-            return None
-        text = raw_text.strip()
+        parsed = _parse_description_formatter_json(raw_text)
+        if parsed is not None:
+            return parsed
+        text = (raw_text or "").strip()
         if text.startswith("```"):
             text = re.sub(r"^```(?:json)?\s*", "", text)
             text = re.sub(r"\s*```\s*$", "", text)
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError as e_first:
-            logger.warning(
-                "DescriptionFormatter JSON first parse failed: %s raw_preview=\n%s",
-                e_first,
-                _preview(text, 8000),
-            )
-            try:
-                fixed = re.sub(r",\s*([}\]])", r"\1", text)
-                return json.loads(fixed)
-            except json.JSONDecodeError as e_second:
-                logger.warning(
-                    "DescriptionFormatter JSON parse failed after comma-fix: %s raw_preview=\n%s",
-                    e_second,
-                    _preview(text, 8000),
-                )
-                return None
+        logger.warning(
+            "DescriptionFormatter JSON parse failed after repairs raw_preview=\n%s",
+            _preview(text, 8000),
+        )
+        return None
 
     def _normalize_sections(self, raw_sections: Any) -> List[dict[str, Any]]:
         if not isinstance(raw_sections, list):
@@ -281,6 +269,77 @@ Tone and content rules:
                 }
             )
         return out[:12]
+
+
+def _escape_control_chars_in_json_strings(text: str) -> str:
+    """
+    Gemini often returns pretty-printed bodies with literal newlines inside JSON
+    string values, which is invalid JSON. Escape control chars only while inside
+    double-quoted strings.
+    """
+    out: list[str] = []
+    in_string = False
+    escape = False
+    for ch in text:
+        if escape:
+            out.append(ch)
+            escape = False
+            continue
+        if ch == "\\":
+            out.append(ch)
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            out.append(ch)
+            continue
+        if in_string and ch == "\n":
+            out.append("\\n")
+            continue
+        if in_string and ch == "\r":
+            out.append("\\r")
+            continue
+        if in_string and ch == "\t":
+            out.append("\\t")
+            continue
+        out.append(ch)
+    return "".join(out)
+
+
+def _try_parse_json_object(text: str) -> dict | None:
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _parse_description_formatter_json(raw_text: str) -> dict | None:
+    """Parse Gemini description JSON with common LLM formatting repairs."""
+    if not raw_text or not raw_text.strip():
+        return None
+    text = raw_text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```\s*$", "", text)
+
+    attempts = [
+        text,
+        re.sub(r",\s*([}\]])", r"\1", text),
+        _escape_control_chars_in_json_strings(text),
+        _escape_control_chars_in_json_strings(
+            re.sub(r",\s*([}\]])", r"\1", text)
+        ),
+    ]
+    seen: set[str] = set()
+    for candidate in attempts:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        parsed = _try_parse_json_object(candidate)
+        if parsed is not None:
+            return parsed
+    return None
 
 
 def description_source_hash(description: str) -> str:
