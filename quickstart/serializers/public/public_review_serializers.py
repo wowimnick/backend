@@ -160,9 +160,7 @@ class PublicReviewSerializer(serializers.ModelSerializer):
 class ImportedGoogleReviewSerializer(serializers.ModelSerializer):
     """Serializer for displaying imported Google Reviews."""
 
-    business_name = serializers.CharField(
-        source="business.businessName", read_only=True, allow_null=True
-    )
+    business_name = serializers.SerializerMethodField()
     # FIXED: Changed field names to match frontend expectations
     reviewer_avatar_url = (
         serializers.SerializerMethodField()
@@ -191,6 +189,12 @@ class ImportedGoogleReviewSerializer(serializers.ModelSerializer):
             "image_medium_urls",
             "source",
         ]
+
+    def get_business_name(self, obj):
+        if "business_name" in self.context:
+            return self.context["business_name"]
+        business = getattr(obj, "business", None)
+        return business.businessName if business else None
 
     def get_reviewer_avatar_url(self, obj):
         """

@@ -16,10 +16,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import pytz
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone as django_timezone
 
-from quickstart.models import Booking, GiftCard
+from quickstart.models import Booking, GiftCard, ImportedGoogleReview
 
 # Single prefix for API paths (no double /api/api/). Equals http://localhost:8000/api/...
 API = "/api"
@@ -678,6 +680,35 @@ class TestClassReviewsPaginated:
         """GET classes/<identifier>/reviews/ returns 200."""
         response = api_client.get(f"{API}/classes/{public_class.slug}/reviews/")
         assert response.status_code == 200
+
+    def test_class_reviews_google_reviews_no_business_n_plus_one(
+        self, api_client, public_class, business
+    ):
+        """Google reviews on the page must not trigger one business_info query each."""
+        for i in range(5):
+            ImportedGoogleReview.objects.create(
+                business=business,
+                google_review_id=f"test-google-{uuid.uuid4()}",
+                reviewer_name=f"Reviewer {i}",
+                rating=5,
+                comment="Great class",
+            )
+
+        with CaptureQueriesContext(connection) as ctx:
+            response = api_client.get(f"{API}/classes/{public_class.slug}/reviews/")
+
+        assert response.status_code == 200
+        business_queries = [
+            q["sql"]
+            for q in ctx.captured_queries
+            if "business_info" in q["sql"].lower()
+        ]
+        assert len(business_queries) <= 1, (
+            f"Expected at most one business_info query, got {len(business_queries)}"
+        )
+        data = response.json()
+        assert data["counts"]["google_reviews"] == 5
+        assert all(r.get("business_name") == business.businessName for r in data["reviews"])
 
 
 # -----------------------------------------------------------------------------

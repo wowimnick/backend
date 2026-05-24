@@ -370,7 +370,9 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             .prefetch_related(
                 Prefetch(
                     "images",
-                    queryset=ClassImage.objects.order_by("-isCover", "createdAt"),
+                    queryset=ClassImage.objects.only(
+                        "imageId", "classId_id", "image", "isCover", "createdAt"
+                    ).order_by("-isCover", "createdAt"),
                 ),
                 Prefetch("options", queryset=options_qs),
             )
@@ -1493,7 +1495,17 @@ def paginated_class_reviews(request, identifier):
         if identifier.isdigit():
             class_obj = get_object_or_404(queryset, pk=identifier)
         else:
-            class_obj = get_object_or_404(queryset, slug=identifier)
+            from quickstart.utils.class_slug_utils import resolve_class_by_slug
+
+            try:
+                class_obj = resolve_class_by_slug(queryset, identifier)
+            except ClassesMain.DoesNotExist:
+                raise Http404 from None
+
+        business_name = (
+            class_obj.businessId.businessName if class_obj.businessId_id else None
+        )
+        google_review_context = {"business_name": business_name}
 
         # Cheap totals — do not load all rows into memory (fixes timeouts on large imports).
         platform_base = Reviews.objects.filter(classId=class_obj, status="approved")
@@ -1559,7 +1571,9 @@ def paginated_class_reviews(request, identifier):
 
         google_by_pk = {}
         if google_ids:
-            for rev in ImportedGoogleReview.objects.filter(id__in=google_ids):
+            for rev in ImportedGoogleReview.objects.filter(
+                id__in=google_ids
+            ).select_related("business"):
                 google_by_pk[rev.id] = rev
 
         paginated_reviews = []
@@ -1579,7 +1593,9 @@ def paginated_class_reviews(request, identifier):
                 date_val = review.review_date or review.created_at
                 paginated_reviews.append(
                     {
-                        **ImportedGoogleReviewSerializer(review).data,
+                        **ImportedGoogleReviewSerializer(
+                            review, context=google_review_context
+                        ).data,
                         "source": "google",
                         "id": f"g-{review.google_review_id}",
                         "date": date_val.isoformat() if date_val else "",
