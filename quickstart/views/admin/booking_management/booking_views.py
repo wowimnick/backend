@@ -37,6 +37,7 @@ from quickstart.utils.permissions import (
     BasePermission,
     CanAccessBookingAdmin,
     CanManageTargetBooking,
+    user_can_manage,
 )
 
 try:
@@ -52,6 +53,7 @@ except ImportError:
 from quickstart.utils.sms_utils import normalize_phone_for_sns, business_sms_enabled
 from quickstart.tasks.notification_tasks import send_sms_task
 from quickstart.views.admin.metrics_time_windows import get_admin_metrics_window
+from quickstart.utils.admin_export import check_export_row_limit, export_row_limit_response
 
 
 logger = logging.getLogger(__name__)
@@ -480,6 +482,9 @@ class AdminBookingViewSet(viewsets.ModelViewSet):
             self.permission_denied(request, message="You cannot export booking data.")
         try:
             queryset = self.filter_queryset(self.get_queryset())
+            ok, count = check_export_row_limit(queryset)
+            if not ok:
+                return export_row_limit_response(count)
             response = HttpResponse(content_type="text/csv")
             response["Content-Disposition"] = (
                 'attachment; filename="bookings_export.csv"'

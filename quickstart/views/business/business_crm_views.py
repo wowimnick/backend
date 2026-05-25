@@ -125,7 +125,7 @@ class ContactImportViewSet(viewsets.ViewSet):
 
         # Launch the background task
         task = process_contact_import.delay(
-            file_path, column_mapping, business.businessId
+            file_path, column_mapping, business.businessId, request.user.pk
         )
 
         return Response(

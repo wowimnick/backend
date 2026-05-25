@@ -5,6 +5,7 @@ from django.db.models import Count
 from django.db.models.deletion import ProtectedError
 
 from quickstart.utils.permissions import IsAuthenticated, CanAccessBlogAdmin
+from quickstart.utils.admin_pagination import AdminStandardPagination
 from quickstart.utils.revalidation import trigger_nextjs_revalidation
 from quickstart.serializers.admin.blog_management.admin_blog_serializers import (
     AdminBlogCategorySerializer,
@@ -102,6 +103,7 @@ class AdminBlogCategoryViewSet(viewsets.ModelViewSet):
     """Admin viewset for managing blog categories."""
 
     permission_classes = [IsAuthenticated, CanAccessBlogAdmin]
+    pagination_class = AdminStandardPagination
     serializer_class = AdminBlogCategorySerializer
     queryset = BlogCategory.objects.annotate(post_count=Count("posts"))
 

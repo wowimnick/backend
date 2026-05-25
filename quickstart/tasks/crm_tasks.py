@@ -19,8 +19,37 @@ def sanitize_cell(value):
     return value
 
 
+def _notify_crm_import_failure(business_id, initiated_by_user_id, detail_message):
+    if not initiated_by_user_id:
+        return
+    try:
+        from django.conf import settings
+        from quickstart.utils.notification_utils import create_notifications_for_users
+
+        business = BusinessInfo.objects.filter(businessId=business_id).first()
+        initiator = CustomUser.objects.filter(pk=initiated_by_user_id).first()
+        if not initiator:
+            return
+        dashboard_url = f"{settings.FRONTEND_BASE_URL}/business/dashboard/students"
+        create_notifications_for_users(
+            users=[initiator],
+            notification_type="crm_import_failed",
+            message=f"Contact import failed: {detail_message}",
+            icon="alert-circle",
+            color="red",
+            link_web=dashboard_url,
+            business=business,
+        )
+    except Exception as notify_err:
+        logger.warning(
+            "Failed to send CRM import failure notification for business %s: %s",
+            business_id,
+            notify_err,
+        )
+
+
 @shared_task
-def process_contact_import(file_path, column_mapping, business_id):
+def process_contact_import(file_path, column_mapping, business_id, initiated_by_user_id=None):
     """
     Processes an uploaded student/contact file by streaming it from storage,
     processing in chunks, sanitizing input, and creating new Contact records.
@@ -111,7 +140,27 @@ def process_contact_import(file_path, column_mapping, business_id):
             f"Import for Business {business_id} completed. "
             f"Total Rows: {total_processed}, Created: {created_count}, Skipped: {skipped_count}"
         )
-        # TODO: Send a success notification to the user.
+
+        if initiated_by_user_id:
+            from django.conf import settings
+            from quickstart.models import CustomUser
+            from quickstart.utils.notification_utils import create_notifications_for_users
+
+            initiator = CustomUser.objects.filter(pk=initiated_by_user_id).first()
+            if initiator:
+                dashboard_url = f"{settings.FRONTEND_BASE_URL}/business/dashboard/students"
+                create_notifications_for_users(
+                    users=[initiator],
+                    notification_type="crm_import_complete",
+                    message=(
+                        f"Contact import finished: {created_count} created, "
+                        f"{skipped_count} skipped out of {total_processed} rows."
+                    ),
+                    icon="users",
+                    color="green",
+                    link_web=dashboard_url,
+                    business=business,
+                )
 
         return {
             "status": "success",
@@ -122,13 +171,18 @@ def process_contact_import(file_path, column_mapping, business_id):
 
     except BusinessInfo.DoesNotExist:
         logger.error(f"Import Task Failed: Business with ID {business_id} not found.")
+        _notify_crm_import_failure(
+            business_id, initiated_by_user_id, "Business not found."
+        )
         return {"status": "error", "message": "Business not found."}
     except Exception as e:
         logger.error(
             f"Unhandled exception in import task for Business {business_id}: {e}",
             exc_info=True,
         )
-        # TODO: Send a failure notification to the user.
+        _notify_crm_import_failure(
+            business_id, initiated_by_user_id, "An unexpected error occurred during processing."
+        )
         return {
             "status": "error",
             "message": "An unexpected error occurred during processing.",

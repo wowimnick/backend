@@ -100,7 +100,11 @@ class BusinessConversationListSerializer(serializers.ModelSerializer):
         return None
 
     def get_last_message_preview(self, obj):
-        last = obj.messages.order_by("-created_at").first()
+        prefetched = getattr(obj, "_prefetched_objects_cache", {}).get("messages")
+        if prefetched is not None:
+            last = prefetched[0] if prefetched else None
+        else:
+            last = obj.messages.order_by("-created_at").first()
         if not last:
             return None
         text = (last.text or "").strip()

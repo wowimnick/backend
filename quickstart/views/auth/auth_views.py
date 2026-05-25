@@ -337,7 +337,7 @@ class EndImpersonationView(APIView):
     is_impersonated and impersonator_id, then issues new tokens for the admin
     and sets them in cookies. No re-login required.
     """
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def _set_auth_cookies(self, response, access_token, refresh_token=None):
         response.set_cookie(

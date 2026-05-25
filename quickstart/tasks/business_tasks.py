@@ -545,3 +545,65 @@ def generate_weekly_blog_draft_task():
     except Exception as e:
         logger.exception("Weekly blog draft task failed: %s", e)
         return f"Failed (safe): {e!r}"
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def send_business_announcement_task(
+    self,
+    owner_emails,
+    title,
+    message,
+    send_email=True,
+    send_in_app=True,
+    urgency="normal",
+    admin_email=None,
+):
+    """Send platform announcement emails and/or in-app notifications to business owners."""
+    from django.contrib.auth import get_user_model
+
+    from quickstart.utils.notification_utils import create_notifications_for_users
+    from quickstart.tasks.email_tasks import send_transactional_email_task
+
+    User = get_user_model()
+    emails = [e for e in (owner_emails or []) if e]
+    if not emails:
+        return "No recipients"
+
+    users = list(User.objects.filter(email__in=emails, is_active=True))
+    sent_count = 0
+
+    if send_in_app and users:
+        urgency_prefix = "[URGENT] " if urgency == "urgent" else ""
+        create_notifications_for_users(
+            users,
+            "system_announcement",
+            f"{urgency_prefix}{title}: {message}",
+            "Megaphone",
+            "#ff385c",
+            "/business/dashboard",
+        )
+
+    if send_email:
+        html_body = (
+            f"<h2>{title}</h2><p>{message}</p>"
+            f"<p style='color:#64748b;font-size:12px;'>Sent by ClassEasily platform administration.</p>"
+        )
+        for email in emails:
+            try:
+                send_transactional_email_task.delay(
+                    to=email,
+                    subject=title,
+                    html=html_body,
+                )
+                sent_count += 1
+            except Exception as exc:
+                logger.error("Failed to queue announcement email to %s: %s", email, exc)
+
+    logger.info(
+        "Business announcement '%s' processed by %s: %s emails queued, %s in-app users",
+        title,
+        admin_email or "system",
+        sent_count,
+        len(users) if send_in_app else 0,
+    )
+    return f"Queued {sent_count} emails, {len(users)} in-app notifications"

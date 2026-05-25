@@ -35,6 +35,7 @@ from quickstart.services.corporate_billing import (
 )
 from quickstart.utils.corporate_events import log_corporate_booking_event
 from quickstart.utils.permissions import CanAccessCorporateAdmin, IsAuthenticated
+from quickstart.utils.admin_pagination import AdminStandardPagination
 from quickstart.utils.url_utils import build_cloudfront_url
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,7 @@ class AdminCorporateInquiryViewSet(viewsets.ReadOnlyModelViewSet):
     """
 
     permission_classes = [IsAuthenticated, CanAccessCorporateAdmin]
+    pagination_class = AdminStandardPagination
     queryset = CorporateInquiry.objects.all().order_by("-created_at")
     serializer_class = CorporateInquiryListSerializer
 

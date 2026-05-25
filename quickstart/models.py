@@ -2289,9 +2289,32 @@ class ScheduleInstance(models.Model):
                     )
 
                 booking.save(update_fields=update_fields_for_booking)
-                # TODO: Send notification to user about cancellation and refund status
-                # This might involve a signal or a direct call to a notification utility.
                 logger.info(f"Booking {booking.id} status updated to 'cancelled'.")
+
+                from quickstart.utils.email_utils import (
+                    send_booking_cancellation_user_email,
+                )
+
+                recipient = booking.user or booking.contact
+                if recipient:
+                    refund_details = (
+                        "A refund will be processed automatically if applicable."
+                        if original_payment_status == "paid"
+                        else "This session was cancelled by the instructor."
+                    )
+                    try:
+                        send_booking_cancellation_user_email(
+                            user=recipient,
+                            booking=booking,
+                            refund_details=refund_details,
+                        )
+                    except Exception as email_err:
+                        logger.error(
+                            "Failed to send cancellation email for booking %s: %s",
+                            booking.id,
+                            email_err,
+                            exc_info=True,
+                        )
 
             # Now proceed with deletion of the instance itself
             instance_id_log = self.id

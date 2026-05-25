@@ -5,10 +5,13 @@ from __future__ import annotations
 import logging
 
 from django.conf import settings
+from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
 _client = None
+_TYPESENSE_HEALTH_CACHE_KEY = "typesense_health_ok"
+_TYPESENSE_HEALTH_CACHE_TTL = 30
 
 
 def get_typesense_client():
@@ -31,11 +34,31 @@ def get_typesense_client():
         {
             "nodes": [{"host": host, "port": port, "protocol": protocol}],
             "api_key": api_key,
-            "connection_timeout_seconds": 15,
+            "connection_timeout_seconds": 4,
+            "num_retries": 2,
+            "retry_interval_seconds": 0.1,
         }
     )
     return _client
 
 
 def typesense_available() -> bool:
-    return get_typesense_client() is not None
+    """True when Typesense is configured and responds to a lightweight health check."""
+    if get_typesense_client() is None:
+        return False
+
+    cached = cache.get(_TYPESENSE_HEALTH_CACHE_KEY)
+    if cached is not None:
+        return bool(cached)
+
+    ok = False
+    try:
+        client = get_typesense_client()
+        if client is not None:
+            client.health.retrieve()
+            ok = True
+    except Exception as e:
+        logger.warning("Typesense health check failed: %s", e)
+
+    cache.set(_TYPESENSE_HEALTH_CACHE_KEY, ok, _TYPESENSE_HEALTH_CACHE_TTL)
+    return ok

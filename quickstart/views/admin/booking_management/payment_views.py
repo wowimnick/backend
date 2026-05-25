@@ -14,6 +14,7 @@ from quickstart.utils.permissions import (
     BasePermission,
     CanAccessPaymentAdmin,
     CanManageTargetPayment,
+    user_can_manage,
 )
 from quickstart.serializers.admin.booking_management.payment_serializers import (
     AdminPaymentSerializer,
@@ -26,6 +27,7 @@ import csv
 from django.http import HttpResponse
 
 from quickstart.views.admin.metrics_time_windows import get_admin_metrics_window
+from quickstart.utils.admin_export import check_export_row_limit, export_row_limit_response
 
 logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
@@ -505,6 +507,9 @@ class AdminPaymentViewSet(viewsets.ModelViewSet):
 
         try:
             queryset = self.filter_queryset(self.get_queryset())  # Apply filters
+            ok, count = check_export_row_limit(queryset)
+            if not ok:
+                return export_row_limit_response(count)
 
             response = HttpResponse(content_type="text/csv")
             response["Content-Disposition"] = (

@@ -30,7 +30,11 @@ from quickstart.serializers.admin.notifications.notification_serializers import 
     NotificationAttachmentSerializer,
     UserSegmentSerializer,
 )
-from quickstart.tasks.notification_tasks import send_campaign_task
+from quickstart.utils.admin_pagination import AdminStandardPagination
+from quickstart.tasks.notification_tasks import (
+    send_campaign_task,
+    refresh_segment_counts_task,
+)
 from quickstart.utils.sms_utils import normalize_phone_for_sns
 import resend  # Ensure resend is imported
 from django.conf import settings
@@ -55,6 +59,7 @@ class AdminNotificationCampaignViewSet(viewsets.ModelViewSet):
     """
 
     permission_classes = [IsAuthenticated, CanAccessNotificationAdmin]
+    pagination_class = AdminStandardPagination
     queryset = (
         NotificationCampaign.objects.select_related("created_by")
         .prefetch_related("attachments")
@@ -861,9 +866,13 @@ class AdminUserSegmentViewSet(viewsets.ReadOnlyModelViewSet):
                 request, message="You do not have permission to refresh segment counts."
             )
         try:
-            self._update_segment_counts()
+            refresh_segment_counts_task.delay()
             return Response(
-                {"status": "success", "message": "Segment counts refreshed."}
+                {
+                    "status": "accepted",
+                    "message": "Segment count refresh queued.",
+                },
+                status=status.HTTP_202_ACCEPTED,
             )
         except Exception as e:
             logger.error(f"Manual segment count refresh failed: {e}", exc_info=True)
@@ -885,6 +894,7 @@ class AdminNotificationAttachmentViewSet(viewsets.ModelViewSet):
         IsAuthenticated,
         CanAccessNotificationAdmin,
     ]  # Use campaign admin access
+    pagination_class = AdminStandardPagination
     serializer_class = NotificationAttachmentSerializer
     queryset = NotificationAttachment.objects.select_related(
         "campaign"

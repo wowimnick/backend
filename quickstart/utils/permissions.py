@@ -682,6 +682,19 @@ class CanAccessGlobalDiscountAdmin(BasePermission):
         )
 
 
+# --- Business verification submission (non-admin users) ---
+class CanSubmitBusinessVerification(BasePermission):
+    message = "Only business owners can submit verification requests."
+
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+        role = getattr(request.user, "role", None)
+        if role and getattr(role, "name", None) == "Business Owner":
+            return True
+        return request.user.owned_businesses.exists()
+
+
 # --- Admin: Corporate inquiries / shortlists / bookings ---
 class CanAccessCorporateAdmin(BasePermission):
     message = "You do not have permission to access corporate booking administration."

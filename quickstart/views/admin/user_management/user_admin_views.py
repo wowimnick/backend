@@ -15,7 +15,11 @@ from quickstart.utils.permissions import (
     CanAccessUserAdmin,
     CanImpersonateUser,
     CanManageTargetUser,
+    user_can_manage,
 )
+from allauth.account.adapter import get_adapter
+from django.contrib.auth.tokens import default_token_generator
+from django.contrib.sites.shortcuts import get_current_site
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.conf import settings
 from urllib.parse import urlencode
@@ -605,13 +609,30 @@ class UserAdminViewSet(viewsets.ModelViewSet):
                 message="You do not have permission to initiate password resets.",
             )
 
+        if not (user.email or "").strip():
+            return Response(
+                {"detail": "User has no email address; password reset cannot be sent."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        token = default_token_generator.make_token(user)
+        adapter = get_adapter(request)
+        password_reset_url = adapter.get_password_reset_url(request, user, token)
+        context = {
+            "current_site": get_current_site(request),
+            "user": user,
+            "password_reset_url": password_reset_url,
+            "request": request,
+        }
+        adapter.send_mail("account/email/password_reset_key", user.email, context)
+
         logger.info(
-            f"Password reset initiated for user {user.email} by admin {request.user.email}"
+            f"Password reset email sent for user {user.email} by admin {request.user.email}"
         )
         self._log_user_action(
-            user, "password_reset", f"Password reset initiated by admin"
+            user, "password_reset", "Password reset email sent by admin"
         )
-        return Response({"status": "Password reset initiated (implementation pending)"})
+        return Response({"status": "Password reset email sent."})
 
     @action(detail=False, methods=["get"])
     def metrics(self, request):
