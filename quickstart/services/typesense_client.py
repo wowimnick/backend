@@ -10,8 +10,23 @@ from django.core.cache import cache
 logger = logging.getLogger(__name__)
 
 _client = None
-_TYPESENSE_HEALTH_CACHE_KEY = "typesense_health_ok"
 _TYPESENSE_HEALTH_CACHE_TTL = 30
+_TYPESENSE_HEALTH_NEGATIVE_CACHE_TTL = 5
+
+
+def _typesense_health_cache_key() -> str:
+    env = str(getattr(settings, "DJANGO_ENV", "local") or "local")
+    host = getattr(settings, "TYPESENSE_HOST", "localhost")
+    return f"{env}:typesense_health_ok:{host}"
+
+
+def _ping_typesense_health(client) -> bool:
+    """Lightweight health ping; compatible with typesense==0.21.x."""
+    ops = getattr(client, "operations", None)
+    if ops is not None and callable(getattr(ops, "is_healthy", None)):
+        return bool(ops.is_healthy())
+    # Client is configured but health API is unknown — do not block search.
+    return True
 
 
 def get_typesense_client():
@@ -47,7 +62,8 @@ def typesense_available() -> bool:
     if get_typesense_client() is None:
         return False
 
-    cached = cache.get(_TYPESENSE_HEALTH_CACHE_KEY)
+    cache_key = _typesense_health_cache_key()
+    cached = cache.get(cache_key)
     if cached is not None:
         return bool(cached)
 
@@ -55,10 +71,10 @@ def typesense_available() -> bool:
     try:
         client = get_typesense_client()
         if client is not None:
-            client.health.retrieve()
-            ok = True
+            ok = _ping_typesense_health(client)
     except Exception as e:
         logger.warning("Typesense health check failed: %s", e)
 
-    cache.set(_TYPESENSE_HEALTH_CACHE_KEY, ok, _TYPESENSE_HEALTH_CACHE_TTL)
+    ttl = _TYPESENSE_HEALTH_CACHE_TTL if ok else _TYPESENSE_HEALTH_NEGATIVE_CACHE_TTL
+    cache.set(cache_key, ok, ttl)
     return ok
