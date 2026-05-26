@@ -33,6 +33,8 @@ SQLQuery = None
 
 from quickstart.utils.permissions import IsAuthenticated, BasePermission, CanViewSystemMetrics
 
+from quickstart.utils.beat_schedule_info import get_beat_schedule_tasks
+
 logger = logging.getLogger(__name__)
 
 
@@ -48,6 +50,8 @@ def get_celery_stats():
             "failed_tasks_count": 0,
             "workers": [],
             "failed_tasks": [],
+            "scheduled_tasks": get_beat_schedule_tasks(),
+            "server_time": timezone.now().isoformat(),
         }
 
     try:
@@ -82,12 +86,16 @@ def get_celery_stats():
         # Get failed tasks from cache
         failed_tasks = cache.get("celery_failed_tasks", [])
 
+        scheduled_tasks = get_beat_schedule_tasks()
+
         return {
             "active_workers": active_workers_count,
             "queue_length": queue_length,
             "failed_tasks_count": len(failed_tasks),
             "workers": workers_data,
             "failed_tasks": failed_tasks,  # Return the full list of failed tasks
+            "scheduled_tasks": scheduled_tasks,
+            "server_time": timezone.now().isoformat(),
         }
     except Exception as e:
         logger.error(f"Error getting Celery stats: {e}", exc_info=True)
@@ -97,6 +105,8 @@ def get_celery_stats():
             "failed_tasks_count": 0,
             "workers": [],
             "failed_tasks": [],
+            "scheduled_tasks": get_beat_schedule_tasks(),
+            "server_time": timezone.now().isoformat(),
         }
 
 def get_silk_data():
