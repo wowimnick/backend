@@ -24,12 +24,14 @@ from quickstart.services.boundary_geometry_service import (
 )
 from quickstart.services.search_geo_params import (
     CANADIAN_PROVINCES,
-    DEFAULT_SEARCH_RADIUS_KM,
     business_states_for_province_field,
     is_toronto_gta_search_name,
+    is_valid_lat_lng,
     normalize_province_name,
+    normalize_search_radius_km,
     toronto_gta_center_point,
     toronto_gta_typesense_location_clause,
+    typesense_geo_radius_clause,
 )
 from quickstart.services.search_filter_params import normalize_booking_type_query
 from quickstart.services.search_index_service import (
@@ -118,13 +120,35 @@ def _build_page_url(request, page: int) -> str:
 
 
 def _facet_or(field: str, values: list[str]) -> str | None:
-    if not values:
-        return None
     parts = []
     for v in values:
-        escaped = str(v).replace("`", "\\`")
+        if v is None:
+            continue
+        raw = str(v).strip()
+        if not raw:
+            continue
+        escaped = raw.replace("`", "\\`")
         parts.append(f"{field}:=`{escaped}`")
+    if not parts:
+        return None
     return "(" + " || ".join(parts) + ")"
+
+
+def _sanitize_slug_list(values: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value is None:
+            continue
+        slug = str(value).strip()
+        if not slug:
+            continue
+        key = slug.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(slug)
+    return out
 
 
 # Typesense rejects GET search URLs longer than ~4000 chars (large polygon filter_by).
@@ -190,9 +214,14 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
     resolved_collection_meta = None
     if keyword_query_text and not raw_collections:
         matched = match_collection_by_alias(keyword_query_text.strip())
-        if matched:
-            effective_collection_slugs = [matched.slug]
+        if matched and matched.slug and str(matched.slug).strip():
+            effective_collection_slugs = [str(matched.slug).strip()]
             resolved_collection_meta = {"slug": matched.slug, "name": matched.name}
+
+    effective_collection_slugs = _sanitize_slug_list(effective_collection_slugs)
+    sub_slugs = _sanitize_slug_list(
+        [s.strip() for s in qp.getlist("sub") if s and str(s).strip()]
+    )
 
     tag_filter = qp.get("tag")
     price_min_str = qp.get("price_min")
@@ -205,7 +234,6 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
     time_preferences = qp.getlist("time_preference")
     sort_by = qp.get("sort_by", "relevance")
     days_params = [str(d).strip() for d in qp.getlist("days") if str(d).strip()]
-    sub_slugs = [s.strip() for s in qp.getlist("sub") if s and str(s).strip()]
     bt_norm = normalize_booking_type_query(qp.get("class_type"))
 
     page = int(qp.get("page", "1") or 1)
@@ -221,8 +249,11 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
     sort_lat = sort_lng = None
     try:
         if req_lat_str and req_lng_str:
-            sort_lat = float(req_lat_str)
-            sort_lng = float(req_lng_str)
+            lat_candidate = float(req_lat_str)
+            lng_candidate = float(req_lng_str)
+            if is_valid_lat_lng(lat_candidate, lng_candidate):
+                sort_lat = lat_candidate
+                sort_lng = lng_candidate
     except (TypeError, ValueError):
         sort_lat = sort_lng = None
 
@@ -251,25 +282,34 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
         ).first()
         if boundary:
             metro_handled = True
-            nearby_radius_km = (
-                float(req_radius_km_str)
-                if req_radius_km_str
-                and req_radius_km_str.replace(".", "", 1).replace("-", "", 1).isdigit()
-                else float(DEFAULT_SEARCH_RADIUS_KM)
-            )
+            nearby_radius_km = normalize_search_radius_km(req_radius_km_str)
             centroid = boundary.geom.centroid
             coords = get_cached_boundary_polygon_coords(boundary.id)
             if coords:
-                named_boundary_for_fallback = boundary
-                named_boundary_polygon_clause = (
-                    "location:" + format_typesense_polygon_filter(coords)
-                )
-                filter_parts.append(named_boundary_polygon_clause)
+                poly = format_typesense_polygon_filter(coords)
+                if poly:
+                    named_boundary_for_fallback = boundary
+                    named_boundary_polygon_clause = "location:" + poly
+                    filter_parts.append(named_boundary_polygon_clause)
+                elif centroid:
+                    clause = typesense_geo_radius_clause(
+                        float(centroid.y),
+                        float(centroid.x),
+                        nearby_radius_km,
+                    )
+                    if clause:
+                        filter_parts.append(clause)
             elif centroid:
-                filter_parts.append(
-                    f"location:({centroid.y:.6f}, {centroid.x:.6f}, {nearby_radius_km} km)"
+                clause = typesense_geo_radius_clause(
+                    float(centroid.y),
+                    float(centroid.x),
+                    nearby_radius_km,
                 )
-            if sort_lat is None and centroid:
+                if clause:
+                    filter_parts.append(clause)
+            if sort_lat is None and centroid and is_valid_lat_lng(
+                float(centroid.y), float(centroid.x)
+            ):
                 sort_lat, sort_lng = float(centroid.y), float(centroid.x)
 
     if (
@@ -281,17 +321,12 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
         try:
             lat_u = float(req_lat_str)
             lng_u = float(req_lng_str)
-            search_radius_km = (
-                float(req_radius_km_str)
-                if req_radius_km_str
-                and req_radius_km_str.replace(".", "", 1).replace("-", "", 1).isdigit()
-                else float(DEFAULT_SEARCH_RADIUS_KM)
-            )
-            filter_parts.append(
-                f"location:({lat_u:.6f}, {lng_u:.6f}, {search_radius_km} km)"
-            )
-            sort_lat = lat_u
-            sort_lng = lng_u
+            search_radius_km = normalize_search_radius_km(req_radius_km_str)
+            clause = typesense_geo_radius_clause(lat_u, lng_u, search_radius_km)
+            if clause:
+                filter_parts.append(clause)
+                sort_lat = lat_u
+                sort_lng = lng_u
         except (TypeError, ValueError):
             pass
 
@@ -447,7 +482,12 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
     if filter_by:
         search_params["filter_by"] = filter_by
 
-    if sort_by == "distance" and sort_lat is not None and sort_lng is not None:
+    if (
+        sort_by == "distance"
+        and sort_lat is not None
+        and sort_lng is not None
+        and is_valid_lat_lng(sort_lat, sort_lng)
+    ):
         search_params[
             "sort_by"
         ] = f"location({sort_lat:.6f},{sort_lng:.6f}):asc,class_id:desc"
@@ -511,6 +551,14 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
             else:
                 search_params_retry.pop("filter_by", None)
             result = _typesense_search_collection(client, coll, search_params_retry)
+        elif "filter field" in err_l or "filter value" in err_l:
+            logger.warning(
+                "Typesense rejected search filters; returning empty results. "
+                "params=%s error=%s",
+                dict(request.query_params),
+                exc,
+            )
+            result = {"hits": [], "found": 0}
         else:
             raise
     except ObjectNotFound:

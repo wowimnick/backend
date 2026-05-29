@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import math
+
 from django.contrib.gis.geos import Point
 
 from quickstart.constants.explore_location_presets import PRESET_LOCATIONS
 
 DEFAULT_SEARCH_RADIUS_KM = 100
+MAX_SEARCH_RADIUS_KM = 500
 
 CANADIAN_PROVINCES = {
     "alberta": "AB",
@@ -62,12 +65,37 @@ def toronto_gta_center_point() -> Point:
 
 def toronto_gta_radius_km(radius_km_str: str | None) -> float:
     """GTA explore radius (matches Postgres public search)."""
+    return normalize_search_radius_km(radius_km_str)
+
+
+def is_valid_lat_lng(lat: float, lng: float) -> bool:
+    if not (math.isfinite(lat) and math.isfinite(lng)):
+        return False
+    return -90.0 <= lat <= 90.0 and -180.0 <= lng <= 180.0
+
+
+def normalize_search_radius_km(radius_km_str: str | None) -> float:
+    default = float(DEFAULT_SEARCH_RADIUS_KM)
     if (
         radius_km_str
         and str(radius_km_str).replace(".", "", 1).replace("-", "", 1).isdigit()
     ):
-        return float(radius_km_str)
-    return float(DEFAULT_SEARCH_RADIUS_KM)
+        try:
+            radius = float(radius_km_str)
+            if math.isfinite(radius) and radius > 0:
+                return min(radius, MAX_SEARCH_RADIUS_KM)
+        except (TypeError, ValueError):
+            pass
+    return default
+
+
+def typesense_geo_radius_clause(lat: float, lng: float, radius_km: float) -> str | None:
+    if not is_valid_lat_lng(lat, lng):
+        return None
+    if not math.isfinite(radius_km) or radius_km <= 0:
+        return None
+    radius = min(radius_km, MAX_SEARCH_RADIUS_KM)
+    return f"location:({lat:.6f}, {lng:.6f}, {radius} km)"
 
 
 def toronto_gta_typesense_location_clause(radius_km_str: str | None) -> str:
@@ -79,7 +107,10 @@ def toronto_gta_typesense_location_clause(radius_km_str: str | None) -> str:
     """
     metro_radius_km = toronto_gta_radius_km(radius_km_str)
     c = toronto_gta_center_point()
-    return f"location:({c.y:.6f}, {c.x:.6f}, {metro_radius_km} km)"
+    clause = typesense_geo_radius_clause(float(c.y), float(c.x), metro_radius_km)
+    if clause:
+        return clause
+    return f"location:({c.y:.6f}, {c.x:.6f}, {DEFAULT_SEARCH_RADIUS_KM} km)"
 
 
 def normalize_province_name(location_text: str | None) -> str | None:

@@ -18,6 +18,7 @@ from rest_framework.test import APIRequestFactory
 
 from quickstart.services.search_engine_service import (
     run_public_class_search,
+    _facet_or,
     _hydrate_card_row_image_medium_urls,
 )
 from quickstart.services.search_filter_params import (
@@ -25,7 +26,11 @@ from quickstart.services.search_filter_params import (
     BOOKING_TYPE_SINGLE_SESSION,
     normalize_booking_type_query,
 )
-from quickstart.services.search_geo_params import toronto_gta_typesense_location_clause
+from quickstart.services.search_geo_params import (
+    toronto_gta_typesense_location_clause,
+    typesense_geo_radius_clause,
+)
+from quickstart.services.boundary_geometry_service import format_typesense_polygon_filter
 from quickstart.tests.factories import (
     BusinessFactory,
     ClassMainFactory,
@@ -104,6 +109,58 @@ class TestTorontoGtaGeoParams:
     def test_typesense_location_clause_honors_custom_radius(self):
         clause = toronto_gta_typesense_location_clause("50")
         assert "50.0 km" in clause
+
+    def test_typesense_geo_radius_clause_rejects_invalid_coords(self):
+        assert typesense_geo_radius_clause(float("nan"), -79.0, 100) is None
+        assert typesense_geo_radius_clause(43.65, float("inf"), 100) is None
+        assert typesense_geo_radius_clause(120.0, -79.0, 100) is None
+
+    def test_facet_or_ignores_empty_values(self):
+        assert _facet_or("collection_slugs", ["", "  ", "wellness"]) == (
+            "(collection_slugs:=`wellness`)"
+        )
+        assert _facet_or("collection_slugs", ["", ""]) is None
+
+    def test_polygon_filter_requires_three_valid_points(self):
+        assert format_typesense_polygon_filter([(43.65, -79.38), (43.66, -79.39)]) is None
+        poly = format_typesense_polygon_filter(
+            [(43.65, -79.38), (43.66, -79.39), (43.67, -79.40)]
+        )
+        assert poly is not None
+        assert poly.startswith("(")
+
+    def test_invalid_lat_lng_omits_location_filter(self):
+        request = _drf_request(
+            "/api/classes/search/",
+            {
+                "lat": "not-a-number",
+                "lng": "-79.3832",
+                "location_search": "123 Fake Street",
+            },
+        )
+        with patch(
+            "quickstart.services.search_engine_service._typesense_search_collection",
+            return_value={"hits": [], "found": 0},
+        ) as ts_search:
+            run_public_class_search(request)
+        _, params = _capture_search(ts_search)
+        assert "location:(" not in params.get("filter_by", "")
+
+    def test_empty_collection_slug_omits_collection_filter(self):
+        request = _drf_request(
+            "/api/classes/search/",
+            "lat=43.6532&lng=-79.3832&location_search=Toronto,+ON&collection=&collection=wellness",
+        )
+        with patch(
+            "quickstart.services.search_engine_service._typesense_search_collection",
+            return_value={"hits": [], "found": 0},
+        ) as ts_search:
+            run_public_class_search(request)
+        _, params = _capture_search(ts_search)
+        fb = params.get("filter_by", "")
+        assert "collection_slugs:" in fb
+        assert "wellness" in fb
+        assert "collection_slugs:=``" not in fb
 
 
 class TestNormalizeBookingTypeQuery:

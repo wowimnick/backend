@@ -142,8 +142,19 @@ def rebuild_all_boundary_polygon_caches() -> int:
     return count
 
 
-def format_typesense_polygon_filter(coords: list[tuple[float, float]]) -> str:
-    parts = []
+def format_typesense_polygon_filter(coords: list[tuple[float, float]]) -> str | None:
+    from quickstart.services.search_geo_params import is_valid_lat_lng
+
+    parts: list[str] = []
     for lat, lng in coords:
-        parts.append(f"{lat:.7f},{lng:.7f}")
+        try:
+            lat_f = float(lat)
+            lng_f = float(lng)
+        except (TypeError, ValueError):
+            continue
+        if not is_valid_lat_lng(lat_f, lng_f):
+            continue
+        parts.append(f"{lat_f:.7f},{lng_f:.7f}")
+    if len(parts) < 3:
+        return None
     return "(" + ", ".join(parts) + ")"
