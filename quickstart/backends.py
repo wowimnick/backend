@@ -28,7 +28,6 @@ class RolePermissionBackend(ModelBackend):
         if not user_obj.is_active or user_obj.is_anonymous:
             return False
 
-        # Split perm into app_label and codename
         try:
             app_label, codename = perm.split(".")
         except ValueError:
