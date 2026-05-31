@@ -12,12 +12,35 @@ W_FEATURED = 1.3
 W_QUALITY = 0.8
 W_RATING = 1.0
 W_REVIEW_COUNT = 0.8
+W_INSTAGRAM_FOLLOWERS = 0.8
 W_NEWNESS = 0.4
 QUALITY_SCORE_MAX_DESCRIPTION_LEN = 1000
 QUALITY_SCORE_BASE_IMAGES = 5
 QUALITY_SCORE_IDEAL_IMAGES = 10
 RECENCY_HALFLIFE_DAYS = 180
 REVIEW_COUNT_FOR_MAX_SCORE = 50
+FOLLOWER_COUNT_FOR_MAX_SCORE = 10_000
+
+
+def log_normalized_count_score(count: int, count_for_max: int) -> float:
+    """Log-scaled 0..1 score; ``count_for_max`` maps to 1.0."""
+    c = float(count or 0)
+    return math.log10(c + 1.0) / math.log10(count_for_max + 1.0)
+
+
+def compute_weighted_social_proof_score(
+    *,
+    review_count: int,
+    instagram_follower_count: int | None = None,
+) -> float:
+    """Reviews and Instagram followers compete; only the stronger signal counts."""
+    review_term = W_REVIEW_COUNT * log_normalized_count_score(
+        review_count, REVIEW_COUNT_FOR_MAX_SCORE
+    )
+    follower_term = W_INSTAGRAM_FOLLOWERS * log_normalized_count_score(
+        instagram_follower_count or 0, FOLLOWER_COUNT_FOR_MAX_SCORE
+    )
+    return max(review_term, follower_term)
 
 
 def compute_search_relevance_score(
@@ -28,6 +51,7 @@ def compute_search_relevance_score(
     average_rating: Decimal | float,
     review_count: int,
     business_featured: bool,
+    instagram_follower_count: int | None = None,
 ) -> float:
     """Python mirror of _calculate_relevance_score annotation."""
     now = timezone.now()
@@ -56,9 +80,9 @@ def compute_search_relevance_score(
     ar = float(average_rating or 0)
     rating_score = ar / 5.0
 
-    rc = float(review_count or 0)
-    review_count_score = math.log10(rc + 1.0) / math.log10(
-        REVIEW_COUNT_FOR_MAX_SCORE + 1.0
+    social_proof_score = compute_weighted_social_proof_score(
+        review_count=review_count,
+        instagram_follower_count=instagram_follower_count,
     )
 
     newness_score = math.pow(
@@ -70,7 +94,7 @@ def compute_search_relevance_score(
     relevance = (
         W_QUALITY * quality_score
         + W_RATING * rating_score
-        + W_REVIEW_COUNT * review_count_score
+        + social_proof_score
         + W_NEWNESS * newness_score
     ) * featured_multiplier
     return float(relevance)
