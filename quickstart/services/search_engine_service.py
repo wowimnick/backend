@@ -40,8 +40,11 @@ from quickstart.services.search_index_service import (
     ensure_physical_collection,
 )
 from quickstart.services.search_suggest_service import match_collection_by_alias
-from quickstart.services.typesense_client import get_typesense_client
-from typesense.exceptions import ObjectNotFound, RequestMalformed
+from quickstart.services.typesense_client import (
+    ObjectNotFound,
+    RequestMalformed,
+    get_typesense_client,
+)
 from quickstart.utils.url_utils import build_cloudfront_resized_webp_from_original_key
 
 logger = logging.getLogger(__name__)

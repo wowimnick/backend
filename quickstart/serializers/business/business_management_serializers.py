@@ -97,12 +97,18 @@ class MetricsContainerSerializer(serializers.Serializer):
     average_rating = MetricSerializer()
 
 
+class WidgetSetupProgressSerializer(serializers.Serializer):
+    has_widget_domains = serializers.BooleanField()
+    has_widget_embed_verified = serializers.BooleanField()
+
+
 class SetupProgressSerializer(serializers.Serializer):
     is_stripe_connected = serializers.BooleanField()
     is_profile_complete = serializers.BooleanField()
     has_created_class = serializers.BooleanField()
     has_class_options = serializers.BooleanField()
     has_schedules = serializers.BooleanField()
+    widget_setup = WidgetSetupProgressSerializer(required=False, allow_null=True)
 
 
 class ActionablePromptsSerializer(serializers.Serializer):

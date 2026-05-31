@@ -9,6 +9,15 @@ from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
+try:
+    from typesense.exceptions import ObjectNotFound, RequestMalformed
+except ImportError:
+    class ObjectNotFound(Exception):
+        """Fallback when typesense is not installed."""
+
+    class RequestMalformed(Exception):
+        """Fallback when typesense is not installed."""
+
 _client = None
 _TYPESENSE_HEALTH_CACHE_TTL = 30
 _TYPESENSE_HEALTH_NEGATIVE_CACHE_TTL = 5

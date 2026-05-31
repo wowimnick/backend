@@ -12,8 +12,6 @@ from django.conf import settings
 from django.db.models import Exists, OuterRef, Prefetch
 from django.utils import timezone
 
-from typesense.exceptions import ObjectNotFound
-
 from quickstart.models import (
     BusinessInfo,
     ClassCollection,
@@ -27,7 +25,7 @@ from quickstart.serializers.public.public_class_serializers import (
 )
 from quickstart.services.search_ranking import compute_search_relevance_score
 from quickstart.services.search_schema import CLASS_SEARCH_SCHEMA_BODY
-from quickstart.services.typesense_client import get_typesense_client
+from quickstart.services.typesense_client import ObjectNotFound, get_typesense_client
 from quickstart.utils.deploy_build_id import get_deploy_build_id
 from quickstart.utils.url_utils import build_cloudfront_resized_webp_from_original_key
 
