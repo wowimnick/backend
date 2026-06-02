@@ -1380,6 +1380,8 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
 
                 ctx = self.get_serializer_context()
                 fav = ctx.get("favorited_ids") or set()
+                from quickstart.services.typesense_client import ServiceUnavailable
+
                 try:
                     payload = run_public_class_search(request, favorited_ids=fav)
                     if not _is_count_only_request(request):
@@ -1397,6 +1399,20 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                         resp["Cache-Control"] = cc
                     resp["Cache-Tag"] = "classes-search"
                     return resp
+                except ServiceUnavailable:
+                    logger.warning(
+                        "Typesense returned 503 (Not Ready or Lagging); "
+                        "returning service unavailable response."
+                    )
+                    if getattr(settings, "SEARCH_LOCAL_DB_FALLBACK", False):
+                        logger.warning(
+                            "Typesense 503; using Postgres search (local fallback)."
+                        )
+                        return self._public_class_search_database(request)
+                    return Response(
+                        {"error": "Search service is temporarily unavailable."},
+                        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    )
                 except Exception:
                     logger.exception("Typesense search failed")
                     if getattr(settings, "SEARCH_LOCAL_DB_FALLBACK", False):

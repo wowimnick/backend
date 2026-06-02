@@ -399,6 +399,31 @@ class TestRunPublicClassSearchMockedTypesense:
         assert f"min_available_date:>={today_compact}" in fb
         assert fb.count("available_dates:=`") < 50
 
+    def test_service_unavailable_invalidates_health_cache_and_reraises(self):
+        """ServiceUnavailable from Typesense (503) must invalidate the health cache
+        and propagate so callers can handle it as a transient error."""
+        from quickstart.services.typesense_client import ServiceUnavailable
+
+        request = _drf_request(
+            "/api/classes/search/",
+            {"lat": "43.6532", "lng": "-79.3832", "location_search": "Toronto, ON"},
+        )
+        invalidate_calls = []
+        with patch(
+            "quickstart.services.search_engine_service._typesense_search_collection",
+            side_effect=ServiceUnavailable(503, "Not Ready or Lagging"),
+        ):
+            with patch(
+                "quickstart.services.search_engine_service.invalidate_health_cache",
+                side_effect=lambda: invalidate_calls.append(1),
+            ):
+                with pytest.raises(ServiceUnavailable):
+                    run_public_class_search(request)
+
+        assert invalidate_calls == [1], (
+            "invalidate_health_cache must be called exactly once on ServiceUnavailable"
+        )
+
 
 @pytest.mark.django_db
 class TestPublicClassSearchViewEnginePaths:
@@ -464,6 +489,83 @@ class TestPublicClassSearchViewEnginePaths:
                     },
                 )
         assert response.status_code == 503
+
+    def test_typesense_service_unavailable_returns_503_without_error_log(
+        self, api_client, settings, caplog
+    ):
+        """ServiceUnavailable (503 from Typesense) should return 503 to client and
+        log at WARNING level, not ERROR — so it does not create Sentry error events."""
+        import logging
+
+        from quickstart.services.typesense_client import ServiceUnavailable
+
+        settings.SEARCH_LOCAL_DB_FALLBACK = False
+        with patch(
+            "quickstart.services.typesense_client.typesense_available",
+            return_value=True,
+        ):
+            with patch(
+                "quickstart.services.search_engine_service.run_public_class_search",
+                side_effect=ServiceUnavailable(503, "Not Ready or Lagging"),
+            ):
+                with caplog.at_level(logging.WARNING):
+                    response = api_client.get(
+                        f"{API}/classes/search/",
+                        {
+                            "lat": "43.6532",
+                            "lng": "-79.3832",
+                            "location_search": "Toronto, ON",
+                        },
+                    )
+        assert response.status_code == 503
+        assert "error" in response.json()
+        # Our application logger must not emit ERROR for this transient failure.
+        # (django.request will still log 503 at ERROR level — that is expected Django
+        # behaviour and unrelated to the Sentry handler we are fixing.)
+        app_error_records = [
+            r
+            for r in caplog.records
+            if r.levelno >= logging.ERROR
+            and r.name != "django.request"
+        ]
+        assert not app_error_records, (
+            f"Expected no application ERROR logs for ServiceUnavailable, got: {app_error_records}"
+        )
+
+    def test_typesense_service_unavailable_with_db_fallback(
+        self, api_client, settings
+    ):
+        """When SEARCH_LOCAL_DB_FALLBACK=True and Typesense returns 503, the view
+        should fall back to the DB search instead of returning an error."""
+        from rest_framework.response import Response as DRFResponse
+
+        from quickstart.services.typesense_client import ServiceUnavailable
+
+        settings.SEARCH_LOCAL_DB_FALLBACK = True
+        fake_payload = {"count": 0, "results": [], "next": None, "previous": None}
+        with patch(
+            "quickstart.services.typesense_client.typesense_available",
+            return_value=True,
+        ):
+            with patch(
+                "quickstart.services.search_engine_service.run_public_class_search",
+                side_effect=ServiceUnavailable(503, "Not Ready or Lagging"),
+            ):
+                with patch(
+                    "quickstart.views.public.public_class_views.PublicClassViewSet"
+                    "._public_class_search_database",
+                    return_value=DRFResponse(fake_payload),
+                ):
+                    response = api_client.get(
+                        f"{API}/classes/search/",
+                        {
+                            "lat": "43.6532",
+                            "lng": "-79.3832",
+                            "location_search": "Toronto, ON",
+                        },
+                    )
+        assert response.status_code == 200
+        assert response.json()["count"] == 0
 
     def test_count_only_returns_count_only_json(self, api_client):
         fake = {"count": 7, "next": None, "previous": None, "results": []}
