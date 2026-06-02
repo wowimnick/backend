@@ -488,6 +488,86 @@ class TestPublicClassSearchViewEnginePaths:
         body = response.json()
         assert body == {"count": 7}
 
+    def test_service_unavailable_returns_503_without_exception_log(
+        self, api_client, settings
+    ):
+        """ServiceUnavailable (Typesense 503) must return HTTP 503 but NOT call
+        logger.exception (which would trigger Sentry) for transient outages.
+        It should call logger.warning instead, and invalidate the health cache.
+        """
+        from quickstart.services.typesense_client import ServiceUnavailable
+
+        settings.SEARCH_LOCAL_DB_FALLBACK = False
+        # Patch the view's module-level logger to observe which logging methods are called.
+        view_logger_path = "quickstart.views.public.public_class_views.logger"
+        with patch(
+            "quickstart.services.typesense_client.typesense_available",
+            return_value=True,
+        ):
+            with patch(
+                "quickstart.services.search_engine_service.run_public_class_search",
+                side_effect=ServiceUnavailable(503, "Not Ready or Lagging"),
+            ):
+                with patch(
+                    "quickstart.services.typesense_client.invalidate_typesense_health_cache"
+                ) as mock_invalidate:
+                    with patch(view_logger_path) as mock_logger:
+                        response = api_client.get(
+                            f"{API}/classes/search/",
+                            {
+                                "lat": "43.6532",
+                                "lng": "-79.3832",
+                                "location_search": "Toronto, ON",
+                            },
+                        )
+        assert response.status_code == 503
+        assert "error" in response.json()
+        # Health cache must be cleared so the next request re-probes Typesense.
+        mock_invalidate.assert_called_once()
+        # logger.exception must NOT be called (that would report to Sentry).
+        mock_logger.exception.assert_not_called()
+        # logger.warning must be called with a message about the transient 503.
+        assert mock_logger.warning.called, "Expected logger.warning to be called for ServiceUnavailable"
+        warning_call_args = " ".join(
+            str(a) for call in mock_logger.warning.call_args_list for a in call[0]
+        )
+        assert any(
+            kw in warning_call_args for kw in ("503", "Not Ready", "Lagging", "transient")
+        ), f"Warning message didn't mention the 503 error: {warning_call_args}"
+
+    def test_service_unavailable_with_db_fallback(self, api_client, settings):
+        """ServiceUnavailable falls back to Postgres when SEARCH_LOCAL_DB_FALLBACK is True."""
+        from rest_framework.response import Response as DRFResponse
+        from quickstart.services.typesense_client import ServiceUnavailable
+
+        settings.SEARCH_LOCAL_DB_FALLBACK = True
+        fake_payload = {"count": 5, "results": [], "next": None, "previous": None}
+        with patch(
+            "quickstart.services.typesense_client.typesense_available",
+            return_value=True,
+        ):
+            with patch(
+                "quickstart.services.search_engine_service.run_public_class_search",
+                side_effect=ServiceUnavailable(503, "Not Ready or Lagging"),
+            ):
+                with patch(
+                    "quickstart.views.public.public_class_views.PublicClassViewSet._public_class_search_database",
+                    return_value=DRFResponse(fake_payload),
+                ):
+                    with patch(
+                        "quickstart.services.typesense_client.invalidate_typesense_health_cache"
+                    ):
+                        response = api_client.get(
+                            f"{API}/classes/search/",
+                            {
+                                "lat": "43.6532",
+                                "lng": "-79.3832",
+                                "location_search": "Toronto, ON",
+                            },
+                        )
+        assert response.status_code == 200
+        assert response.json()["count"] == 5
+
 
 @pytest.mark.django_db
 class TestPublicClassSearchForceDb:

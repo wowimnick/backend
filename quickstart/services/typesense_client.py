@@ -10,12 +10,15 @@ from django.core.cache import cache
 logger = logging.getLogger(__name__)
 
 try:
-    from typesense.exceptions import ObjectNotFound, RequestMalformed
+    from typesense.exceptions import ObjectNotFound, RequestMalformed, ServiceUnavailable
 except ImportError:
     class ObjectNotFound(Exception):
         """Fallback when typesense is not installed."""
 
     class RequestMalformed(Exception):
+        """Fallback when typesense is not installed."""
+
+    class ServiceUnavailable(Exception):
         """Fallback when typesense is not installed."""
 
 _client = None
@@ -64,6 +67,16 @@ def get_typesense_client():
         }
     )
     return _client
+
+
+def invalidate_typesense_health_cache() -> None:
+    """Clears the cached 'healthy' status so the next request re-checks Typesense health.
+
+    Call this whenever a ServiceUnavailable exception is caught so that callers
+    don't keep treating Typesense as healthy for the remainder of the cache TTL.
+    """
+    cache_key = _typesense_health_cache_key()
+    cache.delete(cache_key)
 
 
 def typesense_available() -> bool:

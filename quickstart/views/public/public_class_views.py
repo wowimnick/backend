@@ -1397,8 +1397,23 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                         resp["Cache-Control"] = cc
                     resp["Cache-Tag"] = "classes-search"
                     return resp
-                except Exception:
-                    logger.exception("Typesense search failed")
+                except Exception as _exc:
+                    from quickstart.services.typesense_client import (
+                        ServiceUnavailable as _ServiceUnavailable,
+                        invalidate_typesense_health_cache,
+                    )
+                    if isinstance(_exc, _ServiceUnavailable):
+                        # Typesense returned 503 Not Ready or Lagging — this is transient.
+                        # Log at WARNING so Sentry is not alerted; clear the health cache so
+                        # the next request re-probes rather than assuming Typesense is healthy.
+                        invalidate_typesense_health_cache()
+                        logger.warning(
+                            "Typesense search returned 503 (Not Ready or Lagging); "
+                            "responding with 503. error=%s",
+                            _exc,
+                        )
+                    else:
+                        logger.exception("Typesense search failed")
                     if getattr(settings, "SEARCH_LOCAL_DB_FALLBACK", False):
                         logger.warning(
                             "Typesense search error; using Postgres search (local fallback)."
