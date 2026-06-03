@@ -507,7 +507,7 @@ class AdminBookingViewSet(viewsets.ModelViewSet):
                     "Payment Intent ID",
                 ]
             )
-            for booking in queryset.iterator():
+            for booking in queryset.iterator(chunk_size=2000):
                 payment_id = (
                     booking.payments.first().stripe_payment_intent_id
                     if booking.payments.exists()
