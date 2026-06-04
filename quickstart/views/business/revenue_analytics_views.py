@@ -66,9 +66,39 @@ HST_RATE = Decimal("0.13")
 TAX_EXPORT_DISCLAIMER = (
     "Estimates for your records, grouped by transaction date. "
     "Not tax advice — confirm with your accountant. "
-    "Bank deposit dates may differ slightly from transaction dates; "
+    "When customers pay, HST is split between your class sales and ClassEasily's "
+    "fee (ITC). Bank deposit dates may differ slightly from transaction dates; "
     "see Payouts for deposit reconciliation."
 )
+
+# Plain-language key shown at the top of every export so an owner who doesn't know
+# the platform fee structure can read the columns. Wording mirrors the dashboard
+# monthly tax table so on-screen and exported numbers match exactly.
+REPORT_LEGEND_ROWS = [
+    ["How to read this report"],
+    ["Total Collected", "What your customer paid you, including HST."],
+    ["Your Sales (before HST)", "Your class price before tax (after discounts and gift cards)."],
+    [
+        "HST on Your Sales",
+        "Your share of the HST customers paid. It's included in your deposit and is "
+        "generally what you remit on your HST return.",
+    ],
+    [
+        "ClassEasily Fee",
+        "Our platform fee on your sales, before HST. Deducted before your payout.",
+    ],
+    [
+        "HST on ClassEasily Fee (ITC)",
+        "13% HST we charge on our fee — not extra tax on your classes. Usually "
+        "claimable from the CRA as an Input Tax Credit (ITC).",
+    ],
+    ["Card Processing", "Estimated card/Stripe processing, deducted from your payout."],
+    [
+        "Net Deposited to You",
+        "Your Sales + HST on Your Sales − ClassEasily Fee − Card Processing.",
+    ],
+    [],
+]
 
 
 class RevenueAnalyticsView(views.APIView):
@@ -416,20 +446,23 @@ class RevenueAnalyticsView(views.APIView):
             ["Monthly HST Summary (for tax filing)"],
             [
                 "Month",
-                "Sales (Pre-Tax)",
-                "HST Collected from Students",
-                "Platform Commission (Pre-Tax)",
-                "HST on Commission (ITC)",
+                "Your Sales (before HST)",
+                "HST on Your Sales",
+                "ClassEasily Fee",
+                "HST on ClassEasily Fee (ITC)",
                 "Card Processing",
-                "Net Payout",
+                "Net Deposited to You",
             ],
         ]
         for entry in monthly_breakdown:
+            # Match the dashboard: the HST that stays with you is what customers paid
+            # on the class minus the HST charged on ClassEasily's fee (your ITC).
+            hst_on_your_sales = entry["hst_collected"] - entry["hst_on_commission"]
             rows.append(
                 [
                     entry["month"],
                     f"${entry['subtotal']:.2f}",
-                    f"${entry['hst_collected']:.2f}",
+                    f"${hst_on_your_sales:.2f}",
                     f"${entry['commission']:.2f}",
                     f"${entry['hst_on_commission']:.2f}",
                     f"${entry['stripe_fees']:.2f}",
@@ -943,11 +976,11 @@ class RevenueAnalyticsView(views.APIView):
             [
                 "Note:",
                 "All amounts reflect actual amounts after discounts and gift cards. "
-                "Net Payout is the amount allocated to the business.",
+                "Net Deposited is the amount allocated to your business.",
             ],
             ["Tax note:", TAX_EXPORT_DISCLAIMER],
             [],
-        ]
+        ] + REPORT_LEGEND_ROWS
 
     def _export_metrics_rows(
         self, business, start_date_utc, end_date_utc, class_id_filter, source_filter
@@ -956,16 +989,18 @@ class RevenueAnalyticsView(views.APIView):
             business, start_date_utc, end_date_utc, class_id_filter, source_filter
         )
         total_amount_collected = Decimal(str(metrics["total_gross_revenue"]))
-        platform_fees_actual = Decimal(str(metrics["estimated_platform_fees"]))
+        classeasily_fee = Decimal(str(metrics["platform_commission"]))
+        card_processing = Decimal(str(metrics["stripe_processing_fees"]))
         net_revenue_actual = Decimal(str(metrics["estimated_net_revenue"]))
         return [
             ["Key Metrics Summary", "Value"],
             [
-                "Total Amount Collected from Customers (incl. tax)",
+                "Total Collected from Customers (incl. HST)",
                 f"${total_amount_collected:.2f}",
             ],
-            ["Platform Fees (actual take)", f"${platform_fees_actual:.2f}"],
-            ["Net Payout to Business (actual)", f"${net_revenue_actual:.2f}"],
+            ["ClassEasily Fee", f"${classeasily_fee:.2f}"],
+            ["Card Processing", f"${card_processing:.2f}"],
+            ["Net Deposited to You", f"${net_revenue_actual:.2f}"],
             [],
         ]
 
@@ -978,15 +1013,22 @@ class RevenueAnalyticsView(views.APIView):
             business, start_date_utc, end_date_utc, class_id_filter, source_filter
         )
         rows = [
-            ["Daily Revenue Detail (Local Business Time, incl. Tax)"],
-            ["Date", "Gross Revenue", "Platform Fees", "Net Revenue"],
+            ["Daily Revenue Detail (Local Business Time, incl. HST)"],
+            [
+                "Date",
+                "Total Collected (incl. HST)",
+                "ClassEasily Fee",
+                "Card Processing",
+                "Net Deposited to You",
+            ],
         ]
         for entry in trends:
             rows.append(
                 [
                     entry["date"],
                     f"${entry['gross_revenue']:.2f}",
-                    f"${entry['platform_fees']:.2f}",
+                    f"${entry['platform_commission']:.2f}",
+                    f"${entry['stripe_processing_fees']:.2f}",
                     f"${entry['net_revenue']:.2f}",
                 ]
             )
@@ -1002,8 +1044,16 @@ class RevenueAnalyticsView(views.APIView):
         if not class_revenue:
             return []
         rows = [
-            ["Revenue by Class (incl. Tax)"],
-            ["Class Name", "Gross Revenue", "Platform Fees", "Net Revenue"],
+            ["Revenue by Class (incl. HST)"],
+            [
+                "Fees & Charges = ClassEasily Fee + Card Processing + HST on ClassEasily Fee.",
+            ],
+            [
+                "Class Name",
+                "Total Collected (incl. HST)",
+                "Fees & Charges",
+                "Net Deposited to You",
+            ],
         ]
         for entry in class_revenue:
             rows.append(
@@ -1025,6 +1075,10 @@ class RevenueAnalyticsView(views.APIView):
         rows = [
             ["Detailed Transaction Report for Accounting"],
             [
+                "Total Paid = Your Sales + HST on Your Sales + HST on ClassEasily Fee.  "
+                "Net Deposited = Your Sales + HST on Your Sales − ClassEasily Fee − Card Processing.",
+            ],
+            [
                 "Booking Ref",
                 "Booking Date (UTC)",
                 "Class Date (Local)",
@@ -1032,12 +1086,13 @@ class RevenueAnalyticsView(views.APIView):
                 "Booker Name",
                 "Booker Email",
                 "Participants",
-                "Subtotal (Pre-Tax)",
-                "Tax Collected from Student",
-                "Total Amount Paid",
-                "Platform Fee (Pre-tax)",
-                "Tax on Platform Fee (ITC for Business)",
-                "Net Payout to Business",
+                "Your Sales (before HST)",
+                "HST on Your Sales",
+                "ClassEasily Fee (before HST)",
+                "HST on ClassEasily Fee (ITC)",
+                "Card Processing",
+                "Total Paid by Customer (incl. HST)",
+                "Net Deposited to You",
                 "Business Discount (codes)",
                 "Business Discount ($)",
                 "Global Discount (names)",
@@ -1081,6 +1136,8 @@ class RevenueAnalyticsView(views.APIView):
             tax_collected = bd["tax_collected"]
             platform_fee_pre_tax = bd["platform_fee_pre_tax"]
             hst_on_fee = bd["hst_on_commission"]
+            card_processing = bd["stripe_fees"]
+            hst_on_your_sales = tax_collected - hst_on_fee
             net_payout = bd["net_payout"]
             total_paid = bd["gross"]
 
@@ -1115,10 +1172,11 @@ class RevenueAnalyticsView(views.APIView):
                     booker_email,
                     booking.participants,
                     f"${subtotal:.2f}",
-                    f"${tax_collected:.2f}",
-                    f"${total_paid:.2f}",
+                    f"${hst_on_your_sales:.2f}",
                     f"${platform_fee_pre_tax:.2f}",
                     f"${hst_on_fee:.2f}",
+                    f"${card_processing:.2f}",
+                    f"${total_paid:.2f}",
                     f"${net_payout:.2f}",
                     business_discount_names,
                     f"${business_discount_amt:.2f}",
@@ -1142,10 +1200,12 @@ class RevenueAnalyticsView(views.APIView):
             [
                 "Payment ID",
                 "Paid At (UTC)",
-                "Amount (gross)",
-                "Platform Fee (pre-tax)",
-                "HST on Commission (ITC)",
-                "Net Payout to Business",
+                "Your Sales (before HST)",
+                "HST on Your Sales",
+                "ClassEasily Fee (before HST)",
+                "HST on ClassEasily Fee (ITC)",
+                "Total Paid by Member (incl. HST)",
+                "Net Deposited to You",
                 "Status",
             ],
         ]
@@ -1160,14 +1220,17 @@ class RevenueAnalyticsView(views.APIView):
         )
         for mp in membership_rows:
             bd = self._membership_tax_breakdown(mp)
+            hst_on_your_sales = bd["tax_collected"] - bd["hst_on_commission"]
             rows.append(
                 [
                     str(mp.id),
                     mp.created_at.strftime("%Y-%m-%d %H:%M"),
-                    f"${mp.amount:.2f}",
-                    f"${mp.platform_fee_amount:.2f}",
+                    f"${bd['subtotal']:.2f}",
+                    f"${hst_on_your_sales:.2f}",
+                    f"${bd['platform_fee_pre_tax']:.2f}",
                     f"${bd['hst_on_commission']:.2f}",
-                    f"${mp.net_payout_amount:.2f}",
+                    f"${bd['gross']:.2f}",
+                    f"${bd['net_payout']:.2f}",
                     mp.get_status_display(),
                 ]
             )
