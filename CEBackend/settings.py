@@ -797,3 +797,8 @@ TYPESENSE_FULL_REINDEX_EACH_DEPLOY = _env_truthy(
     "TYPESENSE_FULL_REINDEX_EACH_DEPLOY",
     default=True,
 )
+# Local dev: fall back to Postgres class search when Typesense is down or not configured.
+SEARCH_LOCAL_DB_FALLBACK = _env_truthy(
+    "SEARCH_LOCAL_DB_FALLBACK",
+    default=(DJANGO_ENV == "local"),
+)

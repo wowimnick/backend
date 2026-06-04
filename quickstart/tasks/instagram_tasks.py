@@ -223,6 +223,10 @@ def _sync_instagram_followers_core(business_id: int) -> dict:
         row_updates["instagram_follower_count"] = None
 
     n_updated = _update_business_instagram_fields(business_id, row_updates)
+    if n_updated > 0 and "instagram_follower_count" in row_updates:
+        from quickstart.tasks.search_index_tasks import enqueue_reindex_classes_for_business
+
+        enqueue_reindex_classes_for_business(business_id)
     logger.info(
         "sync_instagram_followers_for_business done business_id=%s handle=%s apify_status=%s "
         "follower_count=%s db_rows_updated=%s stored_sync_status=%s",

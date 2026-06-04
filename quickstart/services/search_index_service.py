@@ -240,6 +240,7 @@ def build_typesense_document_for_class(class_id: int) -> dict[str, Any] | None:
         average_rating=combined_avg,
         review_count=combined_raw,
         business_featured=bool(business.featured),
+        instagram_follower_count=business.instagram_follower_count,
     )
 
     jitter = _deterministic_jitter_coord(klass)

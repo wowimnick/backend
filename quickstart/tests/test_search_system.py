@@ -408,7 +408,8 @@ class TestPublicClassSearchViewEnginePaths:
     def _search_settings(self, settings):
         settings.SEARCH_RESULTS_CACHE_SECONDS = 0
 
-    def test_typesense_unavailable_returns_503(self, api_client):
+    def test_typesense_unavailable_returns_503(self, api_client, settings):
+        settings.SEARCH_LOCAL_DB_FALLBACK = False
         with patch(
             "quickstart.services.typesense_client.typesense_available",
             return_value=False,
@@ -420,7 +421,32 @@ class TestPublicClassSearchViewEnginePaths:
         assert response.status_code == 503
         assert "error" in response.json()
 
-    def test_typesense_exception_returns_503(self, api_client):
+    def test_typesense_unavailable_local_db_fallback(self, api_client, settings):
+        from rest_framework.response import Response as DRFResponse
+
+        settings.SEARCH_LOCAL_DB_FALLBACK = True
+        fake_payload = {"count": 0, "results": [], "next": None, "previous": None}
+        with patch(
+            "quickstart.services.typesense_client.typesense_available",
+            return_value=False,
+        ):
+            with patch(
+                "quickstart.views.public.public_class_views.PublicClassViewSet._public_class_search_database",
+                return_value=DRFResponse(fake_payload),
+            ):
+                response = api_client.get(
+                    f"{API}/classes/search/",
+                    {
+                        "lat": "43.6532",
+                        "lng": "-79.3832",
+                        "location_search": "Toronto, ON",
+                    },
+                )
+        assert response.status_code == 200
+        assert response.json()["count"] == 0
+
+    def test_typesense_exception_returns_503(self, api_client, settings):
+        settings.SEARCH_LOCAL_DB_FALLBACK = False
         with patch(
             "quickstart.services.typesense_client.typesense_available",
             return_value=True,

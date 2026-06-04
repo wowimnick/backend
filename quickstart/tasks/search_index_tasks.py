@@ -151,6 +151,19 @@ def enqueue_reindex_classes_for_instance(instance_id: int) -> None:
         logger.debug("enqueue_reindex_classes_for_instance: %s", e)
 
 
+def enqueue_reindex_classes_for_business(business_id: int) -> None:
+    from quickstart.models import ClassesMain
+
+    try:
+        bid = int(business_id)
+        for cid in ClassesMain.objects.filter(businessId_id=bid).values_list(
+            "classId", flat=True
+        )[:800]:
+            enqueue_reindex_class(int(cid))
+    except Exception as e:
+        logger.debug("enqueue_reindex_classes_for_business: %s", e)
+
+
 @shared_task(ignore_result=True)
 def bootstrap_typesense_search_index_task():
     """Create/populate Typesense when alias is missing or index is empty but DB has classes."""

@@ -31,6 +31,7 @@ from django.db.models.functions import (
     StrIndex,
     Substr,
     ATan2,
+    Greatest,
     Least,
     Extract,
     Length,
@@ -84,12 +85,14 @@ from django.conf import settings
 
 from quickstart.services.search_filter_params import normalize_booking_type_query
 from quickstart.services.search_ranking import (
+    FOLLOWER_COUNT_FOR_MAX_SCORE,
     QUALITY_SCORE_BASE_IMAGES,
     QUALITY_SCORE_IDEAL_IMAGES,
     QUALITY_SCORE_MAX_DESCRIPTION_LEN,
     RECENCY_HALFLIFE_DAYS,
     REVIEW_COUNT_FOR_MAX_SCORE,
     W_FEATURED,
+    W_INSTAGRAM_FOLLOWERS,
     W_NEWNESS,
     W_QUALITY,
     W_RATING,
@@ -522,6 +525,32 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             output_field=FloatField(),
         )
 
+        follower_count_score = ExpressionWrapper(
+            Log(
+                Cast(Value(10), FloatField()),
+                Cast(
+                    Coalesce(F("businessId__instagram_follower_count"), Value(0)),
+                    FloatField(),
+                )
+                + Cast(Value(1), FloatField()),
+            )
+            / Log(
+                Cast(Value(10), FloatField()),
+                Cast(Value(FOLLOWER_COUNT_FOR_MAX_SCORE + 1), FloatField()),
+            ),
+            output_field=FloatField(),
+        )
+
+        review_social_term = ExpressionWrapper(
+            Cast(Value(W_REVIEW_COUNT), FloatField()) * review_count_score,
+            output_field=FloatField(),
+        )
+        follower_social_term = ExpressionWrapper(
+            Cast(Value(W_INSTAGRAM_FOLLOWERS), FloatField()) * follower_count_score,
+            output_field=FloatField(),
+        )
+        social_proof_score = Greatest(review_social_term, follower_social_term)
+
         newness_score = ExpressionWrapper(
             Power(
                 Cast(Value(2), FloatField()),
@@ -542,7 +571,7 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
             (
                 (Cast(Value(W_QUALITY), FloatField()) * quality_score)
                 + (Cast(Value(W_RATING), FloatField()) * rating_score)
-                + (Cast(Value(W_REVIEW_COUNT), FloatField()) * review_count_score)
+                + social_proof_score
                 + (Cast(Value(W_NEWNESS), FloatField()) * newness_score)
             )
             * featured_multiplier,
@@ -1337,6 +1366,11 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                 )
 
                 if not typesense_available():
+                    if getattr(settings, "SEARCH_LOCAL_DB_FALLBACK", False):
+                        logger.warning(
+                            "Typesense unavailable; using Postgres search (local fallback)."
+                        )
+                        return self._public_class_search_database(request)
                     return Response(
                         {
                             "error": "Search service is temporarily unavailable.",
@@ -1365,6 +1399,11 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     return resp
                 except Exception:
                     logger.exception("Typesense search failed")
+                    if getattr(settings, "SEARCH_LOCAL_DB_FALLBACK", False):
+                        logger.warning(
+                            "Typesense search error; using Postgres search (local fallback)."
+                        )
+                        return self._public_class_search_database(request)
                     return Response(
                         {"error": "Search service is temporarily unavailable."},
                         status=status.HTTP_503_SERVICE_UNAVAILABLE,
