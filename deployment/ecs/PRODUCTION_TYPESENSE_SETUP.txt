@@ -76,7 +76,7 @@ Verify from AWS (no curl needed on a laptop): CloudWatch log group /ecs/classeas
 From a task inside the VPC (ECS Exec, bastion, or one-off Fargate): curl http://typesense.classeasily.local:8108/health
 
 Raft stuck in ERROR ("Node with no leader", "can't reset_peer")
-================================================================
+===============================================================
 Common on Fargate when EFS keeps old Raft peer IPs after a task replacement. The task definition
 sets TYPESENSE_RESET_PEERS_ON_ERROR=true on the task definition.
 
