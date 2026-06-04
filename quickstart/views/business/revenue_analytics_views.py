@@ -403,7 +403,9 @@ class RevenueAnalyticsView(views.APIView):
         if report_type not in ("tax_summary", "detailed", "full"):
             report_type = "full"
 
-        export_format = request.query_params.get("format", "csv")
+        # Use export_format, not "format" — DRF reserves ?format= for content negotiation
+        # and returns 404 when csv/xlsx is not a registered renderer.
+        export_format = request.query_params.get("export_format", "csv")
         if export_format not in ("csv", "xlsx"):
             export_format = "csv"
 
