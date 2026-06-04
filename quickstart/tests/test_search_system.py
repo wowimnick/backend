@@ -611,7 +611,7 @@ class TestPublicClassSearchViewEnginePaths:
                 side_effect=ServiceUnavailable(503, "Not Ready or Lagging"),
             ):
                 with patch(
-                    "quickstart.services.typesense_client.invalidate_typesense_health_cache"
+                    "quickstart.services.typesense_client.invalidate_health_cache"
                 ) as mock_invalidate:
                     with patch(view_logger_path) as mock_logger:
                         response = api_client.get(
@@ -657,7 +657,7 @@ class TestPublicClassSearchViewEnginePaths:
                     return_value=DRFResponse(fake_payload),
                 ):
                     with patch(
-                        "quickstart.services.typesense_client.invalidate_typesense_health_cache"
+                        "quickstart.services.typesense_client.invalidate_health_cache"
                     ):
                         response = api_client.get(
                             f"{API}/classes/search/",
