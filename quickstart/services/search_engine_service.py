@@ -43,7 +43,9 @@ from quickstart.services.search_suggest_service import match_collection_by_alias
 from quickstart.services.typesense_client import (
     ObjectNotFound,
     RequestMalformed,
+    ServiceUnavailable,
     get_typesense_client,
+    invalidate_health_cache,
 )
 from quickstart.utils.url_utils import build_cloudfront_resized_webp_from_original_key
 
@@ -579,6 +581,18 @@ def run_public_class_search(request, favorited_ids: set | None = None) -> dict[s
         sync_typesense_bootstrap_at_web_startup(max_wait_peer_seconds=900)
         coll = _physical_collection_name(client)
         result = _typesense_search_collection(client, coll, search_params)
+    except ServiceUnavailable as exc:
+        # Typesense returned 503 (Not Ready or Lagging) — transient infrastructure issue.
+        # Invalidate the positive health cache so subsequent requests fail fast at the
+        # availability check rather than repeatedly hitting an unhealthy node.
+        invalidate_health_cache()
+        logger.warning(
+            "Typesense returned 503 (Not Ready or Lagging) for collection %r; "
+            "invalidating health cache and propagating to caller. error=%s",
+            coll,
+            exc,
+        )
+        raise
 
     geo_search_notice: dict[str, Any] | None = None
     if (
