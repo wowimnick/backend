@@ -1380,7 +1380,10 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
 
                 ctx = self.get_serializer_context()
                 fav = ctx.get("favorited_ids") or set()
-                from quickstart.services.typesense_client import ServiceUnavailable
+                from quickstart.services.typesense_client import (
+                    ServiceUnavailable,
+                    invalidate_health_cache,
+                )
 
                 try:
                     payload = run_public_class_search(request, favorited_ids=fav)
@@ -1399,10 +1402,12 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                         resp["Cache-Control"] = cc
                     resp["Cache-Tag"] = "classes-search"
                     return resp
-                except ServiceUnavailable:
+                except ServiceUnavailable as exc:
+                    invalidate_health_cache()
                     logger.warning(
                         "Typesense returned 503 (Not Ready or Lagging); "
-                        "returning service unavailable response."
+                        "returning service unavailable response. error=%s",
+                        exc,
                     )
                     if getattr(settings, "SEARCH_LOCAL_DB_FALLBACK", False):
                         logger.warning(

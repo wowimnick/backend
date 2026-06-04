@@ -70,7 +70,11 @@ def get_typesense_client():
 
 
 def invalidate_health_cache() -> None:
-    """Clear the cached health status so the next request re-checks Typesense."""
+    """Clear the cached health status so the next request re-checks Typesense.
+
+    Call whenever ServiceUnavailable is caught so callers do not keep treating
+    Typesense as healthy for the remainder of the cache TTL.
+    """
     cache.delete(_typesense_health_cache_key())
 
 
