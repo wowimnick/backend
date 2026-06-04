@@ -19,6 +19,7 @@ from quickstart.serializers.admin.payout_management.admin_payout_serializers imp
 
 from quickstart.tasks import process_daily_payouts
 from quickstart.views.admin.metrics_time_windows import get_admin_metrics_window
+from quickstart.utils.admin_export import check_export_row_limit, export_row_limit_response
 
 logger = logging.getLogger(__name__)
 
@@ -174,7 +175,12 @@ class AdminPayoutViewSet(viewsets.ReadOnlyModelViewSet):
             self.permission_denied(request, message="You cannot export payout data.")
 
         try:
-            queryset = self.filter_queryset(self.get_queryset())
+            queryset = self.filter_queryset(
+                self.get_queryset().annotate(bookings_count=Count("bookings"))
+            )
+            ok, count = check_export_row_limit(queryset)
+            if not ok:
+                return export_row_limit_response(count)
             response = HttpResponse(content_type="text/csv")
             response["Content-Disposition"] = (
                 f'attachment; filename="payouts_export_{timezone.now().strftime("%Y-%m-%d")}.csv"'
@@ -208,7 +214,7 @@ class AdminPayoutViewSet(viewsets.ReadOnlyModelViewSet):
                         payout.arrival_date.strftime("%Y-%m-%d")
                         if payout.arrival_date
                         else "",
-                        payout.bookings.count(),
+                        payout.bookings_count,
                     ]
                 )
             return response

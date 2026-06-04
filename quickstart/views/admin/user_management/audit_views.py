@@ -15,6 +15,7 @@ from quickstart.serializers.admin.user_management.audit_serializers import (
 
 from quickstart.models import AuditLog
 from quickstart.utils.permissions import IsAuthenticated, CanAccessUserAdmin
+from quickstart.utils.admin_export import check_export_row_limit, export_row_limit_response
 
 
 User = get_user_model()
@@ -80,6 +81,9 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
     def export(self, request):
         """Export audit logs to CSV"""
         queryset = self.get_queryset()
+        ok, count = check_export_row_limit(queryset)
+        if not ok:
+            return export_row_limit_response(count)
 
         response = HttpResponse(content_type="text/csv")
         response["Content-Disposition"] = 'attachment; filename="audit_logs.csv"'

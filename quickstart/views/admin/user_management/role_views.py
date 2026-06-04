@@ -16,13 +16,14 @@ from quickstart.serializers.admin.user_management.role_serializers import (
 
 from quickstart.models import Role, PermissionGroup, EnhancedPermission, AuditLog
 
-logger = logging.getLogger(__name__)
+from quickstart.utils.admin_pagination import AdminStandardPagination
 
 
 class RoleManagementViewSet(viewsets.ModelViewSet):
     """Viewset for role management"""
 
     permission_classes = [IsAuthenticated, CanAccessUserAdmin]
+    pagination_class = AdminStandardPagination
 
     def get_queryset(self):
         queryset = Role.objects.annotate(user_count=Count("customuser"))

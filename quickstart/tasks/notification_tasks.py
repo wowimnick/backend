@@ -187,3 +187,16 @@ def send_campaign_task(self, campaign_id, template_variables=None):
     campaign.error_message = f"Unsupported notification_type: {campaign.notification_type}"
     campaign.save(update_fields=["status", "error_message"])
     cache.set(cache_key, {"status": "error", "message": campaign.error_message}, timeout=3600)
+
+
+@shared_task
+def refresh_segment_counts_task():
+    """Background refresh of user segment counts."""
+    from quickstart.views.admin.notifications.notification_views import (
+        AdminUserSegmentViewSet,
+    )
+
+    viewset = AdminUserSegmentViewSet()
+    viewset._update_segment_counts()
+    logger.info("Segment count refresh task completed.")
+    return "Segment counts refreshed."

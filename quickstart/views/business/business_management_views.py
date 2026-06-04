@@ -56,7 +56,9 @@ from quickstart.models import (
     Payment,
     Discount,
     ImportedGoogleReview,
+    WidgetFunnelEvent,
 )
+from quickstart.views.widget.widget_views import _business_has_active_widget_subscription
 from quickstart.utils.widget_booking_source import (
     business_has_growth_or_advanced_widget_plan as _business_has_growth_or_advanced_widget_plan,
 )
@@ -712,6 +714,20 @@ class MyBusinessOverviewView(APIView):
             "has_class_options": has_class_options,
             "has_schedules": has_schedules,
         }
+
+        if _business_has_active_widget_subscription(business):
+            origins = [
+                str(o).strip()
+                for o in (business.allowed_widget_origins or [])
+                if o and str(o).strip()
+            ]
+            has_widget_embed_verified = WidgetFunnelEvent.objects.filter(
+                business=business
+            ).exists()
+            setup_progress_data["widget_setup"] = {
+                "has_widget_domains": len(origins) > 0,
+                "has_widget_embed_verified": has_widget_embed_verified,
+            }
 
         metrics_payload = {
             "total_students": total_students,

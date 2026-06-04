@@ -9,6 +9,7 @@ from rest_framework.response import Response
 
 from quickstart.models import WidgetSubscription, BusinessInfo, AuditLog
 from quickstart.utils.permissions import IsAuthenticated, CanAccessBusinessAdmin
+from quickstart.utils.admin_pagination import AdminStandardPagination
 
 
 class AdminWidgetSubscriptionViewSet(viewsets.ViewSet):
@@ -17,6 +18,7 @@ class AdminWidgetSubscriptionViewSet(viewsets.ViewSet):
     """
 
     permission_classes = [IsAuthenticated, CanAccessBusinessAdmin]
+    pagination_class = AdminStandardPagination
 
     def list(self, request):
         if not (
@@ -34,8 +36,11 @@ class AdminWidgetSubscriptionViewSet(viewsets.ViewSet):
             .select_related("business")
             .order_by("-created_at")
         )
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(subs, request, view=self)
+        rows = page if page is not None else subs
         out = []
-        for sub in subs:
+        for sub in rows:
             out.append(
                 {
                     "id": str(sub.id),
@@ -56,6 +61,8 @@ class AdminWidgetSubscriptionViewSet(viewsets.ViewSet):
                     "created_at": sub.created_at.isoformat() if sub.created_at else None,
                 }
             )
+        if page is not None:
+            return paginator.get_paginated_response(out)
         return Response(out, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["post"], url_path="comp-override")
@@ -89,7 +96,6 @@ class AdminWidgetSubscriptionViewSet(viewsets.ViewSet):
                 {"detail": "Business not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        now = timezone.now()
         sub, _created = WidgetSubscription.objects.update_or_create(
             business=business,
             defaults={
@@ -102,6 +108,7 @@ class AdminWidgetSubscriptionViewSet(viewsets.ViewSet):
                 "current_period_end": None,
             },
         )
+        audit_warning = None
         try:
             AuditLog.objects.create(
                 user=request.user if request.user.is_authenticated else None,
@@ -115,8 +122,13 @@ class AdminWidgetSubscriptionViewSet(viewsets.ViewSet):
                     "plan_id": plan_id,
                 },
             )
-        except Exception:
-            pass
+        except Exception as audit_err:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "Widget comp override audit log failed: %s", audit_err
+            )
+            audit_warning = "Comp override applied but audit log failed."
         return Response(
             {
                 "id": str(sub.id),
@@ -124,6 +136,7 @@ class AdminWidgetSubscriptionViewSet(viewsets.ViewSet):
                 "plan_id": sub.plan_id,
                 "status": sub.status,
                 "comp_reason": sub.comp_reason,
+                "warning": audit_warning,
             },
             status=status.HTTP_200_OK,
         )

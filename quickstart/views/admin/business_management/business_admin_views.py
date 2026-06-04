@@ -64,6 +64,7 @@ from quickstart.serializers.admin.business_management.admin_business_serializers
     GeographicBoundaryDataSerializer,
 )
 from quickstart.views.admin.metrics_time_windows import get_admin_metrics_window
+from quickstart.utils.admin_export import check_export_row_limit, export_row_limit_response
 from quickstart.constants.search_location_presets import EXPLORE_LOCATION_PRESET_LABELS
 
 logger = logging.getLogger(__name__)
@@ -77,39 +78,26 @@ def count_engaged_businesses(login_start_dt, login_end_exclusive_dt):
     Businesses where an owner or accepted staff logged in during [login_start_dt, login_end_exclusive_dt)
     AND the business has at least one Booking (any status), via class schedule chain.
     """
-    login_user_ids = list(
-        AuditLog.objects.filter(
-            action="login",
-            timestamp__gte=login_start_dt,
-            timestamp__lt=login_end_exclusive_dt,
-            user_id__isnull=False,
-        )
-        .values_list("user_id", flat=True)
-        .distinct()
-    )
-    if not login_user_ids:
-        return 0
-    owner_biz_ids = set(
-        BusinessInfo.objects.filter(owner_id__in=login_user_ids).values_list(
-            "pk", flat=True
-        )
-    )
-    staff_biz_ids = set(
-        BusinessStaff.objects.filter(
-            user_id__in=login_user_ids,
-            status=BusinessStaff.StaffStatus.ACCEPTED,
-        ).values_list("business_id", flat=True)
-    )
-    candidates = owner_biz_ids | staff_biz_ids
-    if not candidates:
-        return 0
+    logged_in_users = AuditLog.objects.filter(
+        action="login",
+        timestamp__gte=login_start_dt,
+        timestamp__lt=login_end_exclusive_dt,
+        user_id__isnull=False,
+    ).values("user_id")
+
     has_booking = Exists(
         Booking.objects.filter(
             schedule_instance__schedule__option__classId__businessId=OuterRef("pk"),
         )
     )
     return (
-        BusinessInfo.objects.filter(pk__in=candidates)
+        BusinessInfo.objects.filter(
+            Q(owner_id__in=logged_in_users)
+            | Q(
+                staff_members__user_id__in=logged_in_users,
+                staff_members__status=BusinessStaff.StaffStatus.ACCEPTED,
+            )
+        )
         .filter(has_booking)
         .distinct()
         .count()
@@ -959,6 +947,9 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
                 request, message="You do not have permission to export business data."
             )
         queryset = self.filter_queryset(self.get_queryset())
+        ok, count = check_export_row_limit(queryset)
+        if not ok:
+            return export_row_limit_response(count)
         response = HttpResponse(content_type="text/csv")
         response["Content-Disposition"] = 'attachment; filename="businesses_export.csv"'
         writer = csv.writer(response)
@@ -1328,12 +1319,31 @@ class BusinessAdminViewSet(viewsets.ModelViewSet):
             f"Announcement '{title}' triggered for {len(owner_emails)} business owners by Admin {request.user.email}"
         )
 
-        # Example: Use Celery or Django-Q
-        # from your_tasks import send_announcement_task
-        # send_announcement_task.delay(owner_emails, title, message, send_email, send_in_app)
+        from quickstart.tasks.business_tasks import send_business_announcement_task
 
-        # --- Log Action ---
-        # Optionally create an AuditLog entry for sending announcements
+        send_business_announcement_task.delay(
+            owner_emails=owner_emails,
+            title=title,
+            message=message,
+            send_email=send_email,
+            send_in_app=send_in_app,
+            urgency=urgency,
+            admin_email=request.user.email,
+        )
+
+        try:
+            AuditLog.objects.create(
+                user=request.user,
+                user_email=request.user.email,
+                action="notification_sent",
+                details=f"Business announcement queued: '{title}' to {len(owner_emails)} recipients",
+                target_model="BusinessInfo",
+                target_id="announcement",
+                ip_address=request.META.get("REMOTE_ADDR"),
+                user_agent=request.META.get("HTTP_USER_AGENT", ""),
+            )
+        except Exception as audit_err:
+            logger.warning(f"Failed to audit business announcement: {audit_err}")
 
         return Response(
             {
@@ -1423,7 +1433,7 @@ class AdminGeographicalDataView(generics.ListAPIView):
     - `bubble`: Aggregates data by city, providing a centroid for mapping.
     """
 
-    permission_classes = [IsAuthenticated, CanAccessClassAdmin]
+    permission_classes = [IsAuthenticated, CanAccessBusinessAdmin]
     serializer_class = GeographicBoundaryDataSerializer
 
     def get_queryset_for_choropleth(self):

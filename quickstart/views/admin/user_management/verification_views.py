@@ -38,7 +38,9 @@ from quickstart.utils.permissions import (
     IsAuthenticated,
     CanProcessVerificationRequests,
     CanViewAllVerificationRequests,
+    CanSubmitBusinessVerification,
 )
+from quickstart.utils.admin_pagination import AdminStandardPagination
 from quickstart.views.admin.metrics_time_windows import get_admin_metrics_window
 
 
@@ -55,6 +57,7 @@ VERIFIED_STATUS = "verified"  # <<<< CONSISTENT STATUS
 class VerificationRequestViewSet(viewsets.ModelViewSet):
     """Viewset for managing verification requests"""
 
+    pagination_class = AdminStandardPagination
     filter_backends = [filters.SearchFilter]
     search_fields = [
         "user__email",
@@ -66,8 +69,8 @@ class VerificationRequestViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in [
             "submit_verification",
-        ]: 
-            return [IsAuthenticated()]
+        ]:
+            return [IsAuthenticated(), CanSubmitBusinessVerification()]
         elif self.action in ["list", "retrieve", "stats"]:  # Admin viewing
             return [IsAuthenticated(), CanViewAllVerificationRequests()]
         elif self.action in [
@@ -113,7 +116,11 @@ class VerificationRequestViewSet(viewsets.ModelViewSet):
             return VerificationProcessSerializer
         return VerificationRequestDetailSerializer
 
-    @action(detail=False, methods=["post"], permission_classes=[IsAuthenticated])
+    @action(
+        detail=False,
+        methods=["post"],
+        permission_classes=[IsAuthenticated, CanSubmitBusinessVerification],
+    )
     def submit_verification(self, request):
         """Endpoint for users to submit verification requests"""
         serializer = VerificationSubmissionSerializer(

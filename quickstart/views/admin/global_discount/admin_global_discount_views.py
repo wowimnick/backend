@@ -7,6 +7,7 @@ from django.db.models.functions import Coalesce
 
 from quickstart.models import GlobalDiscount, AppliedGlobalDiscount
 from quickstart.utils.permissions import IsAuthenticated, CanAccessGlobalDiscountAdmin
+from quickstart.utils.admin_pagination import AdminStandardPagination
 from quickstart.serializers.admin.global_discount_serializers import (
     AdminGlobalDiscountSerializer,
     AdminGlobalDiscountStatsSerializer,
@@ -21,6 +22,7 @@ class AdminGlobalDiscountViewSet(viewsets.ModelViewSet):
     """
 
     permission_classes = [IsAuthenticated, CanAccessGlobalDiscountAdmin]
+    pagination_class = AdminStandardPagination
     serializer_class = AdminGlobalDiscountSerializer
     queryset = GlobalDiscount.objects.all().order_by("-created_at")
     lookup_field = "id"

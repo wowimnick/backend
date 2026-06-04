@@ -156,6 +156,7 @@ from quickstart.views.admin.business_management.business_admin_views import (
     BusinessAdminViewSet,
     ImportGoogleReviewsAdminView,
 )
+from quickstart.views.admin.metrics_monitoring.admin_metrics_views import AdminMetricsView
 from quickstart.views.admin.global_discount.admin_global_discount_views import (
     AdminGlobalDiscountViewSet,
 )
@@ -1135,6 +1136,11 @@ urlpatterns = [
         "admin/geographical-data/",
         AdminGeographicalDataView.as_view(),
         name="admin-geographical-data",
+    ),
+    path(
+        "admin/metrics/",
+        AdminMetricsView.as_view(),
+        name="admin-metrics",
     ),
     path("widget/v1/", include((widget_urlpatterns, "widget"), namespace="widget-v1")),
     path("health-check/", health_check, name="health-check"),

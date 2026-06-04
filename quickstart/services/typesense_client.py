@@ -5,10 +5,37 @@ from __future__ import annotations
 import logging
 
 from django.conf import settings
+from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
+try:
+    from typesense.exceptions import ObjectNotFound, RequestMalformed
+except ImportError:
+    class ObjectNotFound(Exception):
+        """Fallback when typesense is not installed."""
+
+    class RequestMalformed(Exception):
+        """Fallback when typesense is not installed."""
+
 _client = None
+_TYPESENSE_HEALTH_CACHE_TTL = 30
+_TYPESENSE_HEALTH_NEGATIVE_CACHE_TTL = 5
+
+
+def _typesense_health_cache_key() -> str:
+    env = str(getattr(settings, "DJANGO_ENV", "local") or "local")
+    host = getattr(settings, "TYPESENSE_HOST", "localhost")
+    return f"{env}:typesense_health_ok:{host}"
+
+
+def _ping_typesense_health(client) -> bool:
+    """Lightweight health ping; compatible with typesense==0.21.x."""
+    ops = getattr(client, "operations", None)
+    if ops is not None and callable(getattr(ops, "is_healthy", None)):
+        return bool(ops.is_healthy())
+    # Client is configured but health API is unknown — do not block search.
+    return True
 
 
 def get_typesense_client():
@@ -31,11 +58,32 @@ def get_typesense_client():
         {
             "nodes": [{"host": host, "port": port, "protocol": protocol}],
             "api_key": api_key,
-            "connection_timeout_seconds": 15,
+            "connection_timeout_seconds": 4,
+            "num_retries": 2,
+            "retry_interval_seconds": 0.1,
         }
     )
     return _client
 
 
 def typesense_available() -> bool:
-    return get_typesense_client() is not None
+    """True when Typesense is configured and responds to a lightweight health check."""
+    if get_typesense_client() is None:
+        return False
+
+    cache_key = _typesense_health_cache_key()
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return bool(cached)
+
+    ok = False
+    try:
+        client = get_typesense_client()
+        if client is not None:
+            ok = _ping_typesense_health(client)
+    except Exception as e:
+        logger.warning("Typesense health check failed: %s", e)
+
+    ttl = _TYPESENSE_HEALTH_CACHE_TTL if ok else _TYPESENSE_HEALTH_NEGATIVE_CACHE_TTL
+    cache.set(cache_key, ok, ttl)
+    return ok
