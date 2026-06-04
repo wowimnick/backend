@@ -20,6 +20,9 @@ B) Self-hosted on ECS (this repo adds typesense-ecs-deploy.yml for image bumps)
         TYPESENSE_DATA_DIR=/data
         TYPESENSE_API_KEY=<strong secret — prefer AWS Secrets Manager + secretOptions>
         TYPESENSE_ENABLE_CORS=true
+        TYPESENSE_RESET_PEERS_ON_ERROR=true
+          (last-resort auto-recovery when single-node Raft is stuck in ERROR on Fargate)
+          Note: --peering-address must be an IP, not Cloud Map DNS; Fargate IPs change on redeploy.
       For durable index across task replacements: mount Amazon EFS at /data (recommended).
       Without EFS, disk is ephemeral — Django’s bootstrap task will repopulate when empty (slow on large catalogs).
    3) Create ECS service (Fargate, awsvpc) on private subnets; optional AWS Cloud Map for stable DNS
@@ -62,8 +65,28 @@ Ops helpers in deployment/ecs/
 - patch_ecs_prod_django_typesense_secrets.py web|worker — register new task revision with TYPESENSE_* ASM refs and force deploy
 - classeasily-prod-typesense-task-definition.json — baseline task JSON used for initial register-task-definition
 
+Monitoring and self-healing (repo)
+==================================
+- Task definition includes container healthCheck (curl :8108/health) so ECS replaces unhealthy tasks.
+- typesense-ecs-deploy.yml enables deployment circuit breaker with rollback.
+- One-time alarms: python deployment/ecs/setup_typesense_cloudwatch_alarms.py --email admin@example.com
+- Verify prod Sentry on Django tasks: python deployment/ecs/verify_prod_sentry_env.py
+
 Verify from AWS (no curl needed on a laptop): CloudWatch log group /ecs/classeasily-prod-typesense should show "listening on port 8108".
 From a task inside the VPC (ECS Exec, bastion, or one-off Fargate): curl http://typesense.classeasily.local:8108/health
+
+Raft stuck in ERROR ("Node with no leader", "can't reset_peer")
+================================================================
+Common on Fargate when EFS keeps old Raft peer IPs after a task replacement. The task definition
+sets TYPESENSE_RESET_PEERS_ON_ERROR=true on the task definition.
+
+1) Register a new task revision (env vars above) and force-new-deployment on classeasily-prod-typesense-service.
+2) Watch /ecs/classeasily-prod-typesense for "listening on port 8108" and no repeating ERROR lines.
+3) If still broken after one restart with reset-peers enabled:
+   - Stop the service (desired count 0), mount EFS fs-022624328107e5b42 at /data
+   - Remove only the corrupted RocksDB dir: rm -rf /data/db
+     (Typesense restores from /data/state/snapshot; Django reindex if needed)
+   - Start the service again (desired count 1).
 
 Optional before cutover: run manage.py reindex_classes from a container that can reach Typesense to pre-warm.
 Push backend Redis namespacing + any Django fixes to prod so Valkey keys for Typesense locks/cache stay env-scoped.

@@ -74,4 +74,5 @@ jobs:
             --cluster ${{ github.event.inputs.cluster }} \
             --service ${{ github.event.inputs.service }} \
             --task-definition "${{ steps.reg.outputs.arn }}" \
+            --deployment-configuration "deploymentCircuitBreaker={enable=true,rollback=true},maximumPercent=200,minimumHealthyPercent=100" \
             --force-new-deployment

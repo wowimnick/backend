@@ -31,6 +31,7 @@ from django.db.models.functions import (
     Coalesce,
     TruncHour,
 )
+from io import BytesIO
 from django.utils import timezone
 from datetime import datetime, timedelta, date as datetime_date
 from collections import defaultdict
@@ -60,6 +61,14 @@ from quickstart.utils.widget_booking_source import (
 logger = logging.getLogger(__name__)
 
 _WIDGET_SOURCE_LIST = list(WIDGET_BOOKING_SOURCES)
+HST_RATE = Decimal("0.13")
+
+TAX_EXPORT_DISCLAIMER = (
+    "Estimates for your records, grouped by transaction date. "
+    "Not tax advice — confirm with your accountant. "
+    "Bank deposit dates may differ slightly from transaction dates; "
+    "see Payouts for deposit reconciliation."
+)
 
 
 class RevenueAnalyticsView(views.APIView):
@@ -237,6 +246,196 @@ class RevenueAnalyticsView(views.APIView):
         if pay.amount and pay.amount > 0 and booking_amount_paid:
             return (gc * (booking_amount_paid / pay.amount)).quantize(Decimal("0.01"))
         return gc.quantize(Decimal("0.01"))
+
+    def _booking_tax_breakdown(self, booking, business, hst_rate=None):
+        """Per-booking tax figures (aligned with detailed export row logic)."""
+        rate = hst_rate if hst_rate is not None else HST_RATE
+        total_paid = booking.amount_paid or Decimal("0.00")
+        net_payout = booking.allocated_net_payout or Decimal("0.00")
+        stripe_fee = Decimal("0.00")
+
+        pay = None
+        for p in booking.payments.all():
+            if p.status == "succeeded":
+                pay = p
+                break
+
+        if pay and pay.amount and pay.amount > 0:
+            share = (total_paid / pay.amount).quantize(Decimal("0.0001"))
+            tax_collected = (pay.tax_amount * share).quantize(Decimal("0.01"))
+            platform_fee_pre_tax = (pay.platform_fee_amount * share).quantize(
+                Decimal("0.01")
+            )
+            hst_on_fee = (pay.platform_fee_tax * share).quantize(Decimal("0.01"))
+            stripe_fee = (pay.stripe_processing_fee * share).quantize(Decimal("0.01"))
+        else:
+            subtotal_est = total_paid / (Decimal("1.0") + rate)
+            tax_collected = (total_paid - subtotal_est).quantize(Decimal("0.01"))
+            fee_rate = self._platform_fee_rate_for_booking(booking, business)
+            platform_fee_pre_tax = (subtotal_est * fee_rate).quantize(Decimal("0.01"))
+            hst_on_fee = (platform_fee_pre_tax * rate).quantize(Decimal("0.01"))
+
+        subtotal = (total_paid - tax_collected).quantize(Decimal("0.01"))
+
+        if net_payout == Decimal("0.00") and total_paid > 0:
+            net_payout = (
+                subtotal - platform_fee_pre_tax + (tax_collected - hst_on_fee)
+            ).quantize(Decimal("0.01"))
+
+        return {
+            "gross": total_paid,
+            "subtotal": subtotal,
+            "tax_collected": tax_collected,
+            "platform_fee_pre_tax": platform_fee_pre_tax,
+            "hst_on_commission": hst_on_fee,
+            "stripe_fees": stripe_fee,
+            "net_payout": net_payout,
+            "payment": pay,
+        }
+
+    def _membership_tax_breakdown(self, mp, hst_rate=None):
+        """Membership payment tax estimates (no stored tax fields on model)."""
+        rate = hst_rate if hst_rate is not None else HST_RATE
+        gross = mp.amount or Decimal("0.00")
+        commission = mp.platform_fee_amount or Decimal("0.00")
+        hst_on_commission = (commission * rate).quantize(Decimal("0.01"))
+        net_payout = mp.net_payout_amount or Decimal("0.00")
+        subtotal = (gross / (Decimal("1.0") + rate)).quantize(Decimal("0.01"))
+        hst_collected = (gross - subtotal).quantize(Decimal("0.01"))
+        return {
+            "gross": gross,
+            "subtotal": subtotal,
+            "tax_collected": hst_collected,
+            "platform_fee_pre_tax": commission,
+            "hst_on_commission": hst_on_commission,
+            "stripe_fees": Decimal("0.00"),
+            "net_payout": net_payout,
+        }
+
+    def _month_key_from_dt(self, dt, business_pytz):
+        local = dt.astimezone(business_pytz)
+        return f"{local.year}-{local.month:02d}"
+
+    def get_monthly_tax_breakdown(
+        self, business, start_date, end_date, class_id=None, source="all"
+    ):
+        """Monthly rollup of sales, HST collected, commission, and HST on commission (ITC)."""
+        business_pytz = pytz.timezone(business.business_timezone)
+        months = defaultdict(
+            lambda: {
+                "gross": Decimal("0.00"),
+                "subtotal": Decimal("0.00"),
+                "hst_collected": Decimal("0.00"),
+                "commission": Decimal("0.00"),
+                "hst_on_commission": Decimal("0.00"),
+                "stripe_fees": Decimal("0.00"),
+                "net_payout": Decimal("0.00"),
+            }
+        )
+
+        if source != "membership":
+            bookings_qs = (
+                self.get_valid_bookings_queryset(
+                    business, start_date, end_date, class_id, source
+                )
+                .prefetch_related("payments")
+            )
+            for booking in bookings_qs:
+                bd = self._booking_tax_breakdown(booking, business)
+                mk = self._month_key_from_dt(booking.booking_date, business_pytz)
+                months[mk]["gross"] += bd["gross"]
+                months[mk]["subtotal"] += bd["subtotal"]
+                months[mk]["hst_collected"] += bd["tax_collected"]
+                months[mk]["commission"] += bd["platform_fee_pre_tax"]
+                months[mk]["hst_on_commission"] += bd["hst_on_commission"]
+                months[mk]["stripe_fees"] += bd["stripe_fees"]
+                months[mk]["net_payout"] += bd["net_payout"]
+
+        if source in ("all", "membership"):
+            membership_rows = MembershipPayment.objects.filter(
+                membership__product__business=business,
+                status="paid",
+                created_at__range=[start_date, end_date],
+            )
+            for mp in membership_rows:
+                bd = self._membership_tax_breakdown(mp)
+                mk = self._month_key_from_dt(mp.created_at, business_pytz)
+                months[mk]["gross"] += bd["gross"]
+                months[mk]["subtotal"] += bd["subtotal"]
+                months[mk]["hst_collected"] += bd["tax_collected"]
+                months[mk]["commission"] += bd["platform_fee_pre_tax"]
+                months[mk]["hst_on_commission"] += bd["hst_on_commission"]
+                months[mk]["stripe_fees"] += bd["stripe_fees"]
+                months[mk]["net_payout"] += bd["net_payout"]
+
+        return [
+            {
+                "month": month,
+                "gross": round(float(months[month]["gross"]), 2),
+                "subtotal": round(float(months[month]["subtotal"]), 2),
+                "hst_collected": round(float(months[month]["hst_collected"]), 2),
+                "commission": round(float(months[month]["commission"]), 2),
+                "hst_on_commission": round(
+                    float(months[month]["hst_on_commission"]), 2
+                ),
+                "stripe_fees": round(float(months[month]["stripe_fees"]), 2),
+                "net_payout": round(float(months[month]["net_payout"]), 2),
+            }
+            for month in sorted(months.keys())
+        ]
+
+    def _parse_export_query_params(self, request, business):
+        class_id_filter = request.query_params.get("class_id")
+        if class_id_filter and not class_id_filter.isdigit():
+            class_id_filter = None
+        else:
+            class_id_filter = int(class_id_filter) if class_id_filter else None
+
+        source_filter = request.query_params.get("source", "all")
+        if source_filter not in ("widget", "marketplace", "all", "membership"):
+            source_filter = "all"
+        if source_filter == "widget" and not business_has_growth_or_advanced_widget_plan(
+            business
+        ):
+            source_filter = "all"
+
+        report_type = request.query_params.get("report_type", "full")
+        if report_type not in ("tax_summary", "detailed", "full"):
+            report_type = "full"
+
+        export_format = request.query_params.get("format", "csv")
+        if export_format not in ("csv", "xlsx"):
+            export_format = "csv"
+
+        return class_id_filter, source_filter, report_type, export_format
+
+    def _monthly_tax_csv_rows(self, monthly_breakdown):
+        rows = [
+            ["Monthly HST Summary (for tax filing)"],
+            [
+                "Month",
+                "Sales (Pre-Tax)",
+                "HST Collected from Students",
+                "Platform Commission (Pre-Tax)",
+                "HST on Commission (ITC)",
+                "Card Processing",
+                "Net Payout",
+            ],
+        ]
+        for entry in monthly_breakdown:
+            rows.append(
+                [
+                    entry["month"],
+                    f"${entry['subtotal']:.2f}",
+                    f"${entry['hst_collected']:.2f}",
+                    f"${entry['commission']:.2f}",
+                    f"${entry['hst_on_commission']:.2f}",
+                    f"${entry['stripe_fees']:.2f}",
+                    f"${entry['net_payout']:.2f}",
+                ]
+            )
+        rows.append([])
+        return rows
 
     def _get_membership_payment_aggregates(self, business, start_date, end_date):
         """Aggregate MembershipPayment for the business in the date range (status=paid)."""
@@ -693,6 +892,9 @@ class RevenueAnalyticsView(views.APIView):
             revenue_by_booking_type = self.get_revenue_by_booking_type(
                 business, start_date_utc, end_date_utc, class_id_filter, source_filter
             )
+            monthly_tax_breakdown = self.get_monthly_tax_breakdown(
+                business, start_date_utc, end_date_utc, class_id_filter, source_filter
+            )
 
             if source_filter == "all" and not business_has_growth_or_advanced_widget_plan(
                 business
@@ -710,6 +912,7 @@ class RevenueAnalyticsView(views.APIView):
                 "revenue_trends": trends,
                 "class_revenue": class_revenue_breakdown,
                 "revenue_by_booking_type": revenue_by_booking_type,
+                "monthly_tax_breakdown": monthly_tax_breakdown,
             }
             return Response(data, status=status.HTTP_200_OK)
         except ValidationError as e:
@@ -726,7 +929,327 @@ class RevenueAnalyticsView(views.APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-    def post(self, request):  # Export to CSV
+    def _export_header_rows(self, business, start_date_utc, end_date_utc):
+        return [
+            ["Revenue Report"],
+            ["Business:", business.businessName],
+            [
+                "Period:",
+                f"{start_date_utc.date().strftime('%Y-%m-%d')} to {end_date_utc.date().strftime('%Y-%m-%d')}",
+            ],
+            [],
+            [
+                "Note:",
+                "All amounts reflect actual amounts after discounts and gift cards. "
+                "Net Payout is the amount allocated to the business.",
+            ],
+            ["Tax note:", TAX_EXPORT_DISCLAIMER],
+            [],
+        ]
+
+    def _export_metrics_rows(
+        self, business, start_date_utc, end_date_utc, class_id_filter, source_filter
+    ):
+        metrics = self.calculate_metrics(
+            business, start_date_utc, end_date_utc, class_id_filter, source_filter
+        )
+        total_amount_collected = Decimal(str(metrics["total_gross_revenue"]))
+        platform_fees_actual = Decimal(str(metrics["estimated_platform_fees"]))
+        net_revenue_actual = Decimal(str(metrics["estimated_net_revenue"]))
+        return [
+            ["Key Metrics Summary", "Value"],
+            [
+                "Total Amount Collected from Customers (incl. tax)",
+                f"${total_amount_collected:.2f}",
+            ],
+            ["Platform Fees (actual take)", f"${platform_fees_actual:.2f}"],
+            ["Net Payout to Business (actual)", f"${net_revenue_actual:.2f}"],
+            [],
+        ]
+
+    def _export_daily_trends_rows(
+        self, business, start_date_utc, end_date_utc, class_id_filter, source_filter
+    ):
+        if source_filter == "membership":
+            return []
+        trends = self.get_revenue_trends(
+            business, start_date_utc, end_date_utc, class_id_filter, source_filter
+        )
+        rows = [
+            ["Daily Revenue Detail (Local Business Time, incl. Tax)"],
+            ["Date", "Gross Revenue", "Platform Fees", "Net Revenue"],
+        ]
+        for entry in trends:
+            rows.append(
+                [
+                    entry["date"],
+                    f"${entry['gross_revenue']:.2f}",
+                    f"${entry['platform_fees']:.2f}",
+                    f"${entry['net_revenue']:.2f}",
+                ]
+            )
+        rows.append([])
+        return rows
+
+    def _export_class_revenue_rows(
+        self, business, start_date_utc, end_date_utc, class_id_filter, source_filter
+    ):
+        class_revenue = self.get_class_revenue(
+            business, start_date_utc, end_date_utc, class_id_filter, source_filter
+        )
+        if not class_revenue:
+            return []
+        rows = [
+            ["Revenue by Class (incl. Tax)"],
+            ["Class Name", "Gross Revenue", "Platform Fees", "Net Revenue"],
+        ]
+        for entry in class_revenue:
+            rows.append(
+                [
+                    entry["name"],
+                    f"${entry['gross_revenue']:.2f}",
+                    f"${entry['platform_fees']:.2f}",
+                    f"${entry['net_revenue']:.2f}",
+                ]
+            )
+        rows.append([])
+        return rows
+
+    def _export_detailed_transaction_rows(
+        self, business, start_date_utc, end_date_utc, class_id_filter, source_filter
+    ):
+        if source_filter == "membership":
+            return []
+        rows = [
+            ["Detailed Transaction Report for Accounting"],
+            [
+                "Booking Ref",
+                "Booking Date (UTC)",
+                "Class Date (Local)",
+                "Class Name",
+                "Booker Name",
+                "Booker Email",
+                "Participants",
+                "Subtotal (Pre-Tax)",
+                "Tax Collected from Student",
+                "Total Amount Paid",
+                "Platform Fee (Pre-tax)",
+                "Tax on Platform Fee (ITC for Business)",
+                "Net Payout to Business",
+                "Business Discount (codes)",
+                "Business Discount ($)",
+                "Global Discount (names)",
+                "Global Discount ($)",
+                "Gift Card Applied ($)",
+                "Payment Status",
+                "Booking Status",
+            ],
+        ]
+        detailed_bookings_qs = (
+            self.get_valid_bookings_queryset(
+                business, start_date_utc, end_date_utc, class_id_filter, source_filter
+            )
+            .select_related(
+                "user", "contact", "schedule_instance__schedule__option__classId"
+            )
+            .prefetch_related(
+                "payments",
+                "applied_global_discounts__global_discount",
+                "discounts",
+                "applieddiscount_set",
+            )
+            .order_by("booking_date")
+        )
+        for booking in detailed_bookings_qs:
+            booker_name, booker_email = ("N/A", "N/A")
+            if booking.user:
+                booker_name = (
+                    f"{booking.user.first_name} {booking.user.last_name}".strip()
+                )
+                booker_email = booking.user.email
+            elif booking.contact:
+                booker_name = (
+                    f"{booking.contact.first_name} {booking.contact.last_name}".strip()
+                )
+                booker_email = booking.contact.email
+
+            bd = self._booking_tax_breakdown(booking, business)
+            pay = bd["payment"]
+            subtotal = bd["subtotal"]
+            tax_collected = bd["tax_collected"]
+            platform_fee_pre_tax = bd["platform_fee_pre_tax"]
+            hst_on_fee = bd["hst_on_commission"]
+            net_payout = bd["net_payout"]
+            total_paid = bd["gross"]
+
+            business_discount_names = "—"
+            business_discount_amt = Decimal("0.00")
+            if booking.discounts.exists():
+                names = [d.name or (d.code or "—") for d in booking.discounts.all()]
+                business_discount_names = ", ".join(names) if names else "—"
+            for ad in booking.applieddiscount_set.all():
+                business_discount_amt += ad.amount_saved
+
+            global_discount_names = "—"
+            global_discount_amt = Decimal("0.00")
+            if booking.applied_global_discounts.exists():
+                names = [
+                    a.global_discount.name
+                    for a in booking.applied_global_discounts.all()
+                ]
+                global_discount_names = ", ".join(names) if names else "—"
+                for a in booking.applied_global_discounts.all():
+                    global_discount_amt += a.amount_saved
+
+            gift_card_amt = self._gift_card_amount_from_payment(pay, total_paid)
+
+            rows.append(
+                [
+                    booking.user_facing_reference or f"ID-{booking.id}",
+                    booking.booking_date.strftime("%Y-%m-%d %H:%M"),
+                    booking.schedule_instance.date.strftime("%Y-%m-%d"),
+                    booking.schedule_instance.schedule.option.classId.title,
+                    booker_name,
+                    booker_email,
+                    booking.participants,
+                    f"${subtotal:.2f}",
+                    f"${tax_collected:.2f}",
+                    f"${total_paid:.2f}",
+                    f"${platform_fee_pre_tax:.2f}",
+                    f"${hst_on_fee:.2f}",
+                    f"${net_payout:.2f}",
+                    business_discount_names,
+                    f"${business_discount_amt:.2f}",
+                    global_discount_names,
+                    f"${global_discount_amt:.2f}",
+                    f"${gift_card_amt:.2f}",
+                    booking.get_payment_status_display(),
+                    booking.get_status_display(),
+                ]
+            )
+        rows.append([])
+        return rows
+
+    def _export_membership_rows(
+        self, business, start_date_utc, end_date_utc, source_filter
+    ):
+        if source_filter not in ("all", "membership"):
+            return []
+        rows = [
+            ["Membership payment detail"],
+            [
+                "Payment ID",
+                "Paid At (UTC)",
+                "Amount (gross)",
+                "Platform Fee (pre-tax)",
+                "HST on Commission (ITC)",
+                "Net Payout to Business",
+                "Status",
+            ],
+        ]
+        membership_rows = (
+            MembershipPayment.objects.filter(
+                membership__product__business=business,
+                status="paid",
+                created_at__range=[start_date_utc, end_date_utc],
+            )
+            .select_related("membership", "membership__product")
+            .order_by("created_at")
+        )
+        for mp in membership_rows:
+            bd = self._membership_tax_breakdown(mp)
+            rows.append(
+                [
+                    str(mp.id),
+                    mp.created_at.strftime("%Y-%m-%d %H:%M"),
+                    f"${mp.amount:.2f}",
+                    f"${mp.platform_fee_amount:.2f}",
+                    f"${bd['hst_on_commission']:.2f}",
+                    f"${mp.net_payout_amount:.2f}",
+                    mp.get_status_display(),
+                ]
+            )
+        rows.append([])
+        return rows
+
+    def _collect_export_sections(
+        self,
+        business,
+        start_date_utc,
+        end_date_utc,
+        class_id_filter,
+        source_filter,
+        report_type,
+    ):
+        monthly_breakdown = self.get_monthly_tax_breakdown(
+            business, start_date_utc, end_date_utc, class_id_filter, source_filter
+        )
+        sections = {}
+        sections["Summary"] = (
+            self._export_header_rows(business, start_date_utc, end_date_utc)
+            + self._export_metrics_rows(
+                business, start_date_utc, end_date_utc, class_id_filter, source_filter
+            )
+        )
+        if report_type in ("tax_summary", "full"):
+            sections["Monthly HST"] = self._monthly_tax_csv_rows(monthly_breakdown)
+        if report_type in ("detailed", "full"):
+            sections["Daily Trends"] = self._export_daily_trends_rows(
+                business, start_date_utc, end_date_utc, class_id_filter, source_filter
+            )
+            sections["By Class"] = self._export_class_revenue_rows(
+                business, start_date_utc, end_date_utc, class_id_filter, source_filter
+            )
+            sections["Transactions"] = self._export_detailed_transaction_rows(
+                business, start_date_utc, end_date_utc, class_id_filter, source_filter
+            )
+            sections["Memberships"] = self._export_membership_rows(
+                business, start_date_utc, end_date_utc, source_filter
+            )
+        return sections
+
+    def _http_csv_from_sections(self, sections, filename):
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        writer = csv.writer(response)
+        for sheet_name, rows in sections.items():
+            if sheet_name != "Summary" and rows:
+                writer.writerow([f"--- {sheet_name} ---"])
+            for row in rows:
+                writer.writerow(row)
+        return response
+
+    def _http_xlsx_from_sections(self, sections, filename):
+        try:
+            from openpyxl import Workbook
+        except ImportError as exc:
+            raise ValidationError(
+                "Excel export is not available on this server. Please use CSV."
+            ) from exc
+
+        wb = Workbook()
+        wb.remove(wb.active)
+        for sheet_name, rows in sections.items():
+            if not rows:
+                continue
+            title = sheet_name[:31]
+            ws = wb.create_sheet(title=title)
+            for row in rows:
+                ws.append(row)
+
+        buffer = BytesIO()
+        wb.save(buffer)
+        buffer.seek(0)
+        response = HttpResponse(
+            buffer.getvalue(),
+            content_type=(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ),
+        )
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
+
+    def post(self, request):  # Export revenue report (CSV or XLSX)
         user = request.user
         business = self.get_business(user)
         if not business:
@@ -736,261 +1259,37 @@ class RevenueAnalyticsView(views.APIView):
 
         try:
             start_date_utc, end_date_utc = self.get_date_range(request)
-            class_id_filter = request.query_params.get("class_id")
-            if class_id_filter and not class_id_filter.isdigit():
-                class_id_filter = None
+            (
+                class_id_filter,
+                source_filter,
+                report_type,
+                export_format,
+            ) = self._parse_export_query_params(request, business)
+
+            safe_name = business.businessName.replace(" ", "_")
+            date_suffix = (
+                f"{start_date_utc.strftime('%Y%m%d')}_{end_date_utc.strftime('%Y%m%d')}"
+            )
+            ext = "xlsx" if export_format == "xlsx" else "csv"
+            filename = f"{safe_name}_revenue_report_{date_suffix}.{ext}"
+
+            sections = self._collect_export_sections(
+                business,
+                start_date_utc,
+                end_date_utc,
+                class_id_filter,
+                source_filter,
+                report_type,
+            )
+
+            if export_format == "xlsx":
+                response = self._http_xlsx_from_sections(sections, filename)
             else:
-                class_id_filter = int(class_id_filter) if class_id_filter else None
-
-            response = HttpResponse(content_type="text/csv")
-            filename = f"{business.businessName.replace(' ', '_')}_revenue_report_{start_date_utc.strftime('%Y%m%d')}_{end_date_utc.strftime('%Y%m%d')}.csv"
-            response["Content-Disposition"] = f'attachment; filename="{filename}"'
-            writer = csv.writer(response)
-
-            writer.writerow(["Revenue Report"])
-            writer.writerow(["Business:", business.businessName])
-            writer.writerow(
-                [
-                    "Period:",
-                    f"{start_date_utc.date().strftime('%Y-%m-%d')} to {end_date_utc.date().strftime('%Y-%m-%d')}",
-                ]
-            )
-            writer.writerow([])
-            writer.writerow(
-                [
-                    "Note:",
-                    "All amounts reflect actual amounts after any business discounts, global discounts, and gift cards applied at checkout. Net Payout is the amount allocated to the business.",
-                ]
-            )
-
-            # --- 1. Metrics Summary (uses actual payout and platform take from bookings) ---
-            metrics = self.calculate_metrics(
-                business, start_date_utc, end_date_utc, class_id_filter
-            )
-            HST_RATE = Decimal("0.13")
-            total_amount_collected = Decimal(str(metrics["total_gross_revenue"]))
-            platform_fees_actual = Decimal(str(metrics["estimated_platform_fees"]))
-            net_revenue_actual = Decimal(str(metrics["estimated_net_revenue"]))
-
-            writer.writerow(["Key Metrics Summary", "Value"])
-            writer.writerow(
-                [
-                    "Total Amount Collected from Customers (incl. tax)",
-                    f"${total_amount_collected:.2f}",
-                ]
-            )
-            writer.writerow(
-                ["Platform Fees (actual take)", f"${platform_fees_actual:.2f}"]
-            )
-            writer.writerow(
-                ["Net Payout to Business (actual)", f"${net_revenue_actual:.2f}"]
-            )
-            writer.writerow([])
-            
-            # --- 2. Daily Trends ---
-            trends = self.get_revenue_trends(
-                business, start_date_utc, end_date_utc, class_id_filter
-            )
-            writer.writerow(["Daily Revenue Detail (Local Business Time, incl. Tax)"])
-            writer.writerow(["Date", "Gross Revenue", "Platform Fees", "Net Revenue"])
-            for entry in trends:
-                writer.writerow(
-                    [
-                        entry["date"],
-                        f"${entry['gross_revenue']:.2f}",
-                        f"${entry['platform_fees']:.2f}",
-                        f"${entry['net_revenue']:.2f}",
-                    ]
-                )
-            writer.writerow([])
-
-            # --- 3. Class Revenue ---
-            class_revenue = self.get_class_revenue(
-                business, start_date_utc, end_date_utc, class_id_filter
-            )
-            writer.writerow(["Revenue by Class (incl. Tax)"])
-            writer.writerow(
-                ["Class Name", "Gross Revenue", "Platform Fees", "Net Revenue"]
-            )
-            for entry in class_revenue:
-                writer.writerow(
-                    [
-                        entry["name"],
-                        f"${entry['gross_revenue']:.2f}",
-                        f"${entry['platform_fees']:.2f}",
-                        f"${entry['net_revenue']:.2f}",
-                    ]
-                )
-            writer.writerow([])
-
-            # --- 4. Detailed Transaction Report ---
-            writer.writerow(["Detailed Transaction Report for Accounting"])
-            writer.writerow(
-                [
-                    "Booking Ref",
-                    "Booking Date (UTC)",
-                    "Class Date (Local)",
-                    "Class Name",
-                    "Booker Name",
-                    "Booker Email",
-                    "Participants",
-                    "Subtotal (Pre-Tax)",
-                    "Tax Collected from Student",
-                    "Total Amount Paid",
-                    "Platform Fee (Pre-tax)",
-                    "Tax on Platform Fee (ITC for Business)",
-                    "Net Payout to Business",
-                    "Business Discount (codes)",
-                    "Business Discount ($)",
-                    "Global Discount (names)",
-                    "Global Discount ($)",
-                    "Gift Card Applied ($)",
-                    "Payment Status",
-                    "Booking Status",
-                ]
-            )
-
-            detailed_bookings_qs = (
-                self.get_valid_bookings_queryset(
-                    business, start_date_utc, end_date_utc, class_id_filter
-                )
-                .select_related(
-                    "user", "contact", "schedule_instance__schedule__option__classId"
-                )
-                .prefetch_related(
-                    "payments",
-                    "applied_global_discounts__global_discount",
-                    "discounts",
-                    "applieddiscount_set",
-                )
-                .order_by("booking_date")
-            )
-
-            for booking in detailed_bookings_qs:
-                # Retrieve booker details
-                booker_name, booker_email = ("N/A", "N/A")
-                if booking.user:
-                    booker_name = (
-                        f"{booking.user.first_name} {booking.user.last_name}".strip()
-                    )
-                    booker_email = booking.user.email
-                elif booking.contact:
-                    booker_name = f"{booking.contact.first_name} {booking.contact.last_name}".strip()
-                    booker_email = booking.contact.email
-
-                total_paid = booking.amount_paid
-                net_payout = booking.allocated_net_payout
-
-                pay = None
-                for p in booking.payments.all():
-                    if p.status == "succeeded":
-                        pay = p
-                        break
-
-                if pay and pay.amount and pay.amount > 0:
-                    share = (total_paid / pay.amount).quantize(Decimal("0.0001"))
-                    tax_collected = (pay.tax_amount * share).quantize(Decimal("0.01"))
-                    platform_fee_pre_tax = (pay.platform_fee_amount * share).quantize(
-                        Decimal("0.01")
-                    )
-                    hst_on_fee = (pay.platform_fee_tax * share).quantize(Decimal("0.01"))
-                else:
-                    subtotal_est = total_paid / (Decimal("1.0") + HST_RATE)
-                    tax_collected = (total_paid - subtotal_est).quantize(Decimal("0.01"))
-                    fee_rate = self._platform_fee_rate_for_booking(booking, business)
-                    platform_fee_pre_tax = (subtotal_est * fee_rate).quantize(
-                        Decimal("0.01")
-                    )
-                    hst_on_fee = (platform_fee_pre_tax * HST_RATE).quantize(Decimal("0.01"))
-
-                subtotal = (total_paid - tax_collected).quantize(Decimal("0.01"))
-
-                if net_payout == Decimal("0.00") and total_paid > 0:
-                    net_payout = (
-                        subtotal - platform_fee_pre_tax + (tax_collected - hst_on_fee)
-                    ).quantize(Decimal("0.01"))
-
-                business_discount_names = "—"
-                business_discount_amt = Decimal("0.00")
-                if booking.discounts.exists():
-                    names = [d.name or (d.code or "—") for d in booking.discounts.all()]
-                    business_discount_names = ", ".join(names) if names else "—"
-                for ad in booking.applieddiscount_set.all():
-                    business_discount_amt += ad.amount_saved
-
-                global_discount_names = "—"
-                global_discount_amt = Decimal("0.00")
-                if booking.applied_global_discounts.exists():
-                    names = [
-                        a.global_discount.name
-                        for a in booking.applied_global_discounts.all()
-                    ]
-                    global_discount_names = ", ".join(names) if names else "—"
-                    for a in booking.applied_global_discounts.all():
-                        global_discount_amt += a.amount_saved
-
-                gift_card_amt = self._gift_card_amount_from_payment(pay, total_paid)
-
-                writer.writerow(
-                    [
-                        booking.user_facing_reference or f"ID-{booking.id}",
-                        booking.booking_date.strftime("%Y-%m-%d %H:%M"),
-                        booking.schedule_instance.date.strftime("%Y-%m-%d"),
-                        booking.schedule_instance.schedule.option.classId.title,
-                        booker_name,
-                        booker_email,
-                        booking.participants,
-                        f"${subtotal:.2f}",
-                        f"${tax_collected:.2f}",
-                        f"${total_paid:.2f}",
-                        f"${platform_fee_pre_tax:.2f}",
-                        f"${hst_on_fee:.2f}",
-                        f"${net_payout:.2f}",
-                        business_discount_names,
-                        f"${business_discount_amt:.2f}",
-                        global_discount_names,
-                        f"${global_discount_amt:.2f}",
-                        f"${gift_card_amt:.2f}",
-                        booking.get_payment_status_display(),
-                        booking.get_status_display(),
-                    ]
-                )
-
-            writer.writerow([])
-            writer.writerow(["Membership payment detail"])
-            writer.writerow(
-                [
-                    "Payment ID",
-                    "Paid At (UTC)",
-                    "Amount (gross)",
-                    "Platform Fee (pre-tax)",
-                    "Net Payout to Business",
-                    "Status",
-                ]
-            )
-            membership_rows = (
-                MembershipPayment.objects.filter(
-                    membership__product__business=business,
-                    status="paid",
-                    created_at__range=[start_date_utc, end_date_utc],
-                )
-                .select_related("membership", "membership__product")
-                .order_by("created_at")
-            )
-            for mp in membership_rows:
-                writer.writerow(
-                    [
-                        str(mp.id),
-                        mp.created_at.strftime("%Y-%m-%d %H:%M"),
-                        f"${mp.amount:.2f}",
-                        f"${mp.platform_fee_amount:.2f}",
-                        f"${mp.net_payout_amount:.2f}",
-                        mp.get_status_display(),
-                    ]
-                )
+                response = self._http_csv_from_sections(sections, filename)
 
             logger.info(
-                f"Revenue report exported for Business '{business.businessName}' by {user.email}"
+                f"Revenue report exported ({report_type}/{export_format}) for "
+                f"Business '{business.businessName}' by {user.email}"
             )
             return response
         except ValidationError as e:

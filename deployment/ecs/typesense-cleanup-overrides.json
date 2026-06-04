@@ -1,0 +1,14 @@
+{
+  "containerOverrides": [
+    {
+      "name": "typesense",
+      "image": "public.ecr.aws/docker/library/busybox:1.36",
+      "command": [
+        "sh",
+        "-c",
+        "echo Cleaning stale EFS locks...; rm -fv /data/db/LOCK /data/meta/LOCK; echo Done"
+      ],
+      "essential": true
+    }
+  ]
+}
