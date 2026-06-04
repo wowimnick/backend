@@ -1,0 +1,46 @@
+{
+  "family": "typesense-efs-cleanup-once",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::459929160817:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::459929160817:role/classeasily-prod-typesense-task-role",
+  "volumes": [
+    {
+      "name": "typesense-data",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "fs-022624328107e5b42",
+        "transitEncryption": "ENABLED",
+        "authorizationConfig": { "iam": "ENABLED" }
+      }
+    }
+  ],
+  "containerDefinitions": [
+    {
+      "name": "cleanup",
+      "image": "public.ecr.aws/docker/library/busybox:1.36",
+      "essential": true,
+      "command": [
+        "sh",
+        "-c",
+        "echo Cleaning stale EFS locks...; rm -fv /data/db/LOCK /data/meta/LOCK; echo Done"
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "typesense-data",
+          "containerPath": "/data",
+          "readOnly": false
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/classeasily-prod-typesense",
+          "awslogs-region": "us-east-2",
+          "awslogs-stream-prefix": "cleanup"
+        }
+      }
+    }
+  ]
+}

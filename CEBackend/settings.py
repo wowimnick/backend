@@ -122,27 +122,33 @@ def traces_sampler(sampling_context):
     path = sampling_context.get("wsgi_environ", {}).get("PATH_INFO", "")
     if path == "/" or path == "/health-check/":
         return 0.0
-    return 1.0
+    return 0.15
 
+
+SENTRY_RELEASE = (
+    os.environ.get("BUILD_ID")
+    or os.environ.get("GIT_SHA")
+    or os.environ.get("IMAGE_TAG")
+)
 
 if IS_DEPLOYED_ENV and os.environ.get("SENTRY_DSN"):
-    sentry_sdk.init(
-        dsn=os.environ.get("SENTRY_DSN"),
-        traces_sampler=traces_sampler,
-        integrations=[
+    sentry_init_kwargs = {
+        "dsn": os.environ.get("SENTRY_DSN"),
+        "traces_sampler": traces_sampler,
+        "integrations": [
             DjangoIntegration(),
             CeleryIntegration(),
         ],
-        ignore_errors=[
+        "ignore_errors": [
             TemplateDoesNotExist,  # Ignore template errors
             "django.security.DisallowedHost",  # Ignore bots hitting with wrong IP/Host
         ],
-        # Set to 1.0 to capture 100% of transactions for performance monitoring.
-        # In high-traffic production, you might lower this to 0.1 or 0.2
-        traces_sample_rate=1.0,
-        send_default_pii=True,
-        environment=os.environ.get("DJANGO_ENV"),
-    )
+        "send_default_pii": True,
+        "environment": os.environ.get("DJANGO_ENV"),
+    }
+    if SENTRY_RELEASE:
+        sentry_init_kwargs["release"] = SENTRY_RELEASE
+    sentry_sdk.init(**sentry_init_kwargs)
 # --- API & Service Keys ---
 RESEND_API_KEY = os.environ["RESEND_API_KEY"]
 # HMAC signing secret for POST /api/webhooks/resend/ (Resend dashboard → Webhooks).

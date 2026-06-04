@@ -24,7 +24,8 @@
       "portMappings": [{ "containerPort": 8108, "protocol": "tcp" }],
       "environment": [
         { "name": "TYPESENSE_DATA_DIR", "value": "/data" },
-        { "name": "TYPESENSE_ENABLE_CORS", "value": "true" }
+        { "name": "TYPESENSE_ENABLE_CORS", "value": "true" },
+        { "name": "TYPESENSE_RESET_PEERS_ON_ERROR", "value": "true" }
       ],
       "secrets": [
         {
@@ -39,6 +40,16 @@
           "readOnly": false
         }
       ],
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "wget -q -O- http://127.0.0.1:8108/health | grep -q ok || exit 1"
+        ],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 60
+      },
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {

@@ -93,9 +93,12 @@ jobs:
       - name: 5. Fill in new WORKER Task Definition
         id: task-def-worker
         run: |
-          jq --arg IMAGE_URI "${{ steps.build-image.outputs.image }}" '
-          .containerDefinitions[0].image = $IMAGE_URI | 
-          del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)
+          BUILD_ID="${{ github.sha }}"
+          ENV_ENTRY=$(jq -nc --arg v "$BUILD_ID" '[{name: "BUILD_ID", value: $v}]')
+          jq --arg IMAGE_URI "${{ steps.build-image.outputs.image }}" --argjson newenv "$ENV_ENTRY" '
+            .containerDefinitions[0].image = $IMAGE_URI |
+            .containerDefinitions[0].environment = ((.containerDefinitions[0].environment // []) | map(select(.name != "BUILD_ID")) + $newenv) |
+            del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)
           ' task-definition-worker.json > new-task-definition-worker.json
           echo "task_definition_path=new-task-definition-worker.json" >> $GITHUB_OUTPUT
 

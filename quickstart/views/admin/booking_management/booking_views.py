@@ -507,17 +507,26 @@ class AdminBookingViewSet(viewsets.ModelViewSet):
                     "Payment Intent ID",
                 ]
             )
-            for booking in queryset.iterator():
+            for booking in queryset.iterator(chunk_size=2000):
                 payment_id = (
                     booking.payments.first().stripe_payment_intent_id
                     if booking.payments.exists()
                     else ""
                 )
+                if booking.user:
+                    student_name = f"{booking.user.first_name} {booking.user.last_name}".strip()
+                    student_email = booking.user.email
+                elif booking.contact:
+                    student_name = f"{booking.contact.first_name} {booking.contact.last_name}".strip()
+                    student_email = booking.contact.email
+                else:
+                    student_name = ""
+                    student_email = ""
                 writer.writerow(
                     [
                         booking.id,
-                        f"{booking.user.first_name} {booking.user.last_name}".strip(),
-                        booking.user.email,
+                        student_name,
+                        student_email,
                         (
                             booking.schedule_instance.schedule.option.classId.title
                             if booking.schedule_instance
