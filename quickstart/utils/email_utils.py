@@ -1,6 +1,7 @@
 # quickstart/utils/email_utils.py
 
 from datetime import datetime, timedelta
+from decimal import Decimal
 import logging
 from icalendar import Calendar, Event, vRecur, vText
 from django.core.mail import EmailMultiAlternatives
@@ -1255,6 +1256,67 @@ def send_super_admin_booking_created_email(booking: Booking):
     )
     logger.info(
         f"Super Admin new-booking email prepared/queued for booking {booking.id} to {len(recipient_list)} Super Admin(s)."
+    )
+
+
+def send_super_admin_booking_webhook_failed_email(
+    payment_intent_id: str,
+    error_message: str,
+    *,
+    webhook_id: str = "",
+    metadata: Optional[dict] = None,
+    amount_received_cents: Optional[int] = None,
+):
+    """
+    Email Super Admins when a succeeded Stripe payment could not be fulfilled via webhook.
+    Payment is not auto-refunded; ops must create the booking and/or contact the guest.
+    """
+    recipient_list = get_super_admin_emails()
+    if not recipient_list:
+        logger.debug(
+            "No Super Admin recipients for booking webhook failure; skipping email."
+        )
+        return
+    metadata = metadata or {}
+    guest_name = (metadata.get("guest_full_name") or "").strip() or "—"
+    guest_email = (metadata.get("guest_email") or "").strip() or "—"
+    guest_phone = (metadata.get("guest_phone") or "").strip() or "—"
+    schedule_instance_id = metadata.get("schedule_instance_id") or "—"
+    amount_display = "—"
+    if amount_received_cents is not None:
+        amount_display = f"${Decimal(amount_received_cents) / 100:.2f} CAD"
+    admin_url = f"{settings.FRONTEND_BASE_URL}/admin"
+    stripe_url = (
+        f"https://dashboard.stripe.com/payments/{payment_intent_id}"
+        if payment_intent_id
+        else admin_url
+    )
+    context = {
+        "payment_intent_id": payment_intent_id or "—",
+        "error_message": error_message or "Unknown error",
+        "webhook_id": webhook_id or "—",
+        "guest_name": guest_name,
+        "guest_email": guest_email,
+        "guest_phone": guest_phone,
+        "schedule_instance_id": schedule_instance_id,
+        "amount_display": amount_display,
+        "admin_url": admin_url,
+        "stripe_url": stripe_url,
+        "recipient_email": ", ".join(recipient_list),
+    }
+    send_templated_email(
+        recipient_list=recipient_list,
+        template_name="emails/super_admin_booking_webhook_failed.html",
+        context=context,
+        subject=(
+            f"[ClassEasily] Paid booking webhook failed — manual action required "
+            f"({payment_intent_id})"
+        ),
+    )
+    logger.info(
+        "Super Admin booking-webhook-failure email queued for PI=%s to %s recipient(s).",
+        payment_intent_id,
+        len(recipient_list),
     )
 
 

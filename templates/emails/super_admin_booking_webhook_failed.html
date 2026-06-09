@@ -1,0 +1,91 @@
+{# templates/emails/super_admin_booking_webhook_failed.html #}
+{% extends "emails/base_email.html" %}
+{% load i18n %}
+{% block title %}
+    {% trans "Booking webhook failed (Super Admin)" %}
+{% endblock title %}
+{% block content %}
+    <div style="text-align: center;">
+        <div style="font-size: 48px; margin-bottom: 24px; line-height: 1;">⚠️</div>
+        <h1>{% trans "Paid booking could not be completed" %}</h1>
+        <p style="font-size: 18px; color: #1D1D1F; margin-bottom: 32px;">
+            {% trans "Stripe reported payment success, but the booking webhook could not finish. The customer was not auto-refunded — please create the booking manually or contact the guest." %}
+        </p>
+
+        <div style="background: linear-gradient(135deg, #FEF2F2 0%, #FFF7ED 100%);
+                    border: 1px solid #FECACA;
+                    border-radius: 16px;
+                    margin-bottom: 20px;
+                    padding: 20px 24px;
+                    text-align: left;">
+            <div style="font-size: 11px; color: #B91C1C; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; font-weight: 600;">{% trans "Error" %}</div>
+            <div style="font-size: 14px; color: #1D1D1F; white-space: pre-wrap; font-family: ui-monospace, monospace;">{{ error_message }}</div>
+        </div>
+
+        <div style="background-color: #ffffff;
+                    border: 1px solid #E5E7EB;
+                    border-radius: 16px;
+                    margin-bottom: 20px;
+                    overflow: hidden;
+                    text-align: left;">
+            <div style="font-size: 11px; color: #6B7280; text-transform: uppercase; letter-spacing: 0.06em; padding: 14px 24px; background: #F9FAFB; border-bottom: 1px solid #E5E7EB; font-weight: 600;">{% trans "Payment" %}</div>
+            <div style="padding: 20px 24px;">
+                <div style="margin-bottom: 12px;">
+                    <div style="font-size: 13px; color: #9CA3AF; margin-bottom: 2px;">{% trans "PaymentIntent" %}</div>
+                    <div style="font-size: 14px; color: #1D1D1F; word-break: break-all;">{{ payment_intent_id }}</div>
+                </div>
+                <div style="margin-bottom: 12px;">
+                    <div style="font-size: 13px; color: #9CA3AF; margin-bottom: 2px;">{% trans "Amount received" %}</div>
+                    <div style="font-size: 17px; font-weight: 600; color: #1D1D1F;">{{ amount_display }}</div>
+                </div>
+                <div style="margin-bottom: 0;">
+                    <div style="font-size: 13px; color: #9CA3AF; margin-bottom: 2px;">{% trans "Webhook trace" %}</div>
+                    <div style="font-size: 14px; color: #1D1D1F;">{{ webhook_id }}</div>
+                </div>
+            </div>
+        </div>
+
+        <div style="background-color: #ffffff;
+                    border: 1px solid #E5E7EB;
+                    border-radius: 16px;
+                    margin-bottom: 28px;
+                    overflow: hidden;
+                    text-align: left;">
+            <div style="font-size: 11px; color: #6B7280; text-transform: uppercase; letter-spacing: 0.06em; padding: 14px 24px; background: #F9FAFB; border-bottom: 1px solid #E5E7EB; font-weight: 600;">{% trans "Guest (from Stripe metadata)" %}</div>
+            <div style="padding: 20px 24px;">
+                <div style="margin-bottom: 12px;">
+                    <div style="font-size: 13px; color: #9CA3AF; margin-bottom: 2px;">{% trans "Name" %}</div>
+                    <div style="font-size: 17px; font-weight: 600; color: #1D1D1F;">{{ guest_name }}</div>
+                </div>
+                <div style="margin-bottom: 12px;">
+                    <div style="font-size: 13px; color: #9CA3AF; margin-bottom: 2px;">{% trans "Email" %}</div>
+                    <div style="font-size: 15px; color: #1D1D1F;">{{ guest_email }}</div>
+                </div>
+                <div style="margin-bottom: 12px;">
+                    <div style="font-size: 13px; color: #9CA3AF; margin-bottom: 2px;">{% trans "Phone" %}</div>
+                    <div style="font-size: 15px; color: #1D1D1F;">{{ guest_phone }}</div>
+                </div>
+                <div style="margin-bottom: 0;">
+                    <div style="font-size: 13px; color: #9CA3AF; margin-bottom: 2px;">{% trans "Schedule instance ID" %}</div>
+                    <div style="font-size: 15px; color: #1D1D1F;">{{ schedule_instance_id }}</div>
+                </div>
+            </div>
+        </div>
+
+        <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+            <tr>
+                <td align="center" style="padding-bottom: 12px;">
+                    <a href="{{ stripe_url }}" target="_blank" class="button">{% trans 'View in Stripe' %}</a>
+                </td>
+            </tr>
+            <tr>
+                <td align="center">
+                    <a href="{{ admin_url }}" target="_blank" class="button" style="background-color: #6B7280;">{% trans 'Open Admin' %}</a>
+                </td>
+            </tr>
+        </table>
+    </div>
+{% endblock content %}
+{% block footer_recipient %}
+    <p class="footer-text">{% trans "Sent to Super Administrators" %}</p>
+{% endblock footer_recipient %}
