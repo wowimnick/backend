@@ -95,3 +95,52 @@ class TestUpdatePaymentIntentValidation:
             format="json",
         )
         assert r.status_code == status.HTTP_400_BAD_REQUEST
+
+    @patch("quickstart.payments.views.stripe.PaymentIntent.modify")
+    @patch("quickstart.payments.views.stripe.PaymentIntent.retrieve")
+    def test_metadata_only_update_syncs_placeholder_contact(
+        self, mock_retrieve, mock_modify, api_client
+    ):
+        business = BusinessFactory()
+        cls = ClassMainFactory(businessId=business, status="active")
+        option = ClassOptionFactory(classId=cls)
+        schedule = ScheduleFactory(option=option)
+        inst = ScheduleInstanceFactory(schedule=schedule)
+        placeholder = ContactFactory(
+            business=business,
+            email="pending@example.com",
+            phone_number="555-555-5555",
+        )
+        pi_id = "pi_update_contact_sync"
+        mock_retrieve.return_value = type(
+            "PI",
+            (),
+            {
+                "metadata": {
+                    "schedule_instance_id": str(inst.id),
+                    "guest_contact_id": str(placeholder.id),
+                    "participants": "1",
+                    "booking_type": "Single Session",
+                }
+            },
+        )()
+
+        r = api_client.post(
+            f"{API}/payments/update-payment-intent/",
+            {
+                "payment_intent_id": pi_id,
+                "guest_email": "nina@example.com",
+                "guest_full_name": "Nina DeGagne",
+                "guest_phone": "8609449143",
+            },
+            format="json",
+        )
+        assert r.status_code == status.HTTP_200_OK
+        assert r.json().get("metadata_only") is True
+        mock_modify.assert_called_once()
+        modified_meta = mock_modify.call_args.kwargs["metadata"]
+        assert modified_meta["guest_email"] == "nina@example.com"
+        placeholder.refresh_from_db()
+        assert placeholder.email == "nina@example.com"
+        assert placeholder.phone_number == "8609449143"
+        assert modified_meta["guest_contact_id"] == str(placeholder.id)

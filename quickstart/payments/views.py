@@ -64,6 +64,7 @@ from quickstart.utils.email_utils import (
     send_business_new_booking_email,
     send_gift_card_email,
     send_super_admin_booking_created_email,
+    send_super_admin_booking_webhook_failed_email,
     send_widget_subscription_payment_failed_email,
     send_business_subscription_lifecycle_email,
     format_addon_subscription_display_name,
@@ -93,6 +94,150 @@ from quickstart.utils.widget_booking_source import is_widget_booking_source
 from quickstart.utils.stripe_processing_fee import estimate_stripe_processing_fee
 
 logger = logging.getLogger(__name__)
+
+_WEBHOOK_FAILURE_NOTIFY_CACHE_TTL = 60 * 60 * 24  # 24h — avoid duplicate admin emails on Stripe retries
+
+
+def _metadata_has_valid_guest_contact(metadata) -> bool:
+    email = (metadata.get("guest_email") or "").strip()
+    phone = (metadata.get("guest_phone") or "").strip()
+    if not email or _is_placeholder_booker_email(email):
+        return False
+    return not _is_placeholder_phone(phone)
+
+
+def _apply_guest_metadata_to_contact(contact, guest_email, guest_full_name, guest_phone):
+    """Persist guest checkout fields on a Contact row and refresh the instance."""
+    if not contact:
+        return None
+    full_name = (guest_full_name or "Guest").strip() or "Guest"
+    parts = full_name.split(" ", 1)
+    first = parts[0]
+    last = parts[1] if len(parts) > 1 else ""
+    updates = {
+        "first_name": first,
+        "last_name": last,
+        "updated_at": timezone.now(),
+    }
+    if guest_email and not _is_placeholder_booker_email(guest_email):
+        updates["email"] = guest_email.strip()
+    if guest_phone and not _is_placeholder_phone(guest_phone):
+        updates["phone_number"] = guest_phone.strip()
+    Contact.objects.filter(pk=contact.pk).update(**updates)
+    contact.refresh_from_db()
+    return contact
+
+
+def _ensure_guest_contact_ready(contact, metadata):
+    """
+    Ensure guest contact is usable for booking confirmation.
+    Syncs from Stripe metadata when the DB row is still a checkout placeholder.
+    """
+    if not contact:
+        raise DRFValidationError("Guest contact missing. Manual review required.")
+    contact.refresh_from_db()
+    if is_placeholder_guest_contact(contact) and _metadata_has_valid_guest_contact(
+        metadata
+    ):
+        _apply_guest_metadata_to_contact(
+            contact,
+            metadata.get("guest_email"),
+            metadata.get("guest_full_name"),
+            metadata.get("guest_phone"),
+        )
+    if is_placeholder_guest_contact(contact):
+        raise DRFValidationError(
+            "Guest contact details are invalid. Manual review required."
+        )
+    return contact
+
+
+def _guest_field_validation_error(guest_email, guest_full_name, guest_phone):
+    """Return a DRF-friendly error string if guest fields look like placeholders."""
+    email = (guest_email or "").strip()
+    phone = (guest_phone or "").strip()
+    name = (guest_full_name or "").strip()
+    if not email or _is_placeholder_booker_email(email):
+        return "Please enter your real email address."
+    if not phone or _is_placeholder_phone(phone):
+        return "Please enter your real phone number."
+    if not name or name.lower() in ("guest", "pending guest"):
+        return "Please enter your full name."
+    return None
+
+
+def _sync_guest_contact_for_checkout(
+    business,
+    guest_contact_id,
+    guest_email,
+    guest_full_name,
+    guest_phone,
+):
+    """
+    Keep the Contact row in sync with checkout guest fields.
+    Returns (contact, guest_contact_id_str) or (None, None) when fields are invalid.
+    """
+    err = _guest_field_validation_error(guest_email, guest_full_name, guest_phone)
+    if err:
+        return None, None
+
+    email = (guest_email or "").strip()
+    full_name = (guest_full_name or "").strip()
+    phone = (guest_phone or "").strip()
+    first_name, _, last_name = full_name.partition(" ")
+
+    contact = None
+    if guest_contact_id:
+        try:
+            contact = Contact.objects.filter(
+                pk=guest_contact_id, business=business
+            ).first()
+        except (ValueError, TypeError):
+            contact = None
+
+    existing_by_email = Contact.objects.filter(
+        business=business, email__iexact=email
+    ).first()
+
+    if existing_by_email and contact and existing_by_email.pk != contact.pk:
+        _apply_guest_metadata_to_contact(existing_by_email, email, full_name, phone)
+        if is_placeholder_guest_contact(contact):
+            try:
+                contact.delete()
+            except Exception:
+                logger.warning(
+                    "Could not delete stale placeholder contact id=%s", contact.pk
+                )
+        contact = existing_by_email
+    elif contact:
+        _apply_guest_metadata_to_contact(contact, email, full_name, phone)
+    else:
+        contact, _ = Contact.objects.update_or_create(
+            business=business,
+            email__iexact=email,
+            defaults={
+                "first_name": first_name or "Guest",
+                "last_name": last_name,
+                "phone_number": phone,
+                "source": "guest_booking",
+                "email": email,
+            },
+        )
+
+    return contact, str(contact.pk) if contact else None
+
+
+def _business_for_payment_intent_metadata(metadata):
+    instance_id = metadata.get("schedule_instance_id")
+    if not instance_id:
+        return None
+    try:
+        instance = ScheduleInstance.objects.select_related(
+            "schedule__option__classId__businessId"
+        ).get(pk=int(instance_id))
+        return instance.schedule.option.classId.businessId
+    except (ValueError, TypeError, ScheduleInstance.DoesNotExist):
+        return None
 
 
 def _record_processed_stripe_webhook_event(event, layer="webhook"):
@@ -198,6 +343,14 @@ class CreatePaymentIntentView(APIView):
             if not all([guest_email, guest_full_name, guest_phone]):
                 return Response(
                     {"error": "Guest email, full name, and phone number are required."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            guest_validation_error = _guest_field_validation_error(
+                guest_email, guest_full_name, guest_phone
+            )
+            if guest_validation_error:
+                return Response(
+                    {"error": guest_validation_error},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             first_name, _, last_name = guest_full_name.partition(" ")
@@ -825,6 +978,9 @@ class CreatePaymentIntentView(APIView):
             }
             if is_guest:
                 metadata["guest_contact_id"] = str(guest_contact.id)
+                metadata["guest_email"] = guest_email
+                metadata["guest_full_name"] = guest_full_name
+                metadata["guest_phone"] = guest_phone
             else:
                 metadata["user_id"] = str(request.user.userId)
             if request.data.get("meta_fbc"):
@@ -1075,7 +1231,7 @@ class UpdatePaymentIntentView(APIView):
             "notes": new_notes,
         }
 
-        def merge_and_modify_metadata():
+        def merge_and_modify_metadata(*, sync_contact=True):
             intent = stripe.PaymentIntent.retrieve(payment_intent_id)
             merged = _stripe_metadata_dict(intent.metadata)
             participants_count = None
@@ -1099,6 +1255,18 @@ class UpdatePaymentIntentView(APIView):
                 merged["participant_details_json"] = json.dumps(
                     normalize_participant_details(new_participants, expected_count)
                 )
+            if sync_contact:
+                business = _business_for_payment_intent_metadata(merged)
+                if business and _metadata_has_valid_guest_contact(merged):
+                    _, synced_contact_id = _sync_guest_contact_for_checkout(
+                        business,
+                        merged.get("guest_contact_id"),
+                        merged.get("guest_email"),
+                        merged.get("guest_full_name"),
+                        merged.get("guest_phone"),
+                    )
+                    if synced_contact_id:
+                        merged["guest_contact_id"] = synced_contact_id
             stripe.PaymentIntent.modify(
                 payment_intent_id,
                 metadata=merged,
@@ -1151,45 +1319,22 @@ class UpdatePaymentIntentView(APIView):
 
                 # 2. Handle Contact Collision & Updates
                 updated_contact = booking.contact
-                if booking.contact and new_email:
-                    existing_contact = (
-                        Contact.objects.filter(
-                            business=business, email__iexact=new_email
-                        )
-                        .exclude(id=booking.contact.id)
-                        .first()
+                if new_email and _metadata_has_valid_guest_contact(
+                    {
+                        "guest_email": new_email,
+                        "guest_full_name": new_name,
+                        "guest_phone": new_phone,
+                    }
+                ):
+                    synced_contact, _ = _sync_guest_contact_for_checkout(
+                        business,
+                        str(booking.contact_id) if booking.contact_id else None,
+                        new_email,
+                        new_name,
+                        new_phone,
                     )
-
-                    if existing_contact:
-                        old_temp_contact = booking.contact
-                        updated_contact = existing_contact
-                        if new_name:
-                            parts = new_name.split(" ", 1)
-                            existing_contact.first_name = parts[0]
-                            existing_contact.last_name = (
-                                parts[1] if len(parts) > 1 else ""
-                            )
-                        if new_phone:
-                            existing_contact.phone_number = new_phone
-                        existing_contact.save()
-                        if (
-                            "pending@example" in old_temp_contact.email
-                            or "pending" in old_temp_contact.email
-                        ):
-                            old_temp_contact.delete()
-                    else:
-                        if new_email:
-                            booking.contact.email = new_email
-                        if new_name:
-                            parts = new_name.split(" ", 1)
-                            booking.contact.first_name = parts[0]
-                            booking.contact.last_name = (
-                                parts[1] if len(parts) > 1 else ""
-                            )
-                        if new_phone:
-                            booking.contact.phone_number = new_phone
-                        booking.contact.save()
-                        updated_contact = booking.contact
+                    if synced_contact:
+                        updated_contact = synced_contact
 
                 # 3. Update Booking(s)
                 bookings_to_update = []
@@ -1223,7 +1368,9 @@ class UpdatePaymentIntentView(APIView):
                         booking.save()
 
                 # 4. Update Stripe metadata (merge so we don't wipe schedule_instance_id, etc.)
-                merge_and_modify_metadata()
+                if updated_contact:
+                    guest_updates["guest_contact_id"] = str(updated_contact.id)
+                merge_and_modify_metadata(sync_contact=False)
 
             logger.info("[%s] UpdatePaymentIntent: DB and Stripe updated for booking_id=%s", update_id, booking.id)
             return Response(
@@ -1308,16 +1455,25 @@ class ProcessBookingWebhook(APIView):
     authentication_classes = []
     permission_classes = []
 
-    def _attempt_stripe_refund(self, payment_intent_id, reason_message=""):
-        logger.info(
-            f"REFUND: Attempting refund for PaymentIntent {payment_intent_id}. Reason: {reason_message}"
+    def _notify_admins_webhook_failure(
+        self, payment_intent, error_message, webhook_id
+    ):
+        """Alert Super Admins once per PI; payment is left captured for manual fulfillment."""
+        pi_id = getattr(payment_intent, "id", None) or ""
+        if not pi_id:
+            return
+        cache_key = f"booking_webhook_failure_notified:{pi_id}"
+        if cache.get(cache_key):
+            return
+        metadata = _stripe_metadata_dict(getattr(payment_intent, "metadata", None) or {})
+        send_super_admin_booking_webhook_failed_email(
+            payment_intent_id=pi_id,
+            error_message=error_message,
+            webhook_id=webhook_id,
+            metadata=metadata,
+            amount_received_cents=getattr(payment_intent, "amount_received", None),
         )
-        try:
-            stripe.Refund.create(payment_intent=payment_intent_id)
-            return True
-        except stripe.StripeError as e:
-            logger.error(f"REFUND: CRITICAL - Stripe error during refund: {e}")
-            return False
+        cache.set(cache_key, True, timeout=_WEBHOOK_FAILURE_NOTIFY_CACHE_TTL)
 
     def _mark_booking_as_failed(self, payment_intent_id, reason):
         """
@@ -1358,30 +1514,6 @@ class ProcessBookingWebhook(APIView):
             logger.error(
                 f"FAILURE_MARKER: An unexpected error occurred while marking PI {payment_intent_id} as failed: {str(e)}"
             )
-
-    def _on_webhook_refund_failed(self, payment_intent_id, reason_message=""):
-        """
-        When Stripe refund failed after a booking could not be fulfilled: persist state
-        and trigger alert so support can manually refund and/or notify the guest.
-        """
-        try:
-            payment = Payment.objects.filter(
-                stripe_payment_intent_id=payment_intent_id
-            ).first()
-            if payment:
-                suffix = " [Stripe refund failed - manual refund required]"
-                payment.failure_message = (payment.failure_message or "") + suffix
-                payment.save(update_fields=["failure_message"])
-        except Exception as e:
-            logger.warning(
-                "Could not update Payment failure_message for PI %s: %s",
-                payment_intent_id, e,
-            )
-        logger.critical(
-            "REFUND_FAILED: PaymentIntent %s - Stripe refund could not be completed. Reason: %s. Manual refund required.",
-            payment_intent_id,
-            reason_message,
-        )
 
     def handle_gift_card_creation(self, payment_intent):
         """Creates the Gift Card after successful payment (Step E)"""
@@ -1608,15 +1740,12 @@ class ProcessBookingWebhook(APIView):
                 self._mark_booking_as_failed(
                     payment_intent.id, f"Booking validation failed: {error_msg}"
                 )
-                refund_ok = self._attempt_stripe_refund(
-                    payment_intent.id, f"Booking validation failed: {error_msg}"
+                self._notify_admins_webhook_failure(
+                    payment_intent, f"Booking validation failed: {error_msg}", webhook_id
                 )
-                if not refund_ok:
-                    self._on_webhook_refund_failed(
-                        payment_intent.id, f"Booking validation failed: {error_msg}"
-                    )
                 return Response(
-                    {"error": error_msg}, status=status.HTTP_400_BAD_REQUEST
+                    {"error": error_msg, "manual_review": True},
+                    status=status.HTTP_200_OK,
                 )
             except Exception as e:
                 logger.error(
@@ -1632,16 +1761,12 @@ class ProcessBookingWebhook(APIView):
                 self._mark_booking_as_failed(
                     payment_intent.id, f"Unexpected server error: {str(e)}"
                 )
-                refund_ok = self._attempt_stripe_refund(
-                    payment_intent.id, f"Unexpected server error: {e}"
+                self._notify_admins_webhook_failure(
+                    payment_intent, f"Unexpected server error: {str(e)}", webhook_id
                 )
-                if not refund_ok:
-                    self._on_webhook_refund_failed(
-                        payment_intent.id, f"Unexpected server error: {str(e)}"
-                    )
                 return Response(
-                    {"error": "Internal server error"},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    {"error": "Internal server error", "manual_review": True},
+                    status=status.HTTP_200_OK,
                 )
         elif event.type == "payment_intent.payment_failed":
             payment_intent = event.data.object
@@ -2735,7 +2860,7 @@ class ProcessBookingWebhook(APIView):
     def _create_single_booking_from_metadata(self, payment_intent, webhook_id):
         """
         Instant flow (no hold): create confirmed booking + payment from PaymentIntent metadata.
-        Raises DRFValidationError if slot no longer has capacity (caller will refund).
+        Raises DRFValidationError if slot no longer has capacity (caller notifies admins).
         """
         metadata = _stripe_metadata_dict(payment_intent.metadata)
         logger.info(
@@ -2755,7 +2880,7 @@ class ProcessBookingWebhook(APIView):
         if not instance_id:
             logger.error("[%s] Missing schedule_instance_id in metadata", webhook_id)
             raise DRFValidationError(
-                "Missing schedule_instance_id in metadata. Initiating refund."
+                "Missing schedule_instance_id in metadata. Manual review required."
             )
         try:
             instance = ScheduleInstance.objects.select_related(
@@ -2765,14 +2890,14 @@ class ProcessBookingWebhook(APIView):
         except (ValueError, ScheduleInstance.DoesNotExist):
             logger.warning("[%s] Invalid or missing schedule instance id=%s", webhook_id, instance_id)
             raise DRFValidationError(
-                "Invalid or missing schedule instance. Initiating refund."
+                "Invalid or missing schedule instance. Manual review required."
             )
 
         participants = int(metadata.get("participants", 1))
         if not instance.can_accommodate(participants):
             logger.warning("[%s] Slot no longer has capacity for %s participants", webhook_id, participants)
             raise DRFValidationError(
-                f"Session on {instance.date.strftime('%b %d')} is now full. Initiating refund."
+                f"Session on {instance.date.strftime('%b %d')} is now full. Manual review required."
             )
 
         option = instance.schedule.option
@@ -2869,13 +2994,13 @@ class ProcessBookingWebhook(APIView):
                         )
                 except (ValueError, TypeError, Contact.DoesNotExist):
                     raise DRFValidationError(
-                        "Guest contact missing. Initiating refund."
+                        "Guest contact missing. Manual review required."
                     )
             elif guest_email or guest_full_name:
                 # Widget/single-session: no guest_contact_id; get existing contact or create (never full save to avoid unique constraint)
                 if not guest_email:
                     raise DRFValidationError(
-                        "Guest email missing. Initiating refund."
+                        "Guest email missing. Manual review required."
                     )
                 first = (guest_full_name or "Guest").split(" ", 1)[0]
                 last = (guest_full_name or "Guest").split(" ", 1)[-1] if len((guest_full_name or "Guest").split(" ", 1)) > 1 else ""
@@ -2916,12 +3041,9 @@ class ProcessBookingWebhook(APIView):
                         )
             else:
                 raise DRFValidationError(
-                    "Guest contact missing. Initiating refund."
+                    "Guest contact missing. Manual review required."
                 )
-            if contact and is_placeholder_guest_contact(contact):
-                raise DRFValidationError(
-                    "Guest contact details are invalid. Initiating refund."
-                )
+            _ensure_guest_contact_ready(contact, metadata)
         else:
             try:
                 user = CustomUser.objects.get(
@@ -2929,7 +3051,7 @@ class ProcessBookingWebhook(APIView):
                 )
             except (ValueError, TypeError, CustomUser.DoesNotExist):
                 raise DRFValidationError(
-                    "User missing. Initiating refund."
+                    "User missing. Manual review required."
                 )
 
         notes = metadata.get("notes", "") or ""
@@ -3243,7 +3365,7 @@ class ProcessBookingWebhook(APIView):
             if not payment_record:
                 logger.error("[%s] Payment record missing for PI %s", webhook_id, payment_intent.id)
                 raise DRFValidationError(
-                    "Payment record missing. Initiating refund to prevent lost funds."
+                    "Payment record missing. Manual review required."
                 )
             if payment_record.status != "pending":
                 logger.warning(
@@ -3262,12 +3384,13 @@ class ProcessBookingWebhook(APIView):
 
             if not pending_booking:
                 raise DRFValidationError(
-                    "Booking record missing in DB. Initiating refund."
+                    "Booking record missing in DB. Manual review required."
                 )
 
             metadata = _stripe_metadata_dict(payment_intent.metadata)
             participants = pending_booking.participants
             initial_instance = pending_booking.schedule_instance
+            business = initial_instance.schedule.option.classId.businessId
 
             # Capacity Check (legacy pending booking)
             other_participants = (
@@ -3277,15 +3400,12 @@ class ProcessBookingWebhook(APIView):
             )
             if (initial_instance.max_participants - other_participants) < participants:
                 raise DRFValidationError(
-                    f"Session on {initial_instance.date.strftime('%b %d')} is now full."
+                    f"Session on {initial_instance.date.strftime('%b %d')} is now full. Manual review required."
                 )
 
-            # Safeguard: never confirm a booking with placeholder guest details
+            # Safeguard: sync placeholder guest contacts from Stripe metadata before confirming
             if pending_booking.contact and not pending_booking.user:
-                if is_placeholder_guest_contact(pending_booking.contact):
-                    raise DRFValidationError(
-                        "Guest contact details are invalid. Initiating refund."
-                    )
+                _ensure_guest_contact_ready(pending_booking.contact, metadata)
 
             # --- CALCULATE FEES AND NET PAYOUT (use subtotal_for_payout so business never loses from global discount) ---
             grand_total = Decimal(payment_intent.amount_received) / 100
@@ -3294,7 +3414,6 @@ class ProcessBookingWebhook(APIView):
                 metadata.get("subtotal_for_payout")
                 or metadata.get("subtotal_after_discount", "0.00")
             )
-            business = initial_instance.schedule.option.classId.businessId
 
             if is_widget_booking_source(metadata.get("booking_source")):
                 plan_id = (metadata.get("plan_id") or "basic").lower()
