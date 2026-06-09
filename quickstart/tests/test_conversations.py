@@ -2,6 +2,8 @@
 import pytest
 from rest_framework import status
 
+from quickstart.tests.factories import ConversationFactory, ConversationMessageFactory
+
 
 API = "/api"
 
@@ -22,6 +24,18 @@ class TestBusinessConversations:
     def test_unauthenticated_401(self, api_client):
         r = api_client.get(f"{API}/business/conversations/")
         assert r.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+@pytest.mark.django_db
+class TestAdminConversations:
+    def test_list_with_messages_200(self, admin_client):
+        conv = ConversationFactory()
+        ConversationMessageFactory(conversation=conv, text="Latest message")
+        r = admin_client.get(f"{API}/admin/conversations/")
+        assert r.status_code == status.HTTP_200_OK
+        results = r.data.get("results", r.data)
+        assert len(results) >= 1
+        assert results[0]["last_message_preview"] == "Latest message"
 
 
 @pytest.mark.django_db

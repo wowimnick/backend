@@ -45,7 +45,7 @@ class AdminConversationViewSet(viewsets.ReadOnlyModelViewSet):
                     "messages",
                     queryset=ConversationMessage.objects.select_related(
                         "sender_user", "sender_contact"
-                    ).order_by("-created_at")[:1],
+                    ).order_by("-created_at"),
                 )
             )
         else:
