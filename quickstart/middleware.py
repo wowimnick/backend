@@ -1,9 +1,13 @@
 import os
 from django.conf import settings
-from django.http import HttpResponse
+from django.db import models
+from django.http import HttpResponse, JsonResponse
+from django.utils import timezone
 import logging
+from django.core.cache import cache
 from django.utils.functional import SimpleLazyObject
-from quickstart.models import BusinessInfo
+from quickstart.models import BusinessInfo, BannedIP
+from quickstart.utils.request_utils import get_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +147,44 @@ def _origin_allowed_for_business(origin, business):
         for o in business.allowed_widget_origins
     ]
     return (origin_domain or "").lower() in normalized_allowed
+
+
+BANNED_IP_CACHE_KEY = "banned_ip_addresses"
+BANNED_IP_CACHE_TTL = 60
+
+
+def _get_active_banned_ips():
+    cached = cache.get(BANNED_IP_CACHE_KEY)
+    if cached is not None:
+        return cached
+
+    now = timezone.now()
+    ips = set(
+        BannedIP.objects.filter(is_active=True)
+        .filter(models.Q(expires_at__isnull=True) | models.Q(expires_at__gt=now))
+        .values_list("ip_address", flat=True)
+    )
+    cache.set(BANNED_IP_CACHE_KEY, ips, BANNED_IP_CACHE_TTL)
+    return ips
+
+
+def invalidate_banned_ip_cache():
+    cache.delete(BANNED_IP_CACHE_KEY)
+
+
+class BannedIPMiddleware:
+    """Return 403 for banned client IPs on /api/ routes."""
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        path = request.path or ""
+        if path.startswith("/api/"):
+            client_ip = get_client_ip(request)
+            if client_ip and client_ip in _get_active_banned_ips():
+                return JsonResponse({"detail": "Access denied."}, status=403)
+        return self.get_response(request)
 
 
 class DynamicCorsMiddleware:

@@ -2,7 +2,7 @@
 Business dashboard conversation ViewSet: list conversations, get detail with messages, send reply.
 """
 
-from django.db.models import Q
+from django.db.models import Prefetch, Q
 from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
@@ -22,6 +22,10 @@ from quickstart.serializers.business.business_conversation_serializers import (
     BusinessConversationMessageCreateSerializer,
     BusinessConversationMessageSerializer,
     BusinessStartConversationByBookingSerializer,
+)
+from quickstart.utils.conversation_moderation import (
+    business_visible_conversations_queryset,
+    business_visible_messages_queryset,
 )
 from quickstart.utils.permissions import IsBusinessOwnerOrManager
 
@@ -60,8 +64,12 @@ class BusinessConversationViewSet(viewsets.GenericViewSet):
         business = _get_business_for_user(self.request.user)
         if not business:
             return Conversation.objects.none()
+        visible_messages = business_visible_messages_queryset().select_related(
+            "sender_user", "sender_contact"
+        )
         return (
-            Conversation.objects.filter(business=business)
+            business_visible_conversations_queryset()
+            .filter(business=business)
             .select_related(
                 "business",
                 "booking",
@@ -69,7 +77,9 @@ class BusinessConversationViewSet(viewsets.GenericViewSet):
                 "booker_contact",
                 "booking__schedule_instance__schedule__option__classId",
             )
-            .prefetch_related("messages__sender_user", "messages__sender_contact")
+            .prefetch_related(
+                Prefetch("messages", queryset=visible_messages),
+            )
             .order_by("-last_message_at", "-created_at")
         )
 

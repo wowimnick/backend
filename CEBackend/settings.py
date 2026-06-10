@@ -162,6 +162,9 @@ GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
 STRIPE_PUBLIC_KEY = os.environ["STRIPE_PUBLIC_KEY"]
 STRIPE_SECRET_KEY = os.environ["STRIPE_SECRET_KEY"]
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
+# Comma-separated Gemini models for scam message moderation (fallback order).
+GEMINI_SCAM_MODELS = os.environ.get("GEMINI_SCAM_MODELS", "")
+SCAM_FILTER_ENABLED = os.environ.get("SCAM_FILTER_ENABLED", "true").lower() == "true"
 # Apify (Instagram profile follower counts; optional — scraper skips if unset)
 APIFY_TOKEN = os.environ.get("APIFY_TOKEN", "")
 # Secret for the endpoint at /api/webhooks/stripe-connect/
@@ -288,6 +291,7 @@ MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "quickstart.middleware.DynamicCorsMiddleware",
     "corsheaders.middleware.CorsMiddleware",
+    "quickstart.middleware.BannedIPMiddleware",
     "quickstart.middleware.SeoStagingMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",

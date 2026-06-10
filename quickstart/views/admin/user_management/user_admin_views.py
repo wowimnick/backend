@@ -21,10 +21,14 @@ from allauth.account.adapter import get_adapter
 from django.contrib.auth.tokens import default_token_generator
 from django.contrib.sites.shortcuts import get_current_site
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.token_blacklist.models import (
+    BlacklistedToken,
+    OutstandingToken,
+)
 from django.conf import settings
 from urllib.parse import urlencode
 
-from quickstart.models import AuditLog, Role, Booking, BusinessInfo
+from quickstart.models import AuditLog, BannedIP, Role, Booking, BusinessInfo
 from quickstart.serializers.admin.user_management.admin_serializers import (
     AdminUserListSerializer,
     AdminUserDetailSerializer,
@@ -569,6 +573,8 @@ class UserAdminViewSet(viewsets.ModelViewSet):
 
         user.is_active = False
         user.save(update_fields=["is_active"])
+        for token in OutstandingToken.objects.filter(user=user):
+            BlacklistedToken.objects.get_or_create(token=token)
         self._log_user_action(user, "account_lock", f"Account locked by admin")
         return Response({"status": "Account locked"})
 
@@ -595,6 +601,55 @@ class UserAdminViewSet(viewsets.ModelViewSet):
         user.save(update_fields=["is_active"])
         self._log_user_action(user, "account_unlock", f"Account unlocked by admin")
         return Response({"status": "Account unlocked"})
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[IsAuthenticated, CanAccessUserAdmin, CanManageTargetUser],
+        url_path="ban_account_ips",
+    )
+    def ban_account_ips(self, request, pk=None):
+        user = self.get_object()
+        if not request.user.has_perm("quickstart.manage_ip_bans"):
+            self.permission_denied(
+                request,
+                message="You do not have permission to manage IP bans.",
+            )
+
+        login_ips = (
+            AuditLog.objects.filter(user=user, action="login")
+            .exclude(ip_address__isnull=True)
+            .exclude(ip_address="")
+            .values_list("ip_address", flat=True)
+            .distinct()
+        )
+        reason = (request.data.get("reason") or f"Banned login IPs for user {user.email}").strip()
+        created = []
+        for ip in login_ips:
+            ban, was_created = BannedIP.objects.get_or_create(
+                ip_address=ip,
+                defaults={
+                    "reason": reason,
+                    "created_by": request.user,
+                    "is_active": True,
+                },
+            )
+            if was_created:
+                created.append(ip)
+
+        self._log_user_action(
+            user,
+            "system_setting_change",
+            f"Banned {len(created)} login IP(s) for user {user.email}",
+            metadata={"banned_ips": created},
+        )
+        return Response(
+            {
+                "status": "ok",
+                "banned_ips": created,
+                "total_login_ips": len(login_ips),
+            }
+        )
 
     @action(
         detail=True,

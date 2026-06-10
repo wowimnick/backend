@@ -607,3 +607,90 @@ def send_business_announcement_task(
         len(users) if send_in_app else 0,
     )
     return f"Queued {sent_count} emails, {len(users)} in-app notifications"
+
+
+@shared_task(bind=True, max_retries=2, default_retry_delay=30)
+def moderate_message_task(self, message_id):
+    """
+    Async scam moderation for quarantined booker messages.
+    Fail-open on Gemini errors so genuine leads are never lost.
+    """
+    from django.utils import timezone
+
+    from quickstart.models import ConversationMessage
+    from quickstart.utils.conversation_delivery import deliver_booker_message
+    from quickstart.utils.scam_filter_ai import classify_message
+
+    try:
+        msg = (
+            ConversationMessage.objects.select_related(
+                "conversation",
+                "conversation__business",
+                "sender_user",
+                "sender_contact",
+            )
+            .get(pk=message_id)
+        )
+    except ConversationMessage.DoesNotExist:
+        logger.warning("moderate_message_task: message %s not found", message_id)
+        return
+
+    if msg.moderation_status != ConversationMessage.MODERATION_PENDING:
+        return
+
+    conv = msg.conversation
+    business = conv.business
+    sender_name = "Guest"
+    sender_email = None
+    if msg.sender_user:
+        sender_name = msg.sender_user.get_full_name() or msg.sender_user.email or sender_name
+        sender_email = msg.sender_user.email
+    elif msg.sender_contact:
+        sender_name = (
+            f"{msg.sender_contact.first_name} {msg.sender_contact.last_name}".strip()
+            or msg.sender_contact.email
+            or sender_name
+        )
+        sender_email = msg.sender_contact.email
+
+    now = timezone.now()
+    update_fields = ["moderation_status", "moderation_reason", "moderation_confidence", "moderated_at"]
+
+    try:
+        result = classify_message(
+            msg.text,
+            business_name=getattr(business, "businessName", None),
+            sender_name=sender_name,
+            sender_email=sender_email,
+        )
+        if result.get("is_scam"):
+            msg.moderation_status = ConversationMessage.MODERATION_REJECTED
+            msg.moderation_reason = (result.get("reason") or "")[:2000]
+            msg.moderation_confidence = result.get("confidence")
+            msg.moderated_at = now
+            msg.save(update_fields=update_fields)
+            logger.info(
+                "Message %s rejected by scam filter (confidence=%s)",
+                message_id,
+                result.get("confidence"),
+            )
+            return
+
+        msg.moderation_status = ConversationMessage.MODERATION_APPROVED
+        msg.moderation_reason = (result.get("reason") or "")[:2000]
+        msg.moderation_confidence = result.get("confidence")
+        msg.moderated_at = now
+        msg.save(update_fields=update_fields)
+        deliver_booker_message(conv, msg)
+    except Exception as exc:
+        logger.error(
+            "moderate_message_task failed for %s; fail-open deliver: %s",
+            message_id,
+            exc,
+            exc_info=True,
+        )
+        msg.moderation_status = ConversationMessage.MODERATION_ERROR
+        msg.moderation_reason = str(exc)[:2000]
+        msg.moderated_at = now
+        msg.save(update_fields=update_fields)
+        deliver_booker_message(conv, msg)

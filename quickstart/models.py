@@ -416,6 +416,7 @@ class CustomUser(AbstractUser):
             # --- Platform Admin Permissions (Keep these as they are) ---
             ("change_user_role", "Can change the role assigned to any user"),
             ("lock_user", "Can lock/unlock any user account"),
+            ("manage_ip_bans", "Can manage IP bans"),
             ("reset_user_password", "Can initiate password reset for any user"),
             ("view_user_metrics", "Can view user management metrics"),
             ("access_user_admin", "Can access the user administration section"),
@@ -4718,6 +4719,17 @@ class ConversationMessage(models.Model):
         (SENDER_BUSINESS, "Business"),
     ]
 
+    MODERATION_APPROVED = "approved"
+    MODERATION_PENDING = "pending"
+    MODERATION_REJECTED = "rejected"
+    MODERATION_ERROR = "error"
+    MODERATION_STATUS_CHOICES = [
+        (MODERATION_APPROVED, "Approved"),
+        (MODERATION_PENDING, "Pending"),
+        (MODERATION_REJECTED, "Rejected"),
+        (MODERATION_ERROR, "Error"),
+    ]
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     conversation = models.ForeignKey(
         Conversation,
@@ -4745,6 +4757,16 @@ class ConversationMessage(models.Model):
     )
     text = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    moderation_status = models.CharField(
+        max_length=10,
+        choices=MODERATION_STATUS_CHOICES,
+        default=MODERATION_APPROVED,
+        db_index=True,
+    )
+    moderation_reason = models.TextField(blank=True, default="")
+    moderation_confidence = models.FloatField(null=True, blank=True)
+    moderated_at = models.DateTimeField(null=True, blank=True)
+    sender_ip = models.GenericIPAddressField(null=True, blank=True)
 
     class Meta:
         db_table = "conversation_messages"
@@ -4763,6 +4785,34 @@ class ConversationMessage(models.Model):
                 raise ValidationError(
                     "Booker messages must have exactly one of sender_user or sender_contact."
                 )
+
+
+class BannedIP(models.Model):
+    """Blocked client IP addresses for API access."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    ip_address = models.GenericIPAddressField(db_index=True)
+    reason = models.TextField(blank=True, default="")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="banned_ips_created",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    expires_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+
+    class Meta:
+        db_table = "banned_ips"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["is_active", "expires_at"]),
+        ]
+
+    def __str__(self):
+        return self.ip_address
 
 
 class ConversationEmailLog(models.Model):

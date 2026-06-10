@@ -1350,3 +1350,11 @@ def typesense_rebuild_boundary_buffer(sender, instance, **kwargs):
 
     bid = str(instance.pk)
     transaction.on_commit(lambda b=bid: rebuild_boundary_buffer_for_id_task.delay(b))
+
+
+@receiver(post_save, sender="quickstart.BannedIP")
+@receiver(post_delete, sender="quickstart.BannedIP")
+def invalidate_banned_ip_cache_signal(sender, **kwargs):
+    from quickstart.middleware import invalidate_banned_ip_cache
+
+    invalidate_banned_ip_cache()

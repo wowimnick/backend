@@ -5,6 +5,7 @@ Serializers for guest–business conversations (business / dashboard side).
 from rest_framework import serializers
 
 from quickstart.models import Conversation, ConversationMessage
+from quickstart.utils.conversation_moderation import BUSINESS_VISIBLE_MODERATION_STATUSES
 
 
 class BusinessConversationMessageSerializer(serializers.ModelSerializer):
@@ -102,9 +103,20 @@ class BusinessConversationListSerializer(serializers.ModelSerializer):
     def get_last_message_preview(self, obj):
         prefetched = getattr(obj, "_prefetched_objects_cache", {}).get("messages")
         if prefetched is not None:
-            last = prefetched[0] if prefetched else None
+            visible = [
+                m
+                for m in prefetched
+                if m.moderation_status in BUSINESS_VISIBLE_MODERATION_STATUSES
+            ]
+            last = max(visible, key=lambda m: m.created_at, default=None)
         else:
-            last = obj.messages.order_by("-created_at").first()
+            last = (
+                obj.messages.filter(
+                    moderation_status__in=BUSINESS_VISIBLE_MODERATION_STATUSES
+                )
+                .order_by("-created_at")
+                .first()
+            )
         if not last:
             return None
         text = (last.text or "").strip()

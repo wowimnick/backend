@@ -2,6 +2,8 @@
 Public (unauthenticated) guest messaging: submit a message from class page, and guest inbox via token.
 """
 
+from django.conf import settings
+from django.db import transaction
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.views import APIView
@@ -23,7 +25,8 @@ from quickstart.serializers.public.public_conversation_serializers import (
     ConversationMessageCreateSerializer,
 )
 from quickstart.utils.guest_inbox_token import create_guest_inbox_token, parse_guest_inbox_token
-from quickstart.utils.conversation_emails import notify_business_new_message
+from quickstart.utils.conversation_delivery import deliver_booker_message
+from quickstart.utils.request_utils import get_client_ip
 
 import logging
 
@@ -77,22 +80,29 @@ class GuestMessageCreateView(APIView):
             conv.full_clean()
             conv.save()
 
-        msg = ConversationMessage.objects.create(
-            conversation=conv,
-            sender_type=ConversationMessage.SENDER_BOOKER,
-            sender_user=None,
-            sender_contact=contact,
-            text=data["message"],
-        )
+        scam_filter_enabled = getattr(settings, "SCAM_FILTER_ENABLED", True)
+        msg_kwargs = {
+            "conversation": conv,
+            "sender_type": ConversationMessage.SENDER_BOOKER,
+            "sender_user": None,
+            "sender_contact": contact,
+            "text": data["message"],
+            "sender_ip": get_client_ip(request),
+        }
+        if scam_filter_enabled:
+            msg_kwargs["moderation_status"] = ConversationMessage.MODERATION_PENDING
+        msg = ConversationMessage.objects.create(**msg_kwargs)
         conv.last_message_at = timezone.now()
         conv.save(update_fields=["last_message_at"])
 
-        notify_business_new_message(conv, msg)
-        from quickstart.utils.notification_utils import create_notifications_for_new_chat_message
-        create_notifications_for_new_chat_message(conv, msg)
+        if scam_filter_enabled:
+            from quickstart.tasks.business_tasks import moderate_message_task
+
+            transaction.on_commit(lambda: moderate_message_task.delay(str(msg.id)))
+        else:
+            deliver_booker_message(conv, msg)
 
         # Send email to guest with magic link to inbox
-        from django.conf import settings
         from quickstart.utils.email_utils import send_templated_email
 
         token = create_guest_inbox_token(str(conv.id), str(contact.id))
@@ -188,11 +198,9 @@ class GuestInboxSendView(APIView):
         )
         conv.last_message_at = timezone.now()
         conv.save(update_fields=["last_message_at"])
-        notify_business_new_message(conv, msg)
-        from quickstart.utils.conversation_ws_broadcast import broadcast_new_message
-        from quickstart.utils.notification_utils import create_notifications_for_new_chat_message
-        broadcast_new_message(msg)
-        create_notifications_for_new_chat_message(conv, msg)
+        from quickstart.utils.conversation_delivery import deliver_booker_message
+
+        deliver_booker_message(conv, msg)
 
         return Response(
             ConversationMessageSerializer(msg).data,

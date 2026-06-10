@@ -143,6 +143,7 @@ from quickstart.payments.views import (
     CheckSlotAvailabilityView,
 )
 from quickstart.views.admin.user_management.user_admin_views import UserAdminViewSet
+from quickstart.views.admin.user_management.banned_ip_views import BannedIPViewSet
 from quickstart.views.admin.user_management.role_views import RoleManagementViewSet
 from quickstart.views.admin.user_management.verification_views import (
     VerificationRequestViewSet,
@@ -357,6 +358,7 @@ admin_router.register(
     r"verification", VerificationRequestViewSet, basename="admin-verification"
 )
 admin_router.register(r"audit-logs", AuditLogViewSet, basename="admin-audit-logs")
+admin_router.register(r"banned-ips", BannedIPViewSet, basename="admin-banned-ips")
 admin_router.register(
     r"support-tickets", AdminSupportTicketViewSet, basename="admin-support-tickets"
 )

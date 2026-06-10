@@ -27,6 +27,7 @@ _EXTRA_REQUIRED_CELERY_TASKS = frozenset(
     {
         "quickstart.tasks.business_tasks.classify_class_task",
         "quickstart.tasks.business_tasks.format_class_description_task",
+        "quickstart.tasks.business_tasks.moderate_message_task",
         "quickstart.tasks.business_tasks.reconcile_stuck_description_ai_task",
         "quickstart.tasks.corporate_booking_tasks.send_shortlist_sent_to_admins",
         "quickstart.tasks.corporate_booking_tasks.send_shortlist_to_corporate",

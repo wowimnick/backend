@@ -41,18 +41,9 @@ from quickstart.serializers import (
     CustomUserDetailsSerializer,
     CustomRegisterSerializer,
 )
+from quickstart.utils.request_utils import get_client_ip  # noqa: F401 — re-exported for callers
 
 logger = logging.getLogger(__name__)
-
-
-def get_client_ip(request):
-    """Get client IP address from request."""
-    x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
-    if x_forwarded_for:
-        ip = x_forwarded_for.split(",")[0]
-    else:
-        ip = request.META.get("REMOTE_ADDR")
-    return ip
 
 
 class CustomPasswordResetView(APIView):
@@ -192,6 +183,14 @@ class CustomTokenRefreshView(APIView):
                 .get(userId=user_id)
             )
 
+            if not user.is_active:
+                response = Response(
+                    {"detail": "Account is disabled."},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+                self._delete_auth_cookies(response)
+                return response
+
             user_serializer = CustomUserDetailsSerializer(user)
 
             data = {
@@ -266,6 +265,14 @@ class CustomTokenRefreshView(APIView):
                             )
                             .get(userId=user_id)
                         )
+
+                        if not user.is_active:
+                            response = Response(
+                                {"detail": "Account is disabled."},
+                                status=status.HTTP_401_UNAUTHORIZED,
+                            )
+                            self._delete_auth_cookies(response)
+                            return response
 
                         data = {
                             "access": str(new_refresh.access_token),
