@@ -30,6 +30,7 @@ from urllib.parse import urlencode
 
 from quickstart.models import AuditLog, Role, Booking, BusinessInfo
 from quickstart.utils.ip_bans import ban_ip_addresses
+from quickstart.utils.login_audit import collect_account_ip_addresses
 from quickstart.serializers.admin.user_management.admin_serializers import (
     AdminUserListSerializer,
     AdminUserDetailSerializer,
@@ -617,19 +618,15 @@ class UserAdminViewSet(viewsets.ModelViewSet):
                 message="You do not have permission to manage IP bans.",
             )
 
-        login_ips = list(
-            AuditLog.objects.filter(user=user, action="login")
-            .exclude(ip_address__isnull=True)
-            .exclude(ip_address="")
-            .values_list("ip_address", flat=True)
-            .distinct()
-        )
-        if not login_ips:
+        account_ips = collect_account_ip_addresses(user)
+        if not account_ips:
             return Response(
                 {
                     "detail": (
-                        "No login IP addresses found for this account. "
-                        "The user may not have any recorded logins yet."
+                        "No IP addresses found for this account. "
+                        "IPs are recorded when the user signs in (email or Google) or "
+                        "sends a message. If they use Google, have them sign in once "
+                        "after this update, or ban an IP manually from the Banned IPs tab."
                     )
                 },
                 status=status.HTTP_400_BAD_REQUEST,
@@ -638,7 +635,7 @@ class UserAdminViewSet(viewsets.ModelViewSet):
         reason = (
             request.data.get("reason") or f"Banned login IPs for user {user.email}"
         ).strip()
-        ban_result = ban_ip_addresses(request.user, login_ips, reason)
+        ban_result = ban_ip_addresses(request.user, account_ips, reason)
         created = ban_result["created"]
         reactivated = ban_result["reactivated"]
         already_active = ban_result["already_active"]
@@ -660,7 +657,8 @@ class UserAdminViewSet(viewsets.ModelViewSet):
                 "banned_ips": created,
                 "reactivated_ips": reactivated,
                 "already_banned_ips": already_active,
-                "total_login_ips": len(login_ips),
+                "total_ips": len(account_ips),
+                "total_login_ips": len(account_ips),
             }
         )
 

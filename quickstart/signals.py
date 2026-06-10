@@ -1363,8 +1363,12 @@ def invalidate_banned_ip_cache_signal(sender, **kwargs):
 
 @receiver(user_logged_in)
 def audit_api_user_login(sender, request, user, **kwargs):
-    """Audit social/API session logins (email/password JWT login is logged in its view)."""
+    """Audit session-based API logins not handled explicitly in auth views."""
     if not request or not str(getattr(request, "path", "")).startswith("/api/"):
+        return
+
+    path = str(getattr(request, "path", "")).rstrip("/")
+    if path in ("/api/login", "/api/auth/google"):
         return
 
     from quickstart.utils.login_audit import log_user_login

@@ -10,6 +10,16 @@ from quickstart.tasks.user_tasks import send_pending_review_requests
 
 
 @pytest.mark.django_db
+def test_moderate_message_task_is_registered_with_explicit_name():
+    import quickstart.tasks  # noqa: F401
+
+    from CEBackend.celery import app
+    from quickstart.utils.message_moderation import MODERATE_MESSAGE_TASK_NAME
+
+    assert MODERATE_MESSAGE_TASK_NAME in app.tasks
+
+
+@pytest.mark.django_db
 def test_beat_and_critical_tasks_are_registered_on_celery_app():
     """Regression: worker KeyError / NotRegistered when deploy skew omits task modules."""
     import quickstart.tasks  # noqa: F401 — same registration path as Celery worker_ready

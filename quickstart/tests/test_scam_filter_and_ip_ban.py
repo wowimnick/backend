@@ -97,7 +97,40 @@ class TestBanAccountIps:
             f"{API}/admin/users/{user.userId}/ban_account_ips/"
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert "No login IP addresses found" in response.data["detail"]
+        assert "No IP addresses found" in response.data["detail"]
+
+    def test_ban_account_ips_uses_message_sender_ip(self, admin_client):
+        user = UserFactory()
+        conv = ConversationFactory(booker_user=user)
+        ConversationMessageFactory(
+            conversation=conv,
+            sender_user=user,
+            sender_type="booker",
+            sender_ip="198.51.100.22",
+            text="Hello",
+        )
+
+        response = admin_client.post(
+            f"{API}/admin/users/{user.userId}/ban_account_ips/"
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["banned_ips"] == ["198.51.100.22"]
+
+    def test_ban_account_ips_matches_login_logs_by_email(self, admin_client):
+        user = UserFactory()
+        AuditLog.objects.create(
+            user=None,
+            user_email=user.email,
+            action="login",
+            details="Legacy login log",
+            ip_address="203.0.113.88",
+        )
+
+        response = admin_client.post(
+            f"{API}/admin/users/{user.userId}/ban_account_ips/"
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["banned_ips"] == ["203.0.113.88"]
 
 
 @pytest.mark.django_db

@@ -5,7 +5,8 @@ from .email_tasks import *
 from . import email_marketing_tasks  # noqa: F401
 from . import email_marketing_workflow_tasks  # noqa: F401
 from .user_tasks import *
-from .business_tasks import *
+from .business_tasks import *  # noqa: F403
+from .business_tasks import moderate_message_task  # noqa: F401 — explicit worker registration
 from .booking_tasks import *
 from .cache_tasks import *  # prewarm_class_search_cache_task (registered by name for workers)
 from . import search_index_tasks  # noqa: F401
