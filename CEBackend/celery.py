@@ -108,10 +108,9 @@ def on_worker_ready(sender, **kwargs):
     Fail fast if worker image is missing beat-scheduled or critical .delay() tasks (deploy skew).
     Operational fix: redeploy Celery workers with the same image tag as the web tier.
     """
-    import quickstart.tasks  # noqa: F401 — registers submodules after Django setup
-    from quickstart.tasks.business_tasks import moderate_message_task
-
-    app.register_task(moderate_message_task)
+    # Import registers @shared_task handlers. Do not call app.register_task() here —
+    # it re-fires worker_ready and causes RecursionError.
+    import quickstart.tasks  # noqa: F401
 
     missing = [name for name in _required_celery_task_names() if name not in app.tasks]
     if missing:
