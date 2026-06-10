@@ -2,6 +2,7 @@
 Public (booker) conversation ViewSet: list/create conversations, get detail with messages, send message.
 """
 
+from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone
 from rest_framework import viewsets, status
@@ -23,6 +24,12 @@ from quickstart.serializers.public.public_conversation_serializers import (
     ConversationCreateSerializer,
     ConversationMessageSerializer,
     ConversationMessageCreateSerializer,
+)
+from quickstart.utils.conversation_delivery import deliver_booker_message
+from quickstart.utils.moderation_queue import queue_message_moderation
+from quickstart.utils.scam_moderation_log import (
+    log_message_delivered_immediately,
+    log_message_quarantined,
 )
 
 import logging
@@ -143,23 +150,49 @@ class GuestConversationViewSet(viewsets.GenericViewSet):
         ser = ConversationMessageCreateSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         text = ser.validated_data["text"]
-        msg = ConversationMessage.objects.create(
-            conversation=conv,
-            sender_type=ConversationMessage.SENDER_BOOKER,
-            sender_user=request.user,
-            sender_contact=None,
-            text=text,
-        )
+        is_first_booker_message = not conv.messages.filter(
+            sender_type=ConversationMessage.SENDER_BOOKER
+        ).exists()
+        scam_filter_enabled = getattr(settings, "SCAM_FILTER_ENABLED", True)
+        from quickstart.utils.request_utils import get_client_ip
+
+        msg_kwargs = {
+            "conversation": conv,
+            "sender_type": ConversationMessage.SENDER_BOOKER,
+            "sender_user": request.user,
+            "sender_contact": None,
+            "text": text,
+        }
+        if is_first_booker_message and scam_filter_enabled:
+            msg_kwargs["moderation_status"] = ConversationMessage.MODERATION_PENDING
+            msg_kwargs["sender_ip"] = get_client_ip(request)
+        msg = ConversationMessage.objects.create(**msg_kwargs)
         conv.last_message_at = timezone.now()
         conv.save(update_fields=["last_message_at"])
-        from quickstart.utils.conversation_emails import (
-            notify_business_new_message,
-        )
-        notify_business_new_message(conv, msg)
-        from quickstart.utils.conversation_ws_broadcast import broadcast_new_message
-        from quickstart.utils.notification_utils import create_notifications_for_new_chat_message
-        broadcast_new_message(msg)
-        create_notifications_for_new_chat_message(conv, msg)
+
+        if is_first_booker_message and scam_filter_enabled:
+            log_message_quarantined(
+                message_id=msg.id,
+                conversation_id=conv.id,
+                business_id=conv.business_id,
+                sender_type=ConversationMessage.SENDER_BOOKER,
+                source="booker_conversation",
+                scam_filter_enabled=True,
+                is_first_booker_message=True,
+                sender_ip=msg_kwargs.get("sender_ip"),
+            )
+            queue_message_moderation(msg, source="booker_conversation")
+        else:
+            reason = "not_first_booker_message"
+            if not scam_filter_enabled:
+                reason = "scam_filter_disabled"
+            log_message_delivered_immediately(
+                message_id=msg.id,
+                conversation_id=conv.id,
+                source="booker_conversation",
+                reason=reason,
+            )
+            deliver_booker_message(conv, msg)
         return Response(
             ConversationMessageSerializer(msg).data,
             status=status.HTTP_201_CREATED,

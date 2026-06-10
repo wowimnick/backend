@@ -21,10 +21,16 @@ from allauth.account.adapter import get_adapter
 from django.contrib.auth.tokens import default_token_generator
 from django.contrib.sites.shortcuts import get_current_site
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.token_blacklist.models import (
+    BlacklistedToken,
+    OutstandingToken,
+)
 from django.conf import settings
 from urllib.parse import urlencode
 
 from quickstart.models import AuditLog, Role, Booking, BusinessInfo
+from quickstart.utils.ip_bans import ban_ip_addresses
+from quickstart.utils.login_audit import collect_account_ip_addresses
 from quickstart.serializers.admin.user_management.admin_serializers import (
     AdminUserListSerializer,
     AdminUserDetailSerializer,
@@ -569,6 +575,8 @@ class UserAdminViewSet(viewsets.ModelViewSet):
 
         user.is_active = False
         user.save(update_fields=["is_active"])
+        for token in OutstandingToken.objects.filter(user=user):
+            BlacklistedToken.objects.get_or_create(token=token)
         self._log_user_action(user, "account_lock", f"Account locked by admin")
         return Response({"status": "Account locked"})
 
@@ -595,6 +603,64 @@ class UserAdminViewSet(viewsets.ModelViewSet):
         user.save(update_fields=["is_active"])
         self._log_user_action(user, "account_unlock", f"Account unlocked by admin")
         return Response({"status": "Account unlocked"})
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[IsAuthenticated, CanAccessUserAdmin, CanManageTargetUser],
+        url_path="ban_account_ips",
+    )
+    def ban_account_ips(self, request, pk=None):
+        user = self.get_object()
+        if not request.user.has_perm("quickstart.manage_ip_bans"):
+            self.permission_denied(
+                request,
+                message="You do not have permission to manage IP bans.",
+            )
+
+        account_ips = collect_account_ip_addresses(user)
+        if not account_ips:
+            return Response(
+                {
+                    "detail": (
+                        "No IP addresses found for this account. "
+                        "IPs are recorded when the user signs in (email or Google) or "
+                        "sends a message. If they use Google, have them sign in once "
+                        "after this update, or ban an IP manually from the Banned IPs tab."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        reason = (
+            request.data.get("reason") or f"Banned login IPs for user {user.email}"
+        ).strip()
+        ban_result = ban_ip_addresses(request.user, account_ips, reason)
+        created = ban_result["created"]
+        reactivated = ban_result["reactivated"]
+        already_active = ban_result["already_active"]
+        affected = created + reactivated
+
+        self._log_user_action(
+            user,
+            "system_setting_change",
+            f"Banned {len(affected)} login IP(s) for user {user.email}",
+            metadata={
+                "banned_ips": created,
+                "reactivated_ips": reactivated,
+                "already_banned_ips": already_active,
+            },
+        )
+        return Response(
+            {
+                "status": "ok",
+                "banned_ips": created,
+                "reactivated_ips": reactivated,
+                "already_banned_ips": already_active,
+                "total_ips": len(account_ips),
+                "total_login_ips": len(account_ips),
+            }
+        )
 
     @action(
         detail=True,

@@ -607,3 +607,22 @@ def send_business_announcement_task(
         len(users) if send_in_app else 0,
     )
     return f"Queued {sent_count} emails, {len(users)} in-app notifications"
+
+
+@shared_task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=30,
+    name="quickstart.tasks.business_tasks.moderate_message_task",
+)
+def moderate_message_task(self, message_id):
+    """Async scam moderation for quarantined booker messages."""
+    from quickstart.utils.message_moderation import run_message_moderation
+
+    celery_task_id = getattr(getattr(self, "request", None), "id", None)
+    attempt = int(getattr(self.request, "retries", 0) or 0) + 1
+    run_message_moderation(
+        str(message_id),
+        celery_task_id=celery_task_id,
+        attempt=attempt,
+    )

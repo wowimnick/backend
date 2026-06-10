@@ -5,7 +5,10 @@ from dj_rest_auth.registration.views import SocialLoginView
 from rest_framework.response import Response
 from rest_framework import status
 from django.conf import settings
+from django.contrib.auth import get_user_model
 import logging
+
+from quickstart.utils.login_audit import log_user_login
 
 # --- MODIFIED: Import the necessary decorators ---
 from django.utils.decorators import method_decorator
@@ -82,6 +85,17 @@ class GoogleLogin(SocialLoginView):
                 samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],
                 secure=settings.SIMPLE_JWT["AUTH_COOKIE_SECURE"],
             )
+
+            user = None
+            user_id = user_data.get("userId")
+            if user_id is not None:
+                user = get_user_model().objects.filter(pk=user_id).first()
+            if user is None and user_data.get("email"):
+                user = get_user_model().objects.filter(
+                    email__iexact=user_data["email"]
+                ).first()
+            if user:
+                log_user_login(user, request)
 
             logger.info(
                 f"Successfully processed and served Google login for user: {user_data.get('email')}"

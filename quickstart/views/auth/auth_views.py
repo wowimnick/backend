@@ -33,26 +33,15 @@ from allauth.account.forms import ResetPasswordForm, SetPasswordForm
 
 
 from quickstart.serializers.auth.auth_serializers import CustomAllAuthPasswordResetForm
-from quickstart.models import AuditLog
-
-
 from quickstart.serializers import (
     CustomTokenObtainPairSerializer,
     CustomUserDetailsSerializer,
     CustomRegisterSerializer,
 )
+from quickstart.utils.login_audit import log_user_login
+from quickstart.utils.request_utils import get_client_ip  # noqa: F401 — re-exported for callers
 
 logger = logging.getLogger(__name__)
-
-
-def get_client_ip(request):
-    """Get client IP address from request."""
-    x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
-    if x_forwarded_for:
-        ip = x_forwarded_for.split(",")[0]
-    else:
-        ip = request.META.get("REMOTE_ADDR")
-    return ip
 
 
 class CustomPasswordResetView(APIView):
@@ -127,20 +116,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         validated_data = serializer.validated_data
         user = serializer.user
 
-        try:
-            AuditLog.objects.create(
-                user=user,
-                user_email=user.email,
-                action="login",
-                details=f"User '{user.email}' logged in successfully.",
-                ip_address=get_client_ip(request),
-                user_agent=request.META.get("HTTP_USER_AGENT", ""),
-            )
-            logger.info(f"Successful login audited for user: {user.email}")
-        except Exception as audit_error:
-            logger.error(
-                f"Failed to create login audit log for user {user.email}: {audit_error}"
-            )
+        log_user_login(user, request)
 
         response_data = {
             "user": validated_data["user"],
@@ -191,6 +167,14 @@ class CustomTokenRefreshView(APIView):
                 )
                 .get(userId=user_id)
             )
+
+            if not user.is_active:
+                response = Response(
+                    {"detail": "Account is disabled."},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+                self._delete_auth_cookies(response)
+                return response
 
             user_serializer = CustomUserDetailsSerializer(user)
 
@@ -266,6 +250,14 @@ class CustomTokenRefreshView(APIView):
                             )
                             .get(userId=user_id)
                         )
+
+                        if not user.is_active:
+                            response = Response(
+                                {"detail": "Account is disabled."},
+                                status=status.HTTP_401_UNAUTHORIZED,
+                            )
+                            self._delete_auth_cookies(response)
+                            return response
 
                         data = {
                             "access": str(new_refresh.access_token),

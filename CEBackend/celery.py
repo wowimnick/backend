@@ -3,7 +3,7 @@ import logging
 import time
 
 from celery import Celery
-from celery.signals import task_failure, task_prerun, worker_ready
+from celery.signals import task_failure, task_prerun, task_unknown, worker_ready
 from django.conf import settings
 from django.core.cache import cache
 from django.db import close_old_connections
@@ -27,6 +27,7 @@ _EXTRA_REQUIRED_CELERY_TASKS = frozenset(
     {
         "quickstart.tasks.business_tasks.classify_class_task",
         "quickstart.tasks.business_tasks.format_class_description_task",
+        "quickstart.tasks.business_tasks.moderate_message_task",
         "quickstart.tasks.business_tasks.reconcile_stuck_description_ai_task",
         "quickstart.tasks.corporate_booking_tasks.send_shortlist_sent_to_admins",
         "quickstart.tasks.corporate_booking_tasks.send_shortlist_to_corporate",
@@ -56,13 +57,60 @@ def close_stale_db_connections_before_task(**kwargs):
     close_old_connections()
 
 
+@task_unknown.connect
+def on_task_unknown(sender=None, name=None, id=None, message=None, exc=None, **kwargs):
+    """
+    Recover moderation tasks when a worker receives a job it has not registered
+    (deploy skew). Without this, Celery raises KeyError and the message stays pending.
+    """
+    from quickstart.utils.message_moderation import (
+        MODERATE_MESSAGE_TASK_NAME,
+        run_message_moderation,
+    )
+
+    if name != MODERATE_MESSAGE_TASK_NAME:
+        logger.error("Celery received unregistered task name=%s id=%s", name, id)
+        return
+
+    message_id = None
+    try:
+        body = message.decode() if message is not None and hasattr(message, "decode") else None
+        if isinstance(body, (list, tuple)) and body:
+            args = body[0] if len(body) > 0 else ()
+            message_id = args[0] if args else None
+    except Exception as decode_error:
+        logger.error(
+            "Could not decode unregistered moderate_message_task body id=%s: %s",
+            id,
+            decode_error,
+            exc_info=True,
+        )
+
+    if not message_id:
+        logger.error(
+            "Unregistered moderate_message_task id=%s had no message_id in payload",
+            id,
+        )
+        return
+
+    logger.error(
+        "Celery worker missing registered task %s; running inline for message_id=%s celery_id=%s",
+        name,
+        message_id,
+        id,
+    )
+    run_message_moderation(str(message_id), celery_task_id=id, attempt=1)
+
+
 @worker_ready.connect
 def on_worker_ready(sender, **kwargs):
     """
     Fail fast if worker image is missing beat-scheduled or critical .delay() tasks (deploy skew).
     Operational fix: redeploy Celery workers with the same image tag as the web tier.
     """
-    import quickstart.tasks  # noqa: F401 — registers submodules after Django setup
+    # Import registers @shared_task handlers. Do not call app.register_task() here —
+    # it re-fires worker_ready and causes RecursionError.
+    import quickstart.tasks  # noqa: F401
 
     missing = [name for name in _required_celery_task_names() if name not in app.tasks]
     if missing:

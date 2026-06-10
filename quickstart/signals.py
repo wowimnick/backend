@@ -3,6 +3,7 @@ import logging
 from django.dispatch import receiver
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.auth.signals import user_logged_in
 from django.db.models import Sum, Value, IntegerField, Q
 from django.db.models.functions import Coalesce
 from django.db import transaction
@@ -1350,3 +1351,26 @@ def typesense_rebuild_boundary_buffer(sender, instance, **kwargs):
 
     bid = str(instance.pk)
     transaction.on_commit(lambda b=bid: rebuild_boundary_buffer_for_id_task.delay(b))
+
+
+@receiver(post_save, sender="quickstart.BannedIP")
+@receiver(post_delete, sender="quickstart.BannedIP")
+def invalidate_banned_ip_cache_signal(sender, **kwargs):
+    from quickstart.middleware import invalidate_banned_ip_cache
+
+    invalidate_banned_ip_cache()
+
+
+@receiver(user_logged_in)
+def audit_api_user_login(sender, request, user, **kwargs):
+    """Audit session-based API logins not handled explicitly in auth views."""
+    if not request or not str(getattr(request, "path", "")).startswith("/api/"):
+        return
+
+    path = str(getattr(request, "path", "")).rstrip("/")
+    if path in ("/api/login", "/api/auth/google"):
+        return
+
+    from quickstart.utils.login_audit import log_user_login
+
+    log_user_login(user, request)
