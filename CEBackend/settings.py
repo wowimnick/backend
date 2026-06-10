@@ -714,6 +714,11 @@ LOGGING = {
             "level": "INFO",
         },
         "quickstart": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "quickstart.scam_moderation": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
         "celery": {"handlers": ["console"], "level": "INFO"},
         "": {
             "handlers": ["console"],

@@ -8,7 +8,8 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from quickstart.models import BannedIP, Conversation, ConversationMessage
+from quickstart.models import Conversation, ConversationMessage
+from quickstart.utils.ip_bans import ban_ip_addresses
 from quickstart.serializers.business.business_conversation_serializers import (
     BusinessConversationListSerializer,
     BusinessConversationDetailSerializer,
@@ -125,6 +126,8 @@ class AdminConversationViewSet(viewsets.ReadOnlyModelViewSet):
             )
 
         now = timezone.now()
+        from quickstart.utils.scam_moderation_log import log_admin_override
+
         if approve:
             if msg.moderation_status == ConversationMessage.MODERATION_APPROVED:
                 return Response({"status": "already_approved"})
@@ -135,6 +138,12 @@ class AdminConversationViewSet(viewsets.ReadOnlyModelViewSet):
             msg.moderation_status = ConversationMessage.MODERATION_APPROVED
             msg.moderated_at = now
             msg.save(update_fields=["moderation_status", "moderated_at"])
+            log_admin_override(
+                message_id=msg.id,
+                conversation_id=msg.conversation_id,
+                action="approve",
+                admin_user_id=request.user.userId,
+            )
             if was_quarantined:
                 deliver_booker_message(msg.conversation, msg)
             return Response({"status": "approved"})
@@ -142,15 +151,19 @@ class AdminConversationViewSet(viewsets.ReadOnlyModelViewSet):
         msg.moderation_status = ConversationMessage.MODERATION_REJECTED
         msg.moderated_at = now
         msg.save(update_fields=["moderation_status", "moderated_at"])
+        log_admin_override(
+            message_id=msg.id,
+            conversation_id=msg.conversation_id,
+            action="reject",
+            admin_user_id=request.user.userId,
+            ban_ip=bool(request.data.get("ban_ip") and msg.sender_ip),
+        )
 
         if request.data.get("ban_ip") and msg.sender_ip:
-            BannedIP.objects.get_or_create(
-                ip_address=msg.sender_ip,
-                defaults={
-                    "reason": f"Rejected scam message {msg.id}",
-                    "created_by": request.user,
-                    "is_active": True,
-                },
+            ban_ip_addresses(
+                request.user,
+                [msg.sender_ip],
+                f"Rejected scam message {msg.id}",
             )
 
         return Response({"status": "rejected"})

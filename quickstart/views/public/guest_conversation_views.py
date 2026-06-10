@@ -3,7 +3,6 @@ Public (unauthenticated) guest messaging: submit a message from class page, and 
 """
 
 from django.conf import settings
-from django.db import transaction
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.views import APIView
@@ -26,7 +25,12 @@ from quickstart.serializers.public.public_conversation_serializers import (
 )
 from quickstart.utils.guest_inbox_token import create_guest_inbox_token, parse_guest_inbox_token
 from quickstart.utils.conversation_delivery import deliver_booker_message
+from quickstart.utils.moderation_queue import queue_message_moderation
 from quickstart.utils.request_utils import get_client_ip
+from quickstart.utils.scam_moderation_log import (
+    log_message_delivered_immediately,
+    log_message_quarantined,
+)
 
 import logging
 
@@ -96,10 +100,24 @@ class GuestMessageCreateView(APIView):
         conv.save(update_fields=["last_message_at"])
 
         if scam_filter_enabled:
-            from quickstart.tasks.business_tasks import moderate_message_task
-
-            transaction.on_commit(lambda: moderate_message_task.delay(str(msg.id)))
+            log_message_quarantined(
+                message_id=msg.id,
+                conversation_id=conv.id,
+                business_id=conv.business_id,
+                sender_type=ConversationMessage.SENDER_BOOKER,
+                source="guest_class_page",
+                scam_filter_enabled=True,
+                is_first_booker_message=True,
+                sender_ip=msg_kwargs.get("sender_ip"),
+            )
+            queue_message_moderation(msg, source="guest_class_page")
         else:
+            log_message_delivered_immediately(
+                message_id=msg.id,
+                conversation_id=conv.id,
+                source="guest_class_page",
+                reason="scam_filter_disabled",
+            )
             deliver_booker_message(conv, msg)
 
         # Send email to guest with magic link to inbox

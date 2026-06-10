@@ -11,7 +11,7 @@ from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from quickstart.middleware import BannedIPMiddleware
-from quickstart.models import BannedIP, ConversationMessage
+from quickstart.models import AuditLog, BannedIP, ConversationMessage
 from quickstart.tests.factories import ConversationFactory, ConversationMessageFactory, UserFactory
 from quickstart.utils.scam_filter_ai import parse_scam_classifier_json
 
@@ -62,6 +62,42 @@ class TestBannedIPMiddleware:
         middleware = BannedIPMiddleware(lambda req: downstream)
         response = middleware(request)
         assert response is downstream
+
+
+@pytest.mark.django_db
+class TestBanAccountIps:
+    def test_ban_account_ips_creates_banned_ip_records(self, admin_client):
+        user = UserFactory()
+        AuditLog.objects.create(
+            user=user,
+            user_email=user.email,
+            action="login",
+            details="Login",
+            ip_address="203.0.113.77",
+        )
+
+        response = admin_client.post(
+            f"{API}/admin/users/{user.userId}/ban_account_ips/"
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["banned_ips"] == ["203.0.113.77"]
+        assert BannedIP.objects.filter(
+            ip_address="203.0.113.77", is_active=True
+        ).exists()
+
+        list_response = admin_client.get(f"{API}/admin/banned-ips/")
+        assert list_response.status_code == status.HTTP_200_OK
+        results = list_response.data.get("results", list_response.data)
+        assert any(row["ip_address"] == "203.0.113.77" for row in results)
+
+    def test_ban_account_ips_without_login_history_returns_400(self, admin_client):
+        user = UserFactory()
+
+        response = admin_client.post(
+            f"{API}/admin/users/{user.userId}/ban_account_ips/"
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "No login IP addresses found" in response.data["detail"]
 
 
 @pytest.mark.django_db

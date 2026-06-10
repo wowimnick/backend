@@ -3,6 +3,7 @@ import logging
 from django.dispatch import receiver
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.auth.signals import user_logged_in
 from django.db.models import Sum, Value, IntegerField, Q
 from django.db.models.functions import Coalesce
 from django.db import transaction
@@ -1358,3 +1359,14 @@ def invalidate_banned_ip_cache_signal(sender, **kwargs):
     from quickstart.middleware import invalidate_banned_ip_cache
 
     invalidate_banned_ip_cache()
+
+
+@receiver(user_logged_in)
+def audit_api_user_login(sender, request, user, **kwargs):
+    """Audit social/API session logins (email/password JWT login is logged in its view)."""
+    if not request or not str(getattr(request, "path", "")).startswith("/api/"):
+        return
+
+    from quickstart.utils.login_audit import log_user_login
+
+    log_user_login(user, request)

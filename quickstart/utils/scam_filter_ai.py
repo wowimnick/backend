@@ -73,6 +73,7 @@ def classify_message(
     business_name: str | None = None,
     sender_name: str | None = None,
     sender_email: str | None = None,
+    message_id=None,
 ) -> dict:
     """
     Classify whether a message is scam/spam vs a genuine class/booking inquiry.
@@ -80,6 +81,12 @@ def classify_message(
     Returns {"is_scam": bool, "confidence": float, "reason": str}.
     Raises on unrecoverable API errors (caller should fail-open).
     """
+    from quickstart.utils.scam_moderation_log import (
+        log_gemini_model_failed,
+        log_gemini_request,
+        log_gemini_result,
+    )
+
     api_key = getattr(settings, "GEMINI_API_KEY", None)
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is missing in settings.")
@@ -110,7 +117,15 @@ Return a single JSON object (no markdown):
 
     response = None
     candidate_models = _candidate_models()
+    model_used = None
     for idx, model_name in enumerate(candidate_models, start=1):
+        log_gemini_request(
+            message_id=message_id,
+            model=model_name,
+            business_name=business_name,
+            sender_name=sender_name,
+            text_preview=text,
+        )
         try:
             response = client.models.generate_content(
                 model=model_name,
@@ -119,16 +134,17 @@ Return a single JSON object (no markdown):
                     response_mime_type="application/json",
                 ),
             )
+            model_used = model_name
             break
         except genai_errors.ClientError as model_error:
             status_code = getattr(model_error, "code", None)
             is_retryable = status_code in {404, 429, 500, 502, 503, 504}
-            logger.warning(
-                "Gemini scam model %s failed code=%s retryable=%s: %s",
-                model_name,
-                status_code,
-                is_retryable,
-                model_error,
+            log_gemini_model_failed(
+                message_id=message_id,
+                model=model_name,
+                status_code=status_code,
+                retryable=is_retryable,
+                error=str(model_error),
             )
             if not is_retryable or idx == len(candidate_models):
                 raise
@@ -148,4 +164,11 @@ Return a single JSON object (no markdown):
         confidence = 0.0
 
     reason = str(parsed.get("reason") or "").strip()
+    log_gemini_result(
+        message_id=message_id,
+        model=model_used or "unknown",
+        is_scam=is_scam,
+        confidence=confidence,
+        reason=reason,
+    )
     return {"is_scam": is_scam, "confidence": confidence, "reason": reason}

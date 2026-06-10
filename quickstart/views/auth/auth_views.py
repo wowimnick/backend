@@ -33,14 +33,12 @@ from allauth.account.forms import ResetPasswordForm, SetPasswordForm
 
 
 from quickstart.serializers.auth.auth_serializers import CustomAllAuthPasswordResetForm
-from quickstart.models import AuditLog
-
-
 from quickstart.serializers import (
     CustomTokenObtainPairSerializer,
     CustomUserDetailsSerializer,
     CustomRegisterSerializer,
 )
+from quickstart.utils.login_audit import log_user_login
 from quickstart.utils.request_utils import get_client_ip  # noqa: F401 — re-exported for callers
 
 logger = logging.getLogger(__name__)
@@ -118,20 +116,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         validated_data = serializer.validated_data
         user = serializer.user
 
-        try:
-            AuditLog.objects.create(
-                user=user,
-                user_email=user.email,
-                action="login",
-                details=f"User '{user.email}' logged in successfully.",
-                ip_address=get_client_ip(request),
-                user_agent=request.META.get("HTTP_USER_AGENT", ""),
-            )
-            logger.info(f"Successful login audited for user: {user.email}")
-        except Exception as audit_error:
-            logger.error(
-                f"Failed to create login audit log for user {user.email}: {audit_error}"
-            )
+        log_user_login(user, request)
 
         response_data = {
             "user": validated_data["user"],

@@ -620,6 +620,19 @@ def moderate_message_task(self, message_id):
     from quickstart.models import ConversationMessage
     from quickstart.utils.conversation_delivery import deliver_booker_message
     from quickstart.utils.scam_filter_ai import classify_message
+    from quickstart.utils.scam_moderation_log import (
+        log_moderation_decision,
+        log_task_failed_open,
+        log_task_skipped,
+        log_task_started,
+    )
+
+    celery_task_id = getattr(getattr(self, "request", None), "id", None)
+    log_task_started(
+        message_id=message_id,
+        celery_task_id=celery_task_id,
+        attempt=int(getattr(self.request, "retries", 0) or 0) + 1,
+    )
 
     try:
         msg = (
@@ -632,10 +645,15 @@ def moderate_message_task(self, message_id):
             .get(pk=message_id)
         )
     except ConversationMessage.DoesNotExist:
-        logger.warning("moderate_message_task: message %s not found", message_id)
+        log_task_skipped(message_id=message_id, reason="message_not_found")
         return
 
     if msg.moderation_status != ConversationMessage.MODERATION_PENDING:
+        log_task_skipped(
+            message_id=message_id,
+            reason="not_pending",
+            moderation_status=msg.moderation_status,
+        )
         return
 
     conv = msg.conversation
@@ -662,6 +680,7 @@ def moderate_message_task(self, message_id):
             business_name=getattr(business, "businessName", None),
             sender_name=sender_name,
             sender_email=sender_email,
+            message_id=message_id,
         )
         if result.get("is_scam"):
             msg.moderation_status = ConversationMessage.MODERATION_REJECTED
@@ -669,10 +688,13 @@ def moderate_message_task(self, message_id):
             msg.moderation_confidence = result.get("confidence")
             msg.moderated_at = now
             msg.save(update_fields=update_fields)
-            logger.info(
-                "Message %s rejected by scam filter (confidence=%s)",
-                message_id,
-                result.get("confidence"),
+            log_moderation_decision(
+                message_id=message_id,
+                conversation_id=conv.id,
+                decision="rejected",
+                moderation_status=msg.moderation_status,
+                confidence=result.get("confidence"),
+                reason=result.get("reason"),
             )
             return
 
@@ -681,8 +703,17 @@ def moderate_message_task(self, message_id):
         msg.moderation_confidence = result.get("confidence")
         msg.moderated_at = now
         msg.save(update_fields=update_fields)
+        log_moderation_decision(
+            message_id=message_id,
+            conversation_id=conv.id,
+            decision="approved",
+            moderation_status=msg.moderation_status,
+            confidence=result.get("confidence"),
+            reason=result.get("reason"),
+        )
         deliver_booker_message(conv, msg)
     except Exception as exc:
+        log_task_failed_open(message_id=message_id, error=str(exc))
         logger.error(
             "moderate_message_task failed for %s; fail-open deliver: %s",
             message_id,
@@ -693,4 +724,11 @@ def moderate_message_task(self, message_id):
         msg.moderation_reason = str(exc)[:2000]
         msg.moderated_at = now
         msg.save(update_fields=update_fields)
+        log_moderation_decision(
+            message_id=message_id,
+            conversation_id=conv.id,
+            decision="fail_open",
+            moderation_status=msg.moderation_status,
+            reason=str(exc),
+        )
         deliver_booker_message(conv, msg)

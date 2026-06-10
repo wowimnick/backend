@@ -3,7 +3,6 @@ Public (booker) conversation ViewSet: list/create conversations, get detail with
 """
 
 from django.conf import settings
-from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from rest_framework import viewsets, status
@@ -25,6 +24,12 @@ from quickstart.serializers.public.public_conversation_serializers import (
     ConversationCreateSerializer,
     ConversationMessageSerializer,
     ConversationMessageCreateSerializer,
+)
+from quickstart.utils.conversation_delivery import deliver_booker_message
+from quickstart.utils.moderation_queue import queue_message_moderation
+from quickstart.utils.scam_moderation_log import (
+    log_message_delivered_immediately,
+    log_message_quarantined,
 )
 
 import logging
@@ -166,12 +171,27 @@ class GuestConversationViewSet(viewsets.GenericViewSet):
         conv.save(update_fields=["last_message_at"])
 
         if is_first_booker_message and scam_filter_enabled:
-            from quickstart.tasks.business_tasks import moderate_message_task
-
-            transaction.on_commit(lambda: moderate_message_task.delay(str(msg.id)))
+            log_message_quarantined(
+                message_id=msg.id,
+                conversation_id=conv.id,
+                business_id=conv.business_id,
+                sender_type=ConversationMessage.SENDER_BOOKER,
+                source="booker_conversation",
+                scam_filter_enabled=True,
+                is_first_booker_message=True,
+                sender_ip=msg_kwargs.get("sender_ip"),
+            )
+            queue_message_moderation(msg, source="booker_conversation")
         else:
-            from quickstart.utils.conversation_delivery import deliver_booker_message
-
+            reason = "not_first_booker_message"
+            if not scam_filter_enabled:
+                reason = "scam_filter_disabled"
+            log_message_delivered_immediately(
+                message_id=msg.id,
+                conversation_id=conv.id,
+                source="booker_conversation",
+                reason=reason,
+            )
             deliver_booker_message(conv, msg)
         return Response(
             ConversationMessageSerializer(msg).data,

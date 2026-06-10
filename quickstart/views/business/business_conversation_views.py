@@ -125,6 +125,13 @@ class BusinessConversationViewSet(viewsets.GenericViewSet):
             sender_contact=None,
             text=text,
         )
+        logger.info(
+            "Business outbound message sent message_id=%s conversation_id=%s "
+            "moderation_status=%s (business messages skip Gemini review)",
+            msg.id,
+            conv.id,
+            msg.moderation_status,
+        )
         conv.last_message_at = timezone.now()
         conv.save(update_fields=["last_message_at"])
         from quickstart.utils.conversation_emails import (
@@ -222,6 +229,13 @@ class BusinessConversationViewSet(viewsets.GenericViewSet):
                 sender_user=request.user,
                 sender_contact=None,
                 text=first_message_text,
+            )
+            logger.info(
+                "Business outbound message sent message_id=%s conversation_id=%s "
+                "moderation_status=%s (business messages skip Gemini review)",
+                msg.id,
+                conv.id,
+                msg.moderation_status,
             )
             conv.last_message_at = timezone.now()
             conv.save(update_fields=["last_message_at"])

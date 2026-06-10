@@ -28,7 +28,8 @@ from rest_framework_simplejwt.token_blacklist.models import (
 from django.conf import settings
 from urllib.parse import urlencode
 
-from quickstart.models import AuditLog, BannedIP, Role, Booking, BusinessInfo
+from quickstart.models import AuditLog, Role, Booking, BusinessInfo
+from quickstart.utils.ip_bans import ban_ip_addresses
 from quickstart.serializers.admin.user_management.admin_serializers import (
     AdminUserListSerializer,
     AdminUserDetailSerializer,
@@ -616,37 +617,49 @@ class UserAdminViewSet(viewsets.ModelViewSet):
                 message="You do not have permission to manage IP bans.",
             )
 
-        login_ips = (
+        login_ips = list(
             AuditLog.objects.filter(user=user, action="login")
             .exclude(ip_address__isnull=True)
             .exclude(ip_address="")
             .values_list("ip_address", flat=True)
             .distinct()
         )
-        reason = (request.data.get("reason") or f"Banned login IPs for user {user.email}").strip()
-        created = []
-        for ip in login_ips:
-            ban, was_created = BannedIP.objects.get_or_create(
-                ip_address=ip,
-                defaults={
-                    "reason": reason,
-                    "created_by": request.user,
-                    "is_active": True,
+        if not login_ips:
+            return Response(
+                {
+                    "detail": (
+                        "No login IP addresses found for this account. "
+                        "The user may not have any recorded logins yet."
+                    )
                 },
+                status=status.HTTP_400_BAD_REQUEST,
             )
-            if was_created:
-                created.append(ip)
+
+        reason = (
+            request.data.get("reason") or f"Banned login IPs for user {user.email}"
+        ).strip()
+        ban_result = ban_ip_addresses(request.user, login_ips, reason)
+        created = ban_result["created"]
+        reactivated = ban_result["reactivated"]
+        already_active = ban_result["already_active"]
+        affected = created + reactivated
 
         self._log_user_action(
             user,
             "system_setting_change",
-            f"Banned {len(created)} login IP(s) for user {user.email}",
-            metadata={"banned_ips": created},
+            f"Banned {len(affected)} login IP(s) for user {user.email}",
+            metadata={
+                "banned_ips": created,
+                "reactivated_ips": reactivated,
+                "already_banned_ips": already_active,
+            },
         )
         return Response(
             {
                 "status": "ok",
                 "banned_ips": created,
+                "reactivated_ips": reactivated,
+                "already_banned_ips": already_active,
                 "total_login_ips": len(login_ips),
             }
         )
