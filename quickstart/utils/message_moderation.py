@@ -21,6 +21,32 @@ logger = logging.getLogger(__name__)
 MODERATE_MESSAGE_TASK_NAME = "quickstart.tasks.business_tasks.moderate_message_task"
 
 
+def _apply_moderation_result(
+    msg: ConversationMessage,
+    *,
+    new_status: str,
+    reason: str,
+    confidence: float | None,
+    moderated_at,
+) -> bool:
+    """
+    Write the moderation result to the DB using a conditional update that only
+    applies when the message is still PENDING.  Returns True if the row was
+    updated, False when another actor (admin override, concurrent retry) already
+    changed the status — in which case the caller must not deliver the message.
+    """
+    updated = ConversationMessage.objects.filter(
+        pk=msg.pk,
+        moderation_status=ConversationMessage.MODERATION_PENDING,
+    ).update(
+        moderation_status=new_status,
+        moderation_reason=reason[:2000],
+        moderation_confidence=confidence,
+        moderated_at=moderated_at,
+    )
+    return bool(updated)
+
+
 def run_message_moderation(
     message_id: str,
     *,
@@ -75,12 +101,6 @@ def run_message_moderation(
         sender_email = msg.sender_contact.email
 
     now = timezone.now()
-    update_fields = [
-        "moderation_status",
-        "moderation_reason",
-        "moderation_confidence",
-        "moderated_at",
-    ]
 
     try:
         result = classify_message(
@@ -90,36 +110,55 @@ def run_message_moderation(
             sender_email=sender_email,
             message_id=message_id,
         )
-        if result.get("is_scam"):
-            msg.moderation_status = ConversationMessage.MODERATION_REJECTED
-            msg.moderation_reason = (result.get("reason") or "")[:2000]
-            msg.moderation_confidence = result.get("confidence")
-            msg.moderated_at = now
-            msg.save(update_fields=update_fields)
-            log_moderation_decision(
+        is_scam = bool(result.get("is_scam"))
+        new_status = (
+            ConversationMessage.MODERATION_REJECTED
+            if is_scam
+            else ConversationMessage.MODERATION_APPROVED
+        )
+
+        applied = _apply_moderation_result(
+            msg,
+            new_status=new_status,
+            reason=result.get("reason") or "",
+            confidence=result.get("confidence"),
+            moderated_at=now,
+        )
+
+        if not applied:
+            # An admin override arrived while classify_message was running.
+            # The message has already been handled (and possibly delivered);
+            # do NOT overwrite the admin decision or re-deliver.
+            actual_status = (
+                ConversationMessage.objects.filter(pk=msg.pk)
+                .values_list("moderation_status", flat=True)
+                .first()
+            )
+            logger.warning(
+                "Moderation result for message_id=%s discarded: status changed to %r "
+                "during classification (admin override or concurrent retry).",
+                message_id,
+                actual_status,
+            )
+            log_task_skipped(
                 message_id=message_id,
-                conversation_id=conv.id,
-                decision="rejected",
-                moderation_status=msg.moderation_status,
-                confidence=result.get("confidence"),
-                reason=result.get("reason"),
+                reason="superseded",
+                moderation_status=actual_status,
             )
             return
 
-        msg.moderation_status = ConversationMessage.MODERATION_APPROVED
-        msg.moderation_reason = (result.get("reason") or "")[:2000]
-        msg.moderation_confidence = result.get("confidence")
-        msg.moderated_at = now
-        msg.save(update_fields=update_fields)
+        decision = "rejected" if is_scam else "approved"
         log_moderation_decision(
             message_id=message_id,
             conversation_id=conv.id,
-            decision="approved",
-            moderation_status=msg.moderation_status,
+            decision=decision,
+            moderation_status=new_status,
             confidence=result.get("confidence"),
             reason=result.get("reason"),
         )
-        deliver_booker_message(conv, msg)
+        if not is_scam:
+            deliver_booker_message(conv, msg)
+
     except Exception as exc:
         log_task_failed_open(message_id=message_id, error=str(exc))
         logger.error(
@@ -128,15 +167,41 @@ def run_message_moderation(
             exc,
             exc_info=True,
         )
-        msg.moderation_status = ConversationMessage.MODERATION_ERROR
-        msg.moderation_reason = str(exc)[:2000]
-        msg.moderated_at = now
-        msg.save(update_fields=update_fields)
+
+        applied = _apply_moderation_result(
+            msg,
+            new_status=ConversationMessage.MODERATION_ERROR,
+            reason=str(exc),
+            confidence=None,
+            moderated_at=now,
+        )
+
+        if not applied:
+            # Admin already resolved the message while the Gemini call was
+            # failing; the message is already delivered — don't re-deliver.
+            actual_status = (
+                ConversationMessage.objects.filter(pk=msg.pk)
+                .values_list("moderation_status", flat=True)
+                .first()
+            )
+            logger.warning(
+                "Fail-open delivery for message_id=%s skipped: status is already %r "
+                "(admin resolved before error handler ran).",
+                message_id,
+                actual_status,
+            )
+            log_task_skipped(
+                message_id=message_id,
+                reason="superseded_on_error",
+                moderation_status=actual_status,
+            )
+            return
+
         log_moderation_decision(
             message_id=message_id,
             conversation_id=conv.id,
             decision="fail_open",
-            moderation_status=msg.moderation_status,
+            moderation_status=ConversationMessage.MODERATION_ERROR,
             reason=str(exc),
         )
         deliver_booker_message(conv, msg)

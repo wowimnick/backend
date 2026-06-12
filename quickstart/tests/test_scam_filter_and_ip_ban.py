@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from django.test import RequestFactory
@@ -187,3 +187,180 @@ class TestBusinessHidesQuarantinedMessages:
         conv_data = next((c for c in response.data if c["id"] == str(conv.id)), None)
         assert conv_data is not None
         assert conv_data["last_message_preview"] == "Visible approved message"
+
+
+@pytest.mark.django_db
+class TestModerationRaceCondition:
+    """
+    The Gemini classify_message() call takes several seconds.  If an admin
+    manually approves (or rejects) a message while the task is waiting for the
+    API response, the task must NOT overwrite the admin decision or re-deliver
+    the message.
+    """
+
+    def _make_pending_message(self):
+        conv = ConversationFactory()
+        msg = ConversationMessageFactory(
+            conversation=conv,
+            moderation_status=ConversationMessage.MODERATION_PENDING,
+            text="Test message",
+        )
+        return msg, conv
+
+    def _simulate_admin_approval(self, msg):
+        """Directly set status to APPROVED as an admin override would."""
+        ConversationMessage.objects.filter(pk=msg.pk).update(
+            moderation_status=ConversationMessage.MODERATION_APPROVED
+        )
+
+    def _simulate_admin_rejection(self, msg):
+        ConversationMessage.objects.filter(pk=msg.pk).update(
+            moderation_status=ConversationMessage.MODERATION_REJECTED
+        )
+
+    def test_ai_reject_does_not_override_admin_approval(self):
+        """
+        Race: admin approves → AI finishes with is_scam=True.
+        Expected: message stays APPROVED; deliver_booker_message not called again.
+        """
+        from quickstart.utils.message_moderation import run_message_moderation
+
+        msg, conv = self._make_pending_message()
+
+        def classify_and_then_admin_approves(*args, **kwargs):
+            # Simulate admin approval arriving while Gemini was running.
+            self._simulate_admin_approval(msg)
+            return {"is_scam": True, "confidence": 0.95, "reason": "Phishing"}
+
+        with patch(
+            "quickstart.utils.message_moderation.classify_message",
+            side_effect=classify_and_then_admin_approves,
+        ), patch(
+            "quickstart.utils.message_moderation.deliver_booker_message"
+        ) as mock_deliver:
+            run_message_moderation(str(msg.pk))
+
+        msg.refresh_from_db()
+        assert msg.moderation_status == ConversationMessage.MODERATION_APPROVED, (
+            "AI result must not overwrite admin approval"
+        )
+        mock_deliver.assert_not_called()
+
+    def test_ai_approve_does_not_double_deliver_after_admin_approval(self):
+        """
+        Race: admin approves (and delivers) → AI finishes with is_scam=False.
+        Expected: message stays APPROVED; deliver_booker_message not called a second time.
+        """
+        from quickstart.utils.message_moderation import run_message_moderation
+
+        msg, conv = self._make_pending_message()
+
+        def classify_and_then_admin_approves(*args, **kwargs):
+            self._simulate_admin_approval(msg)
+            return {"is_scam": False, "confidence": 0.05, "reason": "Genuine inquiry"}
+
+        with patch(
+            "quickstart.utils.message_moderation.classify_message",
+            side_effect=classify_and_then_admin_approves,
+        ), patch(
+            "quickstart.utils.message_moderation.deliver_booker_message"
+        ) as mock_deliver:
+            run_message_moderation(str(msg.pk))
+
+        msg.refresh_from_db()
+        assert msg.moderation_status == ConversationMessage.MODERATION_APPROVED
+        mock_deliver.assert_not_called()
+
+    def test_ai_reject_does_not_override_admin_rejection(self):
+        """
+        Race: admin rejects → AI also returns is_scam=True.
+        Expected: message stays REJECTED (no double-write, no delivery).
+        """
+        from quickstart.utils.message_moderation import run_message_moderation
+
+        msg, conv = self._make_pending_message()
+
+        def classify_and_then_admin_rejects(*args, **kwargs):
+            self._simulate_admin_rejection(msg)
+            return {"is_scam": True, "confidence": 0.99, "reason": "Spam"}
+
+        with patch(
+            "quickstart.utils.message_moderation.classify_message",
+            side_effect=classify_and_then_admin_rejects,
+        ), patch(
+            "quickstart.utils.message_moderation.deliver_booker_message"
+        ) as mock_deliver:
+            run_message_moderation(str(msg.pk))
+
+        msg.refresh_from_db()
+        assert msg.moderation_status == ConversationMessage.MODERATION_REJECTED
+        mock_deliver.assert_not_called()
+
+    def test_gemini_error_does_not_override_admin_approval(self):
+        """
+        Race: admin approves → Gemini API raises an exception (fail-open path).
+        Expected: message stays APPROVED; deliver_booker_message not called again.
+        """
+        from quickstart.utils.message_moderation import run_message_moderation
+
+        msg, conv = self._make_pending_message()
+
+        def classify_and_then_admin_approves(*args, **kwargs):
+            self._simulate_admin_approval(msg)
+            raise RuntimeError("Gemini timeout")
+
+        with patch(
+            "quickstart.utils.message_moderation.classify_message",
+            side_effect=classify_and_then_admin_approves,
+        ), patch(
+            "quickstart.utils.message_moderation.deliver_booker_message"
+        ) as mock_deliver:
+            run_message_moderation(str(msg.pk))
+
+        msg.refresh_from_db()
+        assert msg.moderation_status == ConversationMessage.MODERATION_APPROVED, (
+            "Fail-open must not overwrite admin approval with ERROR"
+        )
+        mock_deliver.assert_not_called()
+
+    def test_normal_approval_delivers_exactly_once(self):
+        """
+        Happy path (no race): AI returns is_scam=False, message is still PENDING.
+        Expected: message set to APPROVED, deliver_booker_message called once.
+        """
+        from quickstart.utils.message_moderation import run_message_moderation
+
+        msg, conv = self._make_pending_message()
+
+        with patch(
+            "quickstart.utils.message_moderation.classify_message",
+            return_value={"is_scam": False, "confidence": 0.02, "reason": "Genuine"},
+        ), patch(
+            "quickstart.utils.message_moderation.deliver_booker_message"
+        ) as mock_deliver:
+            run_message_moderation(str(msg.pk))
+
+        msg.refresh_from_db()
+        assert msg.moderation_status == ConversationMessage.MODERATION_APPROVED
+        mock_deliver.assert_called_once()
+
+    def test_normal_rejection_does_not_deliver(self):
+        """
+        Happy path (no race): AI returns is_scam=True.
+        Expected: message set to REJECTED, deliver_booker_message not called.
+        """
+        from quickstart.utils.message_moderation import run_message_moderation
+
+        msg, conv = self._make_pending_message()
+
+        with patch(
+            "quickstart.utils.message_moderation.classify_message",
+            return_value={"is_scam": True, "confidence": 0.97, "reason": "Spam"},
+        ), patch(
+            "quickstart.utils.message_moderation.deliver_booker_message"
+        ) as mock_deliver:
+            run_message_moderation(str(msg.pk))
+
+        msg.refresh_from_db()
+        assert msg.moderation_status == ConversationMessage.MODERATION_REJECTED
+        mock_deliver.assert_not_called()
