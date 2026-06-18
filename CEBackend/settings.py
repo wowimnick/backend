@@ -165,6 +165,8 @@ GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 # Comma-separated Gemini models for scam message moderation (fallback order).
 GEMINI_SCAM_MODELS = os.environ.get("GEMINI_SCAM_MODELS", "")
 SCAM_FILTER_ENABLED = os.environ.get("SCAM_FILTER_ENABLED", "true").lower() == "true"
+# Comma-separated Gemini models for homepage review selection (fallback order).
+GEMINI_REVIEW_MODELS = os.environ.get("GEMINI_REVIEW_MODELS", "")
 # Apify (Instagram profile follower counts; optional — scraper skips if unset)
 APIFY_TOKEN = os.environ.get("APIFY_TOKEN", "")
 # Secret for the endpoint at /api/webhooks/stripe-connect/

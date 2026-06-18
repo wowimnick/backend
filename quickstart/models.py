@@ -4138,6 +4138,50 @@ class ImportedGoogleReview(models.Model):
         ordering = ["-review_date"]
 
 
+class FeaturedHomepageReview(models.Model):
+    """
+    Gemini-selected Google reviews shown on the homepage hero.
+
+    Refreshed once per build by the `refresh_homepage_reviews` management command
+    (called from entrypoint.sh on the web container). Each build stores its own
+    set of rows keyed by `selection_build_id`, so deploys atomically swap the
+    displayed reviews. The public endpoint returns the most recent set.
+    """
+
+    google_review = models.ForeignKey(
+        ImportedGoogleReview,
+        on_delete=models.CASCADE,
+        related_name="homepage_features",
+    )
+    class_slug = models.SlugField(
+        max_length=255,
+        help_text="Deep-link target class slug for the reviewed business.",
+    )
+    business_name = models.CharField(max_length=255)
+    display_order = models.PositiveSmallIntegerField(default=0)
+    selected_at = models.DateTimeField(auto_now=True)
+    selection_build_id = models.CharField(
+        max_length=128,
+        blank=True,
+        db_index=True,
+        help_text="BUILD_ID/IMAGE_TAG/GIT_SHA of the deploy that selected this set.",
+    )
+
+    def __str__(self):
+        return f"Featured #{self.display_order}: {self.google_review.reviewer_name} -> /classes/{self.class_slug}"
+
+    class Meta:
+        db_table = "featured_homepage_reviews"
+        ordering = ["display_order"]
+        indexes = [models.Index(fields=["selection_build_id", "display_order"])]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("google_review", "selection_build_id"),
+                name="unique_featured_per_build",
+            ),
+        ]
+
+
 class SupportTicket(models.Model):
     """
     Represents a customer support ticket.

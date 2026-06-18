@@ -204,6 +204,7 @@ from quickstart.views import (
     register_business,
     PlatformClassReviews,
     ImportedGoogleReviewsView,
+    FeaturedHomepageReviewsView,
     BusinessStudentViewSet,
     MyProfileView,
     RevenueAnalyticsView,
@@ -687,6 +688,11 @@ urlpatterns = [
         "classes/homepage-content/",
         PublicClassViewSet.as_view({"get": "homepage_content"}),
         name="public-class-homepage-content",
+    ),
+    path(
+        "homepage/featured-reviews/",
+        FeaturedHomepageReviewsView.as_view(),
+        name="homepage-featured-reviews",
     ),
     path(
         "classes/collections/<slug:parent_slug>/children/",

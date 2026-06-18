@@ -4,7 +4,7 @@ from django.conf import settings
 from rest_framework import serializers
 
 from quickstart.utils.url_utils import build_cloudfront_url
-from quickstart.models import CustomUser, ImportedGoogleReview, Reviews
+from quickstart.models import CustomUser, FeaturedHomepageReview, ImportedGoogleReview, Reviews
 
 logger = logging.getLogger(__name__)
 
@@ -303,3 +303,27 @@ class ImportedGoogleReviewSerializer(serializers.ModelSerializer):
             f"ImportedGoogleReviewSerializer: get_image_medium_urls called for review {obj.google_review_id}"
         )
         return self._convert_to_processed_urls(obj.image_urls, "medium")
+
+
+class FeaturedHomepageReviewSerializer(serializers.ModelSerializer):
+    """
+    Serializer for Gemini-selected Google reviews shown on the homepage hero.
+    Each review includes a class_slug deep-link to the reviewed class page.
+    """
+
+    reviewer_name = serializers.CharField(source="google_review.reviewer_name", read_only=True)
+    rating = serializers.IntegerField(source="google_review.rating", read_only=True)
+    comment = serializers.CharField(source="google_review.comment", read_only=True)
+    review_date = serializers.DateTimeField(source="google_review.review_date", read_only=True)
+
+    class Meta:
+        model = FeaturedHomepageReview
+        fields = [
+            "reviewer_name",
+            "rating",
+            "comment",
+            "review_date",
+            "class_slug",
+            "business_name",
+            "display_order",
+        ]

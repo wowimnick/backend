@@ -36,6 +36,10 @@ if [ "$CONTAINER_ROLE" = "web" ]; then
     echo "--- [WEB] enhance_permissions (once per build) ---"
     python manage.py enhance_permissions --once-per-build || true
 
+    # Refresh Gemini-selected homepage featured reviews once per deploy.
+    echo "--- [WEB] Refreshing homepage featured reviews (once per build, Gemini) ---"
+    python manage.py refresh_homepage_reviews --once-per-build || true
+
     echo "--- [WEB] Typesense index ready (full reindex once per build when enabled; needs GIT_SHA/BUILD_ID/IMAGE_TAG) ---"
     python manage.py sync_typesense_at_startup || true
 

@@ -83,6 +83,7 @@ from .public.public_review_views import (
     ReviewSubmission,
     PlatformClassReviews,
     ImportedGoogleReviewsView,
+    FeaturedHomepageReviewsView,
 )
 
 from .business.business_staff_views import (
@@ -120,6 +121,7 @@ __all__ = [
     "MyBusinessInstagramFollowersSyncView",
     "PublicBusinessInfoViewSet",
     "ImportedGoogleReviewsView",
+    "FeaturedHomepageReviewsView",
     "MyBusinessOverviewView",
     "NotificationViewSet",
     "BusinessDiscountViewSet",

@@ -25,6 +25,7 @@ from quickstart.utils.revalidation import (
 # Adjust import paths
 from quickstart.models import ImportedGoogleReview, Reviews, Booking
 from quickstart.serializers.public.public_review_serializers import (
+    FeaturedHomepageReviewSerializer,
     ImportedGoogleReviewSerializer,
     ReviewSubmissionSerializer,
     PublicReviewSerializer,
@@ -216,3 +217,95 @@ class ImportedGoogleReviewsView(generics.ListAPIView):
             return all_reviews_list
 
         return random.sample(all_reviews_list, sample_size)
+
+
+class FeaturedHomepageReviewsView(generics.ListAPIView):
+    """
+    Returns the Gemini-selected Google reviews shown on the homepage hero strip.
+
+    Each build refreshes the selection via the `refresh_homepage_reviews`
+    management command. If no selection exists yet (e.g. before the first
+    build runs Gemini), falls back to a random sample of recent Google
+    reviews joined to a representative class slug for each business, so the
+    hero never renders empty.
+
+    Cached for 1 hour.
+    """
+
+    serializer_class = FeaturedHomepageReviewSerializer
+    permission_classes = [AllowAny]
+    pagination_class = None
+
+    @method_decorator(cache_page(60 * 60))
+    def get(self, *args, **kwargs):
+        return super().get(*args, **kwargs)
+
+    def get_queryset(self):
+        from quickstart.models import ClassesMain, FeaturedHomepageReview
+
+        # Prefer the most recent Gemini-selected set.
+        latest_build = (
+            FeaturedHomepageReview.objects
+            .order_by("-selected_at", "-selection_build_id")
+            .values_list("selection_build_id", flat=True)
+            .first()
+        )
+        if latest_build is not None:
+            qs = (
+                FeaturedHomepageReview.objects
+                .filter(selection_build_id=latest_build)
+                .select_related("google_review")
+                .order_by("display_order")
+            )
+            if qs.exists():
+                return list(qs)
+
+        # Fallback: random sample of recent Google reviews with a linkable class.
+        return self._fallback_queryset()
+
+    def _fallback_queryset(self):
+        """Build synthetic FeaturedHomepageReview-like objects from random Google reviews."""
+        from quickstart.models import ClassesMain, FeaturedHomepageReview, ImportedGoogleReview
+
+        recent = list(
+            ImportedGoogleReview.objects
+            .filter(rating__gte=4)
+            .exclude(comment__isnull=True)
+            .exclude(comment="")
+            .select_related("business")
+            .order_by("-review_date", "-created_at")[:24]
+        )
+        # Pick a representative class slug per business.
+        slug_by_business = {}
+        for r in recent:
+            if r.business_id in slug_by_business:
+                continue
+            cls = (
+                ClassesMain.objects
+                .filter(business_id=r.business_id, slug__isnull=False)
+                .exclude(slug="")
+                .order_by("-platform_review_count", "classId")
+                .first()
+            )
+            if cls:
+                slug_by_business[r.business_id] = cls.slug
+
+        # Sample up to 6 with a linkable class.
+        eligible = [r for r in recent if r.business_id in slug_by_business]
+        if len(eligible) > 6:
+            eligible = random.sample(eligible, 6)
+
+        # Construct in-memory FeaturedHomepageReview shells (not persisted).
+        synthetic = []
+        for idx, r in enumerate(eligible):
+            shell = FeaturedHomepageReview(
+                google_review=r,
+                class_slug=slug_by_business[r.business_id],
+                business_name=r.business.businessName if r.business_id else "",
+                display_order=idx,
+            )
+            # Avoid hitting DB for pk on unsaved shell — serializer only reads
+            # through `google_review.*` and the flat fields we set above.
+            shell.pk = f"fallback-{idx}"
+            synthetic.append(shell)
+        return synthetic
