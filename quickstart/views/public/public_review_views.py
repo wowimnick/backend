@@ -240,10 +240,14 @@ class FeaturedHomepageReviewsView(generics.ListAPIView):
     def get(self, *args, **kwargs):
         return super().get(*args, **kwargs)
 
-    def get_queryset(self):
-        from quickstart.models import ClassesMain, FeaturedHomepageReview
+    def list(self, request, *args, **kwargs):
+        items = self.get_review_items()
+        serializer = self.get_serializer(items, many=True)
+        return Response(serializer.data)
 
-        # Prefer the most recent Gemini-selected set.
+    def get_review_items(self):
+        from quickstart.models import FeaturedHomepageReview
+
         latest_build = (
             FeaturedHomepageReview.objects
             .order_by("-selected_at", "-selection_build_id")
@@ -260,8 +264,12 @@ class FeaturedHomepageReviewsView(generics.ListAPIView):
             if qs.exists():
                 return list(qs)
 
-        # Fallback: random sample of recent Google reviews with a linkable class.
         return self._fallback_queryset()
+
+    def get_queryset(self):
+        """Unused — items are resolved in get_review_items for list()."""
+        from quickstart.models import FeaturedHomepageReview
+        return FeaturedHomepageReview.objects.none()
 
     def _fallback_queryset(self):
         """Build synthetic FeaturedHomepageReview-like objects from random Google reviews."""
@@ -282,7 +290,7 @@ class FeaturedHomepageReviewsView(generics.ListAPIView):
                 continue
             cls = (
                 ClassesMain.objects
-                .filter(business_id=r.business_id, slug__isnull=False)
+                .filter(businessId_id=r.business_id, slug__isnull=False)
                 .exclude(slug="")
                 .order_by("-platform_review_count", "classId")
                 .first()
@@ -290,17 +298,20 @@ class FeaturedHomepageReviewsView(generics.ListAPIView):
             if cls:
                 slug_by_business[r.business_id] = cls.slug
 
-        # Sample up to 6 with a linkable class.
+        # Sample up to 6; prefer reviews with a linkable class.
         eligible = [r for r in recent if r.business_id in slug_by_business]
         if len(eligible) > 6:
             eligible = random.sample(eligible, 6)
+        elif not eligible and recent:
+            pool = recent[:12]
+            eligible = random.sample(pool, min(6, len(pool)))
 
         # Construct in-memory FeaturedHomepageReview shells (not persisted).
         synthetic = []
         for idx, r in enumerate(eligible):
             shell = FeaturedHomepageReview(
                 google_review=r,
-                class_slug=slug_by_business[r.business_id],
+                class_slug=slug_by_business.get(r.business_id) or "",
                 business_name=r.business.businessName if r.business_id else "",
                 display_order=idx,
             )

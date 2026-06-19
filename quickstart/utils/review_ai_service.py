@@ -81,7 +81,7 @@ def _build_candidate_pool(count=CANDIDATE_POOL_SIZE):
         for biz_id in business_ids:
             cls = (
                 ClassesMain.objects
-                .filter(business_id=biz_id, slug__isnull=False)
+                .filter(businessId_id=biz_id, slug__isnull=False)
                 .exclude(slug="")
                 .order_by("-platform_review_count", "classId")
                 .first()
