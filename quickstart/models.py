@@ -4158,6 +4158,11 @@ class FeaturedHomepageReview(models.Model):
         help_text="Deep-link target class slug for the reviewed business.",
     )
     business_name = models.CharField(max_length=255)
+    display_comment = models.TextField(
+        blank=True,
+        default="",
+        help_text="Gemini-polished quote shown on the homepage (falls back to the Google review if empty).",
+    )
     display_order = models.PositiveSmallIntegerField(default=0)
     selected_at = models.DateTimeField(auto_now=True)
     selection_build_id = models.CharField(

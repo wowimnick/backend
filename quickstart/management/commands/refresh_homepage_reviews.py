@@ -3,8 +3,8 @@ Refresh the Gemini-selected homepage featured reviews.
 
 Runs once per build on the web container (called from entrypoint.sh) so each
 deploy atomically swaps the displayed reviews on the homepage hero. Gemini
-picks the most compelling, diverse reviews from the imported Google reviews
-pool; each is linked to a representative class slug for deep-linking.
+picks two polished reviews from each of at least three classes; each review
+links to a representative class slug for deep-linking.
 
 Use --once-per-build so only the first web container for a given build runs
 the Gemini call (avoids duplicate work when ECS scales out more web tasks with
@@ -40,7 +40,7 @@ class Command(BaseCommand):
             "--count",
             type=int,
             default=DEFAULT_FEATURED_COUNT,
-            help="Number of reviews Gemini should select (default: %(default)s).",
+            help="Total reviews to feature (default: 6 = 3 classes x 2 reviews each).",
         )
         parser.add_argument(
             "--dry-run",

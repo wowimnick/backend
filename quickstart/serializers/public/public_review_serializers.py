@@ -313,8 +313,14 @@ class FeaturedHomepageReviewSerializer(serializers.ModelSerializer):
 
     reviewer_name = serializers.CharField(source="google_review.reviewer_name", read_only=True)
     rating = serializers.IntegerField(source="google_review.rating", read_only=True)
-    comment = serializers.CharField(source="google_review.comment", read_only=True)
+    comment = serializers.SerializerMethodField()
     review_date = serializers.DateTimeField(source="google_review.review_date", read_only=True)
+
+    def get_comment(self, obj):
+        polished = (obj.display_comment or "").strip()
+        if polished:
+            return polished
+        return obj.google_review.comment
 
     class Meta:
         model = FeaturedHomepageReview
