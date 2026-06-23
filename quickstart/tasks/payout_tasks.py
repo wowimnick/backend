@@ -187,6 +187,212 @@ def _build_payout_batch_idempotency_key(
     return f"payout:{business_id}:{currency.upper()}:{payout_amount_cents}:{digest}"
 
 
+def _build_stripe_transfer_metadata(
+    business_id: int, booking_count: int, idempotency_key: str
+) -> dict:
+    """
+    Stripe transfer metadata must stay identical across retries for the same batch.
+    Do not include values that change per attempt (e.g. payout_record_id).
+    """
+    return {
+        "business_id": str(business_id),
+        "booking_count": str(booking_count),
+        "batch_idempotency_key": idempotency_key,
+    }
+
+
+def _is_stripe_idempotency_key_conflict(stripe_error: stripe.StripeError) -> bool:
+    code = (getattr(stripe_error, "code", None) or "").lower()
+    if code in ("idempotency_key_in_use",):
+        return True
+    msg = (str(stripe_error) or "").lower()
+    return "idempotent" in msg and "same parameters" in msg
+
+
+def _get_completed_payout_for_batch(idempotency_key: str):
+    return (
+        Payout.objects.filter(metadata__batch_idempotency_key=idempotency_key)
+        .exclude(stripe_transfer_id__startswith="temp_")
+        .exclude(stripe_transfer_id="")
+        .order_by("-created_at")
+        .first()
+    )
+
+
+def _find_stripe_transfer_for_batch(
+    *,
+    destination: str,
+    idempotency_key: str,
+    amount_cents: int,
+    currency: str,
+    business_id: int,
+):
+    """
+    Locate an existing Stripe transfer for a payout batch (orphan recovery).
+    """
+    if not destination:
+        return None
+
+    starting_after = None
+    for _ in range(10):
+        list_kwargs = {"limit": 100, "destination": destination}
+        if starting_after:
+            list_kwargs["starting_after"] = starting_after
+        page = stripe.Transfer.list(**list_kwargs)
+        transfers = getattr(page, "data", None) or []
+        if not transfers:
+            break
+
+        for transfer in transfers:
+            transfer_id = getattr(transfer, "id", "") or ""
+            if not transfer_id.startswith("tr_"):
+                continue
+            transfer_amount = int(getattr(transfer, "amount", 0) or 0)
+            transfer_currency = (getattr(transfer, "currency", "") or "").lower()
+            if transfer_amount != amount_cents or transfer_currency != currency.lower():
+                continue
+
+            meta = stripe_metadata_to_dict(getattr(transfer, "metadata", None))
+            batch_key = meta.get("batch_idempotency_key")
+            if batch_key == idempotency_key:
+                return transfer
+
+            description = getattr(transfer, "description", "") or ""
+            if (
+                batch_key is None
+                and str(meta.get("business_id")) == str(business_id)
+                and "ClassEasily Payout" in description
+            ):
+                return transfer
+
+        if not getattr(page, "has_more", False):
+            break
+        starting_after = transfers[-1].id
+
+    return None
+
+
+def _create_stripe_transfer_for_batch(
+    *,
+    business: BusinessInfo,
+    payout_amount_cents: int,
+    idempotency_key: str,
+    booking_count: int,
+):
+    """
+    Create (or recover) a Stripe transfer for a payout batch.
+    """
+    stable_metadata = _build_stripe_transfer_metadata(
+        business.businessId, booking_count, idempotency_key
+    )
+    transfer_params = {
+        "amount": payout_amount_cents,
+        "currency": business.currency.lower(),
+        "destination": business.stripe_account_id,
+        "description": "ClassEasily Payout",
+        "metadata": stable_metadata,
+    }
+
+    try:
+        return stripe.Transfer.create(
+            **transfer_params,
+            idempotency_key=idempotency_key,
+        )
+    except stripe.StripeError as stripe_error:
+        if not _is_stripe_idempotency_key_conflict(stripe_error):
+            raise
+
+        logger.warning(
+            "Stripe idempotency conflict for Business %s batch %s; searching for existing transfer.",
+            business.businessId,
+            idempotency_key,
+        )
+        existing_transfer = _find_stripe_transfer_for_batch(
+            destination=business.stripe_account_id,
+            idempotency_key=idempotency_key,
+            amount_cents=payout_amount_cents,
+            currency=business.currency,
+            business_id=business.businessId,
+        )
+        if existing_transfer is not None:
+            logger.info(
+                "Recovered existing Stripe transfer %s for batch %s",
+                existing_transfer.id,
+                idempotency_key,
+            )
+            return existing_transfer
+
+        recovery_key = f"{idempotency_key}:v2"
+        logger.info(
+            "No existing Stripe transfer for batch %s; retrying with recovery key %s",
+            idempotency_key,
+            recovery_key,
+        )
+        return stripe.Transfer.create(
+            **transfer_params,
+            idempotency_key=recovery_key,
+        )
+
+
+def _finalize_successful_payout(
+    payout_record: Payout,
+    transfer,
+    booking_ids: list[int],
+):
+    arrival_date = timezone.now().date()
+
+    base_meta = payout_record.metadata
+    if not isinstance(base_meta, dict):
+        base_meta = {}
+    updated_metadata = dict(base_meta)
+    updated_metadata.update(
+        stripe_metadata_to_dict(getattr(transfer, "metadata", None))
+    )
+    updated_metadata["payout_record_id"] = str(payout_record.id)
+    updated_metadata.pop("temp_id", None)
+
+    payout_record.stripe_transfer_id = transfer.id
+    payout_record.arrival_date = arrival_date
+    payout_record.status = "paid"
+    payout_record.metadata = updated_metadata
+    payout_record.save(
+        update_fields=[
+            "stripe_transfer_id",
+            "arrival_date",
+            "status",
+            "metadata",
+        ]
+    )
+
+    Booking.objects.filter(id__in=booking_ids).update(payout_status="processed")
+    payout_record.bookings.add(*booking_ids)
+
+
+def _reconcile_pending_bookings_to_existing_payout(
+    payout_record: Payout,
+    booking_ids: list[int],
+) -> int:
+    """
+    Link any still-pending bookings to an already-completed payout for this batch.
+    """
+    pending_ids = list(
+        Booking.objects.filter(id__in=booking_ids, payout_status="pending").values_list(
+            "id", flat=True
+        )
+    )
+    if not pending_ids:
+        return 0
+
+    Booking.objects.filter(id__in=pending_ids).update(payout_status="processed")
+    payout_record.bookings.add(*pending_ids)
+    logger.info(
+        "Reconciled %s pending booking(s) to existing payout %s",
+        len(pending_ids),
+        payout_record.id,
+    )
+    return len(pending_ids)
+
+
 def collect_payout_integrity_findings(
     *, days: int = 3, stripe_limit: int = 200, include_stripe: bool = True
 ) -> dict:
@@ -654,6 +860,29 @@ def process_daily_payouts():
                     booking_ids=booking_ids,
                     payout_amount_cents=payout_amount_cents,
                 )
+
+                existing_payout = _get_completed_payout_for_batch(idempotency_key)
+                if existing_payout:
+                    reconciled = _reconcile_pending_bookings_to_existing_payout(
+                        existing_payout, booking_ids
+                    )
+                    if reconciled:
+                        successful_payouts += 1
+                        logger.info(
+                            "✓ SUCCESS: Reconciled %s booking(s) to existing payout %s "
+                            "for Business %s",
+                            reconciled,
+                            existing_payout.stripe_transfer_id,
+                            business.businessId,
+                        )
+                    else:
+                        logger.info(
+                            "Batch %s already paid via payout %s; no pending bookings to reconcile.",
+                            idempotency_key,
+                            existing_payout.stripe_transfer_id,
+                        )
+                    continue
+
                 temp_transfer_id = (
                     f"temp_task_{business.businessId}_{idempotency_key.split(':')[-1]}"
                 )
@@ -680,56 +909,19 @@ def process_daily_payouts():
                 logger.info(f"Payout record created: ID={payout_record.id}")
                 logger.info(f"Initiating Stripe Transfer: Amount={payout_amount_cents} cents, Currency={business.currency.lower()}")
 
-                # Execute Stripe Transfer
-                transfer = stripe.Transfer.create(
-                    amount=payout_amount_cents,
-                    currency=business.currency.lower(),
-                    destination=business.stripe_account_id,
-                    description=f"ClassEasily Payout",
-                    metadata={
-                        "business_id": business.businessId,
-                        "booking_count": len(booking_ids),
-                        "payout_record_id": str(payout_record.id),
-                        "batch_idempotency_key": idempotency_key,
-                    },
-                    idempotency_key=idempotency_key
+                transfer = _create_stripe_transfer_for_batch(
+                    business=business,
+                    payout_amount_cents=payout_amount_cents,
+                    idempotency_key=idempotency_key,
+                    booking_count=len(booking_ids),
                 )
 
                 logger.info(f"Stripe Transfer successful: ID={transfer.id}")
 
-                arrival_date = timezone.now().date()
-
-                base_meta = payout_record.metadata
-                if not isinstance(base_meta, dict):
-                    base_meta = {}
-                updated_metadata = dict(base_meta)
-                updated_metadata.update(
-                    stripe_metadata_to_dict(getattr(transfer, "metadata", None))
-                )
-                updated_metadata.pop("temp_id", None)
-
-                payout_record.stripe_transfer_id = transfer.id
-                payout_record.arrival_date = arrival_date
-                payout_record.status = "paid"
-                payout_record.metadata = updated_metadata
-                payout_record.save(
-                    update_fields=[
-                        "stripe_transfer_id",
-                        "arrival_date",
-                        "status",
-                        "metadata",
-                    ]
-                )
+                _finalize_successful_payout(payout_record, transfer, booking_ids)
 
                 logger.info(f"Updated payout record with Stripe Transfer ID: {transfer.id}")
-
-                # 1. Bulk update the status fields
-                Booking.objects.filter(id__in=booking_ids).update(payout_status="processed")
                 logger.info(f"Marked {len(booking_ids)} bookings as payout_status='processed'")
-                
-                # 2. Bulk link the bookings to the payout record
-                # Note: 'bookings' is the related_name defined in the Booking model for the payouts field
-                payout_record.bookings.add(*booking_ids)
                 logger.info(f"Linked {len(booking_ids)} bookings to payout record")
                 
                 successful_payouts += 1
