@@ -28,6 +28,7 @@ from django.db.models import (
     IntegerField,
     F,
     Value,
+    Prefetch,
 )
 from rest_framework.views import APIView
 from datetime import timedelta
@@ -47,6 +48,7 @@ from quickstart.views.public.public_business_views import invalidate_business_de
 from quickstart.utils.url_utils import sanitize_filename_for_s3, build_cloudfront_url
 from quickstart.models import (
     BusinessInfo,
+    BusinessLocation,
     Booking,
     ClassOption,
     ClassesMain,
@@ -931,7 +933,17 @@ class MyBusinessProfileView(generics.RetrieveUpdateDestroyAPIView):
                 | Q(staff_members__user=user, staff_members__status="accepted")
             )
             .select_related("owner")
-            .prefetch_related("staff_members__user", "locations")
+            .prefetch_related(
+                "staff_members__user",
+                "managers",
+                Prefetch(
+                    "locations",
+                    queryset=BusinessLocation.objects.annotate(
+                        assigned_classes_count=Count("classes")
+                    ).order_by("-is_primary", "name"),
+                ),
+            )
+            .distinct()
             .first()
         )
 

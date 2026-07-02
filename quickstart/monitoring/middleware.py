@@ -35,10 +35,10 @@ class MetricsMiddleware:
 
         # --- Safely increment request counter on every call ---
         try:
-            # `cache.add` is "set if not exists", so it's safe to call every time.
-            # It will only set the key if it has expired.
-            cache.add("requests_per_minute", 0, timeout=70)
-            cache.incr("requests_per_minute")
+            try:
+                cache.incr("requests_per_minute")
+            except ValueError:
+                cache.add("requests_per_minute", 1, timeout=70)
         except Exception as cache_err:
             logger.error(f"Cache error incrementing requests_per_minute: {cache_err}")
 
@@ -65,13 +65,11 @@ class MetricsMiddleware:
         This is now safe because it's only called during a request.
         """
         try:
-            # Ensure the general error counters exist.
-            cache.add("error_count", 0, timeout=None)
-            cache.add("error_rate", 0, timeout=70)
-
-            # Increment general error counters.
-            cache.incr("error_count")
-            cache.incr("error_rate")
+            for key, timeout in (("error_count", None), ("error_rate", 70)):
+                try:
+                    cache.incr(key)
+                except ValueError:
+                    cache.add(key, 1, timeout=timeout)
 
             # Log detailed exception info if available.
             if is_exception and exception:

@@ -2,6 +2,7 @@
 import uuid
 import stripe
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from django.conf import settings
@@ -1763,6 +1764,31 @@ class WidgetPublicPlansView(APIView):
     authentication_classes = []
     permission_classes = []
 
+    @staticmethod
+    def _fetch_stripe_plan(plan_id, price_id):
+        if not price_id:
+            return None
+        try:
+            price = stripe.Price.retrieve(str(price_id))
+            unit = getattr(price, "unit_amount", None) or 0
+            cur = (getattr(price, "currency", None) or "cad").upper()
+            rec = getattr(price, "recurring", None)
+            interval = None
+            if rec is not None:
+                interval = getattr(rec, "interval", None)
+                if isinstance(rec, dict):
+                    interval = rec.get("interval")
+            return {
+                "plan_id": plan_id,
+                "stripe_price_id": getattr(price, "id", None),
+                "amount": float(unit) / 100.0,
+                "currency": cur,
+                "interval": interval,
+            }
+        except stripe.StripeError as e:
+            logger.warning("WidgetPublicPlansView retrieve %s: %s", price_id, e)
+            return None
+
     def get(self, request):
         cache_key = "widget_v1_public_plans_v3"
         cached = cache.get(cache_key)
@@ -1774,31 +1800,22 @@ class WidgetPublicPlansView(APIView):
             ("growth", getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_GROWTH", None)),
             ("advanced", getattr(settings, "WIDGET_SUBSCRIPTION_PRICE_ADVANCED", None)),
         ]
-        for plan_id, price_id in pairs:
-            if not price_id:
-                continue
-            try:
-                price = stripe.Price.retrieve(str(price_id))
-                unit = getattr(price, "unit_amount", None) or 0
-                cur = (getattr(price, "currency", None) or "cad").upper()
-                payload["currency"] = payload["currency"] or cur
-                rec = getattr(price, "recurring", None)
-                interval = None
-                if rec is not None:
-                    interval = getattr(rec, "interval", None)
-                    if isinstance(rec, dict):
-                        interval = rec.get("interval")
-                payload["plans"].append(
-                    {
-                        "plan_id": plan_id,
-                        "stripe_price_id": getattr(price, "id", None),
-                        "amount": float(unit) / 100.0,
-                        "currency": cur,
-                        "interval": interval,
-                    }
-                )
-            except stripe.StripeError as e:
-                logger.warning("WidgetPublicPlansView retrieve %s: %s", price_id, e)
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {
+                executor.submit(self._fetch_stripe_plan, plan_id, price_id): plan_id
+                for plan_id, price_id in pairs
+                if price_id
+            }
+            for future in as_completed(futures):
+                plan = future.result()
+                if plan:
+                    payload["plans"].append(plan)
+                    payload["currency"] = payload["currency"] or plan["currency"]
+        payload["plans"].sort(
+            key=lambda item: {"basic": 0, "growth": 1, "advanced": 2}.get(
+                item["plan_id"], 99
+            )
+        )
         cache.set(cache_key, payload, timeout=3600)
         return Response(payload)
 

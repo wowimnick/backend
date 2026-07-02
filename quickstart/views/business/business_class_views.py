@@ -46,6 +46,7 @@ from quickstart.serializers.admin.class_management.class_management_serializers 
 )
 from quickstart.utils.revalidation import trigger_nextjs_revalidation
 from quickstart.views.public.public_business_views import invalidate_business_detail_cache
+from quickstart.views.public.public_class_views import invalidate_class_detail_cache
 from quickstart.utils.email_utils import send_booking_cancelled_by_other_email
 from quickstart.utils.sms_utils import normalize_phone_for_sns, business_sms_enabled
 from quickstart.tasks.notification_tasks import send_sms_task
@@ -297,10 +298,14 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
         # 1. Revalidate by TAG (this is what actually works for cached pages)
         if hasattr(class_instance, "slug") and class_instance.slug:
             trigger_nextjs_revalidation(tag=f"class-{class_instance.slug}")
+            invalidate_class_detail_cache(
+                slug=class_instance.slug, class_id=class_instance.classId
+            )
 
         if old_slug and old_slug != getattr(class_instance, "slug", None):
             trigger_nextjs_revalidation(tag=f"class-{old_slug}")
             trigger_nextjs_revalidation(path=f"/classes/{old_slug}")
+            invalidate_class_detail_cache(slug=old_slug)
 
         # 2. Also revalidate by class ID tag (if your fetcher uses it)
         trigger_nextjs_revalidation(tag=f"class-{class_instance.classId}")

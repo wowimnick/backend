@@ -162,9 +162,13 @@ class PublicBusinessDetailSerializer(PublicBusinessInfoSerializer):
         ]
 
     def get_locations(self, obj):
-        qs = list(
-            obj.locations.filter(is_active=True).order_by("-is_primary", "name")
-        )
+        prefetched = getattr(obj, "_prefetched_objects_cache", {}).get("locations")
+        if prefetched is not None:
+            qs = [loc for loc in prefetched if getattr(loc, "is_active", True)]
+        else:
+            qs = list(
+                obj.locations.filter(is_active=True).order_by("-is_primary", "name")
+            )
         seen = set()
         unique = []
         for loc in qs:
@@ -177,18 +181,11 @@ class PublicBusinessDetailSerializer(PublicBusinessInfoSerializer):
             unique.append(loc)
         return PublicBusinessLocationSerializer(unique, many=True).data
 
-    def get_google_reviews(self, obj):
-        # Fetches all imported google reviews for this business
-        google_reviews = obj.imported_google_reviews.all()
-        return ImportedGoogleReviewSerializer(google_reviews, many=True).data
-
     def _get_google_review_stats(self, obj):
-        # Helper to get aggregated stats for Google reviews to avoid re-querying
-        if not hasattr(self, "_google_review_stats"):
-            self._google_review_stats = obj.imported_google_reviews.aggregate(
-                google_count=Count("id"), google_avg_rating=Avg("rating")
-            )
-        return self._google_review_stats
+        return {
+            "google_count": obj.google_review_count or 0,
+            "google_avg_rating": obj.google_avg_rating or Decimal("0.0"),
+        }
 
     def get_combined_review_count(self, obj):
         platform_count = obj.total_reviews_count

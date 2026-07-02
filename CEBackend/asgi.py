@@ -22,6 +22,20 @@ _asgi_app = ProtocolTypeRouter(
 )
 
 
+_UNSUPPORTED_HTTP_METHODS = frozenset({"CONNECT", "TRACE"})
+
+
+async def _reject_unsupported_http_method(scope, send):
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 405,
+            "headers": [(b"content-type", b"text/plain"), (b"content-length", b"18")],
+        }
+    )
+    await send({"type": "http.response.body", "body": b"Method Not Allowed"})
+
+
 async def application(scope, receive, send):
     """
     ASGI app that handles lifespan scope so uvicorn (and other ASGI servers)
@@ -37,4 +51,9 @@ async def application(scope, receive, send):
                 await send({"type": "lifespan.shutdown.complete"})
                 return
         return
+
+    if scope["type"] == "http" and scope.get("method") in _UNSUPPORTED_HTTP_METHODS:
+        await _reject_unsupported_http_method(scope, send)
+        return
+
     await _asgi_app(scope, receive, send)

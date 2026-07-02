@@ -1,6 +1,10 @@
 # quickstart/views/blog_views.py
+import logging
+
+from django.core.cache import cache
 from rest_framework import viewsets, permissions, filters
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.response import Response
 from django.db.models import Count, Q
 
 from quickstart.models import BlogCategory, BlogPost
@@ -9,6 +13,30 @@ from quickstart.serializers import (
     PublicBlogPostDetailSerializer,
     PublicBlogCategorySerializer,
 )
+
+logger = logging.getLogger(__name__)
+
+BLOG_POST_DETAIL_CACHE_PREFIX = "blog_post_detail"
+BLOG_POST_DETAIL_CACHE_VERSION_PREFIX = "blog_post_detail_version"
+BLOG_POST_DETAIL_CACHE_TTL = 60 * 60 * 6  # 6 hours
+
+
+def invalidate_blog_post_detail_cache(slug):
+    if not slug:
+        return
+    try:
+        version_key = f"{BLOG_POST_DETAIL_CACHE_VERSION_PREFIX}:{slug}"
+        version = cache.get(version_key, 0) or 0
+        cache.set(version_key, version + 1, timeout=None)
+        logger.info(
+            "Invalidated blog post detail cache for slug=%s (version -> %s)",
+            slug,
+            version + 1,
+        )
+    except Exception as e:
+        logger.warning(
+            "Failed to invalidate blog post detail cache for slug=%s: %s", slug, e
+        )
 
 
 class BlogPagination(PageNumberPagination):
@@ -53,6 +81,24 @@ class PublicBlogPostViewSet(viewsets.ReadOnlyModelViewSet):
             queryset = queryset.filter(tags__contains=[tag_value])
 
         return queryset
+
+    def retrieve(self, request, *args, **kwargs):
+        slug = kwargs.get(self.lookup_field)
+        version_key = f"{BLOG_POST_DETAIL_CACHE_VERSION_PREFIX}:{slug}"
+        version = cache.get(version_key, 0) or 0
+        cache_key = f"{BLOG_POST_DETAIL_CACHE_PREFIX}:{slug}:v{version}"
+        data = cache.get(cache_key)
+        if data is not None:
+            return Response(data)
+
+        response = super().retrieve(request, *args, **kwargs)
+        try:
+            cache.set(cache_key, response.data, timeout=BLOG_POST_DETAIL_CACHE_TTL)
+        except Exception as e:
+            logger.warning(
+                "Failed to set blog post detail cache for slug=%s: %s", slug, e
+            )
+        return response
 
 
 class PublicBlogCategoryViewSet(viewsets.ReadOnlyModelViewSet):

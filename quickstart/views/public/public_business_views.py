@@ -13,6 +13,12 @@ from django.db.models import (
     Count,
     Avg,
     Value,
+    F,
+    Case,
+    When,
+    IntegerField,
+    ExpressionWrapper,
+    Q,
 )
 from django.db.models.functions import Coalesce
 from django.utils import timezone
@@ -39,6 +45,9 @@ from quickstart.serializers.public.public_business_serializers import (
 )
 from quickstart.serializers.public.public_review_serializers import (
     PublicReviewSerializer,
+)
+from quickstart.views.public.public_class_views import (
+    _public_class_options_prefetch_queryset,
 )
 
 logger = logging.getLogger(__name__)
@@ -189,35 +198,61 @@ class PublicBusinessInfoViewSet(viewsets.ReadOnlyModelViewSet):
                 .values("price")[:1],
                 output_field=DecimalField(max_digits=10, decimal_places=2),
             )
-            avg_rating_subquery = Subquery(
-                Reviews.objects.filter(classId=OuterRef("pk"), status="approved")
-                .values("classId")
-                .annotate(avg_rating=Avg("rating"))
-                .values("avg_rating")[:1],
-                output_field=DecimalField(max_digits=3, decimal_places=1),
-            )
-            review_count_subquery = Subquery(
-                Reviews.objects.filter(classId=OuterRef("pk"), status="approved")
-                .values("classId")
-                .annotate(count=Count("reviewId"))
-                .values("count")[:1],
-            )
 
             classes_queryset = (
                 ClassesMain.objects.filter(status="active")
-                .select_related("location_ref")
+                .select_related("location_ref", "businessId")
                 .prefetch_related(
                     Prefetch(
                         "images",
-                        queryset=ClassImage.objects.order_by("-isCover", "createdAt"),
+                        queryset=ClassImage.objects.only(
+                            "imageId",
+                            "classId_id",
+                            "image",
+                            "isCover",
+                            "createdAt",
+                        ).order_by("-isCover", "createdAt"),
                     ),
-                    "options",
+                    Prefetch(
+                        "options",
+                        queryset=_public_class_options_prefetch_queryset(),
+                    ),
                 )
                 .annotate(
+                    p_rating_raw=Coalesce(
+                        F("platform_avg_rating"), Value(Decimal("0.00"))
+                    ),
+                    p_count_raw=Coalesce(F("platform_review_count"), Value(0)),
+                    g_rating_raw=Coalesce(
+                        F("businessId__google_avg_rating"),
+                        Value(Decimal("0.00")),
+                    ),
+                    g_count_raw=Coalesce(
+                        F("businessId__google_review_count"), Value(0)
+                    ),
+                )
+                .annotate(
+                    review_count=ExpressionWrapper(
+                        F("p_count_raw") + F("g_count_raw"),
+                        output_field=IntegerField(),
+                    ),
+                    weighted_sum=ExpressionWrapper(
+                        (F("p_rating_raw") * F("p_count_raw"))
+                        + (F("g_rating_raw") * F("g_count_raw")),
+                        output_field=DecimalField(max_digits=10, decimal_places=2),
+                    ),
+                )
+                .annotate(
+                    average_rating=Case(
+                        When(review_count=0, then=Value(Decimal("0.0"))),
+                        default=ExpressionWrapper(
+                            F("weighted_sum") / F("review_count"),
+                            output_field=DecimalField(max_digits=3, decimal_places=1),
+                        ),
+                        output_field=DecimalField(max_digits=3, decimal_places=1),
+                    ),
                     min_session_price=Coalesce(min_session_price_subquery, None),
                     min_course_price=Coalesce(min_course_price_subquery, None),
-                    average_rating=Coalesce(avg_rating_subquery, Value(Decimal("0.0"))),
-                    review_count=Coalesce(review_count_subquery, Value(0)),
                 )
             )
 
@@ -225,20 +260,12 @@ class PublicBusinessInfoViewSet(viewsets.ReadOnlyModelViewSet):
                 "classes", queryset=classes_queryset, to_attr="active_classes"
             )
 
-            # Prefetch google reviews as well
             queryset = queryset.prefetch_related(
                 active_classes_prefetch,
                 Prefetch(
                     "locations",
                     queryset=BusinessLocation.objects.filter(is_active=True).order_by(
                         "-is_primary", "name"
-                    ),
-                ),
-                "imported_google_reviews",  # Prefetch google reviews
-                Prefetch(
-                    "reviews_directly_to_business",
-                    queryset=Reviews.objects.select_related("userId").filter(
-                        status="approved"
                     ),
                 ),
             )

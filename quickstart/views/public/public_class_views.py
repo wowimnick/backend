@@ -145,6 +145,36 @@ def _public_class_options_prefetch_queryset():
     ).order_by("optionId")
 
 
+CLASS_DETAIL_CACHE_PREFIX = "class_detail"
+CLASS_DETAIL_CACHE_VERSION_PREFIX = "class_detail_version"
+CLASS_DETAIL_CACHE_TTL = 60 * 60 * 6  # 6 hours
+CLASS_DETAIL_SCHEDULE_HORIZON_DAYS = 120
+
+
+def invalidate_class_detail_cache(slug=None, class_id=None):
+    """Invalidate cached class detail API responses (slug and/or numeric id lookup)."""
+    keys = []
+    if slug:
+        keys.append(f"{CLASS_DETAIL_CACHE_VERSION_PREFIX}:slug:{slug}")
+    if class_id is not None:
+        keys.append(f"{CLASS_DETAIL_CACHE_VERSION_PREFIX}:id:{class_id}")
+    for version_key in keys:
+        try:
+            version = cache.get(version_key, 0) or 0
+            cache.set(version_key, version + 1, timeout=None)
+            logger.info(
+                "Invalidated class detail cache for %s (version -> %s)",
+                version_key,
+                version + 1,
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to invalidate class detail cache for %s: %s",
+                version_key,
+                e,
+            )
+
+
 # Scope cache keys by environment so staging and prod share Redis without clearing each other's cache
 _CACHE_ENV = getattr(settings, "DJANGO_ENV", "local")
 
@@ -274,7 +304,31 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
         return obj
 
     def retrieve(self, request, *args, **kwargs):
-        return super().retrieve(request, *args, **kwargs)
+        if request.user.is_authenticated:
+            return super().retrieve(request, *args, **kwargs)
+
+        identifier = self.kwargs.get(self.lookup_field)
+        version_key = (
+            f"{CLASS_DETAIL_CACHE_VERSION_PREFIX}:id:{identifier}"
+            if identifier and identifier.isdigit()
+            else f"{CLASS_DETAIL_CACHE_VERSION_PREFIX}:slug:{identifier}"
+        )
+        version = cache.get(version_key, 0) or 0
+        cache_key = f"{CLASS_DETAIL_CACHE_PREFIX}:{identifier}:v{version}:anon"
+        data = cache.get(cache_key)
+        if data is not None:
+            return Response(data)
+
+        response = super().retrieve(request, *args, **kwargs)
+        try:
+            cache.set(cache_key, response.data, timeout=CLASS_DETAIL_CACHE_TTL)
+        except Exception as e:
+            logger.warning(
+                "Failed to set class detail cache for identifier=%s: %s",
+                identifier,
+                e,
+            )
+        return response
 
     def get_serializer_context(self):
         ctx = super().get_serializer_context()
@@ -338,11 +392,14 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
 
         options_qs = _public_class_options_prefetch_queryset()
         if self.action == "retrieve":
+            today = timezone.now().date()
+            horizon = today + timedelta(days=CLASS_DETAIL_SCHEDULE_HORIZON_DAYS)
             # Prefetch instances annotated with total_booked so PublicScheduleSerializer
             # can derive available_spots = max_participants - total_booked without
             # extra per-instance DB queries (N+1 prevention).
             instances_qs = ScheduleInstance.objects.filter(
-                date__gte=timezone.now().date(),
+                date__gte=today,
+                date__lte=horizon,
                 status="scheduled",
             ).annotate(
                 total_booked=Coalesce(
@@ -354,16 +411,27 @@ class PublicClassViewSet(viewsets.ReadOnlyModelViewSet):
                     output_field=IntegerField(),
                 )
             )
-            schedules_qs = Schedule.objects.filter(
-                Q(date__gte=timezone.now().date())
-                | Q(end_date__gte=timezone.now().date())
-            ).prefetch_related(
-                Prefetch(
-                    "instances",
-                    queryset=instances_qs,
-                    to_attr="_prefetched_instances",
+            schedules_qs = (
+                Schedule.objects.filter(
+                    Q(
+                        option__booking_type="Single Session",
+                        date__gte=today,
+                        date__lte=horizon,
+                    )
+                    | Q(
+                        option__booking_type="Full Course",
+                        end_date__gte=today,
+                    )
                 )
-            ).order_by("date", "time")
+                .prefetch_related(
+                    Prefetch(
+                        "instances",
+                        queryset=instances_qs,
+                        to_attr="_prefetched_instances",
+                    )
+                )
+                .order_by("date", "time")
+            )
             options_qs = options_qs.prefetch_related(
                 Prefetch("schedules", queryset=schedules_qs)
             )

@@ -54,6 +54,7 @@ from quickstart.views.public.public_class_views import (
     HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY,
 )
 from quickstart.views.public.public_business_views import invalidate_business_detail_cache
+from quickstart.views.public.public_class_views import invalidate_class_detail_cache
 from quickstart.views.admin.metrics_time_windows import get_admin_metrics_local_now
 from quickstart.models import (
     ClassCategory,
@@ -909,10 +910,14 @@ class AdminClassViewSet(viewsets.ModelViewSet):
         # 1. Revalidate the class detail page by tags
         if hasattr(class_instance, "slug") and class_instance.slug:
             trigger_nextjs_revalidation(tag=f"class-{class_instance.slug}")
+            invalidate_class_detail_cache(
+                slug=class_instance.slug, class_id=class_instance.classId
+            )
 
         if old_slug and old_slug != getattr(class_instance, "slug", None):
             trigger_nextjs_revalidation(tag=f"class-{old_slug}")
             trigger_nextjs_revalidation(path=f"/classes/{old_slug}")
+            invalidate_class_detail_cache(slug=old_slug)
 
         trigger_nextjs_revalidation(tag=f"class-{class_instance.classId}")
 

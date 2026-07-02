@@ -1202,6 +1202,16 @@ def nextjs_revalidate_on_class_save(sender, instance, **kwargs):
     slug = getattr(instance, "slug", None) or ""
     if not slug:
         return
+    try:
+        from quickstart.views.public.public_class_views import (
+            invalidate_class_detail_cache,
+        )
+
+        invalidate_class_detail_cache(
+            slug=slug, class_id=getattr(instance, "classId", None)
+        )
+    except Exception as e:
+        logger.warning("Class detail cache invalidation failed: %s", e)
     _schedule_next_revalidate(
         [
             f"class-{slug}",
@@ -1231,6 +1241,14 @@ def nextjs_revalidate_on_blog_post(sender, instance, **kwargs):
     tags = ["blog-posts", "blog-categories", "blog-recent"]
     if slug:
         tags.append(f"blog-post-{slug}")
+        try:
+            from quickstart.views.public.public_blog_views import (
+                invalidate_blog_post_detail_cache,
+            )
+
+            invalidate_blog_post_detail_cache(slug)
+        except Exception as e:
+            logger.warning("Blog post detail cache invalidation failed: %s", e)
     _schedule_next_revalidate(tags)
 
 

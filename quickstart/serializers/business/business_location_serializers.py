@@ -41,6 +41,9 @@ class BusinessLocationSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at", "updated_at", "assigned_classes_count"]
 
     def get_assigned_classes_count(self, obj):
+        annotated = getattr(obj, "assigned_classes_count", None)
+        if annotated is not None:
+            return int(annotated)
         return ClassesMain.objects.filter(location_ref=obj).count()
 
     def validate(self, data):
