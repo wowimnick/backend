@@ -161,3 +161,98 @@ def handle_corporate_balance_invoice_paid(invoice_obj, stripe_event_id, webhook_
     except Exception as e:
         logger.exception("[%s] queue balance paid email: %s", webhook_id, e)
     return Response(status=status.HTTP_200_OK)
+
+
+@transaction.atomic
+def handle_corporate_balance_pi_succeeded(payment_intent, stripe_event_id, webhook_id):
+    """Idempotent: mark corporate booking fully paid via on-site balance PI."""
+    if stripe_event_id and ProcessedStripeEvent.objects.filter(
+        event_id=stripe_event_id
+    ).exists():
+        return Response(status=status.HTTP_200_OK)
+
+    meta = _meta(payment_intent)
+    bid = meta.get("corporate_booking_id")
+    if not bid:
+        logger.error(
+            "[%s] corporate balance pi: missing corporate_booking_id", webhook_id
+        )
+        return Response(
+            {"error": "Missing corporate_booking_id"}, status=status.HTTP_400_BAD_REQUEST
+        )
+    try:
+        booking = CorporateBooking.objects.select_for_update().get(pk=bid)
+    except CorporateBooking.DoesNotExist:
+        logger.error(
+            "[%s] corporate balance pi: booking %s not found", webhook_id, bid
+        )
+        return Response(status=status.HTTP_200_OK)
+
+    if booking.status == CorporateBooking.ST_FULLY_PAID:
+        if stripe_event_id:
+            ProcessedStripeEvent.objects.get_or_create(
+                event_id=stripe_event_id,
+                defaults={"event_type": "payment_intent.succeeded"},
+            )
+        return Response(status=status.HTTP_200_OK)
+
+    if booking.status not in (
+        CorporateBooking.ST_DEPOSIT_PAID,
+        CorporateBooking.ST_INVOICED,
+    ):
+        logger.warning(
+            "[%s] corporate balance pi: booking %s status %s",
+            webhook_id,
+            bid,
+            booking.status,
+        )
+
+    if booking.stripe_invoice_id and (booking.invoice_status or "") not in (
+        "paid",
+        "void",
+    ):
+        try:
+            import stripe
+            from django.conf import settings
+
+            stripe.api_key = settings.STRIPE_SECRET_KEY
+            stripe.Invoice.void_invoice(booking.stripe_invoice_id)
+            booking.invoice_status = "void"
+        except Exception as e:
+            logger.warning(
+                "[%s] void invoice %s failed: %s",
+                webhook_id,
+                booking.stripe_invoice_id,
+                e,
+            )
+
+    now = timezone.now()
+    booking.status = CorporateBooking.ST_FULLY_PAID
+    booking.balance_paid_at = now
+    booking.invoice_status = booking.invoice_status or "paid"
+    if booking.invoice_status == "void":
+        booking.invoice_status = "paid"
+    booking.save(
+        update_fields=[
+            "status",
+            "balance_paid_at",
+            "invoice_status",
+            "updated_at",
+        ]
+    )
+    log_corporate_booking_event(
+        booking,
+        "balance_paid",
+        "Balance paid via on-site checkout.",
+    )
+    if stripe_event_id:
+        ProcessedStripeEvent.objects.get_or_create(
+            event_id=stripe_event_id,
+            defaults={"event_type": "payment_intent.succeeded"},
+        )
+    try:
+        from quickstart.tasks.corporate_booking_tasks import send_balance_paid
+        send_balance_paid.delay(str(booking.id))
+    except Exception as e:
+        logger.exception("[%s] queue balance paid email: %s", webhook_id, e)
+    return Response(status=status.HTTP_200_OK)

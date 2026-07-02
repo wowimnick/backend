@@ -163,6 +163,7 @@ class CorporateShortlistAdminSerializer(serializers.ModelSerializer):
             "token",
             "status",
             "intro_message",
+            "presentation",
             "internal_notes",
             "deposit_percent",
             "currency",

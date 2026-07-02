@@ -56,11 +56,23 @@ class PublicCorporateShortlistDetailSerializer(serializers.Serializer):
     token = serializers.UUIDField()
     status = serializers.CharField()
     intro_message = serializers.CharField()
+    presentation = serializers.JSONField()
     deposit_percent = serializers.IntegerField()
     currency = serializers.CharField()
     inquiry = PublicCorporateInquirySerializer()
     options = PublicCorporateShortlistOptionSerializer(many=True)
     active_booking = PublicCorporateBookingSerializer(allow_null=True)
+
+
+class BillingAddressSerializer(serializers.Serializer):
+    line1 = serializers.CharField(max_length=200)
+    line2 = serializers.CharField(
+        max_length=200, allow_blank=True, required=False, default=""
+    )
+    city = serializers.CharField(max_length=100)
+    state = serializers.CharField(max_length=100)
+    postal_code = serializers.CharField(max_length=20)
+    country = serializers.CharField(max_length=100)
 
 
 class CorporateSelectOptionSerializer(serializers.Serializer):
@@ -73,7 +85,13 @@ class CorporateSelectOptionSerializer(serializers.Serializer):
     billing_company_name = serializers.CharField(max_length=200)
     billing_contact_name = serializers.CharField(max_length=150)
     billing_email = serializers.EmailField()
-    billing_address = serializers.JSONField(required=False, default=dict)
+    billing_address = BillingAddressSerializer()
     po_number = serializers.CharField(
         max_length=100, allow_blank=True, required=False, default=""
     )
+
+
+class CorporateSupportMessageSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=150)
+    email = serializers.EmailField()
+    message = serializers.CharField(max_length=8000, min_length=1)

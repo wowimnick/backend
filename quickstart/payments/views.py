@@ -1713,6 +1713,15 @@ class ProcessBookingWebhook(APIView):
                     payment_intent, getattr(event, "id", None), webhook_id
                 )
 
+            if md_pi.get("type") == "corporate_balance_pi":
+                from quickstart.payments.corporate_stripe_webhooks import (
+                    handle_corporate_balance_pi_succeeded,
+                )
+
+                return handle_corporate_balance_pi_succeeded(
+                    payment_intent, getattr(event, "id", None), webhook_id
+                )
+
             # 2. SKIP INVOICE PAYMENTS (e.g. widget subscription) — not bookings; no CAPI
             invoice_id = getattr(payment_intent, "invoice", None) or (
                 payment_intent.get("invoice") if isinstance(payment_intent, dict) else None

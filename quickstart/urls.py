@@ -175,10 +175,12 @@ from quickstart.views.public.search_views import (
 )
 from quickstart.views.public.corporate_views import CorporateInquiryCreateView
 from quickstart.views.public.corporate_shortlist_views import (
+    CorporateBookingBalanceIntentView,
     CorporateBookingDepositIntentView,
     CorporateBookingStatusPublicView,
     CorporateShortlistPublicView,
     CorporateShortlistSelectView,
+    CorporateShortlistSupportView,
 )
 from quickstart.views.admin.corporate_admin_views import (
     AdminCorporateBookingViewSet,
@@ -500,6 +502,16 @@ urlpatterns = [
         "corporate/shortlist/<uuid:token>/booking/<uuid:booking_id>/deposit-intent/",
         CorporateBookingDepositIntentView.as_view(),
         name="corporate-booking-deposit-intent",
+    ),
+    path(
+        "corporate/shortlist/<uuid:token>/booking/<uuid:booking_id>/balance-intent/",
+        CorporateBookingBalanceIntentView.as_view(),
+        name="corporate-booking-balance-intent",
+    ),
+    path(
+        "corporate/shortlist/<uuid:token>/support/",
+        CorporateShortlistSupportView.as_view(),
+        name="corporate-shortlist-support",
     ),
     path(
         "corporate/shortlist/<uuid:token>/booking/<uuid:booking_id>/",

@@ -32,6 +32,7 @@ class StaticViewSitemap(Sitemap):
         # Next.js routes not in Django url reverse()
         extra_paths = [
             "/about",
+            "/reviews",
             "/giftcards",
             "/fees",
             "/cookie-policy",

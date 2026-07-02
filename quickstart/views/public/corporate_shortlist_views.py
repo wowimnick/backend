@@ -21,8 +21,12 @@ from quickstart.models import (
 )
 from quickstart.serializers.public.corporate_shortlist_serializers import (
     CorporateSelectOptionSerializer,
+    CorporateSupportMessageSerializer,
 )
-from quickstart.services.corporate_billing import create_or_reuse_deposit_payment_intent
+from quickstart.services.corporate_billing import (
+    create_balance_payment_intent,
+    create_or_reuse_deposit_payment_intent,
+)
 from quickstart.utils.corporate_events import log_corporate_booking_event
 from quickstart.utils.corporate_shortlist_images import effective_gallery_urls_for_option
 from quickstart.utils.corporate_shortlist_location import (
@@ -134,6 +138,7 @@ def _build_payload(sl: CorporateShortlist) -> dict:
         "token": str(sl.token),
         "status": sl.status,
         "intro_message": sl.intro_message,
+        "presentation": sl.presentation or {},
         "deposit_percent": sl.deposit_percent,
         "currency": sl.currency,
         "inquiry": _inquiry_out(inq),
@@ -273,7 +278,7 @@ class CorporateShortlistSelectView(APIView):
                 billing_company_name=data["billing_company_name"],
                 billing_contact_name=data["billing_contact_name"],
                 billing_email=data["billing_email"].strip().lower(),
-                billing_address=data.get("billing_address") or {},
+                billing_address=data["billing_address"],
                 po_number=data.get("po_number") or "",
                 total_cents=total,
                 deposit_cents=deposit,
@@ -334,6 +339,77 @@ class CorporateBookingDepositIntentView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
         return Response(out)
+
+
+class CorporateBookingBalanceIntentView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request, token, booking_id):
+        try:
+            sl = CorporateShortlist.objects.get(token=token)
+        except CorporateShortlist.DoesNotExist:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            booking = CorporateBooking.objects.get(id=booking_id, shortlist=sl)
+        except CorporateBooking.DoesNotExist:
+            return Response({"detail": "Booking not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if booking.status not in (
+            CorporateBooking.ST_DEPOSIT_PAID,
+            CorporateBooking.ST_INVOICED,
+        ):
+            return Response(
+                {"detail": "Balance payment is not available for this booking."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        try:
+            out = create_balance_payment_intent(booking)
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.exception("balance intent: %s", e)
+            return Response(
+                {"detail": "Could not start payment. Try again later."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        return Response(out)
+
+
+class CorporateShortlistSupportView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request, token):
+        ser = CorporateSupportMessageSerializer(data=request.data)
+        if not ser.is_valid():
+            return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            sl = CorporateShortlist.objects.select_related("inquiry").get(token=token)
+        except CorporateShortlist.DoesNotExist:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if sl.status == CorporateShortlist.STATUS_CANCELLED:
+            return Response(
+                {"detail": "This shortlist is no longer available."},
+                status=status.HTTP_410_GONE,
+            )
+
+        data = ser.validated_data
+        try:
+            from quickstart.tasks.corporate_booking_tasks import send_corporate_support_message
+
+            send_corporate_support_message.delay(
+                str(sl.id),
+                data["name"],
+                data["email"],
+                data["message"],
+            )
+        except Exception as e:
+            logger.exception("queue support message: %s", e)
+            return Response(
+                {"detail": "Could not send your message. Try again later."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        return Response({"detail": "Message sent."}, status=status.HTTP_202_ACCEPTED)
 
 
 class CorporateBookingStatusPublicView(APIView):

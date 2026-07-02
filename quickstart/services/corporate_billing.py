@@ -32,12 +32,45 @@ def _customer_search_by_email(email: str) -> Optional[str]:
     return None
 
 
+def _stripe_address_from_booking(booking: CorporateBooking) -> Optional[Dict[str, str]]:
+    addr = booking.billing_address or {}
+    line1 = (addr.get("line1") or "").strip()
+    if not line1:
+        return None
+    out = {
+        "line1": line1,
+        "city": (addr.get("city") or "").strip(),
+        "state": (addr.get("state") or "").strip(),
+        "postal_code": (addr.get("postal_code") or "").strip(),
+        "country": (addr.get("country") or "").strip(),
+    }
+    line2 = (addr.get("line2") or "").strip()
+    if line2:
+        out["line2"] = line2
+    return out
+
+
+def _apply_stripe_customer_address(booking: CorporateBooking, customer_id: str) -> None:
+    addr = _stripe_address_from_booking(booking)
+    if not addr:
+        return
+    payload: Dict[str, Any] = {"address": addr}
+    name = (booking.billing_contact_name or "").strip()
+    if name:
+        payload["shipping"] = {"name": name, "address": addr}
+    try:
+        stripe.Customer.modify(customer_id, **payload)
+    except stripe.error.StripeError as e:
+        logger.warning("Stripe customer address update failed: %s", e)
+
+
 @transaction.atomic
 def ensure_stripe_customer(booking: CorporateBooking) -> str:
     """
     Reuse stored id, or find/create by billing email, save on booking.
     """
     if booking.stripe_customer_id:
+        _apply_stripe_customer_address(booking, booking.stripe_customer_id)
         return booking.stripe_customer_id
     email = (booking.billing_email or "").strip().lower()
     cid = _customer_search_by_email(email)
@@ -53,6 +86,7 @@ def ensure_stripe_customer(booking: CorporateBooking) -> str:
         cid = cust.id
     booking.stripe_customer_id = cid
     booking.save(update_fields=["stripe_customer_id", "updated_at"])
+    _apply_stripe_customer_address(booking, cid)
     return cid
 
 
@@ -98,6 +132,37 @@ def create_or_reuse_deposit_payment_intent(booking: CorporateBooking) -> Dict[st
     }
 
 
+def create_balance_payment_intent(booking: CorporateBooking) -> Dict[str, Any]:
+    """
+    Create Stripe PaymentIntent for remaining balance (on-site checkout).
+    """
+    if booking.status not in (
+        CorporateBooking.ST_DEPOSIT_PAID,
+        CorporateBooking.ST_INVOICED,
+    ):
+        raise ValueError("Balance payment is not available for this booking.")
+    if booking.balance_cents <= 0:
+        raise ValueError("No balance due.")
+
+    customer_id = ensure_stripe_customer(booking)
+
+    intent = stripe.PaymentIntent.create(
+        amount=int(booking.balance_cents),
+        currency=booking.currency,
+        customer=customer_id,
+        metadata={
+            "type": "corporate_balance_pi",
+            "corporate_booking_id": str(booking.id),
+        },
+        automatic_payment_methods={"enabled": True},
+    )
+    return {
+        "client_secret": intent.client_secret,
+        "payment_intent_id": intent.id,
+        "publishable_key": settings.STRIPE_PUBLIC_KEY,
+    }
+
+
 def create_balance_invoice(booking: CorporateBooking, due_in_days: int = 15) -> Dict[str, Any]:
     """
     Create Stripe Invoice for remaining balance, finalize, and email the customer.
@@ -112,6 +177,7 @@ def create_balance_invoice(booking: CorporateBooking, due_in_days: int = 15) -> 
         raise ValueError("Invoice already issued for this booking.")
 
     customer_id = ensure_stripe_customer(booking)
+    _apply_stripe_customer_address(booking, customer_id)
     booking = CorporateBooking.objects.select_related("shortlist__inquiry").get(pk=booking.pk)
     meta = {
         "type": "corporate_balance",

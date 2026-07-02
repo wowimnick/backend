@@ -305,3 +305,40 @@ def dispatch_corporate_event_reminders():
                 log_corporate_booking_event(
                     b, ev_type, f"Scheduled {days}-day reminder email."
                 )
+
+
+@shared_task
+def send_corporate_support_message(
+    shortlist_id: str, name: str, email: str, message: str
+):
+    try:
+        sl = CorporateShortlist.objects.select_related("inquiry").get(pk=shortlist_id)
+    except CorporateShortlist.DoesNotExist:
+        return
+    inq = sl.inquiry
+    ctx = {
+        "shortlist": sl,
+        "inquiry": inq,
+        "settings": settings,
+        "frontend_url": _frontend(),
+        "support_name": name,
+        "support_email": email,
+        "support_message": message,
+        "shortlist_url": f"{_frontend()}/corporate/shortlist/{sl.token}",
+    }
+    rec = corporate_tasks_mod._internal_recipients()
+    if rec:
+        _send_html(
+            rec,
+            f"[ClassEasily] Support request — {inq.company_name}",
+            "emails/corporate_support_message.html",
+            None,
+            ctx,
+        )
+    _send_html(
+        [email],
+        "We received your message — ClassEasily",
+        "emails/corporate_support_ack.html",
+        "Thanks for reaching out. Our team will reply shortly.",
+        ctx,
+    )

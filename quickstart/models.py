@@ -5040,6 +5040,20 @@ class CorporateInquiry(models.Model):
         return f"{self.company_name} — {self.email} ({self.created_at.date()})"
 
 
+def default_corporate_shortlist_presentation():
+    return {
+        "accent_color": "#E63151",
+        "hero_image_url": "",
+        "cta_label": "Select this experience",
+        "show_sections": {
+            "show_comparison": True,
+            "show_inclusions": True,
+            "show_faq": True,
+        },
+        "use_standard_copy": False,
+    }
+
+
 class CorporateShortlist(models.Model):
     """Admin-curated option set for a corporate inquiry (magic link)."""
 
@@ -5074,6 +5088,11 @@ class CorporateShortlist(models.Model):
         blank=True,
         default="",
         help_text="Shown at top of the corporate shortlist page",
+    )
+    presentation = models.JSONField(
+        default=default_corporate_shortlist_presentation,
+        blank=True,
+        help_text="Visual/copy settings for the public shortlist page",
     )
     internal_notes = models.TextField(
         max_length=8000,
