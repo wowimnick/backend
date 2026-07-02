@@ -1,4 +1,6 @@
-# Add presentation JSONField to CorporateShortlist
+# Add presentation JSONField to CorporateShortlist (parallel branch from 0239).
+# Superseded for new deploys by 0249; kept so environments that already applied
+# this migration name do not hit a missing-migration error.
 
 import quickstart.models
 from django.db import migrations, models

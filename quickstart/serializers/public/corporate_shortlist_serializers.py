@@ -85,10 +85,15 @@ class CorporateSelectOptionSerializer(serializers.Serializer):
     billing_company_name = serializers.CharField(max_length=200)
     billing_contact_name = serializers.CharField(max_length=150)
     billing_email = serializers.EmailField()
-    billing_address = BillingAddressSerializer()
+    billing_address = BillingAddressSerializer(required=False, allow_null=True)
     po_number = serializers.CharField(
         max_length=100, allow_blank=True, required=False, default=""
     )
+
+    def validate_billing_address(self, value):
+        if value in (None, {}):
+            return {}
+        return value
 
 
 class CorporateSupportMessageSerializer(serializers.Serializer):
