@@ -62,6 +62,7 @@ from quickstart.models import (
     ClassSubcategory,
     ClassesMain,
     ClassOption,
+    IgnoredScheduleWarning,
     ImportedGoogleReview,
     Payment,
     Schedule,
@@ -620,6 +621,106 @@ class AdminClassViewSet(viewsets.ModelViewSet):
         logger.info(f"Class {instance.classId} status changed from {old_status} to {new_status} by {request.user.email}. Reason: {reason}")
         
         return Response({"status": "success", "new_status": new_status, "classId": instance.classId})
+
+    def _parse_bool_query_param(self, value, default=False):
+        if value is None:
+            return default
+        return str(value).lower() in ("true", "1", "yes")
+
+    def _apply_runway_bucket_filter(self, qs, runway_bucket, today, schedule_warn_before):
+        if runway_bucket == "all":
+            return qs.filter(
+                Q(latest_instance_date__isnull=True)
+                | Q(latest_instance_date__lt=schedule_warn_before)
+            )
+        if runway_bucket == "none":
+            return qs.filter(latest_instance_date__isnull=True)
+        if runway_bucket == "expired":
+            return qs.filter(
+                latest_instance_date__isnull=False,
+                latest_instance_date__lt=today,
+            )
+
+        bucket_days = {"7d": 7, "14d": 14, "30d": 30, "60d": 60}.get(runway_bucket)
+        if bucket_days is not None:
+            bucket_end = today + timedelta(days=bucket_days)
+            return qs.filter(
+                latest_instance_date__isnull=False,
+                latest_instance_date__gte=today,
+                latest_instance_date__lte=bucket_end,
+            )
+
+        return qs.filter(
+            Q(latest_instance_date__isnull=True)
+            | Q(latest_instance_date__lt=schedule_warn_before)
+        )
+
+    def _build_schedule_warning_row(self, cls, today, ignored_class_ids):
+        latest_date = cls.latest_instance_date
+        days_remaining = (latest_date - today).days if latest_date else 0
+        return {
+            "classId": cls.classId,
+            "title": cls.title,
+            "status": cls.status,
+            "businessIsActive": (
+                bool(cls.businessId.isActive) if cls.businessId else False
+            ),
+            "businessName": (
+                cls.businessId.businessName if cls.businessId else "N/A"
+            ),
+            "businessEmail": (
+                cls.businessId.owner.email
+                if cls.businessId and cls.businessId.owner
+                else "N/A"
+            ),
+            "ownerId": (
+                cls.businessId.owner.userId
+                if cls.businessId and cls.businessId.owner
+                else None
+            ),
+            "lastScheduleDate": latest_date.isoformat() if latest_date else None,
+            "furthestScheduledSessionDate": (
+                latest_date.isoformat() if latest_date else None
+            ),
+            "daysRemaining": days_remaining,
+            "ignored": cls.classId in ignored_class_ids,
+        }
+
+    @action(detail=True, methods=["post"], url_path="ignore-schedule-warning")
+    def ignore_schedule_warning(self, request, pk=None):
+        if not request.user.has_perm("quickstart.view_class_analytics"):
+            self.permission_denied(
+                request, message="You cannot manage schedule warning ignores."
+            )
+
+        instance = self.get_object()
+        note = request.data.get("note", "")
+        IgnoredScheduleWarning.objects.get_or_create(
+            admin_user=request.user,
+            class_id=instance,
+            defaults={"note": note},
+        )
+        return Response(
+            {"status": "ignored", "classId": instance.classId},
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(detail=True, methods=["delete"], url_path="ignore-schedule-warning")
+    def unignore_schedule_warning(self, request, pk=None):
+        if not request.user.has_perm("quickstart.view_class_analytics"):
+            self.permission_denied(
+                request, message="You cannot manage schedule warning ignores."
+            )
+
+        instance = self.get_object()
+        IgnoredScheduleWarning.objects.filter(
+            admin_user=request.user,
+            class_id=instance,
+        ).delete()
+        return Response(
+            {"status": "unignored", "classId": instance.classId},
+            status=status.HTTP_200_OK,
+        )
     
     @action(detail=False, methods=["get"])
     def analytics(self, request):
@@ -650,9 +751,15 @@ class AdminClassViewSet(viewsets.ModelViewSet):
             local_now = get_admin_metrics_local_now()
             two_weeks_from_now = local_now + timedelta(days=14)
             today = local_now.date()
+            schedule_warn_before = two_weeks_from_now.date()
 
-            # Schedule warnings: low/no future scheduled instances (< 2 weeks runway).
-            # Includes inactive & suspended classes and inactive businesses (full operational picture).
+            runway_bucket = request.query_params.get("runway_bucket", "all")
+            include_ignored = self._parse_bool_query_param(
+                request.query_params.get("include_ignored"), default=False
+            )
+            status_filter = request.query_params.get("status")
+            business_active_param = request.query_params.get("business_active")
+
             latest_instance_date_subquery = Subquery(
                 ScheduleInstance.objects.filter(
                     schedule__option__classId=OuterRef("pk"),
@@ -663,52 +770,44 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                 .values("date")[:1],
                 output_field=DateField(),
             )
-            schedule_warn_before = two_weeks_from_now.date()
-            classes_with_latest_instance = (
-                base_qs.select_related("businessId", "businessId__owner")
-                .annotate(latest_instance_date=latest_instance_date_subquery)
-                .filter(
-                    Q(latest_instance_date__isnull=True)
-                    | Q(latest_instance_date__lt=schedule_warn_before)
-                )
+            annotated_classes = base_qs.select_related(
+                "businessId", "businessId__owner"
+            ).annotate(latest_instance_date=latest_instance_date_subquery)
+
+            # Unfiltered total for the metric card (always < 14 days / no sessions).
+            schedule_warnings_count = annotated_classes.filter(
+                Q(latest_instance_date__isnull=True)
+                | Q(latest_instance_date__lt=schedule_warn_before)
+            ).count()
+
+            ignored_class_ids = set(
+                IgnoredScheduleWarning.objects.filter(
+                    admin_user=request.user
+                ).values_list("class_id_id", flat=True)
             )
+
+            filtered_qs = annotated_classes
+            filtered_qs = self._apply_runway_bucket_filter(
+                filtered_qs, runway_bucket, today, schedule_warn_before
+            )
+
+            if status_filter:
+                filtered_qs = filtered_qs.filter(status=status_filter)
+
+            if business_active_param is not None:
+                filtered_qs = filtered_qs.filter(
+                    businessId__isActive=self._parse_bool_query_param(
+                        business_active_param
+                    )
+                )
+
+            if not include_ignored and ignored_class_ids:
+                filtered_qs = filtered_qs.exclude(classId__in=ignored_class_ids)
+
             classes_with_low_schedules = []
-            for cls in classes_with_latest_instance:
-                latest_date = cls.latest_instance_date
+            for cls in filtered_qs:
                 classes_with_low_schedules.append(
-                    {
-                        "classId": cls.classId,
-                        "title": cls.title,
-                        "status": cls.status,
-                        "businessIsActive": (
-                            bool(cls.businessId.isActive)
-                            if cls.businessId
-                            else False
-                        ),
-                        "businessName": (
-                            cls.businessId.businessName if cls.businessId else "N/A"
-                        ),
-                        "businessEmail": (
-                            cls.businessId.owner.email
-                            if cls.businessId and cls.businessId.owner
-                            else "N/A"
-                        ),
-                        "ownerId": (
-                            cls.businessId.owner.userId
-                            if cls.businessId and cls.businessId.owner
-                            else None
-                        ),
-                        # Furthest future scheduled instance (schedule "runway" end), not "next occurrence".
-                        "lastScheduleDate": (
-                            latest_date.isoformat() if latest_date else None
-                        ),
-                        "furthestScheduledSessionDate": (
-                            latest_date.isoformat() if latest_date else None
-                        ),
-                        "daysRemaining": (
-                            (latest_date - today).days if latest_date else 0
-                        ),
-                    }
+                    self._build_schedule_warning_row(cls, today, ignored_class_ids)
                 )
 
             # Worst first: no future scheduled instances, then soonest last date.
@@ -719,8 +818,6 @@ class AdminClassViewSet(viewsets.ModelViewSet):
                     row["classId"],
                 )
             )
-
-            schedule_warnings_count = len(classes_with_low_schedules)
 
             # --- UPDATED: Review Stats (Platform + Google) ---
             platform_reviews = Reviews.objects.filter(status="approved")

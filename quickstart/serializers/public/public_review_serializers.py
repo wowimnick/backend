@@ -305,6 +305,50 @@ class ImportedGoogleReviewSerializer(serializers.ModelSerializer):
         return self._convert_to_processed_urls(obj.image_urls, "medium")
 
 
+class RecentReviewSerializer(serializers.ModelSerializer):
+    """Serializer for platform-wide recent Google reviews (public /reviews page)."""
+
+    id = serializers.UUIDField(read_only=True)
+    business_name = serializers.SerializerMethodField()
+    class_slug = serializers.SerializerMethodField()
+    reviewer_avatar_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ImportedGoogleReview
+        fields = [
+            "id",
+            "reviewer_name",
+            "reviewer_avatar_url",
+            "rating",
+            "comment",
+            "review_date",
+            "business_name",
+            "class_slug",
+            "source",
+        ]
+
+    def get_business_name(self, obj):
+        business = getattr(obj, "business", None)
+        return business.businessName if business else None
+
+    def get_class_slug(self, obj):
+        slug_map = self.context.get("class_slug_map") or {}
+        return slug_map.get(obj.business_id)
+
+    def get_reviewer_avatar_url(self, obj):
+        if not obj.reviewer_avatar or not obj.reviewer_avatar.name:
+            return None
+
+        original_path = obj.reviewer_avatar.name
+        if original_path.startswith("public/"):
+            return build_cloudfront_url(original_path)
+        if original_path.startswith("originals/"):
+            base_path, _ = os.path.splitext(original_path)
+            thumb_path = base_path.replace("originals/", "public/thumb/", 1) + ".webp"
+            return build_cloudfront_url(thumb_path)
+        return None
+
+
 class FeaturedHomepageReviewSerializer(serializers.ModelSerializer):
     """
     Serializer for Gemini-selected Google reviews shown on the homepage hero.

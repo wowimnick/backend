@@ -205,6 +205,7 @@ from quickstart.views import (
     PlatformClassReviews,
     ImportedGoogleReviewsView,
     FeaturedHomepageReviewsView,
+    RecentReviewsView,
     BusinessStudentViewSet,
     MyProfileView,
     RevenueAnalyticsView,
@@ -1126,6 +1127,11 @@ urlpatterns = [
         name="business-class-option-detail",
     ),
     path("reviews/submit/", ReviewSubmission.as_view(), name="submit-review"),
+    path(
+        "reviews/recent/",
+        RecentReviewsView.as_view(),
+        name="recent-reviews",
+    ),
     path(
         "revenue/analytics/", RevenueAnalyticsView.as_view(), name="revenue-analytics"
     ),

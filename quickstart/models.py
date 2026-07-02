@@ -4138,6 +4138,38 @@ class ImportedGoogleReview(models.Model):
         ordering = ["-review_date"]
 
 
+class IgnoredScheduleWarning(models.Model):
+    """
+    Per-admin dismissal of schedule runway warnings for a class.
+    Hidden from that admin's schedule attention list unless include_ignored=true.
+    """
+
+    admin_user = models.ForeignKey(
+        "CustomUser",
+        on_delete=models.CASCADE,
+        related_name="ignored_schedule_warnings",
+    )
+    class_id = models.ForeignKey(
+        "ClassesMain",
+        on_delete=models.CASCADE,
+        related_name="ignored_schedule_warnings",
+    )
+    ignored_at = models.DateTimeField(auto_now_add=True)
+    note = models.TextField(blank=True, default="")
+
+    def __str__(self):
+        return f"Admin {self.admin_user_id} ignored schedule warning for class {self.class_id_id}"
+
+    class Meta:
+        db_table = "ignored_schedule_warnings"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["admin_user", "class_id"],
+                name="unique_admin_class_schedule_warning_ignore",
+            )
+        ]
+
+
 class FeaturedHomepageReview(models.Model):
     """
     Gemini-selected Google reviews shown on the homepage hero.

@@ -1534,6 +1534,7 @@ def paginated_class_reviews(request, identifier):
     Query params:
     - page: Page number (default: 1)
     - page_size: Number of reviews per page (default: 10, max: 50)
+    - sort: recent (default), high, or low
     """
     try:
         # Get and validate pagination parameters
@@ -1595,20 +1596,30 @@ def paginated_class_reviews(request, identifier):
                 }
             )
 
+        sort_param = request.query_params.get("sort", "recent")
+        if sort_param == "high":
+            order_by = ("-sort_rating", "-sort_date")
+        elif sort_param == "low":
+            order_by = ("sort_rating", "-sort_date")
+        else:
+            order_by = ("-sort_date",)
+
         # Merge-sort keys in the database: UNION ALL + ORDER BY + LIMIT/OFFSET for this page only.
         platform_keys = platform_base.annotate(
             sort_date=F("createdAt"),
+            sort_rating=F("rating"),
             kind=Value("p", output_field=CharField(max_length=1)),
             rid=Cast(F("reviewId"), CharField(max_length=36)),
-        ).values("sort_date", "kind", "rid")
+        ).values("sort_date", "sort_rating", "kind", "rid")
 
         google_keys = google_base.annotate(
             sort_date=Coalesce(F("review_date"), F("created_at")),
+            sort_rating=F("rating"),
             kind=Value("g", output_field=CharField(max_length=1)),
             rid=Cast(F("id"), CharField(max_length=36)),
-        ).values("sort_date", "kind", "rid")
+        ).values("sort_date", "sort_rating", "kind", "rid")
 
-        combined = platform_keys.union(google_keys, all=True).order_by("-sort_date")
+        combined = platform_keys.union(google_keys, all=True).order_by(*order_by)
 
         start_index = (page - 1) * page_size
         end_index = start_index + page_size

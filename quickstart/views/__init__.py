@@ -84,6 +84,7 @@ from .public.public_review_views import (
     PlatformClassReviews,
     ImportedGoogleReviewsView,
     FeaturedHomepageReviewsView,
+    RecentReviewsView,
 )
 
 from .business.business_staff_views import (
@@ -122,6 +123,7 @@ __all__ = [
     "PublicBusinessInfoViewSet",
     "ImportedGoogleReviewsView",
     "FeaturedHomepageReviewsView",
+    "RecentReviewsView",
     "MyBusinessOverviewView",
     "NotificationViewSet",
     "BusinessDiscountViewSet",

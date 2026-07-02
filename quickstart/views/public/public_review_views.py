@@ -27,6 +27,7 @@ from quickstart.models import ImportedGoogleReview, Reviews, Booking
 from quickstart.serializers.public.public_review_serializers import (
     FeaturedHomepageReviewSerializer,
     ImportedGoogleReviewSerializer,
+    RecentReviewSerializer,
     ReviewSubmissionSerializer,
     PublicReviewSerializer,
 )
@@ -40,6 +41,12 @@ class StandardResultsSetPagination(PageNumberPagination):
         "page_size"  # Allows client to override page_size e.g. ?page_size=20
     )
     max_page_size = 100  # Max page size client can request
+
+
+class RecentReviewsPagination(PageNumberPagination):
+    page_size = 12
+    page_size_query_param = "page_size"
+    max_page_size = 60
 
 
 class ReviewSubmission(APIView):
@@ -217,6 +224,77 @@ class ImportedGoogleReviewsView(generics.ListAPIView):
             return all_reviews_list
 
         return random.sample(all_reviews_list, sample_size)
+
+
+class RecentReviewsView(generics.ListAPIView):
+    """
+    Returns recent good Google reviews (rating >= 4) across the platform.
+
+    Paginated for the public /reviews marketing page.
+    """
+
+    serializer_class = RecentReviewSerializer
+    permission_classes = [AllowAny]
+    pagination_class = RecentReviewsPagination
+
+    @method_decorator(cache_page(60 * 60))
+    def get(self, *args, **kwargs):
+        return super().get(*args, **kwargs)
+
+    def get_queryset(self):
+        rating_min = self.request.query_params.get("rating_min", "4")
+        try:
+            rating_min = max(1, min(5, int(rating_min)))
+        except (TypeError, ValueError):
+            rating_min = 4
+
+        sort = self.request.query_params.get("sort", "newest")
+        order_by = (
+            ("-rating", "-review_date", "-created_at")
+            if sort == "highest"
+            else ("-review_date", "-created_at")
+        )
+
+        return (
+            ImportedGoogleReview.objects.filter(rating__gte=rating_min)
+            .exclude(comment__isnull=True)
+            .exclude(comment="")
+            .select_related("business")
+            .order_by(*order_by)
+        )
+
+    def _build_class_slug_map(self, business_ids):
+        from quickstart.models import ClassesMain
+
+        slug_map = {}
+        for business_id in set(business_ids):
+            cls = (
+                ClassesMain.objects.filter(
+                    businessId_id=business_id, slug__isnull=False
+                )
+                .exclude(slug="")
+                .order_by("-platform_review_count", "classId")
+                .first()
+            )
+            if cls:
+                slug_map[business_id] = cls.slug
+        return slug_map
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            slug_map = self._build_class_slug_map([r.business_id for r in page])
+            context = {**self.get_serializer_context(), "class_slug_map": slug_map}
+            serializer = self.get_serializer(page, many=True, context=context)
+            return self.get_paginated_response(serializer.data)
+
+        slug_map = self._build_class_slug_map(
+            list(queryset.values_list("business_id", flat=True))
+        )
+        context = {**self.get_serializer_context(), "class_slug_map": slug_map}
+        serializer = self.get_serializer(queryset, many=True, context=context)
+        return Response(serializer.data)
 
 
 class FeaturedHomepageReviewsView(generics.ListAPIView):
