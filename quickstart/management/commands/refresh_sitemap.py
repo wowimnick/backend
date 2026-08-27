@@ -37,18 +37,10 @@ class Command(BaseCommand):
     def _verify_sitemap(self):
         """Test sitemap generation."""
         try:
-            from quickstart.sitemaps import (
-                ExplorePagesSitemap,
-                StaticViewSitemap,
-                ClassSitemap,
-                BusinessSitemap,
-            )
+            from quickstart.sitemaps import StaticViewSitemap
 
             sitemaps = {
                 "Static": StaticViewSitemap(),
-                "Classes": ClassSitemap(),
-                "Businesses": BusinessSitemap(),
-                "Explore": ExplorePagesSitemap(),
             }
 
             total = 0

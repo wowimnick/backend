@@ -197,6 +197,17 @@ def sync_widget_subscription_from_stripe(stripe_subscription_id, subscription_ob
         business.stripe_customer_id = stripe_customer_id
         business.save(update_fields=["stripe_customer_id"])
 
+    if status in ("active", "trialing"):
+        biz_updates = []
+        if not business.isActive:
+            business.isActive = True
+            biz_updates.append("isActive")
+        if business.verificationStatus != "verified":
+            business.verificationStatus = "verified"
+            biz_updates.append("verificationStatus")
+        if biz_updates:
+            business.save(update_fields=biz_updates)
+
     logger.info(
         "subscription_sync: Widget sub_id=%s business_id=%s plan_id=%s status=%s",
         stripe_subscription_id, business.businessId, plan_id, status,

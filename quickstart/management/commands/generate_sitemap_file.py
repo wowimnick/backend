@@ -65,24 +65,17 @@ class Command(BaseCommand):
         # 2. Frontend-Only Static URLs (hardcoded relative paths)
         # ### ADJUST ###: Add the exact paths used in your React Router <Route path="...">
         frontend_routes = [
-            # Base pages
-            {'path': '/', 'priority': '1.0', 'changefreq': 'daily'}, 
-            {'path': '/explore', 'priority': '0.9', 'changefreq': 'daily'},
-            {'path': '/about-us', 'priority': '0.7', 'changefreq': 'monthly'},
-            {'path': '/careers', 'priority': '0.6', 'changefreq': 'monthly'},
-            {'path': '/careers/positions', 'priority': '0.5', 'changefreq': 'weekly'},
-            {'path': '/business', 'priority': '0.7', 'changefreq': 'monthly'},
-            # User specific (lower priority maybe, depends on content)
-            {'path': '/my-classes', 'priority': '0.5', 'changefreq': 'weekly'},
-            {'path': '/my-favorites', 'priority': '0.5', 'changefreq': 'weekly'},
-            {'path': '/my-tickets', 'priority': '0.5', 'changefreq': 'weekly'},
-            # Legal/Info pages
+            {'path': '/', 'priority': '1.0', 'changefreq': 'daily'},
+            {'path': '/pricing', 'priority': '0.9', 'changefreq': 'weekly'},
+            {'path': '/about', 'priority': '0.7', 'changefreq': 'monthly'},
+            {'path': '/blog', 'priority': '0.7', 'changefreq': 'weekly'},
+            {'path': '/business/register', 'priority': '0.8', 'changefreq': 'monthly'},
             {'path': '/privacy-policy', 'priority': '0.3', 'changefreq': 'yearly'},
             {'path': '/terms-of-service', 'priority': '0.3', 'changefreq': 'yearly'},
-            {'path': '/help', 'priority': '0.4', 'changefreq': 'monthly'},
-             # Add others like '/gift-cards', '/referrals', etc. if they are static frontend pages
-             # IMPORTANT: Do NOT add parameterized routes like '/class/:id' or '/my-tickets/:id' here.
-             # Those should be handled by the dynamic model loops below.
+            {'path': '/fees', 'priority': '0.4', 'changefreq': 'monthly'},
+            {'path': '/cookie-policy', 'priority': '0.3', 'changefreq': 'yearly'},
+            {'path': '/content-policy', 'priority': '0.3', 'changefreq': 'yearly'},
+            {'path': '/copyright-policy', 'priority': '0.3', 'changefreq': 'yearly'},
         ]
         for route in frontend_routes:
             all_urls_data.append({
@@ -100,31 +93,7 @@ class Command(BaseCommand):
             # SubElement(url_element, 'lastmod').text = timezone.now().strftime('%Y-%m-%d') # Add for static if needed
 
 
-        # --- Dynamic URLs (e.g., Classes) --- (Same as before)
-        if Class:
-            class_qs = Class.objects.filter(
-                status='active',  # Use the status field of ClassesMain
-                businessId__isActive=True # Optionally, ensure the business is also active
-            ).order_by('-updatedAt')
-
-            for class_obj in class_qs:
-                try:
-                    # Ensure 'classpage' is the name of the URL pattern in your urls.py
-                    # that resolves to the view handling /class/:id on the frontend.
-                    # Since /class/:id is a frontend route parameter, it will be handled by the
-                    # catch-all in Django, but we still need to construct the URL.
-                    # We can't 'reverse' parameterized frontend routes from Django directly.
-                    # So we construct it manually for the sitemap.
-                    location = f'/class/{class_obj.pk}/' # Construct the path manually
-
-                    url_element = SubElement(urlset, 'url')
-                    SubElement(url_element, 'loc').text = base_url + location
-                    if hasattr(class_obj, 'updatedAt') and class_obj.updatedAt:
-                        SubElement(url_element, 'lastmod').text = class_obj.updatedAt.strftime('%Y-%m-%d')
-                    SubElement(url_element, 'changefreq').text = 'weekly'
-                    SubElement(url_element, 'priority').text = '0.8'
-                except Exception as e: # Catch any other potential error during URL construction for a class
-                    self.stderr.write(self.style.WARNING(f"Error processing Class object pk={class_obj.pk}: {e}"))
+        # Dynamic class/business URLs are no longer public; skip listing them.
 
         # --- Format and Write XML File --- (Same as before)
         xml_str = xml_tostring(urlset, encoding='unicode')

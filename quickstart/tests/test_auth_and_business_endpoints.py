@@ -5,7 +5,6 @@ my-favorites; business register, my-businesses, my-business/overview, my-busines
 business-stats, business/all-categories; and business router ViewSets (classes, staff, etc.).
 Run with: pytest quickstart/tests/test_auth_and_business_endpoints.py -v
 """
-import json
 import pytest
 from rest_framework import status
 
@@ -25,33 +24,13 @@ API = "/api"
 
 def valid_business_registration_payload():
     """Minimal valid payload for POST /api/business/register/."""
-    # At least one day must be open with valid open/close times (HH:MM).
-    business_hours = [
-        {"day": "Mon", "isOpen": True, "open": "09:00", "close": "17:00"},
-        {"day": "Tue", "isOpen": False},
-        {"day": "Wed", "isOpen": False},
-        {"day": "Thu", "isOpen": False},
-        {"day": "Fri", "isOpen": False},
-        {"day": "Sat", "isOpen": False},
-        {"day": "Sun", "isOpen": False},
-    ]
     return {
         "businessName": "New Test Business",
-        "businessType": "venue",
-        "businessDescription": "A" * 250,
-        "businessHours": json.dumps(business_hours),
-        "liabilityWaiver": True,
-        "business_timezone": "America/Toronto",
+        "website": "https://example.com",
         "studentContactPhone": "+15551234567",
-        "studentContactEmail": "owner@example.com",
-        "preferredContact": "email",
-        "contact_privacy": "on_booking",
-        "businessAddress": "123 Main St",
-        "businessCity": "Toronto",
-        "businessState": "ON",
-        "businessZipCode": "M5V 1A1",
         "termsAccepted": True,
         "privacyAccepted": True,
+        "plan_id": "growth",
     }
 
 
@@ -289,7 +268,6 @@ class TestBusinessRegister:
     def test_register_business_already_has_business_409(self, api_client, business):
         """POST /api/business/register/ when user already owns a business returns 409."""
         payload = valid_business_registration_payload()
-        payload["studentContactEmail"] = business.owner.email
         api_client.force_authenticate(user=business.owner)
         response = api_client.post(
             f"{API}/business/register/",
@@ -302,7 +280,6 @@ class TestBusinessRegister:
         """POST /api/business/register/ with valid payload returns 201 and business id."""
         api_client.force_authenticate(user=user)
         payload = valid_business_registration_payload()
-        payload["studentContactEmail"] = user.email
         response = api_client.post(
             f"{API}/business/register/",
             payload,

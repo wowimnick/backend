@@ -204,6 +204,7 @@ from quickstart.views import (
     MyBusinessInstagramFollowersSyncView,
     PublicBusinessInfoViewSet,
     register_business,
+    business_onboarding_state,
     PlatformClassReviews,
     ImportedGoogleReviewsView,
     FeaturedHomepageReviewsView,
@@ -812,6 +813,11 @@ urlpatterns = [
         name="resend-webhook",
     ),
     path("business/register/", register_business, name="business-register"),
+    path(
+        "my-business/onboarding-state/",
+        business_onboarding_state,
+        name="business-onboarding-state",
+    ),
     path("my-businesses/", get_user_businesses, name="my-businesses"),
     path(
         "my-business/widget-config/",

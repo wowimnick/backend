@@ -22,9 +22,6 @@ class StaticViewSitemap(Sitemap):
     def items(self):
         named = [
             "homepage",
-            "business-welcome",
-            "careers",
-            "about-us",
             "terms-of-service",
             "privacy-policy",
             "blog",
@@ -32,12 +29,12 @@ class StaticViewSitemap(Sitemap):
         # Next.js routes not in Django url reverse()
         extra_paths = [
             "/about",
-            "/reviews",
-            "/giftcards",
+            "/pricing",
             "/fees",
             "/cookie-policy",
             "/content-policy",
             "/copyright-policy",
+            "/business/register",
         ]
         return [("named", n) for n in named] + [("path", p) for p in extra_paths]
 

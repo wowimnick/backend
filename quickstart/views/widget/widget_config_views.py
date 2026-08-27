@@ -400,14 +400,11 @@ class CreateWidgetSubscriptionCheckoutView(APIView):
         default_cancel = f"{base_fe}/business/dashboard?tab=settings&checkout=cancel"
         success_url = (request.data.get("success_url") or default_success).strip()
         cancel_url = (request.data.get("cancel_url") or default_cancel).strip()
+        ui_mode = (request.data.get("ui_mode") or "").strip().lower()
         try:
             session_params = {
                 "mode": "subscription",
                 "line_items": [{"price": price_id, "quantity": 1}],
-                "success_url": success_url
-                + ("&" if "?" in success_url else "?")
-                + "session_id={CHECKOUT_SESSION_ID}&subscribed=1",
-                "cancel_url": cancel_url + ("&" if "?" in cancel_url else "?") + f"plan={plan_id}",
                 "client_reference_id": str(business.businessId),
                 "metadata": {
                     "business_id": str(business.businessId),
@@ -422,6 +419,22 @@ class CreateWidgetSubscriptionCheckoutView(APIView):
                     },
                 },
             }
+            if ui_mode == "embedded":
+                session_params["ui_mode"] = "embedded"
+                session_params["return_url"] = (
+                    success_url
+                    + ("&" if "?" in success_url else "?")
+                    + "session_id={CHECKOUT_SESSION_ID}&subscribed=1"
+                )
+            else:
+                session_params["success_url"] = (
+                    success_url
+                    + ("&" if "?" in success_url else "?")
+                    + "session_id={CHECKOUT_SESSION_ID}&subscribed=1"
+                )
+                session_params["cancel_url"] = (
+                    cancel_url + ("&" if "?" in cancel_url else "?") + f"plan={plan_id}"
+                )
             if getattr(settings, "STRIPE_CHECKOUT_AUTOMATIC_TAX", False):
                 session_params["automatic_tax"] = {"enabled": True}
                 session_params["customer_update"] = {"address": "auto"}
@@ -429,7 +442,9 @@ class CreateWidgetSubscriptionCheckoutView(APIView):
             if business.stripe_customer_id:
                 session_params["customer"] = business.stripe_customer_id
             else:
-                session_params["customer_email"] = business.studentContactEmail
+                session_params["customer_email"] = (
+                    business.studentContactEmail or getattr(business.owner, "email", None)
+                )
             session = stripe.checkout.Session.create(**session_params)
             StripeCheckoutAttempt.objects.create(
                 business=business,
@@ -438,14 +453,15 @@ class CreateWidgetSubscriptionCheckoutView(APIView):
                 plan_or_tier_key=plan_id,
                 stripe_price_id=price_id or "",
             )
-            return Response(
-                {
-                    "url": session.url,
-                    "checkout_url": session.url,
-                    "session_id": session.id,
-                },
-                status=status.HTTP_200_OK,
-            )
+            payload = {
+                "url": getattr(session, "url", None),
+                "checkout_url": getattr(session, "url", None),
+                "session_id": session.id,
+            }
+            client_secret = getattr(session, "client_secret", None)
+            if client_secret:
+                payload["client_secret"] = client_secret
+            return Response(payload, status=status.HTTP_200_OK)
         except stripe.StripeError as e:
             return Response(
                 {"error": str(e)},

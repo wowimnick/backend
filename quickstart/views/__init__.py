@@ -12,6 +12,7 @@ from .business.business_management_views import (
     MyBusinessProfileView,
     MyBusinessInstagramFollowersSyncView,
     register_business,
+    business_onboarding_state,
     get_user_businesses,
     MyBusinessOverviewView,
     BusinessDiscountViewSet,

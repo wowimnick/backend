@@ -11,12 +11,7 @@ import django
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'CEBackend.settings')
 django.setup()
 
-from quickstart.sitemaps import (
-    ExplorePagesSitemap,
-    StaticViewSitemap,
-    ClassSitemap,
-    BusinessSitemap,
-)
+from quickstart.sitemaps import StaticViewSitemap
 
 def test_sitemaps():
     print("🔍 Testing Sitemap Generation...\n")
@@ -26,9 +21,6 @@ def test_sitemaps():
     
     sitemaps = {
         'Static Pages': StaticViewSitemap(),
-        'Classes': ClassSitemap(),
-        'Businesses': BusinessSitemap(),
-        'Explore Pages': ExplorePagesSitemap(),
     }
     
     for name, sitemap in sitemaps.items():

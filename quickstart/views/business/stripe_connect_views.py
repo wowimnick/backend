@@ -111,8 +111,14 @@ class StripeConnectView(views.APIView):
             stripe_account_id if stripe_account_id else "new_account_placeholder"
         )
 
-        refresh_url_path = f"/stripe-connect/return?stripe_refresh=true&original_intent=dashboard_settings&account_id={temp_account_id_for_url}"
-        return_url_path = f"/stripe-connect/return?stripe_return=true&original_intent=dashboard_settings&account_id={temp_account_id_for_url}"
+        original_intent = (
+            request.data.get("original_intent") or "dashboard_settings"
+        ).strip()
+        if original_intent not in ("dashboard_settings", "onboarding"):
+            original_intent = "dashboard_settings"
+
+        refresh_url_path = f"/stripe-connect/return?stripe_refresh=true&original_intent={original_intent}&account_id={temp_account_id_for_url}"
+        return_url_path = f"/stripe-connect/return?stripe_return=true&original_intent={original_intent}&account_id={temp_account_id_for_url}"
 
         full_refresh_url = f"{frontend_domain}{refresh_url_path}"
         full_return_url = f"{frontend_domain}{return_url_path}"
@@ -156,8 +162,8 @@ class StripeConnectView(views.APIView):
                 )
 
                 # Update AccountLink URLs with the new ID
-                refresh_url_path = f"/stripe-connect/return?stripe_refresh=true&original_intent=dashboard_settings&account_id={stripe_account_id}"
-                return_url_path = f"/stripe-connect/return?stripe_return=true&original_intent=dashboard_settings&account_id={stripe_account_id}"
+                refresh_url_path = f"/stripe-connect/return?stripe_refresh=true&original_intent={original_intent}&account_id={stripe_account_id}"
+                return_url_path = f"/stripe-connect/return?stripe_return=true&original_intent={original_intent}&account_id={stripe_account_id}"
                 full_refresh_url = f"{frontend_domain}{refresh_url_path}"
                 full_return_url = f"{frontend_domain}{return_url_path}"
 

@@ -243,6 +243,63 @@ def register_business(request):
             status=status.HTTP_201_CREATED,
         )
 
+
+@api_view(["GET", "POST"])
+@permission_classes([IsAuthenticated])
+def business_onboarding_state(request):
+    """
+    GET: resume state for /business/register.
+    POST: { complete: true } marks onboarding finished.
+    """
+    business = (
+        BusinessInfo.objects.filter(
+            Q(owner=request.user)
+            | Q(staff_members__user=request.user, staff_members__status="accepted")
+        )
+        .distinct()
+        .first()
+    )
+    if request.method == "POST":
+        if not business:
+            return Response(
+                {"error": "No business profile found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        if request.data.get("complete"):
+            business.onboarding_completed = True
+            business.save(update_fields=["onboarding_completed"])
+        return Response({"ok": True, "onboarding_completed": business.onboarding_completed})
+
+    if not business:
+        return Response(
+            {
+                "has_business": False,
+                "has_paid_subscription": False,
+                "is_active": False,
+                "onboarding_completed": False,
+                "stripe_connected": False,
+                "timezone": None,
+                "business_name": None,
+                "widget_api_key": None,
+            }
+        )
+
+    has_paid = _business_has_active_widget_subscription(business)
+    return Response(
+        {
+            "has_business": True,
+            "has_paid_subscription": has_paid,
+            "is_active": bool(business.isActive),
+            "onboarding_completed": bool(business.onboarding_completed),
+            "stripe_connected": business.stripe_account_status == "active",
+            "timezone": business.business_timezone,
+            "business_name": business.businessName,
+            "widget_api_key": str(business.widget_api_key)
+            if business.widget_api_key
+            else None,
+        }
+    )
+
     except DRFValidationError as e:
         logger.warning(
             f"Business registration validation error for user {request.user.email}. Errors: {e.detail}"

@@ -519,7 +519,7 @@ class BusinessInfo(models.Model):
         max_length=50,
         choices=BUSINESS_TYPE_CHOICES,
     )
-    businessDescription = models.TextField(max_length=750)
+    businessDescription = models.TextField(max_length=750, blank=True, default="")
     businessImage = models.ImageField(
         upload_to="originals/business_images/",
         blank=True,
@@ -564,8 +564,8 @@ class BusinessInfo(models.Model):
     updatedAt = models.DateTimeField(auto_now=True)
 
     # --- Contact & Website ---
-    studentContactPhone = models.CharField(max_length=100)
-    studentContactEmail = models.EmailField()
+    studentContactPhone = models.CharField(max_length=100, blank=True, default="")
+    studentContactEmail = models.EmailField(blank=True, default="")
     website = models.URLField(max_length=255, blank=True, null=True)  # ADDED
     preferredContact = models.CharField(
         max_length=20,
@@ -575,14 +575,16 @@ class BusinessInfo(models.Model):
             ("text", "Text Message"),
             ("both", "Both Email and Phone"),
         ],
+        default="email",
+        blank=True,
     )
 
     # --- Location ---
-    businessAddress = models.CharField(max_length=255)
-    businessCity = models.CharField(max_length=100)
-    businessState = models.CharField(max_length=100)
+    businessAddress = models.CharField(max_length=255, blank=True, default="")
+    businessCity = models.CharField(max_length=100, blank=True, default="")
+    businessState = models.CharField(max_length=100, blank=True, default="")
     businessUnit = models.CharField(max_length=50, blank=True, null=True)
-    businessZipCode = models.CharField(max_length=20)
+    businessZipCode = models.CharField(max_length=20, blank=True, default="")
     latitude = models.DecimalField(
         max_digits=10, decimal_places=8, null=True, blank=True
     )
@@ -672,6 +674,10 @@ class BusinessInfo(models.Model):
     )
     termsAccepted = models.BooleanField(default=False)
     privacyAccepted = models.BooleanField(default=False)
+    onboarding_completed = models.BooleanField(
+        default=False,
+        help_text="True after the SaaS signup wizard is finished or skipped past payouts/widget preview.",
+    )
 
     widget_config = models.JSONField(
         default=dict,
