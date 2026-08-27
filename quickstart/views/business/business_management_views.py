@@ -243,6 +243,22 @@ def register_business(request):
             status=status.HTTP_201_CREATED,
         )
 
+    except DRFValidationError as e:
+        logger.warning(
+            f"Business registration validation error for user {request.user.email}. Errors: {e.detail}"
+        )
+        return Response({"error": e.detail}, status=status.HTTP_400_BAD_REQUEST)
+
+    except Exception as e:
+        logger.error(
+            f"Unexpected error in business registration for user {request.user.email}: {str(e)}",
+            exc_info=True,
+        )
+        return Response(
+            {"error": "An unexpected server error occurred. Please try again later."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
 
 @api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
@@ -299,22 +315,6 @@ def business_onboarding_state(request):
             else None,
         }
     )
-
-    except DRFValidationError as e:
-        logger.warning(
-            f"Business registration validation error for user {request.user.email}. Errors: {e.detail}"
-        )
-        return Response({"error": e.detail}, status=status.HTTP_400_BAD_REQUEST)
-
-    except Exception as e:
-        logger.error(
-            f"Unexpected error in business registration for user {request.user.email}: {str(e)}",
-            exc_info=True,
-        )
-        return Response(
-            {"error": "An unexpected server error occurred. Please try again later."},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
 
 
 # --- Views for Logged-in Business Users ---
