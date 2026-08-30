@@ -297,6 +297,7 @@ def business_onboarding_state(request):
                 "timezone": None,
                 "business_name": None,
                 "widget_api_key": None,
+                "onboarding_survey": {},
             }
         )
 
@@ -313,6 +314,7 @@ def business_onboarding_state(request):
             "widget_api_key": str(business.widget_api_key)
             if business.widget_api_key
             else None,
+            "onboarding_survey": business.onboarding_survey or {},
         }
     )
 

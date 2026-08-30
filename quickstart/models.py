@@ -678,6 +678,11 @@ class BusinessInfo(models.Model):
         default=False,
         help_text="True after the SaaS signup wizard is finished or skipped past payouts/widget preview.",
     )
+    onboarding_survey = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Optional SaaS signup answers: industry, booking_system, attribution, estimated_monthly_volume.",
+    )
 
     widget_config = models.JSONField(
         default=dict,

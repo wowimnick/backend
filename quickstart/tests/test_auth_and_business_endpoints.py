@@ -364,6 +364,35 @@ class TestMyBusinessProfile:
         data = response.json()
         assert data.get("slug") == business.slug or data.get("businessName") == business.businessName
 
+    def test_my_business_profile_patch_onboarding_survey(self, business_owner_client, business):
+        """PATCH /api/my-business/profile/ stores optional onboarding survey answers."""
+        response = business_owner_client.patch(
+            f"{API}/my-business/profile/",
+            {
+                "onboarding_survey": {
+                    "industry": "arts",
+                    "booking_system": "calendly",
+                    "attribution": "google",
+                    "estimated_monthly_volume": 2500,
+                }
+            },
+            format="json",
+        )
+        assert response.status_code == status.HTTP_200_OK
+        business.refresh_from_db()
+        assert business.onboarding_survey["industry"] == "arts"
+        assert business.onboarding_survey["booking_system"] == "calendly"
+        assert business.onboarding_survey["attribution"] == "google"
+        assert business.onboarding_survey["estimated_monthly_volume"] == 2500
+
+    def test_my_business_profile_patch_onboarding_survey_rejects_unknown(self, business_owner_client):
+        response = business_owner_client.patch(
+            f"{API}/my-business/profile/",
+            {"onboarding_survey": {"industry": "not-a-vertical"}},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
 
 # -----------------------------------------------------------------------------
 # Business: Business stats (dashboard)

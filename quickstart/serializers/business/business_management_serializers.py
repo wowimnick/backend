@@ -176,6 +176,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
     instagram_follower_count = serializers.IntegerField(read_only=True, allow_null=True)
     instagram_followers_synced_at = serializers.DateTimeField(read_only=True, allow_null=True)
     instagram_sync_status = serializers.CharField(read_only=True)
+    onboarding_survey = serializers.JSONField(required=False)
 
     class Meta:
         model = BusinessInfo
@@ -227,6 +228,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "instagram_follower_count",
             "instagram_followers_synced_at",
             "instagram_sync_status",
+            "onboarding_survey",
         ]
         read_only_fields = (
             "businessId",
@@ -288,6 +290,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "reminderNotification": {"required": False},
             "scheduleExpiryNotification": {"required": False},
             "smsNotifications": {"required": False},
+            "onboarding_survey": {"required": False},
         }
 
     def get_managers_emails(self, obj):
@@ -508,6 +511,55 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
                         )
         return value if value is not None else {}
 
+    def validate_onboarding_survey(self, value):
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise DRFValidationError("Onboarding survey must be an object.")
+        allowed = {
+            "industry": {
+                "fitness",
+                "arts",
+                "tutoring",
+                "kids",
+                "beauty",
+                "other",
+            },
+            "booking_system": {
+                "calendly",
+                "acuity",
+                "square",
+                "instagram",
+                "phone",
+                "other",
+            },
+            "attribution": {
+                "google",
+                "instagram",
+                "tiktok",
+                "referral",
+                "owner",
+                "other",
+            },
+        }
+        cleaned = {}
+        for key, choices in allowed.items():
+            raw = value.get(key)
+            if raw in (None, ""):
+                continue
+            if raw not in choices:
+                raise DRFValidationError({key: "Invalid choice."})
+            cleaned[key] = raw
+        volume = value.get("estimated_monthly_volume")
+        if volume is not None and volume != "":
+            try:
+                cleaned["estimated_monthly_volume"] = int(volume)
+            except (TypeError, ValueError):
+                raise DRFValidationError(
+                    {"estimated_monthly_volume": "Must be an integer."}
+                )
+        return cleaned
+
     def validate_businessHours(self, value):
         if value is not None:
             if not isinstance(value, list):
@@ -572,6 +624,12 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
 
         old_ig = ((instance.social_media_links or {}).get("instagram") or "").strip()
         s3_key = validated_data.pop("businessImage_s3_key", "NOT_PROVIDED")
+        if "onboarding_survey" in validated_data:
+            incoming = validated_data.get("onboarding_survey") or {}
+            validated_data["onboarding_survey"] = {
+                **(instance.onboarding_survey or {}),
+                **incoming,
+            }
 
         if s3_key is None:
             if instance.businessImage:
