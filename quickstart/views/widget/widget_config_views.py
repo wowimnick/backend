@@ -400,12 +400,19 @@ class CreateWidgetSubscriptionCheckoutView(APIView):
         default_cancel = f"{base_fe}/business/dashboard?tab=settings&checkout=cancel"
         success_url = (request.data.get("success_url") or default_success).strip()
         cancel_url = (request.data.get("cancel_url") or default_cancel).strip()
-        ui_mode = (request.data.get("ui_mode") or "").strip().lower()
         try:
             session_params = {
                 "mode": "subscription",
                 "line_items": [{"price": price_id, "quantity": 1}],
                 "client_reference_id": str(business.businessId),
+                "success_url": (
+                    success_url
+                    + ("&" if "?" in success_url else "?")
+                    + "session_id={CHECKOUT_SESSION_ID}&subscribed=1"
+                ),
+                "cancel_url": (
+                    cancel_url + ("&" if "?" in cancel_url else "?") + f"plan={plan_id}"
+                ),
                 "metadata": {
                     "business_id": str(business.businessId),
                     "plan_id": plan_id,
@@ -419,22 +426,6 @@ class CreateWidgetSubscriptionCheckoutView(APIView):
                     },
                 },
             }
-            if ui_mode == "embedded":
-                session_params["ui_mode"] = "embedded"
-                session_params["return_url"] = (
-                    success_url
-                    + ("&" if "?" in success_url else "?")
-                    + "session_id={CHECKOUT_SESSION_ID}&subscribed=1"
-                )
-            else:
-                session_params["success_url"] = (
-                    success_url
-                    + ("&" if "?" in success_url else "?")
-                    + "session_id={CHECKOUT_SESSION_ID}&subscribed=1"
-                )
-                session_params["cancel_url"] = (
-                    cancel_url + ("&" if "?" in cancel_url else "?") + f"plan={plan_id}"
-                )
             if getattr(settings, "STRIPE_CHECKOUT_AUTOMATIC_TAX", False):
                 session_params["automatic_tax"] = {"enabled": True}
                 session_params["customer_update"] = {"address": "auto"}
