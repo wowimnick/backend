@@ -84,6 +84,12 @@ from quickstart.views.business.email_marketing_views import (
     MarketingTemplateDetailView,
     MarketingTemplateListCreateView,
 )
+from quickstart.views.business.email_marketing_workflow_views import (
+    MarketingWorkflowDetailView,
+    MarketingWorkflowEnrollView,
+    MarketingWorkflowEnrollmentListView,
+    MarketingWorkflowListCreateView,
+)
 from quickstart.views.business.scheduling_views import (
     AppointmentSlotsView,
     BusinessTimeOffDetailView,
