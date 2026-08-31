@@ -75,11 +75,49 @@ class UpcomingClassSerializer(serializers.Serializer):
     current_occupancy = serializers.IntegerField()
     max_occupancy = serializers.IntegerField()
     booking_type = serializers.CharField(required=False)
+    date = serializers.CharField(required=False)
+    class_id = serializers.IntegerField(required=False)
 
 
 class PopularClassSerializer(serializers.Serializer):
     name = serializers.CharField()
     enrollment = serializers.IntegerField()
+    class_id = serializers.IntegerField(required=False)
+
+
+class SeriesPointSerializer(serializers.Serializer):
+    date = serializers.CharField()
+    value = serializers.FloatField()
+
+
+class HeatCellSerializer(serializers.Serializer):
+    weekday = serializers.IntegerField()
+    hour = serializers.IntegerField()
+    count = serializers.IntegerField()
+
+
+class OverviewSeriesSerializer(serializers.Serializer):
+    bookings_daily = SeriesPointSerializer(many=True)
+    new_clients_weekly = SeriesPointSerializer(many=True)
+    no_show_weekly = SeriesPointSerializer(many=True)
+    occupancy_weekly = SeriesPointSerializer(many=True)
+    bookings_by_weekday_hour = HeatCellSerializer(many=True)
+
+
+class RecentTransactionSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    booking_id = serializers.IntegerField()
+    user_facing_reference = serializers.CharField(allow_blank=True, allow_null=True)
+    client_name = serializers.CharField()
+    service_name = serializers.CharField()
+    amount = serializers.FloatField()
+    net_payout_amount = serializers.FloatField()
+    currency = serializers.CharField()
+    card_brand = serializers.CharField(allow_blank=True, allow_null=True)
+    card_last4 = serializers.CharField(allow_blank=True, allow_null=True)
+    status = serializers.CharField()
+    kind = serializers.CharField()
+    created_at = serializers.DateTimeField()
 
 
 class RecentActivitySerializer(serializers.Serializer):
@@ -128,6 +166,8 @@ class BusinessDashboardOverviewSerializer(serializers.Serializer):
     )
     actionable_prompts = ActionablePromptsSerializer(required=False)
     setup_progress = SetupProgressSerializer(required=False)
+    series = OverviewSeriesSerializer(required=False)
+    recent_transactions = RecentTransactionSerializer(many=True, required=False)
 
 
 from quickstart.serializers.business.saas_registration import (  # noqa: E402
