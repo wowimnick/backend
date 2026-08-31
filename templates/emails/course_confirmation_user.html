@@ -100,10 +100,10 @@
                width="100%">
             <tr>
                 <td align="center">
-                    {% if is_guest and guest_cancellation_url %}
+                    {% if guest_cancellation_url %}
                         <a href="{{ guest_cancellation_url }}" target="_blank" class="button">{% trans 'Manage Enrollment' %}</a>
                     {% else %}
-                        <a href="{{ manage_bookings_url }}" target="_blank" class="button">{% trans 'View Course Details' %}</a>
+                        <p style="font-size: 13px; color: #86868B;">{% trans "Reply to this email or contact the studio if you need to change or cancel." %}</p>
                     {% endif %}
                 </td>
             </tr>

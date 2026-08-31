@@ -7,7 +7,7 @@ from quickstart.utils.url_utils import build_cloudfront_url
 from quickstart.serializers.business.business_location_serializers import (
     BusinessLocationSerializer,
 )
-from quickstart.serializers.public.public_review_serializers import (
+from quickstart.serializers.imported_google_review_serializers import (
     ImportedGoogleReviewSerializer,
 )
 from ....models import (

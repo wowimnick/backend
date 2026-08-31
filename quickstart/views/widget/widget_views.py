@@ -5,6 +5,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
+import pytz
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
@@ -15,7 +16,8 @@ from rest_framework.exceptions import ValidationError, NotFound
 from django.db.models import Q, Count, Sum, Subquery, OuterRef, IntegerField, Prefetch
 from django.db.models.functions import Coalesce
 
-from quickstart.utils.stripe_processing_fee import estimate_stripe_processing_fee
+from quickstart.utils.commission import get_plan_fee_percentage
+from quickstart.utils.stripe_refund import create_stripe_refund
 from django.core.cache import cache
 from urllib.parse import urlparse
 
@@ -54,6 +56,7 @@ from quickstart.services.membership_service import (
     get_credits_remaining,
     consume_credit,
 )
+from quickstart.services.crm_stats import refresh_contact_stats_safe
 from quickstart.utils.stripe_metadata import stripe_metadata_to_dict
 from quickstart.serializers.widget.widget_serializers import (
     WidgetBusinessConfigSerializer,
@@ -72,6 +75,9 @@ from quickstart.utils.sms_utils import business_sms_enabled, normalize_phone_for
 from quickstart.tasks.notification_tasks import send_sms_task
 from quickstart.utils.permissions import IsValidWidgetRequest
 from quickstart.utils.widget_throttle import WidgetRateThrottle
+from quickstart.views.public.guest_booking_views import (
+    process_guest_booking_cancellation,
+)
 
 logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
@@ -159,28 +165,12 @@ def _business_has_growth_or_advanced_widget_plan(business):
     return business_has_growth_or_advanced_widget_plan(business)
 
 
-# Commission by plan: basic=4%, growth=3%, advanced=2%
-WIDGET_PLAN_FEE_PERCENT = {"basic": Decimal("4.00"), "growth": Decimal("3.00"), "advanced": Decimal("2.00")}
-
-
-def _get_widget_plan_fee_percentage(business):
-    """Return fee percentage (Decimal) for business's active widget plan; default 4% if none."""
-    if getattr(business, "is_demo", False):
-        return Decimal("4.00")
-    now = timezone.now()
-    from quickstart.services.widget_subscription_service import (
-        widget_subscription_grants_platform_access,
+def _business_charges_enabled(business):
+    """True when Connect is linked and charges/payouts are active."""
+    return bool(
+        getattr(business, "stripe_account_id", None)
+        and getattr(business, "stripe_account_status", None) == "active"
     )
-
-    sub = (
-        WidgetSubscription.objects.filter(business=business)
-        .filter(Q(current_period_end__isnull=True) | Q(current_period_end__gt=now))
-        .order_by("-current_period_end")
-        .first()
-    )
-    if not sub or not sub.plan_id or not widget_subscription_grants_platform_access(sub):
-        return Decimal("4.00")
-    return WIDGET_PLAN_FEE_PERCENT.get((sub.plan_id or "").lower(), Decimal("4.00"))
 
 
 def _get_active_membership_for_booking(business, email, class_id):
@@ -367,6 +357,8 @@ class WidgetConfigView(generics.RetrieveAPIView):
                 "stripe_publishable_key": getattr(settings, "STRIPE_PUBLIC_KEY", ""),
                 "terms_url": f"{base}/terms-of-service",
                 "privacy_url": f"{base}/privacy-policy",
+                "charges_enabled": False,
+                "booking_disabled": True,
             })
         instance = self.get_object()
         if not _business_has_active_widget_subscription(instance):
@@ -390,6 +382,10 @@ class WidgetConfigView(generics.RetrieveAPIView):
         base = getattr(settings, "FRONTEND_BASE_URL", "https://www.classeasily.com").rstrip("/")
         data["terms_url"] = f"{base}/terms-of-service"
         data["privacy_url"] = f"{base}/privacy-policy"
+        charges_enabled = _business_charges_enabled(instance)
+        data["charges_enabled"] = charges_enabled
+        if not charges_enabled:
+            data["booking_disabled"] = True
         return Response(data)
 
 
@@ -725,6 +721,15 @@ class CreateGuestPaymentIntentView(APIView):
                 },
                 status=status.HTTP_403_FORBIDDEN,
             )
+        if not _business_charges_enabled(business):
+            return Response(
+                {
+                    "error": "charges_not_enabled",
+                    "code": "charges_not_enabled",
+                    "message": "Payouts must be connected first before this business can accept bookings.",
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
         instance_id = request.data.get("schedule_instance_id")
         participants = int(request.data.get("participants", 1))
 
@@ -736,7 +741,7 @@ class CreateGuestPaymentIntentView(APIView):
         business = request.business_context
         try:
             instance = ScheduleInstance.objects.select_related(
-                "schedule__option__classId__businessId__partner_tier"
+                "schedule__option__classId__businessId"
             ).get(id=instance_id, schedule__option__classId__businessId=business)
         except ScheduleInstance.DoesNotExist:
             raise NotFound("The selected session is not available.")
@@ -829,9 +834,9 @@ class CreateGuestPaymentIntentView(APIView):
         if subtotal_for_payout < 0:
             subtotal_for_payout = Decimal("0.00")
 
-        # Fee calculation: plan-based commission on post-discount subtotal
+        # Business absorbs commission: customer pays subtotal + tax only.
         plan_id = _get_widget_plan_id(business)
-        fee_percentage = _get_widget_plan_fee_percentage(business)
+        fee_percentage = get_plan_fee_percentage(business, plan_id=plan_id)
         platform_fee = (
             subtotal_for_payout * (fee_percentage / Decimal("100"))
         ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -841,9 +846,10 @@ class CreateGuestPaymentIntentView(APIView):
             Decimal("0.01"), rounding=ROUND_HALF_UP
         )
 
-        total_amount_charged = subtotal_for_payout + platform_fee + tax_on_subtotal
+        total_amount_charged = subtotal_for_payout + tax_on_subtotal
         net_payout_amount = subtotal_for_payout - platform_fee
         final_amount_cents = int(total_amount_charged * 100)
+        platform_fee_cents = int(platform_fee * 100)
 
         metadata = {
             "business_id": business.businessId,
@@ -878,13 +884,17 @@ class CreateGuestPaymentIntentView(APIView):
             )
 
         try:
-            payment_intent = stripe.PaymentIntent.create(
-                amount=final_amount_cents,
-                currency=business.currency.lower(),
-                automatic_payment_methods={"enabled": True},
-                transfer_group=f"booking_widget_{uuid.uuid4()}",
-                metadata=metadata,
-            )
+            pi_kwargs = {
+                "amount": final_amount_cents,
+                "currency": business.currency.lower(),
+                "automatic_payment_methods": {"enabled": True},
+                "transfer_data": {"destination": business.stripe_account_id},
+                "on_behalf_of": business.stripe_account_id,
+                "metadata": metadata,
+            }
+            if platform_fee_cents > 0:
+                pi_kwargs["application_fee_amount"] = platform_fee_cents
+            payment_intent = stripe.PaymentIntent.create(**pi_kwargs)
             return Response({"client_secret": payment_intent.client_secret})
         except stripe.StripeError as e:
             logger.error(
@@ -959,7 +969,7 @@ class GuestBookingCreateView(generics.CreateAPIView):
                     logger.error(
                         f"RACE CONDITION: Overbooking attempt on instance {instance.id}. PI: {pi.id}"
                     )
-                    stripe.Refund.create(payment_intent=pi.id)
+                    create_stripe_refund(payment_intent=pi.id)
                     raise ValidationError(
                         "Sorry, the last spots were booked just as you were paying. Your card has not been charged."
                     )
@@ -977,7 +987,6 @@ class GuestBookingCreateView(generics.CreateAPIView):
 
                 class_option = instance.schedule.option
                 amount_charged = Decimal(pi.amount_received) / 100
-                stripe_processing_fee = estimate_stripe_processing_fee(amount_charged)
                 subtotal_for_payout = Decimal(
                     metadata.get("subtotal_for_payout")
                     or metadata.get("subtotal_after_discount", "0.00")
@@ -988,15 +997,10 @@ class GuestBookingCreateView(generics.CreateAPIView):
                 platform_fee_tax = (platform_fee_amount * HST_RATE).quantize(
                     Decimal("0.01"), rounding=ROUND_HALF_UP
                 )
-                business_payout_tax = (tax_amount - platform_fee_tax).quantize(
-                    Decimal("0.01"), rounding=ROUND_HALF_UP
-                )
-                business_net_revenue = (
-                    subtotal_for_payout - platform_fee_amount - stripe_processing_fee
-                )
-                net_payout_after_stripe = max(
+                # Destination charge: Stripe processing comes off the connected account.
+                net_payout_amount = max(
                     Decimal("0.00"),
-                    (business_net_revenue + business_payout_tax).quantize(
+                    (subtotal_for_payout - platform_fee_amount).quantize(
                         Decimal("0.01"), rounding=ROUND_HALF_UP
                     ),
                 )
@@ -1008,13 +1012,13 @@ class GuestBookingCreateView(generics.CreateAPIView):
                     amount_paid=amount_charged,
                     status="confirmed",
                     payment_status="paid",
-                    payout_status="pending",
+                    payout_status="settled",
                     enrollment_type=class_option.booking_type,
                     cancellation_policy=class_option.cancellationPolicy,
                     cancellation_custom_hours=class_option.cancellationCustomHours,
                     cancellation_refund_percentage=class_option.cancellationRefundPercentage,
                     cancellation_token=uuid.uuid4(),
-                    allocated_net_payout=net_payout_after_stripe,
+                    allocated_net_payout=net_payout_amount,
                 )
 
                 Payment.objects.create(
@@ -1026,8 +1030,8 @@ class GuestBookingCreateView(generics.CreateAPIView):
                     tax_amount=tax_amount,
                     platform_fee_amount=platform_fee_amount,
                     platform_fee_tax=platform_fee_tax,
-                    stripe_processing_fee=stripe_processing_fee,
-                    net_payout_amount=net_payout_after_stripe,
+                    stripe_processing_fee=Decimal("0.00"),
+                    net_payout_amount=net_payout_amount,
                     currency=business.currency,
                     payment_method_type=(
                         pi.payment_method_types[0]
@@ -1080,6 +1084,8 @@ class GuestBookingCreateView(generics.CreateAPIView):
                             booking.id,
                             e,
                         )
+
+                refresh_contact_stats_safe(contact)
 
             # --- Post-Transaction Actions: Emails (guest confirmation + business notification) ---
             try:
@@ -1348,6 +1354,8 @@ class GuestFreeBookingCreateView(APIView):
                             applied_discount_id,
                             e,
                         )
+
+                refresh_contact_stats_safe(contact)
 
             # --- Emails (same as paid widget flow) ---
             try:
@@ -1834,3 +1842,270 @@ class WidgetDiagnosticsView(APIView):
             or ""
         )
         return Response(build_widget_diagnostics_data(business, raw_ref))
+
+
+def _booking_location_text(class_obj):
+    ref = getattr(class_obj, "location_ref", None)
+    if ref:
+        parts = [ref.name, ref.address, ref.city, ref.state]
+        return ", ".join(p for p in parts if p)
+    return getattr(class_obj, "location", None) or ""
+
+
+def _aware_session_bounds(instance, business):
+    tz_name = getattr(business, "business_timezone", None) or "UTC"
+    try:
+        business_tz = pytz.timezone(tz_name)
+    except pytz.UnknownTimeZoneError:
+        business_tz = pytz.utc
+    start = business_tz.localize(datetime.combine(instance.date, instance.time))
+    duration = instance.duration or 0
+    end = start + timedelta(minutes=duration)
+    return start, end
+
+
+def _widget_booking_manage_summary(booking, business):
+    instance = booking.schedule_instance
+    class_obj = instance.schedule.option.classId if instance else None
+    start, end = _aware_session_bounds(instance, business) if instance else (None, None)
+    return {
+        "booking_reference": booking.user_facing_reference,
+        "status": booking.status,
+        "participants": booking.participants,
+        "class_title": getattr(class_obj, "title", None) or "",
+        "date": instance.date.isoformat() if instance and instance.date else None,
+        "time": instance.time.strftime("%H:%M:%S") if instance and instance.time else None,
+        "duration": instance.duration if instance else None,
+        "start": start.isoformat() if start else None,
+        "end": end.isoformat() if end else None,
+        "location": _booking_location_text(class_obj) if class_obj else "",
+        "amount_paid": str(booking.amount_paid) if booking.amount_paid is not None else None,
+        "can_cancel": booking.status == "confirmed",
+        "can_reschedule": booking.status == "confirmed",
+    }
+
+
+class WidgetBookingManageView(APIView):
+    """
+    Guest self-serve booking manage (magic-link UI).
+
+    EMBED REPO (not in this workspace): wire the widget magic-link page to
+    GET/POST /widget/v1/bookings/manage/ with X-Business-ID + token.
+    """
+
+    permission_classes = [IsValidWidgetRequest]
+    throttle_classes = [WidgetRateThrottle]
+
+    def _get_booking(self, business, token):
+        if not token:
+            raise ValidationError("token is required.")
+        try:
+            booking = Booking.objects.select_related(
+                "contact",
+                "schedule_instance__schedule__option__classId__businessId",
+                "schedule_instance__schedule__option__classId__location_ref",
+            ).get(cancellation_token=token)
+        except (Booking.DoesNotExist, ValueError, TypeError):
+            raise NotFound("This manage link is invalid or has expired.")
+        class_obj = booking.schedule_instance.schedule.option.classId
+        if str(class_obj.businessId_id) != str(getattr(business, "businessId", "")):
+            raise NotFound("This manage link is invalid or has expired.")
+        return booking
+
+    def get(self, request, *args, **kwargs):
+        if _is_demo(request):
+            return Response(
+                {"error": "demo_mode", "message": "Demo mode."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        token = (request.query_params.get("token") or "").strip()
+        booking = self._get_booking(request.business_context, token)
+        return Response(
+            _widget_booking_manage_summary(booking, request.business_context),
+            status=status.HTTP_200_OK,
+        )
+
+    def post(self, request, *args, **kwargs):
+        if _is_demo(request):
+            return Response(
+                {"error": "demo_mode", "message": "Demo mode."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        business = request.business_context
+        token = (request.data.get("token") or "").strip()
+        action = (request.data.get("action") or "").strip().lower()
+        if action not in ("cancel", "reschedule", "calendar"):
+            raise ValidationError(
+                {"action": 'Must be one of: "cancel", "reschedule", "calendar".'}
+            )
+        booking = self._get_booking(business, token)
+
+        if action == "cancel":
+            try:
+                booking = process_guest_booking_cancellation(booking)
+            except ValidationError:
+                raise
+            except Exception as e:
+                logger.error(
+                    "Widget booking cancel failed for token=%s: %s",
+                    token,
+                    e,
+                    exc_info=True,
+                )
+                return Response(
+                    {"detail": "An error occurred while cancelling the booking."},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+            return Response(
+                {
+                    "ok": True,
+                    "action": "cancel",
+                    "booking": _widget_booking_manage_summary(booking, business),
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        if action == "calendar":
+            return Response(
+                self._calendar_payload(booking, business),
+                status=status.HTTP_200_OK,
+            )
+
+        return self._reschedule(request, booking, business)
+
+    def _calendar_payload(self, booking, business):
+        instance = booking.schedule_instance
+        class_obj = instance.schedule.option.classId
+        start, end = _aware_session_bounds(instance, business)
+        base = getattr(
+            settings, "FRONTEND_BASE_URL", "https://www.classeasily.com"
+        ).rstrip("/")
+        cancel_url = (
+            f"{base}/guest/cancel/{booking.cancellation_token}"
+            if booking.cancellation_token
+            else None
+        )
+        title = class_obj.title or "Class"
+        location = _booking_location_text(class_obj)
+        reference = booking.user_facing_reference or booking.id
+        description = f"{title} with {business.businessName}. Booking {reference}."
+        return {
+            "title": title,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "location": location,
+            "description": description,
+            "cancel_url": cancel_url,
+        }
+
+    def _reschedule(self, request, booking, business):
+        instance_id = request.data.get("instance_id") or request.data.get(
+            "new_schedule_instance_id"
+        )
+        if not instance_id:
+            raise ValidationError({"instance_id": "This field is required."})
+        if booking.status != "confirmed":
+            raise ValidationError(
+                {"status": f'Cannot reschedule a booking with status "{booking.status}".'}
+            )
+
+        try:
+            with transaction.atomic():
+                booking = (
+                    Booking.objects.select_for_update()
+                    .select_related(
+                        "schedule_instance__schedule__option__classId",
+                    )
+                    .get(pk=booking.pk)
+                )
+                try:
+                    new_instance = (
+                        ScheduleInstance.objects.select_for_update()
+                        .select_related(
+                            "schedule__option__classId__businessId",
+                            "schedule__option__classId__location_ref",
+                        )
+                        .get(id=instance_id)
+                    )
+                except ScheduleInstance.DoesNotExist:
+                    raise NotFound("The selected session could not be found.")
+
+                current_class_id = booking.schedule_instance.schedule.option.classId_id
+                new_class_id = new_instance.schedule.option.classId_id
+                if new_class_id != current_class_id:
+                    raise ValidationError(
+                        {
+                            "instance_id": "You can only reschedule to another session of the same class."
+                        }
+                    )
+                if (
+                    new_instance.schedule.option.classId.businessId_id
+                    != getattr(business, "businessId", None)
+                ):
+                    raise ValidationError(
+                        {
+                            "instance_id": "The selected session does not belong to this business."
+                        }
+                    )
+                if new_instance.status != "scheduled":
+                    raise ValidationError(
+                        {"instance_id": "The selected session is not available."}
+                    )
+
+                start, _end = _aware_session_bounds(new_instance, business)
+                if start < timezone.now():
+                    raise ValidationError(
+                        {"instance_id": "Cannot reschedule to a session in the past."}
+                    )
+
+                if new_instance.id != booking.schedule_instance_id:
+                    if not new_instance.can_accommodate(booking.participants):
+                        raise ValidationError(
+                            {
+                                "instance_id": "The selected session does not have enough available spots."
+                            }
+                        )
+
+                original_instance = booking.schedule_instance
+                booking.schedule_instance = new_instance
+                booking.is_rescheduled = True
+                if not booking.original_schedule_instance_id:
+                    booking.original_schedule_instance = original_instance
+                booking.rescheduled_at = timezone.now()
+                # Keep payment / amount_paid unchanged.
+                booking.save(
+                    update_fields=[
+                        "schedule_instance",
+                        "is_rescheduled",
+                        "original_schedule_instance",
+                        "rescheduled_at",
+                    ]
+                )
+
+            booking.refresh_from_db()
+            booking = Booking.objects.select_related(
+                "contact",
+                "schedule_instance__schedule__option__classId__businessId",
+                "schedule_instance__schedule__option__classId__location_ref",
+            ).get(pk=booking.pk)
+            return Response(
+                {
+                    "ok": True,
+                    "action": "reschedule",
+                    "booking": _widget_booking_manage_summary(booking, business),
+                },
+                status=status.HTTP_200_OK,
+            )
+        except (ValidationError, NotFound):
+            raise
+        except Exception as e:
+            logger.error(
+                "Widget booking reschedule failed for booking %s: %s",
+                booking.id,
+                e,
+                exc_info=True,
+            )
+            return Response(
+                {"error": "An error occurred while rescheduling the booking."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )

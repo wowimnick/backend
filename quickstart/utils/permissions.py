@@ -60,34 +60,6 @@ class CanAccessUserAdmin(BasePermission):
             return False
         return request.user.has_perm("quickstart.access_user_admin")
 
-class IsWidgetRequest(BasePermission):
-    """
-    Checks if a request is from the widget by validating the X-Business-ID header.
-    If valid, it attaches the business object to the request for easy access in views.
-    """
-
-    message = "Invalid or missing Business ID."
-
-    def has_permission(self, request, view):
-        # The widget_api_key (UUID) will be sent in this header
-        business_key = request.headers.get("X-Business-ID")
-        if not business_key:
-            return False
-
-        try:
-            # Find the business that is active and verified
-            business = BusinessInfo.objects.get(
-                widget_api_key=business_key,
-                isActive=True,
-                verificationStatus="verified",
-            )
-            # Attach the business context to the request for the view to use
-            request.business_context = business
-            return True
-        except (BusinessInfo.DoesNotExist, ValueError):
-            return False
-
-
 class IsBusinessMember(BasePermission):
     """
     Allows access only to users who are the owner of a business or an accepted staff member.
@@ -405,21 +377,19 @@ class CanViewOwnBusinessBookings(BasePermission):
 
 
 class IsVerifiedAndActiveBusinessMember(BasePermission):  # MODIFIED: Renamed class
-    message = "Your business account is not active or verified."
+    message = "Your business account is not active."
 
     def has_permission(self, request, view):
         user = request.user
         if not user or not user.is_authenticated:
             return False
 
-        # MODIFIED: Check if user is associated with *any* business (as owner or staff) that is active and verified.
         return BusinessInfo.objects.filter(
             (
                 Q(owner=user)
                 | Q(staff_members__user=user, staff_members__status="accepted")
             ),
             isActive=True,
-            verificationStatus="verified",
         ).exists()
 
     def has_object_permission(self, request, view, obj):
@@ -443,19 +413,14 @@ class IsVerifiedAndActiveBusinessMember(BasePermission):  # MODIFIED: Renamed cl
         if not business:
             return False
 
-        # MODIFIED: Check ownership/staff status AND active/verified status.
         is_owner = business.owner == user
         is_staff = business.staff_members.filter(user=user, status="accepted").exists()
 
-        is_authorized = (
-            (is_owner or is_staff)
-            and business.isActive is True
-            and business.verificationStatus == "verified"
-        )
+        is_authorized = (is_owner or is_staff) and business.isActive is True
 
         if not is_authorized:
             logger.warning(
-                f"User {user.email} permission failed for business {business.pk}. IsOwner/Staff: {is_owner or is_staff}, IsActive: {business.isActive}, Verification: {business.verificationStatus}"
+                f"User {user.email} permission failed for business {business.pk}. IsOwner/Staff: {is_owner or is_staff}, IsActive: {business.isActive}"
             )
 
         return is_authorized
@@ -847,10 +812,7 @@ class IsValidWidgetRequest(BasePermission):
             return False
         if getattr(business, "is_demo", False):
             return True
-        return (
-            business.isActive
-            and business.verificationStatus == "verified"
-        )
+        return bool(business.isActive)
 
 
 # --- Verification (admin) ---

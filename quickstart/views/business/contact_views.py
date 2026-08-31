@@ -44,6 +44,11 @@ def _contact_to_dict(contact, extra=None):
         "source": contact.source or "",
         "status": contact.status or "active",
         "tags": contact.tags or [],
+        "lifetime_value": str(contact.lifetime_value or Decimal("0.00")),
+        "booking_count": contact.booking_count or 0,
+        "first_booking_at": contact.first_booking_at.isoformat() if contact.first_booking_at else None,
+        "last_booking_at": contact.last_booking_at.isoformat() if contact.last_booking_at else None,
+        "last_activity_at": contact.last_activity_at.isoformat() if contact.last_activity_at else None,
         "created_at": contact.created_at.isoformat() if contact.created_at else None,
         "updated_at": contact.updated_at.isoformat() if contact.updated_at else None,
     }
@@ -227,4 +232,150 @@ class ContactDetailView(APIView):
             return Response({"detail": "Permission denied."}, status=status.HTTP_403_FORBIDDEN)
         contact = self._get_contact(request, contact_id)
         contact.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ContactTimelineView(APIView):
+    """Unified client timeline: bookings, payments, memberships, notes, messages."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, contact_id):
+        if not request.user.has_perm("quickstart.view_business_students"):
+            return Response({"detail": "Permission denied."}, status=status.HTTP_403_FORBIDDEN)
+        business = _get_business(request.user)
+        contact = get_object_or_404(Contact, id=contact_id, business=business)
+        events = []
+
+        bookings = (
+            Booking.objects.filter(contact=contact)
+            .select_related("schedule_instance__schedule__option__classId")
+            .prefetch_related("payments")
+            .order_by("-booking_date")[:50]
+        )
+        for booking in bookings:
+            title = ""
+            try:
+                title = booking.schedule_instance.schedule.option.classId.title
+            except Exception:
+                title = "Booking"
+            events.append(
+                {
+                    "type": "booking",
+                    "at": booking.booking_date.isoformat() if booking.booking_date else None,
+                    "title": title,
+                    "status": booking.status,
+                    "amount": str(booking.amount_paid or Decimal("0.00")),
+                    "id": booking.id,
+                }
+            )
+            for payment in booking.payments.all():
+                events.append(
+                    {
+                        "type": "payment",
+                        "at": payment.created_at.isoformat() if getattr(payment, "created_at", None) else None,
+                        "title": "Payment",
+                        "status": payment.status,
+                        "amount": str(payment.amount or Decimal("0.00")),
+                        "id": str(payment.id),
+                    }
+                )
+
+        memberships = CustomerMembership.objects.filter(contact=contact).select_related("product")
+        for membership in memberships:
+            events.append(
+                {
+                    "type": "membership",
+                    "at": membership.created_at.isoformat() if getattr(membership, "created_at", None) else None,
+                    "title": getattr(membership.product, "name", "Membership"),
+                    "status": membership.status,
+                    "id": str(membership.id),
+                }
+            )
+
+        from django.contrib.contenttypes.models import ContentType
+        from quickstart.models import StudentNote
+
+        ct = ContentType.objects.get_for_model(Contact)
+        for note in StudentNote.objects.filter(content_type=ct, object_id=contact.pk).order_by("-created_at")[:50]:
+            events.append(
+                {
+                    "type": "note",
+                    "at": note.created_at.isoformat() if note.created_at else None,
+                    "title": (getattr(note, "content", None) or "")[:140],
+                    "id": str(note.id),
+                }
+            )
+
+        events = [e for e in events if e.get("at")]
+        events.sort(key=lambda e: e["at"], reverse=True)
+        return Response(
+            {
+                "contact": _contact_to_dict(contact),
+                "events": events[:100],
+            }
+        )
+
+
+class ClientSegmentListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        business = _get_business(request.user)
+        from quickstart.models import ClientSegment
+
+        rows = ClientSegment.objects.filter(business=business)
+        return Response(
+            [
+                {
+                    "id": str(row.id),
+                    "name": row.name,
+                    "definition": row.definition or {},
+                    "is_builtin": row.is_builtin,
+                }
+                for row in rows
+            ]
+        )
+
+    def post(self, request):
+        business = _get_business(request.user)
+        from quickstart.models import ClientSegment
+
+        name = (request.data.get("name") or "").strip()
+        if not name:
+            return Response({"detail": "name is required"}, status=status.HTTP_400_BAD_REQUEST)
+        row = ClientSegment.objects.create(
+            business=business,
+            name=name[:120],
+            definition=request.data.get("definition") or {},
+        )
+        return Response(
+            {"id": str(row.id), "name": row.name, "definition": row.definition, "is_builtin": False},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class ClientSegmentDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, segment_id):
+        business = _get_business(request.user)
+        from quickstart.models import ClientSegment
+
+        row = get_object_or_404(ClientSegment, id=segment_id, business=business)
+        if "name" in request.data:
+            row.name = (request.data.get("name") or row.name)[:120]
+        if "definition" in request.data and isinstance(request.data.get("definition"), dict):
+            row.definition = request.data["definition"]
+        row.save()
+        return Response(
+            {"id": str(row.id), "name": row.name, "definition": row.definition, "is_builtin": row.is_builtin}
+        )
+
+    def delete(self, request, segment_id):
+        business = _get_business(request.user)
+        from quickstart.models import ClientSegment
+
+        row = get_object_or_404(ClientSegment, id=segment_id, business=business)
+        row.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)

@@ -229,6 +229,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "instagram_followers_synced_at",
             "instagram_sync_status",
             "onboarding_survey",
+            "legacy_grandfathered",
         ]
         read_only_fields = (
             "businessId",
@@ -236,6 +237,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "owner_email",
             "managers_emails",
             "verificationStatus",
+            "legacy_grandfathered",
             "stripe_account_id",
             "stripe_account_status",
             "createdAt",
@@ -618,11 +620,6 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
         return data
 
     def update(self, instance, validated_data):
-        from quickstart.tasks.instagram_tasks import (
-            schedule_instagram_sync_if_instagram_changed,
-        )
-
-        old_ig = ((instance.social_media_links or {}).get("instagram") or "").strip()
         s3_key = validated_data.pop("businessImage_s3_key", "NOT_PROVIDED")
         if "onboarding_survey" in validated_data:
             incoming = validated_data.get("onboarding_survey") or {}
@@ -644,10 +641,6 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             setattr(instance, attr, value)
 
         instance.save()
-        new_ig = ((instance.social_media_links or {}).get("instagram") or "").strip()
-        schedule_instagram_sync_if_instagram_changed(
-            instance.businessId, old_ig, new_ig
-        )
         sync_primary_location_from_business_profile(instance)
         return instance
 

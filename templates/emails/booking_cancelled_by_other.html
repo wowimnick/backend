@@ -83,23 +83,11 @@
                     </ul>
                 </div>
             {% endif %}
-            {% with contact=contact_info|default:"our support team" %}
+            {% with contact=contact_info|default:"the studio" %}
                 <p style="color: #86868B; font-size: 14px;">
-                    {% blocktrans %}We apologize for the interruption to your plans. If you have specific questions, please contact {{ contact }}.{% endblocktrans %}
+                    {% blocktrans %}We apologize for the interruption to your plans. If you have questions, please contact {{ contact }} or reply to this email.{% endblocktrans %}
                 </p>
             {% endwith %}
-            <table role="presentation"
-                   border="0"
-                   cellpadding="0"
-                   cellspacing="0"
-                   width="100%"
-                   style="margin-top: 32px">
-                <tr>
-                    <td align="center">
-                        <a href="{{ explore_url }}" target="_blank" class="button">{% trans 'Browse Other Experiences' %}</a>
-                    </td>
-                </tr>
-            </table>
         {% endwith %}
     </div>
 {% endblock content %}

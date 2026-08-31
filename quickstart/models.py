@@ -88,6 +88,8 @@ class EnhancedPermission(models.Model):
         db_table = "enhanced_permissions"
 
 
+# DEPRECATED(saas): Marketplace vendor approval. Do not write new rows.
+# Drop table after archiving historical requests. FK: VerificationDocument, CustomUser, BusinessInfo.
 class VerificationRequest(models.Model):
     """Stores verification requests for business owners and instructors"""
 
@@ -645,6 +647,40 @@ class BusinessInfo(models.Model):
         blank=True,
         help_text="When we last emailed this business to connect Stripe for pending payouts (3-day cooldown).",
     )
+    commission_waived_until = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="First-3-months promo: ClassEasily commission is 0% until this timestamp.",
+    )
+    payout_interval = models.CharField(
+        max_length=16,
+        choices=[
+            ("manual", "Manual"),
+            ("daily", "Daily"),
+            ("weekly", "Weekly"),
+            ("monthly", "Monthly"),
+        ],
+        default="daily",
+        help_text="Native Stripe Connect payout schedule interval.",
+    )
+    payout_weekly_anchor = models.CharField(
+        max_length=9,
+        blank=True,
+        default="monday",
+        help_text="Stripe weekly payout anchor (monday–sunday).",
+    )
+    payout_monthly_anchor = models.PositiveSmallIntegerField(
+        default=1,
+        help_text="Stripe monthly payout day of month (1–31).",
+    )
+    instant_payouts_enabled = models.BooleanField(
+        default=False,
+        help_text="When True, the dashboard can request Stripe Instant Payouts (~1% fee).",
+    )
+    legacy_grandfathered = models.BooleanField(
+        default=False,
+        help_text="Marketplace-era business granted dashboard access without a paid widget subscription.",
+    )
 
     managers = models.ManyToManyField(
         settings.AUTH_USER_MODEL, related_name="managed_businesses", blank=True
@@ -911,6 +947,8 @@ class BusinessInfo(models.Model):
         ]
 
 
+# DEPRECATED(saas): Marketplace commission tiers (default 13%). SaaS uses plan 4/3/2%.
+# Drop after backfilling Payment.platform_fee_amount. FK: BusinessInfo.partner_tier.
 class PartnerTier(models.Model):
     """
     Defines different partnership tiers with specific platform fee percentages.
@@ -1130,6 +1168,16 @@ class Contact(models.Model):
         db_index=True,
         help_text="Stripe Customer id for this contact (membership subscriptions).",
     )
+    lifetime_value = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        help_text="Denormalized sum of paid booking amounts at this business.",
+    )
+    booking_count = models.PositiveIntegerField(default=0)
+    first_booking_at = models.DateTimeField(null=True, blank=True)
+    last_booking_at = models.DateTimeField(null=True, blank=True)
+    last_activity_at = models.DateTimeField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -1141,6 +1189,29 @@ class Contact(models.Model):
         unique_together = (("business", "user"), ("business", "email"))
         ordering = ["last_name", "first_name"]
         db_table = "crm_contacts"
+
+
+class ClientSegment(models.Model):
+    """Saved CRM filter definition owned by a business."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        BusinessInfo, on_delete=models.CASCADE, related_name="client_segments"
+    )
+    name = models.CharField(max_length=120)
+    definition = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Filter definition: tags, status, source, min_ltv, inactivity_days, etc.",
+    )
+    is_builtin = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "crm_client_segments"
+        unique_together = (("business", "name"),)
+        ordering = ["name"]
 
 
 class Resource(models.Model):
@@ -1321,6 +1392,7 @@ class ClassSubcategory(models.Model):
         unique_together = ["category", "key"]
 
 
+# DEPRECATED(saas): Marketplace explore/homepage curation. FK: ClassesMain.collections.
 class ClassCollection(models.Model):
     """
     Represents curated lists/vibes (e.g., 'Date Night', 'Under $30').
@@ -1670,6 +1742,7 @@ class GeographicBoundary(models.Model):
         ]
 
 
+# DEPRECATED(saas): Consumer marketplace favorites. FK: CustomUser, ClassesMain.
 class Favorites(models.Model):
     favoriteId = models.AutoField(primary_key=True)
     userId = models.ForeignKey(
@@ -2379,6 +2452,7 @@ class ScheduleInstance(models.Model):
         ]
 
 
+# DEPRECATED(saas): Platform gift-card ledger. FK: GiftCardTransaction → Booking.
 class GiftCard(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     code = models.CharField(max_length=20, unique=True, db_index=True, editable=False)
@@ -2572,6 +2646,7 @@ class Booking(models.Model):
             ("processed", "Processed"),
             ("failed", "Failed"),
             ("not_applicable", "Not Applicable"),  # For free classes
+            ("settled", "Settled"),  # Destination charge — funds already on Connect
         ],
         default="pending",
         db_index=True,
@@ -2956,6 +3031,7 @@ class AppliedDiscount(models.Model):
         unique_together = ("booking", "discount")
 
 
+# DEPRECATED(saas): Platform-absorbed checkout promo. FK: AppliedGlobalDiscount → Booking.
 class GlobalDiscount(models.Model):
     """
     Platform-wide discount applied automatically at checkout.
@@ -3194,14 +3270,30 @@ class Payment(models.Model):
 
 class Payout(models.Model):
     """
-    Records a payout transfer made from the platform to a business's Stripe account.
+    Mirrors a Stripe Payout on the connected account (bank deposit).
+    Historical rows may still have stripe_transfer_id from the old Transfer pipeline.
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     business = models.ForeignKey(
         BusinessInfo, on_delete=models.PROTECT, related_name="payouts"
     )
-    stripe_transfer_id = models.CharField(max_length=255, unique=True, db_index=True)
+    stripe_transfer_id = models.CharField(
+        max_length=255, unique=True, db_index=True, null=True, blank=True
+    )
+    stripe_payout_id = models.CharField(
+        max_length=255, unique=True, db_index=True, null=True, blank=True
+    )
+    method = models.CharField(
+        max_length=16,
+        choices=[("standard", "Standard"), ("instant", "Instant")],
+        default="standard",
+    )
+    failure_code = models.CharField(max_length=64, blank=True)
+    failure_message = models.TextField(blank=True)
+    fee_amount = models.DecimalField(
+        max_digits=10, decimal_places=2, default=Decimal("0.00")
+    )
     amount = models.DecimalField(
         max_digits=10,
         decimal_places=2,
@@ -3992,6 +4084,7 @@ class MembershipPayment(models.Model):
         ordering = ["-created_at"]
 
 
+# DEPRECATED(saas): Public/post-booking reviews retired. FK: CustomUser, BusinessInfo, ClassesMain, Booking.
 class Reviews(models.Model):
     reviewId = models.AutoField(primary_key=True)
     userId = models.ForeignKey(
@@ -4110,6 +4203,7 @@ class Reviews(models.Model):
         super().save(*args, **kwargs)
 
 
+# DEPRECATED(saas): Scraped Google reviews for marketplace pages.
 class ImportedGoogleReview(models.Model):
     """
     Stores reviews scraped from Google Maps to temporarily populate business pages.
@@ -4181,6 +4275,7 @@ class IgnoredScheduleWarning(models.Model):
         ]
 
 
+# DEPRECATED(saas): Homepage featured review merchandising.
 class FeaturedHomepageReview(models.Model):
     """
     Gemini-selected Google reviews shown on the homepage hero.
@@ -4938,6 +5033,7 @@ class ConversationEmailLog(models.Model):
         ]
 
 
+# DEPRECATED(saas): Explore search analytics.
 class SearchLog(models.Model):
     """Anonymous or authenticated class/location searches for demand analytics."""
 
@@ -5001,6 +5097,7 @@ class StripeCheckoutAttempt(models.Model):
         ]
 
 
+# DEPRECATED(saas): Corporate concierge marketplace. Child tables: CorporateShortlist*.
 class CorporateInquiry(models.Model):
     """B2B / corporate team-building lead from the public /corporate page."""
 

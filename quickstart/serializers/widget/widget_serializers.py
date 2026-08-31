@@ -46,8 +46,8 @@ class WidgetBusinessConfigSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_widget_fee_percentage(self, obj):
-        from quickstart.views.widget.widget_views import _get_widget_plan_fee_percentage
-        return float(_get_widget_plan_fee_percentage(obj))
+        from quickstart.utils.commission import get_plan_fee_percentage
+        return float(get_plan_fee_percentage(obj))
 
 
 class WidgetScheduleSerializer(serializers.ModelSerializer):

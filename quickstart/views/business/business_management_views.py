@@ -44,7 +44,7 @@ import pytz
 import logging
 
 from quickstart.utils.revalidation import trigger_nextjs_revalidation
-from quickstart.views.public.public_business_views import invalidate_business_detail_cache
+from quickstart.utils.public_cache import invalidate_business_detail_cache
 from quickstart.utils.url_utils import sanitize_filename_for_s3, build_cloudfront_url
 from quickstart.models import (
     BusinessInfo,
@@ -292,6 +292,7 @@ def business_onboarding_state(request):
                 "has_business": False,
                 "has_paid_subscription": False,
                 "is_active": False,
+                "legacy_grandfathered": False,
                 "onboarding_completed": False,
                 "stripe_connected": False,
                 "timezone": None,
@@ -307,6 +308,7 @@ def business_onboarding_state(request):
             "has_business": True,
             "has_paid_subscription": has_paid,
             "is_active": bool(business.isActive),
+            "legacy_grandfathered": bool(business.legacy_grandfathered),
             "onboarding_completed": bool(business.onboarding_completed),
             "stripe_connected": business.stripe_account_status == "active",
             "timezone": business.business_timezone,
@@ -1243,12 +1245,9 @@ class MyBusinessInstagramFollowersSyncView(APIView):
         if not business:
             raise NotFound("No business profile associated with this user found.")
 
-        from quickstart.tasks.instagram_tasks import sync_instagram_followers_for_business
-
-        sync_instagram_followers_for_business.delay(business.businessId)
         return Response(
-            {"detail": "Instagram follower sync scheduled."},
-            status=status.HTTP_202_ACCEPTED,
+            {"detail": "Instagram follower sync is no longer available."},
+            status=status.HTTP_410_GONE,
         )
 
 

@@ -259,7 +259,7 @@ class UserAdminViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            from quickstart.concierge_handover_tokens import (
+            from quickstart.utils.concierge_handover_tokens import (
                 concierge_handover_token_generator,
             )
             from quickstart.utils.email_utils import send_concierge_handover_email

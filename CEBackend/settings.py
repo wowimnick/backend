@@ -439,10 +439,6 @@ CELERY_BEAT_SCHEDULE = {
         "task": "quickstart.tasks.payout_tasks.process_daily_refunds",
         "schedule": crontab(hour=5, minute=0),  # Staggered to 5:00 AM
     },
-    "send-daily-review-requests": {
-        "task": "quickstart.tasks.user_tasks.send_pending_review_requests",
-        "schedule": crontab(hour=6, minute=30),  # Staggered to 6:30 AM
-    },
     "send-hourly-booking-reminders": {
         "task": "quickstart.tasks.booking_tasks.send_upcoming_booking_reminders",
         "schedule": crontab(
@@ -461,10 +457,6 @@ CELERY_BEAT_SCHEDULE = {
         "task": "quickstart.tasks.business_tasks.reconcile_stuck_description_ai_task",
         "schedule": crontab(minute="*/10"),
     },
-    "process-scheduled-gift-cards-daily": {
-        "task": "quickstart.tasks.giftcard_tasks.process_scheduled_gift_cards",
-        "schedule": crontab(hour=8, minute=0),
-    },
     # Disabled: weekly Gemini drafts are manual-only unless BLOG_AI_ENABLED is turned on and scheduled explicitly.
     # "generate-weekly-blog-draft": {
     #     "task": "quickstart.tasks.business_tasks.generate_weekly_blog_draft_task",
@@ -477,34 +469,6 @@ CELERY_BEAT_SCHEDULE = {
     "process-due-marketing-workflow-enrollments": {
         "task": "quickstart.tasks.email_marketing_workflow_tasks.process_due_workflow_enrollments",
         "schedule": crontab(minute="*"),
-    },
-    "corporate-event-reminders-daily": {
-        "task": "quickstart.tasks.corporate_booking_tasks.dispatch_corporate_event_reminders",
-        "schedule": crontab(hour=12, minute=0),
-    },
-    "rebuild-geographic-boundary-buffers-nightly": {
-        "task": "quickstart.tasks.search_index_tasks.rebuild_all_boundary_buffers_task",
-        "schedule": crontab(hour=4, minute=15),
-    },
-    "search-index-dirty-classes-sweep-hourly": {
-        "task": "quickstart.tasks.search_index_tasks.reindex_dirty_classes_task",
-        "schedule": crontab(minute=22),
-    },
-    "typesense-bootstrap-health-hourly": {
-        "task": "quickstart.tasks.search_index_tasks.bootstrap_typesense_search_index_task",
-        "schedule": crontab(minute=47),
-    },
-    "search-index-reconcile-daily": {
-        "task": "quickstart.tasks.search_index_tasks.reconcile_typesense_classes_task",
-        "schedule": crontab(hour=1, minute=10),
-    },
-    "sync-instagram-followers-weekly": {
-        "task": "quickstart.tasks.instagram_tasks.sync_instagram_followers_all",
-        "schedule": crontab(hour=3, minute=0, day_of_week="sunday"),
-    },
-    "sync-google-reviews-biweekly": {
-        "task": "quickstart.tasks.google_reviews_tasks.sync_google_reviews_all",
-        "schedule": crontab(hour=4, minute=0, day_of_month="1,15"),
     },
 }
 

@@ -1,6 +1,7 @@
 # quickstart/views/business/widget_config_views.py
 
 import logging
+import uuid
 import stripe
 from django.conf import settings
 
@@ -345,6 +346,35 @@ class WidgetConfigManagementView(APIView):
 
         # This line is technically not needed due to raise_exception=True, but serves as a fallback.
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class WidgetConfigRotateApiKeyView(APIView):
+    """
+    POST: Generate a new uuid4 for business.widget_api_key.
+    Existing website embeds keep the old key and will fail until the snippet is updated.
+    """
+
+    permission_classes = [IsAuthenticated, CanManageOwnClasses]
+
+    def post(self, request, *args, **kwargs):
+        business = BusinessInfo.objects.filter(
+            Q(owner=request.user)
+            | Q(staff_members__user=request.user, staff_members__status="accepted")
+        ).first()
+        if not business:
+            from rest_framework.exceptions import NotFound
+
+            raise NotFound("You are not a member of any business.")
+
+        business.widget_api_key = uuid.uuid4()
+        business.save(update_fields=["widget_api_key"])
+        _audit_widget_subscription_action(
+            request, business, "Widget API key rotated"
+        )
+        return Response(
+            {"widget_api_key": str(business.widget_api_key)},
+            status=status.HTTP_200_OK,
+        )
 
 
 class CreateWidgetSubscriptionCheckoutView(APIView):

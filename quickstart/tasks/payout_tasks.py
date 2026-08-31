@@ -14,6 +14,12 @@ import pytz
 from quickstart.models import Booking, Payout, BusinessInfo
 from quickstart.utils.notification_utils import create_notification_for_recipients
 from quickstart.utils.stripe_metadata import stripe_metadata_to_dict
+from quickstart.utils.stripe_refund import create_stripe_refund
+
+# CUTOVER_DATE = 2026-08-31
+# Destination-charge bookings (payout_status='settled') skip this holding-account batch.
+# Booking uses booking_date (no created_at). Only pre-cutover pending rows are included.
+CUTOVER_DATE = datetime(2026, 8, 31, tzinfo=timezone.utc)
 
 logger = logging.getLogger(__name__)
 PAYOUT_INTEGRITY_ALERT_RECIPIENTS = ("nick@classeasily.com",)
@@ -765,8 +771,11 @@ def process_daily_payouts():
     business_ids_with_pending = Booking.objects.filter(
         status__in=["completed", "forfeited"],
         payment_status="paid",
-        payout_status="pending"
-    ).values_list('schedule_instance__schedule__option__classId__businessId', flat=True).distinct()
+        payout_status="pending",
+        booking_date__lt=CUTOVER_DATE,
+    ).exclude(payout_status="settled").values_list(
+        'schedule_instance__schedule__option__classId__businessId', flat=True
+    ).distinct()
 
     if not business_ids_with_pending:
         logger.info("No bookings found requiring payout. Process finished.")
@@ -803,8 +812,9 @@ def process_daily_payouts():
                     schedule_instance__schedule__option__classId__businessId=business,
                     status__in=["completed", "forfeited"],
                     payment_status="paid",
-                    payout_status="pending"
-                )
+                    payout_status="pending",
+                    booking_date__lt=CUTOVER_DATE,
+                ).exclude(payout_status="settled")
                 
                 booking_count_locked = bookings_to_process.count()
                 logger.info(f"Acquired lock on {booking_count_locked} bookings")
@@ -1051,7 +1061,7 @@ def process_daily_refunds():
                         refund_to_stripe = min(remaining_refund_needed, payment.available_refund_amount)
                         
                         if refund_to_stripe >= Decimal("0.50"):
-                            stripe.Refund.create(
+                            create_stripe_refund(
                                 payment_intent=payment.stripe_payment_intent_id,
                                 amount=int(refund_to_stripe * 100),
                                 reason="requested_by_customer",

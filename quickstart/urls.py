@@ -1,14 +1,11 @@
 from django.urls import path, include, re_path
 from django.views.generic import TemplateView
 from django.contrib import admin
-from django.shortcuts import get_object_or_404, redirect
 from rest_framework.routers import DefaultRouter
 from dj_rest_auth.registration.views import VerifyEmailView, ResendEmailVerificationView
 from dj_rest_auth.views import PasswordChangeView
 from django.urls import path
 
-# --- Model import for the new redirect view ---
-from quickstart.views.public.public_class_views import paginated_class_reviews
 from quickstart.views.business.email_branding_preview_views import (
     EmailBrandingPreviewView,
 )
@@ -18,6 +15,7 @@ from quickstart.views.business.business_location_views import (
 )
 from quickstart.views.widget.widget_config_views import (
     WidgetConfigManagementView,
+    WidgetConfigRotateApiKeyView,
     CreateWidgetSubscriptionCheckoutView,
     CreateBillingPortalSessionView,
     CreateWidgetSubscriptionPaymentIntentView,
@@ -31,11 +29,6 @@ from quickstart.views.widget.widget_config_views import (
     DefaultPaymentMethodView,
     DetachBusinessPaymentMethodView,
     BusinessAddonsView,
-    CreateMarketplaceEmailAddonCheckoutView,
-    CreateMarketplaceEmailAddonPaymentIntentView,
-    InstantSubscribeMarketplaceEmailAddonView,
-    CancelMarketplaceEmailAddonView,
-    ReactivateMarketplaceEmailAddonView,
 )
 from quickstart.views.business.membership_views import (
     MembershipProductListCreateView,
@@ -51,6 +44,15 @@ from quickstart.views.business.membership_views import (
 from quickstart.views.business.contact_views import (
     ContactListView,
     ContactDetailView,
+    ContactTimelineView,
+    ClientSegmentListCreateView,
+    ClientSegmentDetailView,
+)
+from quickstart.views.business.connect_payout_views import (
+    ConnectPayoutSettingsView,
+    ConnectPayoutBalanceView,
+    ConnectPayoutCreateView,
+    ConnectPayoutExternalAccountsView,
 )
 from quickstart.views.business.email_marketing_addon_views import (
     CancelEmailMarketingAddonView,
@@ -95,15 +97,12 @@ from quickstart.views.admin.blog_management.admin_blog_views import (
     AdminBlogCategoryViewSet,
     AdminBlogPostViewSet,
 )
-from quickstart.models import ClassesMain, BusinessInfo
-
 from quickstart.views.admin.support_management.support_ticket_views import (
     AdminSupportTicketViewSet,
 )
 from quickstart.views.admin.conversation_management.admin_conversation_views import (
     AdminConversationViewSet,
 )
-from quickstart.views.public.user_support_views import UserSupportTicketViewSet
 from quickstart.views.business.business_management_views import (
     generate_presigned_upload_url,
 )
@@ -114,8 +113,6 @@ from quickstart.views.auth.auth_views import (
     CustomPasswordResetConfirmView,
 )
 from quickstart.views.auth.social_auth_views import GoogleLogin
-from quickstart.payments.booking_status_views import BookingStatusByPaymentIntentView
-
 from quickstart.views.admin.notifications.notification_views import (
     AdminNotificationAttachmentViewSet,
     AdminNotificationCampaignViewSet,
@@ -132,61 +129,20 @@ from quickstart.views.admin.revenue_stats.revenue_stats_views import (
 from quickstart.views.admin.class_management.class_management_views import (
     AdminCategoryViewSet,
     AdminClassViewSet,
-    AdminReviewViewSet,
-    AdminCollectionViewSet,
 )
 from quickstart.payments.views import (
-    CreatePaymentIntentView,
     ProcessBookingWebhook,
-    UpdatePaymentIntentView,
-    CancelPendingBookingView,
-    CheckSlotAvailabilityView,
 )
 from quickstart.views.admin.user_management.user_admin_views import UserAdminViewSet
 from quickstart.views.admin.user_management.banned_ip_views import BannedIPViewSet
 from quickstart.views.admin.user_management.role_views import RoleManagementViewSet
-from quickstart.views.admin.user_management.verification_views import (
-    VerificationRequestViewSet,
-)
 from quickstart.views.admin.user_management.audit_views import AuditLogViewSet
 from quickstart.views.admin.business_management.business_admin_views import (
-    AdminBusinessGoogleReviewsSyncView,
-    AdminGeographicalDataView,
-    AdminGoogleReviewsSyncQueueView,
-    AdminInstagramFollowersSyncQueueView,
     BusinessAdminViewSet,
-    ImportGoogleReviewsAdminView,
 )
 from quickstart.views.admin.metrics_monitoring.admin_metrics_views import AdminMetricsView
-from quickstart.views.admin.global_discount.admin_global_discount_views import (
-    AdminGlobalDiscountViewSet,
-)
 from quickstart.views.admin.widget_subscription_admin_views import (
     AdminWidgetSubscriptionViewSet,
-)
-from quickstart.views.public.public_global_discount_views import (
-    ActiveGlobalDiscountView,
-)
-from quickstart.views.public.search_log_views import SearchLogCreateView
-from quickstart.views.public.search_views import (
-    LocationPresetsView,
-    PublicCollectionPlacementListView,
-    SearchSuggestView,
-)
-from quickstart.views.public.corporate_views import CorporateInquiryCreateView
-from quickstart.views.public.corporate_shortlist_views import (
-    CorporateBookingBalanceIntentView,
-    CorporateBookingDepositIntentView,
-    CorporateBookingStatusPublicView,
-    CorporateShortlistPublicView,
-    CorporateShortlistSelectView,
-    CorporateShortlistSupportView,
-)
-from quickstart.views.admin.corporate_admin_views import (
-    AdminCorporateBookingViewSet,
-    AdminCorporateInquiryViewSet,
-    AdminCorporateShortlistOptionViewSet,
-    AdminCorporateShortlistViewSet,
 )
 
 from quickstart.views import (
@@ -198,31 +154,18 @@ from quickstart.views import (
     CustomRegisterView,
     get_user_businesses,
     BusinessBookingViewSet,
-    StudentBookingViewSet,
     BusinessDashboardViewSet,
     MyBusinessProfileView,
-    MyBusinessInstagramFollowersSyncView,
-    PublicBusinessInfoViewSet,
     register_business,
     business_onboarding_state,
-    PlatformClassReviews,
-    ImportedGoogleReviewsView,
-    FeaturedHomepageReviewsView,
-    RecentReviewsView,
     BusinessStudentViewSet,
-    MyProfileView,
     RevenueAnalyticsView,
-    ReviewSubmission,
     BusinessClassViewSet,
     BusinessClassOptionDetail,
     BusinessScheduleViewSet,
     BusinessScheduleInstanceViewSet,
-    PublicClassViewSet,
-    PublicScheduleViewSet,
     BusinessReviewViewSet,
     MyBusinessOverviewView,
-    MyFavoritesListView,
-    PublicCategoryViewSet,
     StripeConnectView,
     stripe_connect_webhook,
     NotificationViewSet,
@@ -237,12 +180,7 @@ from quickstart.views import (
     ValidateInvitationTokenView,
     ContactImportViewSet,
     GuestBookingCancellationView,
-    PublicCourseViewSet,
-    StudentCourseEnrollmentViewSet,
     BusinessCourseManagementViewSet,
-    CreateGiftCardPaymentIntentView,
-    ValidateGiftCardView,
-    GuestConversationViewSet,
     BusinessConversationViewSet,
 )
 from quickstart.views.public.guest_conversation_views import (
@@ -266,6 +204,7 @@ from quickstart.views.widget.widget_views import (
     WidgetMembershipStatusView,
     WidgetPublicPlansView,
     WidgetDiagnosticsView,
+    WidgetBookingManageView,
 )
 
 # =============================================================================
@@ -275,19 +214,11 @@ from quickstart.views.widget.widget_views import (
 # --- Public Router ---
 public_router = DefaultRouter()
 public_router.register(
-    r"businesses", PublicBusinessInfoViewSet, basename="public-business"
-)
-public_router.register(
     r"blog/posts", PublicBlogPostViewSet, basename="public-blog-posts"
 )
 public_router.register(
     r"blog/categories", PublicBlogCategoryViewSet, basename="public-blog-categories"
 )
-public_router.register(r"schedules", PublicScheduleViewSet, basename="public-schedule")
-public_router.register(
-    r"categories", PublicCategoryViewSet, basename="public-categories"
-)
-public_router.register(r"courses", PublicCourseViewSet, basename="public-courses")
 
 # --- Business Management Router ---
 business_management_router = DefaultRouter()
@@ -297,12 +228,6 @@ business_management_router.register(
 business_management_router.register(
     r"classes", BusinessClassViewSet, basename="business-class"
 )
-business_management_router.register(
-    r"student/course-enrollments",
-    StudentCourseEnrollmentViewSet,
-    basename="student-course-enrollments",
-)
-
 business_management_router.register(
     r"course-management",
     BusinessCourseManagementViewSet,
@@ -345,23 +270,10 @@ business_management_router.register(
     r"conversations", BusinessConversationViewSet, basename="business-conversation"
 )
 
-# --- User Self-Service Router ---
-user_self_router = DefaultRouter()
-user_self_router.register(r"my-bookings", StudentBookingViewSet, basename="my-booking")
-user_self_router.register(
-    r"support-tickets", UserSupportTicketViewSet, basename="support-ticket"
-)
-user_self_router.register(
-    r"conversations", GuestConversationViewSet, basename="conversation"
-)
-
 # --- Admin Router ---
 admin_router = DefaultRouter()
 admin_router.register(r"users", UserAdminViewSet, basename="admin-users")
 admin_router.register(r"roles", RoleManagementViewSet, basename="admin-roles")
-admin_router.register(
-    r"verification", VerificationRequestViewSet, basename="admin-verification"
-)
 admin_router.register(r"audit-logs", AuditLogViewSet, basename="admin-audit-logs")
 admin_router.register(r"banned-ips", BannedIPViewSet, basename="admin-banned-ips")
 admin_router.register(
@@ -373,10 +285,6 @@ admin_router.register(
 admin_router.register(r"businesses", BusinessAdminViewSet, basename="admin-businesses")
 admin_router.register(r"classes", AdminClassViewSet, basename="admin-classes")
 admin_router.register(r"categories", AdminCategoryViewSet, basename="admin-categories")
-admin_router.register(
-    r"collections", AdminCollectionViewSet, basename="admin-collections"
-)
-admin_router.register(r"reviews", AdminReviewViewSet, basename="admin-reviews")
 admin_router.register(r"bookings", AdminBookingViewSet, basename="admin-bookings")
 admin_router.register(r"payments", AdminPaymentViewSet, basename="admin-payments")
 admin_router.register(r"payouts", AdminPayoutViewSet, basename="admin-payouts")
@@ -396,61 +304,10 @@ admin_router.register(
     basename="admin-notification-attachments",
 )
 admin_router.register(
-    r"global-discounts",
-    AdminGlobalDiscountViewSet,
-    basename="admin-global-discounts",
-)
-admin_router.register(
     r"widget-subscriptions",
     AdminWidgetSubscriptionViewSet,
     basename="admin-widget-subscriptions",
 )
-admin_router.register(
-    r"corporate-inquiries",
-    AdminCorporateInquiryViewSet,
-    basename="admin-corporate-inquiries",
-)
-admin_router.register(
-    r"corporate-shortlists",
-    AdminCorporateShortlistViewSet,
-    basename="admin-corporate-shortlists",
-)
-admin_router.register(
-    r"corporate-shortlist-options",
-    AdminCorporateShortlistOptionViewSet,
-    basename="admin-corporate-shortlist-options",
-)
-admin_router.register(
-    r"corporate-bookings",
-    AdminCorporateBookingViewSet,
-    basename="admin-corporate-bookings",
-)
-
-
-def class_id_redirect_view(request, class_id):
-    """
-    Permanently redirects an old ID-based browser URL to the new slug-based URL.
-    e.g., /classes/123 -> /classes/new-york-pottery-class
-    """
-    klass = get_object_or_404(ClassesMain, pk=class_id)
-    if klass.slug:
-        # --- FIX: Redirect to the frontend's canonical PLURAL /classes/ path ---
-        return redirect(f"/classes/{klass.slug}", permanent=True)
-    # Fallback if a slug doesn't exist for some reason.
-    return redirect("/")
-
-
-def business_id_redirect_view(request, business_id):
-    """
-    Permanently redirects an old ID-based URL (/business/123/) to the
-    new slug-based URL (/business/my-cool-business/).
-    """
-    business = get_object_or_404(BusinessInfo, pk=business_id)
-    if business.slug:
-        # Redirect to the frontend's canonical path
-        return redirect(f"/business/{business.slug}", permanent=True)
-    # Fallback if a slug doesn't exist for some reason.
-    return redirect("/")
 
 
 # =============================================================================
@@ -473,6 +330,7 @@ widget_urlpatterns = [
         name="widget-payment-intent",
     ),
     path("bookings/free/", GuestFreeBookingCreateView.as_view(), name="widget-create-free-booking"),
+    path("bookings/manage/", WidgetBookingManageView.as_view(), name="widget-bookings-manage"),
     path("bookings/", GuestBookingCreateView.as_view(), name="widget-create-booking"),
     path("events/", WidgetEventsView.as_view(), name="widget-events"),
     path("membership-products/", WidgetMembershipProductsView.as_view(), name="widget-membership-products"),
@@ -483,79 +341,12 @@ widget_urlpatterns = [
 
 urlpatterns = [
     path("", health_check, name="api-root-health"),
-    path("search-log/", SearchLogCreateView.as_view(), name="search-log-create"),
-    path(
-        "corporate-inquiry/",
-        CorporateInquiryCreateView.as_view(),
-        name="corporate-inquiry-create",
-    ),
-    path(
-        "corporate/shortlist/<uuid:token>/",
-        CorporateShortlistPublicView.as_view(),
-        name="corporate-shortlist-public",
-    ),
-    path(
-        "corporate/shortlist/<uuid:token>/select/",
-        CorporateShortlistSelectView.as_view(),
-        name="corporate-shortlist-select",
-    ),
-    path(
-        "corporate/shortlist/<uuid:token>/booking/<uuid:booking_id>/deposit-intent/",
-        CorporateBookingDepositIntentView.as_view(),
-        name="corporate-booking-deposit-intent",
-    ),
-    path(
-        "corporate/shortlist/<uuid:token>/booking/<uuid:booking_id>/balance-intent/",
-        CorporateBookingBalanceIntentView.as_view(),
-        name="corporate-booking-balance-intent",
-    ),
-    path(
-        "corporate/shortlist/<uuid:token>/support/",
-        CorporateShortlistSupportView.as_view(),
-        name="corporate-shortlist-support",
-    ),
-    path(
-        "corporate/shortlist/<uuid:token>/booking/<uuid:booking_id>/",
-        CorporateBookingStatusPublicView.as_view(),
-        name="corporate-booking-status-public",
-    ),
-    path("search/suggest/", SearchSuggestView.as_view(), name="search-suggest"),
-    path(
-        "search/location-presets/",
-        LocationPresetsView.as_view(),
-        name="search-location-presets",
-    ),
-    path(
-        "collections/placement/",
-        PublicCollectionPlacementListView.as_view(),
-        name="public-collections-placement",
-    ),
     # --- Django Admin & 3rd Party Libs ---
     path("admin/panel/", admin.site.urls),
     path(
         "admin/end-impersonation/",
         EndImpersonationView.as_view(),
         name="end_impersonation",
-    ),
-    path(
-        "admin/import-google-reviews/",
-        ImportGoogleReviewsAdminView.as_view(),
-        name="admin-import-google-reviews",
-    ),
-    path(
-        "admin/businesses/<int:business_id>/google-reviews-sync/",
-        AdminBusinessGoogleReviewsSyncView.as_view(),
-        name="admin-business-google-reviews-sync",
-    ),
-    path(
-        "admin/sync-google-reviews-queue/",
-        AdminGoogleReviewsSyncQueueView.as_view(),
-        name="admin-sync-google-reviews-queue",
-    ),
-    path(
-        "admin/sync-instagram-followers-queue/",
-        AdminInstagramFollowersSyncQueueView.as_view(),
-        name="admin-sync-instagram-followers-queue",
     ),
     path("impersonate/", include("impersonate.urls")),
     path("accounts/", include("allauth.urls")),
@@ -584,38 +375,7 @@ urlpatterns = [
     path("business/", include(business_management_router.urls)),
     # Payment and booking-status paths must come before catch-all "" includes
     path("payments/webhook/", ProcessBookingWebhook.as_view(), name="payment-webhook"),
-    path(
-        "booking-status/by-payment-intent/<str:payment_intent_id>/",
-        BookingStatusByPaymentIntentView.as_view(),
-        name="booking-status-by-payment-intent",
-    ),
-    path(
-        "payments/create-payment-intent/",
-        CreatePaymentIntentView.as_view(),
-        name="create-payment-intent",
-    ),
-    path(
-        "payments/update-payment-intent/",
-        UpdatePaymentIntentView.as_view(),
-        name="update-payment-intent",
-    ),
-    path(
-        "payments/update_intent/",
-        UpdatePaymentIntentView.as_view(),
-        name="update-payment-intent-alt",
-    ),
-    path(
-        "payments/cancel-payment-intent/",
-        CancelPendingBookingView.as_view(),
-        name="cancel-payment-intent",
-    ),
-    path(
-        "payments/check-slot-availability/",
-        CheckSlotAvailabilityView.as_view(),
-        name="check-slot-availability",
-    ),
     path("", include(public_router.urls)),
-    path("", include(user_self_router.urls)),
     # --- Authentication & User Management ---
     path("login/", CustomTokenObtainPairView.as_view(), name="token_obtain_pair"),
     path("token/refresh/", CustomTokenRefreshView.as_view(), name="token_refresh"),
@@ -691,66 +451,10 @@ urlpatterns = [
     path("auth/google/", GoogleLogin.as_view(), name="google_login"),
     # User Profile Management
     path("user/update/", UserUpdateView.as_view(), name="user-update"),
-    path("user/profile/", MyProfileView.as_view(), name="my-profile"),
-    path("my-favorites/", MyFavoritesListView.as_view(), name="my-favorites-list"),
-    path(
-        "classes/search/",
-        PublicClassViewSet.as_view({"get": "search"}),
-        name="public-class-search",
-    ),
-    path(
-        "classes/homepage-content/",
-        PublicClassViewSet.as_view({"get": "homepage_content"}),
-        name="public-class-homepage-content",
-    ),
-    path(
-        "homepage/featured-reviews/",
-        FeaturedHomepageReviewsView.as_view(),
-        name="homepage-featured-reviews",
-    ),
-    path(
-        "classes/collections/<slug:parent_slug>/children/",
-        PublicClassViewSet.as_view({"get": "collection_children"}),
-        name="public-collection-children",
-    ),
-    path(
-        "classes/<str:pk>/toggle-favorite/",
-        PublicClassViewSet.as_view({"post": "toggle_favorite"}),
-        name="public-class-toggle-favorite",
-    ),
-    # Redirect integer IDs before the slug detail view so /classes/123/ redirects, not returns JSON.
-    path("classes/<int:class_id>/", class_id_redirect_view, name="class-id-redirect"),
-    path(
-        "classes/<str:pk>/",
-        PublicClassViewSet.as_view({"get": "retrieve"}),
-        name="public-class-detail",
-    ),
-    # The list view (for API consumers, not directly for a page)
-    path(
-        "classes/",
-        PublicClassViewSet.as_view({"get": "list"}),
-        name="public-class-list",
-    ),
-    # --- Other Application Views (Original order maintained) ---
-    path(
-        "business/<int:business_id>/",
-        business_id_redirect_view,
-        name="business-id-redirect",
-    ),
     path(
         "business/generate-upload-url/",
         generate_presigned_upload_url,
         name="generate-upload-url",
-    ),
-    path(
-        "classes/<str:identifier>/reviews/",
-        paginated_class_reviews,
-        name="class-reviews-paginated",
-    ),
-    path(
-        "business/<int:business_id>/google-reviews/",
-        ImportedGoogleReviewsView.as_view(),
-        name="business-google-reviews",
     ),
     path(
         "business-stats/",
@@ -825,6 +529,11 @@ urlpatterns = [
         name="my-business-widget-config",
     ),
     path(
+        "my-business/widget-config/rotate-key/",
+        WidgetConfigRotateApiKeyView.as_view(),
+        name="my-business-widget-config-rotate-key",
+    ),
+    path(
         "my-business/widget-diagnostics/",
         BusinessWidgetDiagnosticsView.as_view(),
         name="my-business-widget-diagnostics",
@@ -895,31 +604,6 @@ urlpatterns = [
         name="my-business-addons",
     ),
     path(
-        "my-business/addons/marketplace-email/checkout/",
-        CreateMarketplaceEmailAddonCheckoutView.as_view(),
-        name="my-business-addon-marketplace-email-checkout",
-    ),
-    path(
-        "my-business/addons/marketplace-email/payment-intent/",
-        CreateMarketplaceEmailAddonPaymentIntentView.as_view(),
-        name="my-business-addon-marketplace-email-payment-intent",
-    ),
-    path(
-        "my-business/addons/marketplace-email/instant-subscribe/",
-        InstantSubscribeMarketplaceEmailAddonView.as_view(),
-        name="my-business-addon-marketplace-email-instant-subscribe",
-    ),
-    path(
-        "my-business/addons/marketplace-email/cancel/",
-        CancelMarketplaceEmailAddonView.as_view(),
-        name="my-business-addon-marketplace-email-cancel",
-    ),
-    path(
-        "my-business/addons/marketplace-email/reactivate/",
-        ReactivateMarketplaceEmailAddonView.as_view(),
-        name="my-business-addon-marketplace-email-reactivate",
-    ),
-    path(
         "my-business/membership-products/",
         MembershipProductListCreateView.as_view(),
         name="my-business-membership-products",
@@ -973,6 +657,41 @@ urlpatterns = [
         "my-business/contacts/<uuid:contact_id>/",
         ContactDetailView.as_view(),
         name="my-business-contact-detail",
+    ),
+    path(
+        "my-business/contacts/<uuid:contact_id>/timeline/",
+        ContactTimelineView.as_view(),
+        name="my-business-contact-timeline",
+    ),
+    path(
+        "my-business/client-segments/",
+        ClientSegmentListCreateView.as_view(),
+        name="my-business-client-segments",
+    ),
+    path(
+        "my-business/client-segments/<uuid:segment_id>/",
+        ClientSegmentDetailView.as_view(),
+        name="my-business-client-segment-detail",
+    ),
+    path(
+        "my-business/payouts/settings/",
+        ConnectPayoutSettingsView.as_view(),
+        name="my-business-payout-settings",
+    ),
+    path(
+        "my-business/payouts/balance/",
+        ConnectPayoutBalanceView.as_view(),
+        name="my-business-payout-balance",
+    ),
+    path(
+        "my-business/payouts/create/",
+        ConnectPayoutCreateView.as_view(),
+        name="my-business-payout-create",
+    ),
+    path(
+        "my-business/payouts/external-accounts/",
+        ConnectPayoutExternalAccountsView.as_view(),
+        name="my-business-payout-external-accounts",
     ),
     path(
         "my-business/marketing/account/",
@@ -1135,39 +854,12 @@ urlpatterns = [
         name="my-business-profile",
     ),
     path(
-        "my-business/instagram-followers-sync/",
-        MyBusinessInstagramFollowersSyncView.as_view(),
-        name="my-business-instagram-followers-sync",
-    ),
-    path(
         "business/classes/<int:pk>/options/<int:option_id>/",
         BusinessClassOptionDetail.as_view(),
         name="business-class-option-detail",
     ),
-    path("reviews/submit/", ReviewSubmission.as_view(), name="submit-review"),
-    path(
-        "reviews/recent/",
-        RecentReviewsView.as_view(),
-        name="recent-reviews",
-    ),
     path(
         "revenue/analytics/", RevenueAnalyticsView.as_view(), name="revenue-analytics"
-    ),
-    path(
-        "gift-cards/purchase-intent/",
-        CreateGiftCardPaymentIntentView.as_view(),
-        name="gc-purchase",
-    ),
-    path("gift-cards/validate/", ValidateGiftCardView.as_view(), name="gc-validate"),
-    path(
-        "global-discount/active/",
-        ActiveGlobalDiscountView.as_view(),
-        name="active-global-discount",
-    ),
-    path(
-        "admin/geographical-data/",
-        AdminGeographicalDataView.as_view(),
-        name="admin-geographical-data",
     ),
     path(
         "admin/metrics/",

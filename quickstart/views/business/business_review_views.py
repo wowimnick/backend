@@ -18,7 +18,7 @@ from quickstart.models import Reviews, BusinessInfo, ImportedGoogleReview
 from quickstart.serializers.business.business_review_serializers import (
     BusinessReviewSerializer,
 )
-from quickstart.serializers.public.public_review_serializers import (
+from quickstart.serializers.imported_google_review_serializers import (
     ImportedGoogleReviewSerializer,
 )
 

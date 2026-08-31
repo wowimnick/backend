@@ -26,25 +26,9 @@ if [ "$CONTAINER_ROLE" = "web" ]; then
     echo "--- [WEB] Running Django migrations ---"
     python manage.py migrate --no-input
 
-    # Clear public caches once per deploy (not on every scale-out). Uses --once-per-build so the first
-    # web container for this build clears cache and sets a Redis marker; other containers (same image)
-    # skip. Set BUILD_ID, IMAGE_TAG, or GIT_SHA in the ECS task definition so each deploy has a unique id.
-    echo "--- [WEB] Clearing public caches (once per build) ---"
-    python manage.py clear_public_caches --once-per-build || true
-
-    # Sync EnhancedPermission rows / groups once per deploy (same build id as clear_public_caches).
+    # Sync EnhancedPermission rows / groups once per deploy.
     echo "--- [WEB] enhance_permissions (once per build) ---"
     python manage.py enhance_permissions --once-per-build || true
-
-    # Refresh Gemini-selected homepage featured reviews once per deploy.
-    echo "--- [WEB] Refreshing homepage featured reviews (once per build, Gemini) ---"
-    python manage.py refresh_homepage_reviews --once-per-build || true
-
-    echo "--- [WEB] Typesense index ready (full reindex once per build when enabled; needs GIT_SHA/BUILD_ID/IMAGE_TAG) ---"
-    python manage.py sync_typesense_at_startup || true
-
-    echo "--- [WEB] Scheduling Typesense bootstrap (Celery backup, if enabled) ---"
-    python manage.py schedule_typesense_bootstrap || true
 
     echo "--- [WEB] Starting Gunicorn server ---"
     # The 'exec "$@"' will run the CMD from the ECS Task Definition (e.g., gunicorn)

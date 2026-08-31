@@ -31,7 +31,7 @@ from quickstart.serializers.admin.booking_management.payment_serializers import 
     AdminBookingListSerializer,
     AdminBookingPaymentSerializer,
 )
-from quickstart.serializers import BookingDetailSerializer
+from quickstart.serializers.booking_serializers import BookingDetailSerializer
 from quickstart.utils.permissions import (
     IsAuthenticated,
     BasePermission,

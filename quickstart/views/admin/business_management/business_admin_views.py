@@ -1536,7 +1536,9 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser, FormParser
 
-from quickstart.services.google_reviews_importer import import_reviews_for_business
+
+def import_reviews_for_business(*args, **kwargs):
+    raise RuntimeError("Google reviews import was moved to deprecated marketplace remnants.")
 
 
 def _csv_row_to_review(raw):
@@ -1678,24 +1680,10 @@ class AdminBusinessGoogleReviewsSyncView(APIView):
     permission_classes = [IsAuthenticated, CanAccessBusinessAdmin]
 
     def post(self, request, business_id):
-        try:
-            bid = int(business_id)
-        except (TypeError, ValueError):
-            return Response(
-                {"error": "Invalid business_id.", "success": False},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if not BusinessInfo.objects.filter(businessId=bid).exists():
-            return Response(
-                {"error": "Business not found.", "success": False},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-        from quickstart.tasks.google_reviews_tasks import (
-            sync_google_reviews_for_business,
+        return Response(
+            {"error": "Google reviews sync is deprecated.", "success": False},
+            status=status.HTTP_410_GONE,
         )
-
-        sync_google_reviews_for_business.delay(bid)
-        return Response({"success": True, "queued": True}, status=status.HTTP_200_OK)
 
 
 class AdminGoogleReviewsSyncQueueView(APIView):
@@ -1708,9 +1696,9 @@ class AdminGoogleReviewsSyncQueueView(APIView):
     permission_classes = [IsAuthenticated, CanAccessBusinessAdmin]
 
     def post(self, request):
-        from quickstart.tasks.google_reviews_tasks import (
-            sync_google_reviews_enqueue_all,
-            sync_google_reviews_for_business,
+        return Response(
+            {"error": "Google reviews sync is deprecated.", "success": False},
+            status=status.HTTP_410_GONE,
         )
 
         all_flag = request.data.get("all") is True
@@ -1770,9 +1758,9 @@ class AdminInstagramFollowersSyncQueueView(APIView):
     permission_classes = [IsAuthenticated, CanAccessBusinessAdmin]
 
     def post(self, request):
-        from quickstart.tasks.instagram_tasks import (
-            sync_instagram_followers_enqueue_all,
-            sync_instagram_followers_for_business,
+        return Response(
+            {"error": "Instagram follower sync is deprecated.", "success": False},
+            status=status.HTTP_410_GONE,
         )
 
         all_flag = request.data.get("all") is True

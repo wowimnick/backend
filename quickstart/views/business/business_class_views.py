@@ -45,8 +45,10 @@ from quickstart.serializers.admin.class_management.class_management_serializers 
     AdminClassCategorySerializer,
 )
 from quickstart.utils.revalidation import trigger_nextjs_revalidation
-from quickstart.views.public.public_business_views import invalidate_business_detail_cache
-from quickstart.views.public.public_class_views import invalidate_class_detail_cache
+from quickstart.utils.public_cache import (
+    invalidate_business_detail_cache,
+    invalidate_class_detail_cache,
+)
 from quickstart.utils.email_utils import send_booking_cancelled_by_other_email
 from quickstart.utils.sms_utils import normalize_phone_for_sns, business_sms_enabled
 from quickstart.tasks.notification_tasks import send_sms_task

@@ -10,7 +10,6 @@ from .auth.auth_views import (
 from .business.business_management_views import (
     BusinessDashboardViewSet,
     MyBusinessProfileView,
-    MyBusinessInstagramFollowersSyncView,
     register_business,
     business_onboarding_state,
     get_user_businesses,
@@ -18,31 +17,17 @@ from .business.business_management_views import (
     BusinessDiscountViewSet,
 )
 
-from .public.public_business_views import (
-    PublicBusinessInfoViewSet,
-)
-from .public.public_giftcard_views import CreateGiftCardPaymentIntentView, ValidateGiftCardView
-
-
 from quickstart.views.business.business_course_views import (
-    PublicCourseViewSet,
-    StudentCourseEnrollmentViewSet,
     BusinessCourseManagementViewSet,
 )
 
 from .public.guest_booking_views import GuestBookingCancellationView
-
-from .public.public_class_views import (
-    PublicClassViewSet,
-    PublicScheduleViewSet,
-)
 
 from .business.business_class_views import (
     BusinessClassViewSet,
     BusinessClassOptionDetail,
     BusinessScheduleViewSet,
     BusinessScheduleInstanceViewSet,
-    PublicCategoryViewSet,
     AllCategoriesForBusinessViewSet,
 )
 
@@ -56,15 +41,10 @@ from .public.public_blog_views import (
 from .webhooks.stripe_webhooks import stripe_connect_webhook
 from .business.stripe_connect_views import StripeConnectView
 
-from .public.user_profile_views import MyProfileView
 from .business.business_student_views import BusinessStudentViewSet
 
-from .public.public_booking_views import StudentBookingViewSet
 from .business.business_booking_views import BusinessBookingViewSet
-from .public.conversation_views import GuestConversationViewSet
 from .business.business_conversation_views import BusinessConversationViewSet
-
-from .public.favorite_views import MyFavoritesListView
 
 from .business.revenue_analytics_views import (
     RevenueAnalyticsView,
@@ -79,14 +59,6 @@ from .business.business_notification_views import (
 )
 
 from .business.business_payout_views import BusinessPayoutViewSet
-
-from .public.public_review_views import (
-    ReviewSubmission,
-    PlatformClassReviews,
-    ImportedGoogleReviewsView,
-    FeaturedHomepageReviewsView,
-    RecentReviewsView,
-)
 
 from .business.business_staff_views import (
     BusinessStaffViewSet,
@@ -107,24 +79,17 @@ from .utils import (
 )
 
 __all__ = [
-    # Auth Views
     "CustomTokenObtainPairView",
     "CustomTokenRefreshView",
     "EndImpersonationView",
     "LogoutView",
     "UserUpdateView",
     "CustomRegisterView",
-    # Business Views
     "ContactImportViewSet",
     "BusinessDashboardViewSet",
     "get_user_businesses",
     "register_business",
     "MyBusinessProfileView",
-    "MyBusinessInstagramFollowersSyncView",
-    "PublicBusinessInfoViewSet",
-    "ImportedGoogleReviewsView",
-    "FeaturedHomepageReviewsView",
-    "RecentReviewsView",
     "MyBusinessOverviewView",
     "NotificationViewSet",
     "BusinessDiscountViewSet",
@@ -137,45 +102,21 @@ __all__ = [
     "PermissionGroupSerializer",
     "BusinessRoleSerializer",
     "ValidateInvitationTokenView",
-    # Gift Card Views
-    "CreateGiftCardPaymentIntentView",
-    "ValidateGiftCardView",
-    # Blog Views
     "PublicBlogPostViewSet",
     "PublicBlogCategoryViewSet",
-    # Stripe Connect Views
     "StripeConnectView",
     "stripe_connect_webhook",
-    # Class Views
-    "PublicClassViewSet",
     "BusinessClassViewSet",
     "BusinessClassOptionDetail",
     "BusinessScheduleViewSet",
     "BusinessScheduleInstanceViewSet",
-    "PublicScheduleViewSet",
-    "PublicCategoryViewSet",
     "AllCategoriesForBusinessViewSet",
-    # Course Views
-    "PublicCourseViewSet",
-    "StudentCourseEnrollmentViewSet",
     "BusinessCourseManagementViewSet",
-    # Favorite Views
-    "MyFavoritesListView",
-    # Student Views
-    "MyProfileView",
     "BusinessStudentViewSet",
     "GuestBookingCancellationView",
-    # Booking Views
     "BusinessBookingViewSet",
-    "GuestConversationViewSet",
     "BusinessConversationViewSet",
-    "StudentBookingViewSet",
-    # Revenue Analytics
     "RevenueAnalyticsView",
-    # Review Views
-    "ReviewSubmission",
-    "PlatformClassReviews",
     "BusinessReviewViewSet",
-    # Utils
     "haversine_distance",
 ]

@@ -47,14 +47,23 @@ from quickstart.utils.permissions import (
     CanAccessReviewAdmin,
 )
 from django.core.cache import cache
+from django.conf import settings
 
 from quickstart.utils.revalidation import trigger_nextjs_revalidation
-from quickstart.views.public.public_class_views import (
-    invalidate_public_class_search_preset_cache,
-    HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY,
+from quickstart.utils.public_cache import (
+    invalidate_business_detail_cache,
+    invalidate_class_detail_cache,
 )
-from quickstart.views.public.public_business_views import invalidate_business_detail_cache
-from quickstart.views.public.public_class_views import invalidate_class_detail_cache
+
+
+def invalidate_public_class_search_preset_cache(*args, **kwargs):
+    """Marketplace search cache invalidation was removed; Next.js tags still revalidate."""
+    return None
+
+
+HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY = (
+    f"homepage_content_collections:{getattr(settings, 'DJANGO_ENV', 'local')}"
+)
 from quickstart.views.admin.metrics_time_windows import get_admin_metrics_local_now
 from quickstart.models import (
     ClassCategory,
@@ -83,7 +92,7 @@ from quickstart.serializers.admin.class_management.class_management_serializers 
     SubcategorySerializer,
 )
 
-from quickstart.serializers.public.public_review_serializers import (
+from quickstart.serializers.imported_google_review_serializers import (
     ImportedGoogleReviewSerializer,
 )
 

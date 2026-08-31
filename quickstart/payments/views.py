@@ -30,7 +30,6 @@ from quickstart.models import (
     AppliedDiscount,
     GlobalDiscount,
     AppliedGlobalDiscount,
-    PartnerTier,
     Payment,
     ScheduleInstance,
     Schedule,
@@ -55,7 +54,7 @@ from quickstart.services.subscription_sync import (
 from quickstart.services.membership_sync import (
     sync_customer_membership_from_stripe,
 )
-from quickstart.serializers.public.public_booking_serializers import (
+from quickstart.serializers.booking_serializers import (
     BookingCreateSerializer,
 )
 
@@ -88,10 +87,14 @@ from quickstart.utils.revalidation import (
     trigger_nextjs_revalidation,
     trigger_multiple_revalidations,
 )
-from quickstart.utils.meta_capi import send_purchase_event_for_booking
+
+def send_purchase_event_for_booking(*args, **kwargs):
+    """No-op: Meta CAPI lived in the deprecated marketplace module."""
+    return None
 from quickstart.utils.stripe_metadata import stripe_metadata_to_dict
 from quickstart.utils.widget_booking_source import is_widget_booking_source
 from quickstart.utils.stripe_processing_fee import estimate_stripe_processing_fee
+from quickstart.utils.commission import get_plan_fee_percentage
 
 logger = logging.getLogger(__name__)
 
@@ -318,6 +321,63 @@ def _revalidate_for_booking(booking):
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 HST_RATE = Decimal("0.13")
+
+
+def _resolve_plan_fee_percentage(business, metadata=None):
+    metadata = metadata or {}
+    plan_id = metadata.get("plan_id") or None
+    return get_plan_fee_percentage(business, plan_id=plan_id)
+
+
+def _payout_split_for_booking(business, metadata, subtotal_for_payout, grand_total, total_tax):
+    """
+    Compute platform fee / net payout.
+    Widget destination charges: customer paid subtotal+tax; business absorbs commission.
+    Legacy marketplace: keep prior Stripe-fee + HST-on-fee split.
+    """
+    fee_percentage = _resolve_plan_fee_percentage(business, metadata)
+    raw_fee_cents = metadata.get("platform_fee_cents")
+    if raw_fee_cents not in (None, ""):
+        try:
+            platform_fee_amount = (Decimal(str(raw_fee_cents)) / 100).quantize(
+                Decimal("0.01")
+            )
+        except (ArithmeticError, ValueError, TypeError):
+            platform_fee_amount = (
+                subtotal_for_payout * (fee_percentage / Decimal("100"))
+            ).quantize(Decimal("0.01"))
+    else:
+        platform_fee_amount = (
+            subtotal_for_payout * (fee_percentage / Decimal("100"))
+        ).quantize(Decimal("0.01"))
+
+    platform_fee_tax = (platform_fee_amount * HST_RATE).quantize(Decimal("0.01"))
+
+    if is_widget_booking_source(metadata.get("booking_source")):
+        net_payout = (subtotal_for_payout - platform_fee_amount).quantize(
+            Decimal("0.01")
+        )
+        return (
+            platform_fee_amount,
+            platform_fee_tax,
+            Decimal("0.00"),
+            net_payout,
+            "settled",
+        )
+
+    stripe_processing_fee = estimate_stripe_processing_fee(grand_total)
+    business_payout_tax = total_tax - platform_fee_tax
+    business_net_revenue = (
+        subtotal_for_payout - platform_fee_amount - stripe_processing_fee
+    )
+    net_payout = business_net_revenue + business_payout_tax
+    return (
+        platform_fee_amount,
+        platform_fee_tax,
+        stripe_processing_fee,
+        net_payout,
+        "pending",
+    )
 
 
 class CreatePaymentIntentView(APIView):
@@ -1705,22 +1765,20 @@ class ProcessBookingWebhook(APIView):
             # 1b. CORPORATE TEAM BOOKING — deposit PaymentIntent
             md_pi = _stripe_metadata_dict(payment_intent.metadata)
             if md_pi.get("type") == "corporate_deposit":
-                from quickstart.payments.corporate_stripe_webhooks import (
-                    handle_corporate_deposit_succeeded,
+                logger.info(
+                    "[%s] Ignoring deprecated corporate_deposit PaymentIntent %s",
+                    webhook_id,
+                    payment_intent.id,
                 )
-
-                return handle_corporate_deposit_succeeded(
-                    payment_intent, getattr(event, "id", None), webhook_id
-                )
+                return Response(status=status.HTTP_200_OK)
 
             if md_pi.get("type") == "corporate_balance_pi":
-                from quickstart.payments.corporate_stripe_webhooks import (
-                    handle_corporate_balance_pi_succeeded,
+                logger.info(
+                    "[%s] Ignoring deprecated corporate_balance_pi PaymentIntent %s",
+                    webhook_id,
+                    payment_intent.id,
                 )
-
-                return handle_corporate_balance_pi_succeeded(
-                    payment_intent, getattr(event, "id", None), webhook_id
-                )
+                return Response(status=status.HTTP_200_OK)
 
             # 2. SKIP INVOICE PAYMENTS (e.g. widget subscription) — not bookings; no CAPI
             invoice_id = getattr(payment_intent, "invoice", None) or (
@@ -2035,15 +2093,8 @@ class ProcessBookingWebhook(APIView):
                 )
                 return Response(status=status.HTTP_200_OK)
             invoice = event.data.object
-            from quickstart.payments.corporate_stripe_webhooks import (
-                handle_corporate_balance_invoice_paid,
-            )
-
-            corp_r = handle_corporate_balance_invoice_paid(
-                invoice, inv_paid_eid or None, webhook_id
-            )
-            if corp_r is not None:
-                return corp_r
+            # Corporate balance invoices were a marketplace remnant; ignore and continue
+            # with widget/addon subscription handling below.
             sub_id = getattr(invoice, "subscription", None) or (
                 invoice.get("subscription") if isinstance(invoice, dict) else None
             )
@@ -2513,37 +2564,18 @@ class ProcessBookingWebhook(APIView):
 
                 # 2. Calculate Business Net Revenue (Total Net Payout) from subtotal_for_payout
                 business = enrollment.schedule.option.classId.businessId
-                if is_widget_booking_source(metadata.get("booking_source")):
-                    plan_id = (metadata.get("plan_id") or "basic").lower()
-                    fee_percentage = {
-                        "basic": Decimal("4.00"),
-                        "growth": Decimal("3.00"),
-                        "advanced": Decimal("2.00"),
-                    }.get(plan_id, Decimal("4.00"))
-                else:
-                    fee_percentage = (
-                        business.partner_tier.fee_percentage
-                        if business.partner_tier
-                        else PartnerTier.objects.get(is_default=True).fee_percentage
-                    )
-
-                service_fee_rate = fee_percentage / Decimal("100.0")
-                platform_fee_amount = (
-                    subtotal_for_payout * service_fee_rate
-                ).quantize(Decimal("0.01"))
-                platform_fee_tax = (platform_fee_amount * HST_RATE).quantize(
-                    Decimal("0.01")
-                )
-
-                # Stripe processing (2.9% + fixed) is deducted from the business payout, not platform commission
-                stripe_processing_fee = estimate_stripe_processing_fee(grand_total)
-                # This is the total bucket of money the business is owed for the whole course
-                business_payout_tax = total_tax - platform_fee_tax
-                business_net_revenue = (
-                    subtotal_for_payout - platform_fee_amount - stripe_processing_fee
-                )
-                total_net_payout_to_business = (
-                    business_net_revenue + business_payout_tax
+                (
+                    platform_fee_amount,
+                    platform_fee_tax,
+                    stripe_processing_fee,
+                    total_net_payout_to_business,
+                    booking_payout_status,
+                ) = _payout_split_for_booking(
+                    business,
+                    metadata,
+                    subtotal_for_payout,
+                    grand_total,
+                    total_tax,
                 )
 
                 # 3. Calculate Share Per Booking
@@ -2575,6 +2607,7 @@ class ProcessBookingWebhook(APIView):
 
                     # Assign the calculated payout share
                     booking.allocated_net_payout = share_per_booking
+                    booking.payout_status = booking_payout_status
 
                     # Add the penny remainder to the first booking
                     if index == 0:
@@ -2597,6 +2630,7 @@ class ProcessBookingWebhook(APIView):
                         "amount_paid",
                         "user_facing_reference",
                         "allocated_net_payout",
+                        "payout_status",
                     ],
                 )
 
@@ -3095,34 +3129,22 @@ class ProcessBookingWebhook(APIView):
                 booking.cancellation_token = uuid.uuid4()
                 booking.save(update_fields=["cancellation_token"])
 
-            if is_widget_booking_source(metadata.get("booking_source")):
-                plan_id = (metadata.get("plan_id") or "basic").lower()
-                fee_percentage = {
-                    "basic": Decimal("4.00"),
-                    "growth": Decimal("3.00"),
-                    "advanced": Decimal("2.00"),
-                }.get(plan_id, Decimal("4.00"))
-            else:
-                fee_percentage = (
-                    business.partner_tier.fee_percentage
-                    if business.partner_tier
-                    else PartnerTier.objects.get(is_default=True).fee_percentage
-                )
-            service_fee_rate = fee_percentage / Decimal("100.0")
-            platform_fee_amount = (
-                subtotal_for_payout * service_fee_rate
-            ).quantize(Decimal("0.01"))
-            platform_fee_tax = (platform_fee_amount * HST_RATE).quantize(
-                Decimal("0.01")
+            (
+                platform_fee_amount,
+                platform_fee_tax,
+                stripe_processing_fee,
+                net_payout_to_business,
+                booking_payout_status,
+            ) = _payout_split_for_booking(
+                business,
+                metadata,
+                subtotal_for_payout,
+                grand_total,
+                total_tax,
             )
-            business_payout_tax = total_tax - platform_fee_tax
-            stripe_processing_fee = estimate_stripe_processing_fee(grand_total)
-            business_net_revenue = (
-                subtotal_for_payout - platform_fee_amount - stripe_processing_fee
-            )
-            net_payout_to_business = business_net_revenue + business_payout_tax
             booking.allocated_net_payout = net_payout_to_business
-            booking.save(update_fields=["allocated_net_payout"])
+            booking.payout_status = booking_payout_status
+            booking.save(update_fields=["allocated_net_payout", "payout_status"])
 
             Payment.objects.create(
                 booking=booking,
@@ -3424,45 +3446,30 @@ class ProcessBookingWebhook(APIView):
                 or metadata.get("subtotal_after_discount", "0.00")
             )
 
-            if is_widget_booking_source(metadata.get("booking_source")):
-                plan_id = (metadata.get("plan_id") or "basic").lower()
-                fee_percentage = {
-                    "basic": Decimal("4.00"),
-                    "growth": Decimal("3.00"),
-                    "advanced": Decimal("2.00"),
-                }.get(plan_id, Decimal("4.00"))
-                logger.info(
-                    f"[{webhook_id}] Applying widget plan fee ({fee_percentage}%) for booking {pending_booking.id}."
-                )
-            else:
-                fee_percentage = (
-                    business.partner_tier.fee_percentage
-                    if business.partner_tier
-                    else PartnerTier.objects.get(is_default=True).fee_percentage
-                )
-                logger.info(
-                    f"[{webhook_id}] Applying partner tier fee ({fee_percentage}%) for booking {pending_booking.id}."
-                )
-
-            service_fee_rate = fee_percentage / Decimal("100.0")
-            platform_fee_amount = (subtotal_for_payout * service_fee_rate).quantize(
-                Decimal("0.01")
+            (
+                platform_fee_amount,
+                platform_fee_tax,
+                stripe_processing_fee,
+                net_payout_to_business,
+                booking_payout_status,
+            ) = _payout_split_for_booking(
+                business,
+                metadata,
+                subtotal_for_payout,
+                grand_total,
+                total_tax,
             )
-            platform_fee_tax = (platform_fee_amount * HST_RATE).quantize(
-                Decimal("0.01")
+            logger.info(
+                f"[{webhook_id}] Applying plan fee for booking {pending_booking.id}: "
+                f"platform_fee={platform_fee_amount} payout_status={booking_payout_status}."
             )
-            business_payout_tax = total_tax - platform_fee_tax
-            stripe_processing_fee = estimate_stripe_processing_fee(grand_total)
-            business_net_revenue = (
-                subtotal_for_payout - platform_fee_amount - stripe_processing_fee
-            )
-            net_payout_to_business = business_net_revenue + business_payout_tax
 
             # --- UPDATE PENDING BOOKING TO CONFIRMED ---
             pending_booking.status = "confirmed"
             pending_booking.payment_status = "paid"
             # FIX: Ensure the booking actually knows how much it's worth to the business
             pending_booking.allocated_net_payout = net_payout_to_business
+            pending_booking.payout_status = booking_payout_status
 
             if not pending_booking.user_facing_reference:
                 pending_booking.user_facing_reference = (

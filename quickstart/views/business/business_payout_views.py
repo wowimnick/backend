@@ -1,4 +1,3 @@
-from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -10,23 +9,23 @@ def _payout_payment_meta_source(meta):
     if isinstance(inner, dict):
         return inner
     return meta
-from django.db.models import Q, Sum, Value, Count
+from django.conf import settings as django_settings
+from django.db.models import Q, Sum, Count
 from django.db.models.functions import Coalesce
-from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.exceptions import PermissionDenied, NotFound
+from rest_framework.exceptions import PermissionDenied
 from django.http import HttpResponse
 import csv
+import stripe
 
 from quickstart.models import BusinessInfo, Booking, Payment, Payout
 from quickstart.serializers.business.business_payout_serializers import (
     BusinessPayoutSerializer,
     PayoutSummarySerializer,
     PayoutBookingSerializer,
-    ScheduledPayoutSerializer,
 )
 from quickstart.utils.permissions import IsBusinessOwnerOrManager
 from quickstart.views.business.business_booking_views import BusinessBookingPagination
@@ -34,49 +33,31 @@ from quickstart.views.business.business_booking_views import BusinessBookingPagi
 import logging
 
 logger = logging.getLogger(__name__)
+stripe.api_key = django_settings.STRIPE_SECRET_KEY
 
 SCHEDULED_PAYOUT_PREFIX = "scheduled-"
 
 
-def get_scheduled_payouts_for_business(business):
-    """
-    Compute scheduled (projected) payouts: confirmed, paid, future-dated bookings
-    grouped by payout date (session date + 1 day). Payout is due the day after the experience.
-    """
-    today = timezone.now().date()
-    qs = (
-        Booking.objects.filter(
-            schedule_instance__schedule__option__classId__businessId=business,
-            status="confirmed",
-            payment_status="paid",
-            payout_status="pending",
-            schedule_instance__date__gte=today,
+def _connect_pending_amount(business):
+    """Stripe Connect pending balance for the business currency, or None if unavailable."""
+    if not business or not business.stripe_account_id:
+        return None
+    try:
+        balance = stripe.Balance.retrieve(stripe_account=business.stripe_account_id)
+    except Exception as e:
+        logger.warning(
+            "Connect balance lookup failed for business %s: %s",
+            business.businessId,
+            e,
         )
-        .select_related("schedule_instance")
-        .order_by("schedule_instance__date")
-    )
-    groups = defaultdict(lambda: {"amount": Decimal("0.00"), "count": 0, "arrival_date": None})
-    for b in qs:
-        if b.schedule_instance and b.schedule_instance.date:
-            arr = b.schedule_instance.date + timedelta(days=1)
-            groups[arr]["arrival_date"] = arr
-            groups[arr]["amount"] += b.allocated_net_payout or Decimal("0.00")
-            groups[arr]["count"] += 1
-    return [
-        {
-            "id": f"{SCHEDULED_PAYOUT_PREFIX}{arr.isoformat()}",
-            "stripe_transfer_id": None,
-            "amount": data["amount"],
-            "currency": business.currency.upper(),
-            "status": "scheduled",
-            "arrival_date": data["arrival_date"],
-            "created_at": None,
-            "booking_count": data["count"],
-            "amount_display": f"${data['amount']:,.2f} {business.currency.upper()}",
-        }
-        for arr, data in sorted(groups.items())
-        if data["count"] > 0 and data["amount"] > 0
-    ]
+        return None
+    currency = (business.currency or "CAD").upper()
+    pending = Decimal("0.00")
+    for item in getattr(balance, "pending", []) or []:
+        item_currency = (item.get("currency") or "").upper()
+        if item_currency == currency:
+            pending += Decimal(item.get("amount", 0) or 0) / 100
+    return pending
 
 
 class BusinessPayoutViewSet(viewsets.ReadOnlyModelViewSet):
@@ -110,15 +91,6 @@ class BusinessPayoutViewSet(viewsets.ReadOnlyModelViewSet):
             .annotate(booking_count_agg=Count("bookings"))
             .order_by("-created_at")
         )
-
-    def list(self, request, *args, **kwargs):
-        response = super().list(request, *args, **kwargs)
-        business = self.get_business_context()
-        scheduled = get_scheduled_payouts_for_business(business)
-        response.data["scheduled_payouts"] = ScheduledPayoutSerializer(
-            scheduled, many=True
-        ).data
-        return response
 
     @action(detail=True, methods=["get"], url_path="bookings")
     def bookings(self, request, pk=None):
@@ -182,23 +154,23 @@ class BusinessPayoutViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=["get"], url_path="summary")
     def summary(self, request, *args, **kwargs):
         """
-        Provides a summary of the business's current payout status using
-        booking-based calculations.
+        Provides a summary of the business's current payout status.
+        Prefers Stripe Connect pending balance when the account is linked.
+        last_payout_* always comes from paid Payout rows.
         """
         business = self.get_business_context()
 
-        # Calculate pending payouts by summing the allocated share of COMPLETED bookings
-        # that haven't been paid out yet.
-        pending_payout_aggregation = Booking.objects.filter(
-            schedule_instance__schedule__option__classId__businessId=business,
-            status__in=["confirmed", "completed", "forfeited"],
-            payment_status="paid",    
-            payout_status="pending",  
-        ).aggregate(
-            total_pending=Coalesce(Sum("allocated_net_payout"), Decimal("0.00"))
-        )
-        
-        pending_payout_amount = pending_payout_aggregation["total_pending"]
+        pending_payout_amount = _connect_pending_amount(business)
+        if pending_payout_amount is None:
+            pending_payout_aggregation = Booking.objects.filter(
+                schedule_instance__schedule__option__classId__businessId=business,
+                status__in=["confirmed", "completed", "forfeited"],
+                payment_status="paid",
+                payout_status="pending",
+            ).aggregate(
+                total_pending=Coalesce(Sum("allocated_net_payout"), Decimal("0.00"))
+            )
+            pending_payout_amount = pending_payout_aggregation["total_pending"]
 
         last_payout = (
             Payout.objects.filter(business=business, status="paid")

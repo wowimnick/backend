@@ -8,7 +8,7 @@ recomputed as if the booking were for the new session price (same fee rate as at
 from decimal import Decimal, ROUND_HALF_UP
 import logging
 
-from quickstart.models import PartnerTier
+from quickstart.utils.commission import get_plan_fee_percentage
 from quickstart.utils.widget_booking_source import is_widget_booking_source
 from quickstart.utils.stripe_processing_fee import estimate_stripe_processing_fee
 
@@ -21,16 +21,8 @@ def _q2(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
-def _widget_plan_fee_percentage(plan_id: str) -> Decimal:
-    return {
-        "basic": Decimal("4.00"),
-        "growth": Decimal("3.00"),
-        "advanced": Decimal("2.00"),
-    }.get((plan_id or "basic").lower(), Decimal("4.00"))
-
-
 def _service_fee_rate(payment, business) -> Decimal:
-    """Match quickstart.payments.views fee resolution (widget plan vs partner tier)."""
+    """Resolve commission rate from stored payment, else current plan fee."""
     meta = payment.metadata or {}
     orig = meta.get("original_stripe_metadata") or {}
     if not isinstance(orig, dict):
@@ -48,16 +40,8 @@ def _service_fee_rate(payment, business) -> Decimal:
         except (ArithmeticError, ValueError, TypeError):
             pass
 
-    if is_widget_booking_source(orig.get("booking_source")):
-        plan_id = (orig.get("plan_id") or "basic").lower()
-        return _widget_plan_fee_percentage(plan_id) / Decimal("100.0")
-
-    if business.partner_tier_id:
-        return business.partner_tier.fee_percentage / Decimal("100.0")
-    default_tier = PartnerTier.objects.filter(is_default=True).first()
-    if default_tier:
-        return default_tier.fee_percentage / Decimal("100.0")
-    return Decimal("0.04")
+    plan_id = orig.get("plan_id") if is_widget_booking_source(orig.get("booking_source")) else None
+    return get_plan_fee_percentage(business, plan_id=plan_id) / Decimal("100.0")
 
 
 def preview_reschedule_payout_adjustment(booking, new_schedule_instance):

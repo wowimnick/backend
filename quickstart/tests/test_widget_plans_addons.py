@@ -5,6 +5,9 @@ Run with: pytest quickstart/tests/test_widget_plans_addons.py -v
 """
 from types import SimpleNamespace
 from unittest.mock import patch
+from datetime import date, time, timedelta
+from decimal import Decimal
+import uuid
 
 import pytest
 from rest_framework import status
@@ -16,6 +19,8 @@ from quickstart.tests.factories import (
     ClassOptionFactory,
     ScheduleFactory,
     ScheduleInstanceFactory,
+    BookingFactory,
+    ContactFactory,
 )
 
 API = "/api"
@@ -551,3 +556,143 @@ class TestWidgetSubscriptionGetScheduledDowngrade:
         data = response.json()
         assert "scheduled_downgrade" in data
         assert data["scheduled_downgrade"]["planId"] == "basic"
+
+
+# -----------------------------------------------------------------------------
+# Widget API key rotation
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestWidgetConfigRotateApiKey:
+    def test_rotate_key_unauthenticated_401(self, api_client):
+        response = api_client.post(f"{API}/my-business/widget-config/rotate-key/")
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+    def test_rotate_key_owner_returns_new_key(self, business_owner_client, business):
+        old_key = str(business.widget_api_key)
+        response = business_owner_client.post(
+            f"{API}/my-business/widget-config/rotate-key/"
+        )
+        assert response.status_code == status.HTTP_200_OK
+        new_key = response.json().get("widget_api_key")
+        assert new_key
+        assert new_key != old_key
+        business.refresh_from_db()
+        assert str(business.widget_api_key) == new_key
+
+
+# -----------------------------------------------------------------------------
+# Widget v1 bookings/manage
+# -----------------------------------------------------------------------------
+
+
+def _booking_for_widget_business(business, **kwargs):
+    klass = ClassMainFactory(businessId=business, status="active")
+    option = ClassOptionFactory(classId=klass, cancellationPolicy="flexible")
+    schedule = ScheduleFactory(option=option)
+    instance = ScheduleInstanceFactory(
+        schedule=schedule,
+        date=date.today() + timedelta(days=14),
+        time=time(10, 0),
+        status="scheduled",
+        duration=60,
+        max_participants=10,
+    )
+    contact = ContactFactory(business=business)
+    defaults = dict(
+        schedule_instance=instance,
+        contact=contact,
+        participants=1,
+        amount_paid=Decimal("25.00"),
+        payment_status="paid",
+        status="confirmed",
+        enrollment_type="Single Session",
+        cancellation_policy="flexible",
+        cancellation_token=uuid.uuid4(),
+    )
+    defaults.update(kwargs)
+    return BookingFactory(**defaults)
+
+
+@pytest.mark.django_db
+class TestWidgetBookingsManage:
+    def test_manage_get_without_key_forbidden(self, api_client):
+        response = api_client.get(f"{API}/widget/v1/bookings/manage/?token={uuid.uuid4()}")
+        assert response.status_code in (401, 403, 404)
+
+    def test_manage_get_returns_summary(self, api_client, business):
+        booking = _booking_for_widget_business(business)
+        response = api_client.get(
+            f"{API}/widget/v1/bookings/manage/",
+            {"token": str(booking.cancellation_token)},
+            HTTP_X_BUSINESS_ID=str(business.widget_api_key),
+        )
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert data["status"] == "confirmed"
+        assert data["class_title"]
+        assert data["can_cancel"] is True
+
+    @patch("quickstart.views.public.guest_booking_views.send_booking_cancellation_user_email")
+    @patch("quickstart.views.public.guest_booking_views.send_business_student_cancellation_email")
+    def test_manage_post_cancel(
+        self, mock_business_email, mock_user_email, api_client, business
+    ):
+        booking = _booking_for_widget_business(business)
+        token = booking.cancellation_token
+        response = api_client.post(
+            f"{API}/widget/v1/bookings/manage/",
+            {"token": str(token), "action": "cancel"},
+            format="json",
+            HTTP_X_BUSINESS_ID=str(business.widget_api_key),
+        )
+        assert response.status_code == status.HTTP_200_OK
+        booking.refresh_from_db()
+        assert booking.status == "cancelled"
+        assert booking.cancellation_token is None
+        mock_user_email.assert_called_once()
+
+    def test_manage_post_calendar(self, api_client, business):
+        booking = _booking_for_widget_business(business)
+        response = api_client.post(
+            f"{API}/widget/v1/bookings/manage/",
+            {"token": str(booking.cancellation_token), "action": "calendar"},
+            format="json",
+            HTTP_X_BUSINESS_ID=str(business.widget_api_key),
+        )
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        for key in ("title", "start", "end", "location", "description", "cancel_url"):
+            assert key in data
+        assert str(booking.cancellation_token) in (data.get("cancel_url") or "")
+
+    def test_manage_post_reschedule_same_class(self, api_client, business):
+        booking = _booking_for_widget_business(business)
+        original_amount = booking.amount_paid
+        schedule = booking.schedule_instance.schedule
+        new_instance = ScheduleInstanceFactory(
+            schedule=schedule,
+            date=date.today() + timedelta(days=21),
+            time=time(14, 0),
+            status="scheduled",
+            duration=60,
+            price=booking.schedule_instance.price,
+            max_participants=10,
+        )
+        response = api_client.post(
+            f"{API}/widget/v1/bookings/manage/",
+            {
+                "token": str(booking.cancellation_token),
+                "action": "reschedule",
+                "instance_id": new_instance.id,
+            },
+            format="json",
+            HTTP_X_BUSINESS_ID=str(business.widget_api_key),
+        )
+        assert response.status_code == status.HTTP_200_OK
+        booking.refresh_from_db()
+        assert booking.schedule_instance_id == new_instance.id
+        assert booking.amount_paid == original_amount
+        assert booking.is_rescheduled is True
+

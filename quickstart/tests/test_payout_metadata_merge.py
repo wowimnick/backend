@@ -19,6 +19,7 @@ from quickstart.tests.factories import (
     ScheduleInstanceFactory,
 )
 from quickstart.tasks.payout_tasks import (
+    CUTOVER_DATE,
     _build_payout_batch_idempotency_key,
     _build_stripe_transfer_metadata,
     _is_stripe_idempotency_key_conflict,
@@ -96,6 +97,7 @@ def _make_payout_booking(business, *, net=Decimal("87.00"), pi_suffix="unique"):
         payout_status="pending",
         amount_paid=Decimal("100.00"),
         allocated_net_payout=net,
+        booking_date=CUTOVER_DATE - timedelta(days=1),
     )
     Payment.objects.create(
         booking=booking,
@@ -272,6 +274,7 @@ def test_process_daily_payouts_completes_with_stripe_like_metadata():
         payout_status="pending",
         amount_paid=Decimal("100.00"),
         allocated_net_payout=expected_net,
+        booking_date=CUTOVER_DATE - timedelta(days=1),
     )
     Payment.objects.create(
         booking=booking,

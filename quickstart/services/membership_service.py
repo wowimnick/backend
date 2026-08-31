@@ -18,12 +18,31 @@ from quickstart.models import (
     MembershipCreditLedger,
     MembershipProduct,
 )
+from quickstart.utils.commission import get_plan_fee_percentage
 from quickstart.utils.email_utils import (
     send_membership_lifecycle_member_email,
     send_membership_lifecycle_business_email,
 )
 
 logger = logging.getLogger(__name__)
+
+_CONNECT_MISSING_ERROR = (
+    "Payouts must be connected before memberships can be charged. "
+    "Connect Stripe in your dashboard first."
+)
+
+
+def _require_connect_for_membership_charges(business):
+    if not getattr(business, "stripe_account_id", None):
+        raise ValueError(_CONNECT_MISSING_ERROR)
+    if getattr(business, "stripe_account_status", None) != "active":
+        raise ValueError(_CONNECT_MISSING_ERROR)
+
+
+def _apply_membership_destination_charge(create_params, business):
+    _require_connect_for_membership_charges(business)
+    create_params["transfer_data"] = {"destination": business.stripe_account_id}
+    create_params["application_fee_percent"] = float(get_plan_fee_percentage(business))
 
 
 def _membership_resolve_stripe_customer_id(business, contact, email, first_name, last_name):
@@ -179,6 +198,7 @@ def create_customer_membership_subscription(
     if trial_period_days is not None and trial_period_days > 0:
         create_params["trial_period_days"] = trial_period_days
 
+    _apply_membership_destination_charge(create_params, business)
     stripe_sub = stripe.Subscription.create(**create_params)
 
     # Persist CustomerMembership so webhook can update it
@@ -328,6 +348,7 @@ def approve_membership(membership):
     if getattr(product, "trial_period_days", None) and product.trial_period_days > 0:
         create_params["trial_period_days"] = product.trial_period_days
 
+    _apply_membership_destination_charge(create_params, product.business)
     stripe_sub = stripe.Subscription.create(**create_params)
 
     period_start = None

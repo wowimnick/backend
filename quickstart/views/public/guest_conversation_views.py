@@ -17,7 +17,7 @@ from quickstart.models import (
     Contact,
     ClassesMain,
 )
-from quickstart.serializers.public.public_conversation_serializers import (
+from quickstart.serializers.conversation_serializers import (
     GuestMessageCreateSerializer,
     ConversationDetailSerializer,
     ConversationMessageSerializer,

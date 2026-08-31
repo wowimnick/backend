@@ -27,7 +27,7 @@ from django.views import View
 from django.http import JsonResponse
 
 from django.contrib.auth.tokens import default_token_generator
-from quickstart.concierge_handover_tokens import concierge_handover_token_generator
+from quickstart.utils.concierge_handover_tokens import concierge_handover_token_generator
 
 from allauth.account.forms import ResetPasswordForm, SetPasswordForm
 

@@ -37,7 +37,6 @@ urlpatterns = [
     ),
     # 4. React Frontend Routes (at the root)
     path("", TemplateView.as_view(template_name="index.html"), name="homepage"),
-    path("explore", TemplateView.as_view(template_name="index.html"), name="explore"),
     path(
         "business",
         TemplateView.as_view(template_name="index.html"),
@@ -45,7 +44,6 @@ urlpatterns = [
     ),
     path("careers", TemplateView.as_view(template_name="index.html"), name="careers"),
     path("about-us", TemplateView.as_view(template_name="index.html"), name="about-us"),
-    path("giftcard", TemplateView.as_view(template_name="index.html"), name="giftcard"),
     path(
         "terms-of-service",
         TemplateView.as_view(template_name="index.html"),

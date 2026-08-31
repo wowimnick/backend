@@ -48,9 +48,9 @@ from quickstart.models import (
     ClassesMain,
     CustomUser,
     MembershipPayment,
-    PartnerTier,
     Payment,
 )
+from quickstart.utils.commission import get_plan_fee_percentage
 from quickstart.utils.permissions import IsBusinessMember
 from quickstart.utils.widget_booking_source import (
     WIDGET_BOOKING_SOURCES,
@@ -144,9 +144,8 @@ class RevenueAnalyticsView(views.APIView):
                 Q(owner=user)
                 | Q(staff_members__user=user, staff_members__status="accepted")
             )
-            .select_related("partner_tier")
             .first()
-        )  # Use select_related for efficiency
+        )
         return business
 
     def get_date_range(self, request):
@@ -216,31 +215,13 @@ class RevenueAnalyticsView(views.APIView):
             return base_bookings
 
     def _get_fee_rate_for_business(self, business):
-        """Helper to get the fee rate from the business's tier with fallbacks."""
-        if business and business.partner_tier:
-            return business.partner_tier.fee_percentage / Decimal("100.0")
+        """Plan-based commission rate (0 if waived)."""
+        if not business:
+            return Decimal("0.04")
+        return get_plan_fee_percentage(business) / Decimal("100.0")
 
-        try:
-            default_tier = PartnerTier.objects.get(is_default=True)
-            if business:
-                logger.warning(
-                    f"Business {business.businessId} was missing a partner tier. Fell back to default tier '{default_tier.name}'."
-                )
-            return default_tier.fee_percentage / Decimal("100.0")
-        except PartnerTier.DoesNotExist:
-            logger.error(
-                "CRITICAL: No default PartnerTier is configured. Using hardcoded 13% fee."
-            )
-            return Decimal("0.13")
-
-    def _widget_fee_rate_decimal(self, plan_id):
-        key = (plan_id or "basic").lower()
-        pct = {
-            "basic": Decimal("4"),
-            "growth": Decimal("3"),
-            "advanced": Decimal("2"),
-        }.get(key, Decimal("4"))
-        return pct / Decimal("100.0")
+    def _widget_fee_rate_decimal(self, business, plan_id):
+        return get_plan_fee_percentage(business, plan_id=plan_id) / Decimal("100.0")
 
     def _stripe_meta_dict(self, meta):
         if not meta or not isinstance(meta, dict):
@@ -259,7 +240,7 @@ class RevenueAnalyticsView(views.APIView):
         if pay:
             src = self._stripe_meta_dict(pay.metadata)
             if is_widget_booking_source(src.get("booking_source")):
-                return self._widget_fee_rate_decimal(src.get("plan_id"))
+                return self._widget_fee_rate_decimal(business, src.get("plan_id"))
         return self._get_fee_rate_for_business(business)
 
     def _gift_card_amount_from_payment(self, pay, booking_amount_paid):

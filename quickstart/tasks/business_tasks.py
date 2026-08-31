@@ -12,14 +12,7 @@ import logging
 
 from quickstart.models import BusinessInfo, ClassesMain, ClassCollection, BlogPost, BlogCategory
 from quickstart.utils.services import CollectionAutoAssigner
-from quickstart.views.public.public_class_views import (
-    HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY,
-    invalidate_public_class_search_preset_cache,
-)
 from quickstart.utils.revalidation import trigger_nextjs_revalidation
-from quickstart.utils.experience_theme_coverage import (
-    ensure_preset_collection_memberships,
-)
 from quickstart.utils.description_formatter import DescriptionFormatter
 from quickstart.utils.description_ai import description_ai_has_output
 from quickstart.utils.blog_ai_service import generate_blog_draft
@@ -258,10 +251,10 @@ def reclassify_automated_collection_task(collection_id: int):
             removed += 1
 
     try:
-        cache.delete(HOMEPAGE_CONTENT_COLLECTIONS_CACHE_KEY)
-        invalidate_public_class_search_preset_cache(
-            affected_collection_slugs=[col.slug] if getattr(col, "slug", None) else None
-        )
+        from django.conf import settings as dj_settings
+
+        homepage_key = f"homepage_content_collections:{getattr(dj_settings, 'DJANGO_ENV', 'local')}"
+        cache.delete(homepage_key)
     except Exception as e:
         logger.warning("Post-reclassify cache invalidation failed: %s", e)
 
@@ -292,14 +285,14 @@ def reclassify_automated_collection_task(collection_id: int):
 @shared_task
 def ensure_preset_experience_theme_coverage_task(thematic_collection_ids: list[int]):
     """
-    Chained after ``update_trending_collections_task`` when bulk-loading the curated
-    "experience themes" preset: link any active classes that still belong to zero of
-    those collections (keyword title/description match first, otherwise default).
+    Marketplace remnant: experience-theme coverage lived in a moved module.
+    Kept as a no-op so historical Celery task names do not crash workers.
     """
-    try:
-        return ensure_preset_collection_memberships(thematic_collection_ids)
-    except Exception as e:
-        logger.exception("ensure_preset_experience_theme_coverage_task failed: %s", e)
+    logger.info(
+        "ensure_preset_experience_theme_coverage_task skipped (marketplace deprecation); ids=%s",
+        thematic_collection_ids,
+    )
+    return {"ok": False, "reason": "deprecated"}
 
 
 @shared_task

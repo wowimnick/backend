@@ -229,22 +229,7 @@ class AdminBusinessDetailSerializer(serializers.ModelSerializer):
         ]
 
     def update(self, instance, validated_data):
-        from quickstart.tasks.instagram_tasks import (
-            schedule_instagram_sync_if_instagram_changed,
-        )
-        from quickstart.tasks.google_reviews_tasks import (
-            schedule_google_reviews_sync_if_url_changed,
-        )
-
-        old_ig = ((instance.social_media_links or {}).get("instagram") or "").strip()
-        old_gmaps = (instance.google_maps_url or "").strip()
         instance = super().update(instance, validated_data)
-        new_ig = ((instance.social_media_links or {}).get("instagram") or "").strip()
-        schedule_instagram_sync_if_instagram_changed(instance.businessId, old_ig, new_ig)
-        new_gmaps = (instance.google_maps_url or "").strip()
-        schedule_google_reviews_sync_if_url_changed(
-            instance.businessId, old_gmaps, new_gmaps
-        )
         return instance
 
     def get_business_image_medium_url(self, obj):

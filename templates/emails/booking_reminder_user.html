@@ -49,9 +49,18 @@
         </div>
         <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
             <tr><td align="center">
-                <a href="{{ class_details_url }}" target="_blank" class="button" style="border-radius: {% if email_branding and email_branding.button_style == "rounded_rect" %}12px{% elif email_branding and email_branding.button_style == "square" %}4px{% else %}980px{% endif %}; background-color: {% if email_branding and email_branding.primary_color %}{{ email_branding.primary_color }}{% else %}#F81E3E{% endif %} !important; color: #ffffff !important;">{% if email_branding and email_branding.button_text %}{{ email_branding.button_text }}{% else %}{% trans 'View details' %}{% endif %}</a>
+                {% if guest_cancellation_url %}
+                    <a href="{{ guest_cancellation_url }}" target="_blank" class="button" style="border-radius: {% if email_branding and email_branding.button_style == "rounded_rect" %}12px{% elif email_branding and email_branding.button_style == "square" %}4px{% else %}980px{% endif %}; background-color: {% if email_branding and email_branding.primary_color %}{{ email_branding.primary_color }}{% else %}#F81E3E{% endif %} !important; color: #ffffff !important;">{% if email_branding and email_branding.button_text_guest %}{{ email_branding.button_text_guest }}{% elif email_branding and email_branding.button_text %}{{ email_branding.button_text }}{% else %}{% trans 'Manage booking' %}{% endif %}</a>
+                {% endif %}
             </td></tr>
         </table>
+        <p style="margin-top: 24px; font-size: 13px; color: #86868B;">
+            {% if guest_cancellation_url %}
+                {% blocktrans %}Need to change or cancel? Use the button above.{% endblocktrans %}
+            {% else %}
+                {% blocktrans %}Reply to this email or contact the studio if you need to change or cancel.{% endblocktrans %}
+            {% endif %}
+        </p>
     </div>
 {% endblock content %}
 {% block footer_recipient %}

@@ -15,15 +15,15 @@
                 {% trans "Hi there," %}
             {% endif %}
             <br>
-            {% trans "You cancelled a booking and were entitled to a refund under our cancellation policy. We were unable to process the refund automatically." %}
+            {% trans "You cancelled a booking and were entitled to a refund under the cancellation policy. We were unable to process the refund automatically." %}
         </p>
         <p style="font-size: 14px; color: #86868B; line-height: 1.5; margin-bottom: 32px;">
-            {% trans "Our team has been notified and will follow up to resolve this. If you do not hear from us within a few business days, please contact support and reference booking #" %}{{ booking_id }}.
+            {% trans "Please contact the business that took this booking. If you do not hear back within a few business days, reply to this email and reference booking #" %}{{ booking_id }}.
         </p>
         <p style="font-size: 14px; color: #86868B;">
             {% trans "We apologize for the inconvenience." %}
         </p>
-        {% if my_classes_url or my_tickets_url %}
+        {% if guest_cancellation_url %}
         <table role="presentation"
                border="0"
                cellpadding="0"
@@ -32,16 +32,7 @@
                style="margin-top: 28px;">
             <tr>
                 <td align="center" style="padding: 8px;">
-                    {% if my_classes_url %}
-                    <a href="{{ my_classes_url }}" class="button">{% trans "View my classes" %}</a>
-                    {% endif %}
-                </td>
-            </tr>
-            <tr>
-                <td align="center" style="padding: 8px;">
-                    {% if my_tickets_url %}
-                    <a href="{{ my_tickets_url }}" class="button" style="background-color: #6b7280;">{% trans "View my tickets" %}</a>
-                    {% endif %}
+                    <a href="{{ guest_cancellation_url }}" class="button">{% trans "Manage this booking" %}</a>
                 </td>
             </tr>
         </table>

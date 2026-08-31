@@ -13,10 +13,7 @@ from django.utils import timezone
 
 from quickstart.models import CustomerMembership, MembershipPayment
 from quickstart.services.membership_service import reset_period_credits
-from quickstart.views.widget.widget_views import (
-    WIDGET_PLAN_FEE_PERCENT,
-    _get_widget_plan_fee_percentage,
-)
+from quickstart.utils.commission import get_plan_fee_percentage
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +132,7 @@ def sync_customer_membership_from_stripe(
         # Record payment and platform fee
         amount_paid = _stripe_dict_get(invoice_obj, "amount_paid") or 0
         amount_decimal = Decimal(amount_paid) / 100
-        fee_pct = _get_widget_plan_fee_percentage(business)
+        fee_pct = get_plan_fee_percentage(business)
         platform_fee = (amount_decimal * (fee_pct / Decimal("100"))).quantize(
             Decimal("0.01")
         )

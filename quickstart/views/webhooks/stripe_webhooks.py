@@ -185,6 +185,23 @@ def stripe_connect_webhook(request):
             )
             return HttpResponse(status=500)
 
+    elif event.type in (
+        "payout.created",
+        "payout.paid",
+        "payout.failed",
+        "payout.canceled",
+    ):
+        try:
+            _upsert_connect_payout_from_event(event)
+        except Exception as e:
+            logger.error(
+                "Error in webhook for payout event %s: %s",
+                event.type,
+                e,
+                exc_info=True,
+            )
+            return HttpResponse(status=500)
+
     elif event.type == "account.updated":
         try:
             _update_business_status_from_stripe_account(event.data.object)
@@ -202,3 +219,55 @@ def stripe_connect_webhook(request):
         logger.info(f"Webhook received unhandled event type: {event.type}")
 
     return HttpResponse(status=200)
+
+
+def _upsert_connect_payout_from_event(event):
+    """Upsert a Payout row from a Connect payout.* webhook using event.account."""
+    stripe_payout = event.data.object
+    account_id = getattr(event, "account", None)
+    if not account_id:
+        logger.error(
+            "Payout webhook %s missing event.account for payout %s",
+            event.type,
+            getattr(stripe_payout, "id", None),
+        )
+        return
+
+    try:
+        business = BusinessInfo.objects.get(stripe_account_id=account_id)
+    except BusinessInfo.DoesNotExist:
+        logger.error(
+            "Payout webhook: unknown Stripe account %s for payout %s",
+            account_id,
+            getattr(stripe_payout, "id", None),
+        )
+        return
+
+    arrival = None
+    arrival_ts = getattr(stripe_payout, "arrival_date", None)
+    if arrival_ts:
+        arrival = datetime.fromtimestamp(int(arrival_ts), tz=pytz.utc).date()
+
+    method = (getattr(stripe_payout, "method", None) or "standard").lower()
+    if method not in ("standard", "instant"):
+        method = "standard"
+
+    Payout.objects.update_or_create(
+        stripe_payout_id=stripe_payout.id,
+        defaults={
+            "business": business,
+            "amount": Decimal(getattr(stripe_payout, "amount", 0) or 0) / 100,
+            "currency": (getattr(stripe_payout, "currency", None) or "cad").upper(),
+            "status": getattr(stripe_payout, "status", None) or "pending",
+            "method": method,
+            "arrival_date": arrival,
+            "failure_code": getattr(stripe_payout, "failure_code", None) or "",
+            "failure_message": getattr(stripe_payout, "failure_message", None) or "",
+        },
+    )
+    logger.info(
+        "Webhook: upserted Payout stripe_payout_id=%s status=%s for business %s",
+        stripe_payout.id,
+        getattr(stripe_payout, "status", None),
+        business.businessId,
+    )

@@ -134,6 +134,12 @@ class BusinessStudentProfileSerializer(serializers.ModelSerializer):
             "createdAt",
             "last_booking_date_this_business",
             "total_spent_this_business",
+            "lifetime_value",
+            "booking_count",
+            "last_booking_at",
+            "last_activity_at",
+            "tags",
+            "status",
             "booking_history",
         ]
         read_only_fields = fields

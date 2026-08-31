@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 def _message_payload(msg):
     """Build JSON-serializable message payload for new_message event."""
-    from quickstart.serializers.public.public_conversation_serializers import (
+    from quickstart.serializers.conversation_serializers import (
         ConversationMessageSerializer,
     )
     data = ConversationMessageSerializer(msg).data

@@ -82,6 +82,22 @@ def _cancellation_policy_display(policy_key, refund_pct=None, custom_hours=None)
     return "See cancellation policy in your booking details."
 
 
+def _guest_manage_booking_url(booking: Booking) -> Optional[str]:
+    """Guest cancel/manage link: {FRONTEND}/?cancel_token={token}."""
+    token = getattr(booking, "cancellation_token", None)
+    if not token:
+        return None
+    base = (getattr(settings, "FRONTEND_BASE_URL", "") or "").rstrip("/")
+    return f"{base}/?cancel_token={token}" if base else f"/?cancel_token={token}"
+
+
+def _attach_guest_manage_url(context: dict, booking: Booking) -> Optional[str]:
+    url = _guest_manage_booking_url(booking)
+    if url:
+        context["guest_cancellation_url"] = url
+    return url
+
+
 def _get_booking_related_data(booking: Booking) -> dict:
     data = {
         "class_title": "N/A",
@@ -499,21 +515,10 @@ def send_booking_confirmation_email(user, booking: Booking, booking_source=None,
     logger.info(f"Recipient email address: {recipient.email}")
 
     related_data = _get_booking_related_data(booking)
-    class_identifier = related_data.get("class_slug") or related_data.get("class_id")
-    if not class_identifier:
+    if not related_data.get("class_slug") and not related_data.get("class_id"):
         logger.error(
             f"Could not access essential related data for booking {booking.id} when sending confirmation."
         )
-
-    class_details_url = (
-        f"{settings.FRONTEND_BASE_URL}/classes/{class_identifier}"
-        if class_identifier
-        else "#"
-    )
-    # Updated: Deep link to the specific booking in "upcoming" tab
-    manage_bookings_url = (
-        f"{settings.FRONTEND_BASE_URL}/my-classes?tab=upcoming&highlight={booking.id}"
-    )
 
     payment = (
         booking.payments.filter(status="succeeded").order_by("-created_at").first()
@@ -558,8 +563,6 @@ def send_booking_confirmation_email(user, booking: Booking, booking_source=None,
     context = {
         "user": recipient,
         "booking": booking,
-        "class_details_url": class_details_url,
-        "manage_bookings_url": manage_bookings_url,
         "recipient_email": recipient.email,
         "related_data": related_data,
         "payment": payment,
@@ -571,15 +574,11 @@ def send_booking_confirmation_email(user, booking: Booking, booking_source=None,
     if booking.schedule_instance:
         _attach_booking_email_branding(context, booking, booking_source)
 
-    if context["is_guest"] and booking.cancellation_token:
-        guest_cancellation_url = (
-            f"{settings.FRONTEND_BASE_URL}/guest/cancel/{booking.cancellation_token}"
-        )
-        context["guest_cancellation_url"] = guest_cancellation_url
+    if _attach_guest_manage_url(context, booking):
         logger.info(
             f"Adding guest cancellation URL to email context for booking {booking.id}"
         )
-    elif context["is_guest"] and not booking.cancellation_token:
+    elif context["is_guest"]:
         logger.warning(
             f"Guest booking {booking.id} is missing a cancellation token for the email."
         )
@@ -799,15 +798,13 @@ def send_refund_failed_guest_email(booking: Booking, reason: str):
     if not guest_email:
         logger.warning("Booking %s has no guest email for refund failed notification.", booking.id)
         return
-    base = (getattr(settings, "FRONTEND_BASE_URL", "") or "").rstrip("/")
     context = {
         "user": guest_user,
         "recipient_email": guest_email,
         "booking_id": booking.id,
         "reason": reason or "Unknown error",
-        "my_classes_url": f"{base}/my-classes" if base else "/my-classes",
-        "my_tickets_url": f"{base}/my-tickets" if base else "/my-tickets",
     }
+    _attach_guest_manage_url(context, booking)
     send_templated_email(
         recipient_list=[guest_email],
         template_name="emails/refund_failed_guest.html",
@@ -839,13 +836,10 @@ def send_booking_cancellation_user_email(
         f"Preparing user booking cancellation email for booking {booking.id} to user {user.email}"
     )
 
-    explore_url = f"{settings.FRONTEND_BASE_URL}/explore"
-
     context = {
         "user": user,
         "booking": booking,
         "refund_details": refund_details,
-        "explore_url": explore_url,
         "recipient_email": user.email,
         "related_data": related_data,
         "upcoming_sessions": [],
@@ -957,15 +951,12 @@ def send_booking_cancelled_by_other_email(
         f"Preparing 'cancelled by other' email for booking {booking.id} to user {user.email}"
     )
 
-    explore_url = f"{settings.FRONTEND_BASE_URL}/explore"
-
     context = {
         "user": user,
         "booking": booking,
         "cancelled_by": cancelled_by,
         "reason": reason or "No specific reason provided.",
         "contact_info": contact_info,
-        "explore_url": explore_url,
         "recipient_email": user.email,
         "related_data": related_data,
         "upcoming_sessions": [],
@@ -1033,25 +1024,13 @@ def send_booking_reminder_email(user, booking: Booking, booking_source=None):
         return
 
     related_data = _get_booking_related_data(booking)
-    class_identifier = related_data.get("class_slug") or related_data.get("class_id")
-    if not class_identifier:
+    if not related_data.get("class_slug") and not related_data.get("class_id"):
         logger.error(
             f"Could not access class identifier for booking {booking.id} when sending reminder email."
         )
 
     logger.info(
         f"Preparing booking reminder email for booking {booking.id} to user {user.email}"
-    )
-
-    class_details_url = (
-        f"{settings.FRONTEND_BASE_URL}/classes/{class_identifier}"
-        if class_identifier
-        else "#"
-    )
-
-    # Updated: Highlighting the specific booking
-    manage_bookings_url = (
-        f"{settings.FRONTEND_BASE_URL}/my-classes?tab=upcoming&highlight={booking.id}"
     )
 
     # Calculate end time
@@ -1073,15 +1052,15 @@ def send_booking_reminder_email(user, booking: Booking, booking_source=None):
     context = {
         "user": user,
         "booking": booking,
-        "class_details_url": class_details_url,
-        "manage_bookings_url": manage_bookings_url,  # Added this to context
         "recipient_email": user.email,
         "related_data": related_data,
         "calculated_end_time": calculated_end_time,
         "formatted_timezone": formatted_timezone,
+        "is_guest": not isinstance(user, CustomUser),
     }
     if booking.schedule_instance:
         _attach_booking_email_branding(context, booking, booking_source)
+    _attach_guest_manage_url(context, booking)
 
     # Pass course session context if available
     if booking.enrollment_type == "Full Course" and booking.course_session_number:

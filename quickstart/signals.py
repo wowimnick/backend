@@ -2,87 +2,39 @@
 import logging
 from django.dispatch import receiver
 from django.conf import settings
-from django.contrib.auth import get_user_model
 from django.contrib.auth.signals import user_logged_in
-from django.db.models import Sum, Value, IntegerField, Q
-from django.db.models.functions import Coalesce
 from django.db import transaction
 
 from allauth.account.signals import email_changed
 
-from django.db.models.signals import pre_save, post_save, post_delete, m2m_changed
+from django.db.models.signals import pre_save, post_save, post_delete
 from django.contrib.contenttypes.models import ContentType
-from django.utils import timezone
-from django.contrib.postgres.search import SearchVector
-
 from django.contrib.auth.models import Permission
+
 from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
 from quickstart.utils.sms_utils import business_sms_enabled
-# Do NOT import quickstart.tasks here: it pulls in the whole tasks package (cache_tasks → cache_prewarm → views → pandas/boto3) and can add 5+ minutes to Django startup. Use send_task by name in handlers instead.
+# Do NOT import quickstart.tasks here: it pulls in the whole tasks package and can slow Django startup. Use send_task by name in handlers instead.
 from .models import (
     Booking,
     BusinessRole,
     BusinessStaff,
     ClassCollection,
-    ClassCategory,
-    ClassImage,
-    ClassSubcategory,
     Contact,
     Reviews,
     Payment,
     Notification,
     BusinessInfo,
-    GeographicBoundary,
     CustomUser,
     BlogPost,
     ClassesMain,
-    ClassOption,
     ImportedGoogleReview,
-    Schedule,
-    ScheduleInstance,
     StudentNote,
-    VerificationRequest,
     Payout,
 )
 
-def _invalidate_public_class_search_preset_cache(
-    affected_locations=None,
-    affected_collection_slugs=None,
-    class_main=None,
-):
-    """Invalidate and repopulate public class search cache (class/schedule/instance/collection change).
-    Delegates to view so prewarm runs with new version before bump — users always get cached.
-    Pass affected_* to prewarm only what changed; or pass class_main (ClassesMain) to derive collections."""
-    try:
-        from quickstart.views.public.public_class_views import (
-            invalidate_public_class_search_preset_cache,
-        )
-        if class_main is not None:
-            try:
-                slugs = list(class_main.collections.values_list("slug", flat=True))
-                affected_collection_slugs = slugs if slugs else affected_collection_slugs
-            except Exception:
-                pass
-            if affected_collection_slugs is None and affected_locations is None:
-                invalidate_public_class_search_preset_cache()
-            else:
-                invalidate_public_class_search_preset_cache(
-                    affected_locations=affected_locations,
-                    affected_collection_slugs=affected_collection_slugs,
-                )
-        else:
-            invalidate_public_class_search_preset_cache(
-                affected_locations=affected_locations,
-                affected_collection_slugs=affected_collection_slugs,
-            )
-    except Exception as e:
-        logger.warning("Failed to invalidate public class search preset cache: %s", e)
-
-
-User = get_user_model()
 
 @receiver(email_changed)
 def handle_email_change_signal(sender, request, user, from_email_address, to_email_address, **kwargs):
@@ -598,103 +550,6 @@ def sync_denorm_google_reviews(sender, instance, **kwargs):
     _bust_homepage_sections_cache()
 
 
-@receiver(post_save, sender=Schedule)
-def notify_users_of_new_schedule(sender, instance: Schedule, created, **kwargs):
-    """
-    After a new Schedule is created, find users who have favorited the parent
-    class and send them a bulk email notification.
-
-    Includes debouncing to prevent spamming users when multiple schedules
-    are added in a batch (e.g. 20 weeks of Monday classes).
-    """
-    from .utils.email_utils import send_favorited_class_new_dates_email
-
-    if not created:
-        return
-
-    try:
-        is_future_schedule = False
-        today = timezone.now().date()
-        if instance.option.booking_type == "Full Course":
-            if instance.start_date and instance.start_date >= today:
-                is_future_schedule = True
-        else:  # Single Session
-            if instance.date and instance.date >= today:
-                is_future_schedule = True
-
-        if not is_future_schedule:
-            return
-
-        class_main = instance.option.classId
-        users_who_favorited = class_main.favorited_by.all()
-
-        if not users_who_favorited.exists():
-            return
-
-        sent_count = 0
-        skipped_count = 0
-
-        for user in users_who_favorited:
-            if user.email:
-                # --- DEBOUNCING LOGIC ---
-                # Cache key unique to User + Class combination
-                cache_key = (
-                    f"fav_new_dates_sent_{user.userId}_{class_main.classId}"
-                )
-
-                # Check if we already sent an email for this class to this user recently
-                if cache.get(cache_key):
-                    skipped_count += 1
-                    continue
-
-                # If not, send the email and set the cache
-                send_favorited_class_new_dates_email(
-                    user=user, class_main=class_main, new_schedule=instance
-                )
-                
-                # Set cache to prevent another email for 2 hours (7200 seconds)
-                # This assumes that batch uploads happen within this window.
-                cache.set(cache_key, True, timeout=7200) 
-                sent_count += 1
-
-        if sent_count > 0:
-            logger.info(
-                f"Queued {sent_count} 'favorite class new dates' emails for class {class_main.classId}. "
-                f"Skipped {skipped_count} due to debouncing."
-            )
-
-    except Exception as e:
-        logger.error(
-            f"Error in notify_users_of_new_schedule signal for schedule {instance.id}: {e}",
-            exc_info=True,
-        )
-    try:
-        class_main = instance.option.classId if getattr(instance, "option", None) else None
-        _invalidate_public_class_search_preset_cache(class_main=class_main)
-    except Exception:
-        _invalidate_public_class_search_preset_cache()
-
-
-@receiver(post_delete, sender=Schedule)
-def schedule_post_delete_invalidate_search_cache(sender, instance, **kwargs):
-    try:
-        class_main = instance.option.classId if getattr(instance, "option", None) else None
-        _invalidate_public_class_search_preset_cache(class_main=class_main)
-    except Exception:
-        _invalidate_public_class_search_preset_cache()
-
-
-@receiver(post_save, sender=ScheduleInstance)
-@receiver(post_delete, sender=ScheduleInstance)
-def schedule_instance_change_invalidate_search_cache(sender, instance, **kwargs):
-    try:
-        s = getattr(instance, "schedule", None)
-        class_main = s.option.classId if s and getattr(s, "option", None) else None
-        _invalidate_public_class_search_preset_cache(class_main=class_main)
-    except Exception:
-        _invalidate_public_class_search_preset_cache()
-
-
 @receiver(post_save, sender=ClassesMain)
 def trigger_classification(sender, instance, created, update_fields, **kwargs):
     """
@@ -872,63 +727,6 @@ def send_payout_notification(sender, instance: Payout, created, **kwargs):
         )
 
 
-@receiver(post_save, sender=VerificationRequest)
-def notify_admins_on_new_verification(sender, instance, created, **kwargs):
-    """
-    Sends a notification to admins when a new verification request is created.
-    """
-    from .utils.email_utils import send_admin_new_verification_request_email
-
-    # Only run this logic when a VerificationRequest is first created.
-    if not created:
-        return
-
-    logger.info(
-        f"Signal 'notify_admins_on_new_verification' triggered for VerificationRequest ID: {instance.id}"
-    )
-
-    try:
-        # This logic is copied directly from your verification_views.py
-        content_type = ContentType.objects.get_for_model(VerificationRequest)
-        admin_perm_codename = "process_verificationrequest"
-        admin_perm = Permission.objects.get(
-            content_type=content_type, codename=admin_perm_codename
-        )
-
-        admin_users = (
-            User.objects.filter(
-                Q(is_superuser=True)
-                | Q(groups__permissions=admin_perm)
-                | Q(user_permissions=admin_perm)
-            )
-            .filter(is_active=True, email__isnull=False)
-            .exclude(email="")
-            .distinct()
-        )
-        admin_emails = list(admin_users.values_list("email", flat=True))
-
-        if admin_emails:
-            # Call the email utility function
-            send_admin_new_verification_request_email(admin_emails, instance)
-            logger.info(
-                f"Admin notification queued via SIGNAL for new verification request {instance.id} to {len(admin_emails)} admins."
-            )
-        else:
-            logger.warning(
-                f"SIGNAL: No active admin users found with '{admin_perm_codename}' permission to notify about verification {instance.id}"
-            )
-
-    except Permission.DoesNotExist:
-        logger.error(
-            f"SIGNAL CRITICAL: Permission '{admin_perm_codename}' not found. Cannot notify admins about new verification request."
-        )
-    except Exception as e:
-        logger.error(
-            f"SIGNAL ERROR: Failed to send admin notification email for new verification {instance.id}: {e}",
-            exc_info=True,
-        )
-
-
 @receiver(post_save, sender=BusinessInfo)
 def create_default_business_role(sender, instance, created, **kwargs):
     """
@@ -986,80 +784,8 @@ def create_default_business_role(sender, instance, created, **kwargs):
 
 
 # ---------------------------------------------------------------------------
-# Search vector and contact/booking signals (moved from models.py)
+# Contact/booking signals (moved from models.py)
 # ---------------------------------------------------------------------------
-
-
-def get_classesmain_search_vector(instance):
-    """Build the search vector for a ClassesMain instance (for full-text search)."""
-    from django.db.models import Value
-
-    vector_components = [
-        SearchVector(Value(instance.title), weight="A", config="english"),
-        SearchVector(Value(instance.description), weight="B", config="english"),
-    ]
-    if instance.businessId:
-        vector_components.append(
-            SearchVector(
-                Value(instance.businessId.businessName), weight="B", config="english"
-            )
-        )
-    if not vector_components:
-        return SearchVector(Value(""))
-    final_vector = vector_components[0]
-    for component in vector_components[1:]:
-        final_vector += component
-    return final_vector
-
-
-@receiver(post_save, sender=ClassesMain)
-def classesmain_post_save_receiver(sender, instance, created, update_fields, **kwargs):
-    if kwargs.get("raw", False):
-        return
-    should_update = created
-    if not created and update_fields:
-        text_fields = {"title", "description"}
-        if any(f in update_fields for f in text_fields):
-            should_update = True
-    elif not created and update_fields is None:
-        should_update = True
-    if should_update:
-        new_vector = get_classesmain_search_vector(instance)
-        if instance.search_vector != new_vector:
-            ClassesMain.objects.filter(pk=instance.pk).update(search_vector=new_vector)
-    _invalidate_public_class_search_preset_cache(class_main=instance)
-
-
-@receiver(post_delete, sender=ClassesMain)
-def classesmain_post_delete_invalidate_search_cache(sender, instance, **kwargs):
-    _invalidate_public_class_search_preset_cache(class_main=instance)
-
-
-@receiver(post_save, sender="quickstart.ClassOption")
-@receiver(post_delete, sender="quickstart.ClassOption")
-def classoption_change_receiver(sender, instance, **kwargs):
-    if hasattr(instance, "classId") and instance.classId:
-        class_instance = instance.classId
-        new_vector = get_classesmain_search_vector(class_instance)
-        if class_instance.search_vector != new_vector:
-            ClassesMain.objects.filter(pk=class_instance.pk).update(
-                search_vector=new_vector
-            )
-        _invalidate_public_class_search_preset_cache(class_main=class_instance)
-    else:
-        _invalidate_public_class_search_preset_cache()
-
-
-@receiver(post_save, sender="quickstart.ClassCategory")
-def classcategory_change_receiver(sender, instance, update_fields, **kwargs):
-    # ClassesMain no longer has category FK; no classes to reindex.
-    pass
-
-
-@receiver(post_save, sender="quickstart.ClassSubcategory")
-def classsubcategory_change_receiver(sender, instance, update_fields, **kwargs):
-    # ClassesMain no longer has subcategory FK; no classes to reindex.
-    pass
 
 
 @receiver(post_save, sender=CustomUser)
@@ -1203,9 +929,7 @@ def nextjs_revalidate_on_class_save(sender, instance, **kwargs):
     if not slug:
         return
     try:
-        from quickstart.views.public.public_class_views import (
-            invalidate_class_detail_cache,
-        )
+        from quickstart.utils.public_cache import invalidate_class_detail_cache
 
         invalidate_class_detail_cache(
             slug=slug, class_id=getattr(instance, "classId", None)
@@ -1259,116 +983,6 @@ def nextjs_revalidate_on_collection(sender, instance, **kwargs):
         ["collections", "homepage-content", "classes-search"]
     )
     _bust_homepage_sections_cache()
-
-
-# ----- Typesense class search indexing (debounced via Celery on_commit) -----
-
-
-@receiver(post_save, sender=ClassesMain)
-def typesense_reindex_class_save(sender, instance, **kwargs):
-    if kwargs.get("raw"):
-        return
-    from quickstart.tasks.search_index_tasks import enqueue_reindex_class
-
-    enqueue_reindex_class(instance.pk)
-
-
-@receiver(post_delete, sender=ClassesMain)
-def typesense_reindex_class_delete(sender, instance, **kwargs):
-    from quickstart.tasks.search_index_tasks import enqueue_reindex_class
-
-    enqueue_reindex_class(instance.pk)
-
-
-@receiver(post_save, sender=BusinessInfo)
-def typesense_reindex_business_classes(sender, instance, **kwargs):
-    if kwargs.get("raw"):
-        return
-    from quickstart.tasks.search_index_tasks import enqueue_reindex_class
-
-    try:
-        for cid in instance.classes.values_list("classId", flat=True)[:800]:
-            enqueue_reindex_class(cid)
-    except Exception as e:
-        logger.debug("typesense_reindex_business_classes: %s", e)
-
-
-@receiver(post_save, sender=ClassOption)
-@receiver(post_delete, sender=ClassOption)
-def typesense_reindex_from_option(sender, instance, **kwargs):
-    from quickstart.tasks.search_index_tasks import enqueue_reindex_classes_for_option
-
-    enqueue_reindex_classes_for_option(instance.pk)
-
-
-@receiver(post_save, sender=Schedule)
-@receiver(post_delete, sender=Schedule)
-def typesense_reindex_from_schedule(sender, instance, **kwargs):
-    from quickstart.tasks.search_index_tasks import enqueue_reindex_classes_for_schedule
-
-    enqueue_reindex_classes_for_schedule(instance.pk)
-
-
-@receiver(post_save, sender=ScheduleInstance)
-@receiver(post_delete, sender=ScheduleInstance)
-def typesense_reindex_from_instance(sender, instance, **kwargs):
-    from quickstart.tasks.search_index_tasks import enqueue_reindex_classes_for_instance
-
-    enqueue_reindex_classes_for_instance(instance.pk)
-
-
-@receiver(post_save, sender=ClassImage)
-@receiver(post_delete, sender=ClassImage)
-def typesense_reindex_from_image(sender, instance, **kwargs):
-    from quickstart.tasks.search_index_tasks import enqueue_reindex_class
-
-    enqueue_reindex_class(instance.classId_id)
-
-
-@receiver(m2m_changed, sender=ClassesMain.collections.through)
-def typesense_reindex_collections_m2m(sender, instance, action, pk_set, **kwargs):
-    if kwargs.get("raw"):
-        return
-    if action not in ("post_add", "post_remove", "post_clear"):
-        return
-    from quickstart.tasks.search_index_tasks import enqueue_reindex_class
-
-    try:
-        if isinstance(instance, ClassesMain):
-            enqueue_reindex_class(instance.pk)
-            return
-        if isinstance(instance, ClassCollection):
-            if pk_set:
-                for cid in pk_set:
-                    enqueue_reindex_class(int(cid))
-            else:
-                for cid in instance.classes.values_list("classId", flat=True)[:800]:
-                    enqueue_reindex_class(cid)
-    except Exception as e:
-        logger.debug("typesense_reindex_collections_m2m: %s", e)
-
-
-@receiver(post_save, sender=ClassCollection)
-def typesense_reindex_collection_members(sender, instance, **kwargs):
-    if kwargs.get("raw"):
-        return
-    from quickstart.tasks.search_index_tasks import enqueue_reindex_class
-
-    try:
-        for cid in instance.classes.values_list("classId", flat=True)[:800]:
-            enqueue_reindex_class(cid)
-    except Exception as e:
-        logger.debug("typesense_reindex_collection_members: %s", e)
-
-
-@receiver(post_save, sender=GeographicBoundary)
-def typesense_rebuild_boundary_buffer(sender, instance, **kwargs):
-    if kwargs.get("raw"):
-        return
-    from quickstart.tasks.search_index_tasks import rebuild_boundary_buffer_for_id_task
-
-    bid = str(instance.pk)
-    transaction.on_commit(lambda b=bid: rebuild_boundary_buffer_for_id_task.delay(b))
 
 
 @receiver(post_save, sender="quickstart.BannedIP")

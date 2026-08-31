@@ -10,6 +10,7 @@ import pytz
 import stripe
 from django.conf import settings
 from django.db import DatabaseError
+from django.utils import timezone
 
 from quickstart.models import (
     BusinessAddonSubscription,
@@ -20,6 +21,7 @@ from quickstart.models import (
     ADDON_TYPE_EMAIL_MARKETING,
     ADDON_TYPE_MARKETPLACE_EMAIL_BRANDING,
 )
+from quickstart.utils.commission import ensure_commission_waiver
 
 logger = logging.getLogger(__name__)
 
@@ -197,16 +199,28 @@ def sync_widget_subscription_from_stripe(stripe_subscription_id, subscription_ob
         business.stripe_customer_id = stripe_customer_id
         business.save(update_fields=["stripe_customer_id"])
 
+    now = timezone.now()
+    period_ok = current_period_end is None or current_period_end > now
+    grants_access = status in ("active", "trialing") and period_ok
+    if not grants_access and status == "past_due" and period_ok:
+        grace = getattr(sub, "payment_grace_until", None)
+        if grace and grace > now:
+            grants_access = True
+    # Paid (or past_due within grace) activates the business. Do not write verificationStatus.
+    # Grandfathered marketplace businesses keep isActive even without a widget plan.
+    if grants_access and not business.isActive:
+        business.isActive = True
+        business.save(update_fields=["isActive"])
+    elif (
+        not grants_access
+        and business.isActive
+        and not business.legacy_grandfathered
+    ):
+        business.isActive = False
+        business.save(update_fields=["isActive"])
+
     if status in ("active", "trialing"):
-        biz_updates = []
-        if not business.isActive:
-            business.isActive = True
-            biz_updates.append("isActive")
-        if business.verificationStatus != "verified":
-            business.verificationStatus = "verified"
-            biz_updates.append("verificationStatus")
-        if biz_updates:
-            business.save(update_fields=biz_updates)
+        ensure_commission_waiver(business)
 
     logger.info(
         "subscription_sync: Widget sub_id=%s business_id=%s plan_id=%s status=%s",
@@ -288,10 +302,17 @@ def sync_addon_subscription_from_stripe(stripe_subscription_id, subscription_obj
 
 def mark_widget_subscription_canceled(stripe_subscription_id):
     """Mark WidgetSubscription as canceled (e.g. on customer.subscription.deleted)."""
-    updated = WidgetSubscription.objects.filter(stripe_subscription_id=stripe_subscription_id).update(status="canceled")
-    if updated:
-        logger.info("subscription_sync: Marked widget sub_id=%s as canceled", stripe_subscription_id)
-    return updated
+    sub = WidgetSubscription.objects.filter(stripe_subscription_id=stripe_subscription_id).select_related("business").first()
+    if not sub:
+        return 0
+    sub.status = "canceled"
+    sub.save(update_fields=["status"])
+    business = sub.business
+    if business and business.isActive and not business.legacy_grandfathered:
+        business.isActive = False
+        business.save(update_fields=["isActive"])
+    logger.info("subscription_sync: Marked widget sub_id=%s as canceled", stripe_subscription_id)
+    return 1
 
 
 def mark_addon_subscription_canceled(stripe_subscription_id, addon_type=None):

@@ -9,6 +9,7 @@ from django.db.models.functions import Coalesce
 from decimal import Decimal
 
 from quickstart.models import AuditLog, Payment
+from quickstart.utils.stripe_refund import create_stripe_refund
 from quickstart.utils.permissions import (
     IsAuthenticated,
     BasePermission,
@@ -311,7 +312,7 @@ class AdminPaymentViewSet(viewsets.ModelViewSet):
             logger.info(
                 f"Attempting Stripe refund for Payment Intent: {payment.stripe_payment_intent_id}, Amount: {refund_amount_decimal}, Requested by: {request.user.email} (SuperAdmin: {is_super_admin})"
             )
-            refund = stripe.Refund.create(
+            refund = create_stripe_refund(
                 payment_intent=payment.stripe_payment_intent_id,
                 amount=int(refund_amount_decimal * 100),  # Amount in cents
                 reason=reason,

@@ -13,7 +13,7 @@ import pytest
 from django.utils import timezone
 
 from quickstart.models import Payment, Payout
-from quickstart.tasks.payout_tasks import process_daily_payouts
+from quickstart.tasks.payout_tasks import CUTOVER_DATE, process_daily_payouts
 from quickstart.tests.factories import (
     BusinessFactory,
     BookingFactory,
@@ -48,6 +48,7 @@ def test_process_daily_payouts_transfers_allocated_net_without_extra_stripe_dedu
         payout_status="pending",
         amount_paid=Decimal("100.00"),
         allocated_net_payout=expected_net,
+        booking_date=CUTOVER_DATE - timedelta(days=1),
     )
     Payment.objects.create(
         booking=booking,

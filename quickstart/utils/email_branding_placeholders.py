@@ -86,7 +86,7 @@ def build_sample_placeholder_map(email_type_key: str) -> Dict[str, str]:
         "option_title": "Evening session",
         "equipment": "Bring a mat and water bottle.",
         "manage_booking_url": f"{settings.FRONTEND_BASE_URL}/my-classes?tab=upcoming",
-        "cancel_booking_url": f"{settings.FRONTEND_BASE_URL}/guest/cancel/sample-token",
+        "cancel_booking_url": f"{settings.FRONTEND_BASE_URL}/?cancel_token=sample-token",
         "class_details_url": f"{settings.FRONTEND_BASE_URL}/classes/sample-class",
         "explore_url": f"{settings.FRONTEND_BASE_URL}/explore",
         "footer_text": "Questions? Reply to this email.",
