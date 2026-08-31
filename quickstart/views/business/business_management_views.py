@@ -16,7 +16,7 @@ from django.db import transaction
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from django.utils import timezone
-from django.db.models.functions import Coalesce, TruncDate, TruncWeek, ExtractWeekDay, ExtractHour
+from django.db.models.functions import Coalesce
 from decimal import Decimal
 from django.db.models import (
     Q,
@@ -29,12 +29,10 @@ from django.db.models import (
     F,
     Value,
     Prefetch,
-    Min,
 )
 from rest_framework.views import APIView
 from datetime import timedelta
 from datetime import datetime
-from datetime import date as date_cls
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.exceptions import (
     PermissionDenied,
@@ -323,224 +321,6 @@ def business_onboarding_state(request):
     )
 
 
-def _pct_change(curr, prev):
-    curr = float(curr or 0)
-    prev = float(prev or 0)
-    if prev > 0:
-        return round(((curr - prev) / prev) * 100, 1)
-    if curr > 0:
-        return 100.0
-    return 0.0
-
-
-def _week_start(d):
-    return d - timedelta(days=d.weekday())
-
-
-def _build_overview_series(business, today):
-    """Daily/weekly series for the reports home graphs."""
-    empty = {
-        "bookings_daily": [],
-        "new_clients_weekly": [],
-        "no_show_weekly": [],
-        "occupancy_weekly": [],
-        "bookings_by_weekday_hour": [],
-    }
-    try:
-        booking_qs = Booking.objects.filter(
-            schedule_instance__schedule__option__classId__businessId=business,
-        )
-        paid = booking_qs.filter(payment_status="paid")
-
-        # bookings_daily — last 30 days
-        start_30 = today - timedelta(days=29)
-        daily_raw = (
-            paid.filter(booking_date__date__gte=start_30)
-            .annotate(day=TruncDate("booking_date"))
-            .values("day")
-            .annotate(value=Count("id"))
-        )
-        daily_map = {row["day"]: row["value"] for row in daily_raw if row["day"]}
-        bookings_daily = [
-            {
-                "date": (start_30 + timedelta(days=i)).isoformat(),
-                "value": daily_map.get(start_30 + timedelta(days=i), 0),
-            }
-            for i in range(30)
-        ]
-
-        # new_clients_weekly — first paid booking per contact, last 12 weeks
-        week0 = _week_start(today) - timedelta(weeks=11)
-        firsts = (
-            paid.exclude(contact_id=None)
-            .values("contact_id")
-            .annotate(first=Min("booking_date"))
-        )
-        weekly_new = {}
-        for row in firsts:
-            first = row["first"]
-            if not first:
-                continue
-            d = first.date() if hasattr(first, "date") else first
-            if d < week0:
-                continue
-            key = _week_start(d)
-            weekly_new[key] = weekly_new.get(key, 0) + 1
-        new_clients_weekly = [
-            {
-                "date": (week0 + timedelta(weeks=i)).isoformat(),
-                "value": weekly_new.get(week0 + timedelta(weeks=i), 0),
-            }
-            for i in range(12)
-        ]
-
-        # no_show_weekly
-        marked = booking_qs.filter(
-            attendance__in=["attended", "no_show"],
-            attendance_marked_at__date__gte=week0,
-        )
-        noshow_map = {}
-        marked_map = {}
-        for row in (
-            marked.annotate(week=TruncWeek("attendance_marked_at"))
-            .values("week")
-            .annotate(total=Count("id"), noshows=Count("id", filter=Q(attendance="no_show")))
-        ):
-            if not row["week"]:
-                continue
-            w = row["week"].date() if hasattr(row["week"], "date") else row["week"]
-            w = _week_start(w)
-            marked_map[w] = row["total"]
-            noshow_map[w] = row["noshows"]
-        no_show_weekly = []
-        for i in range(12):
-            w = week0 + timedelta(weeks=i)
-            tot = marked_map.get(w, 0)
-            no_show_weekly.append(
-                {
-                    "date": w.isoformat(),
-                    "value": round(100.0 * noshow_map.get(w, 0) / tot, 1) if tot else 0.0,
-                }
-            )
-
-        # occupancy_weekly — booked spots / capacity for sessions in each week
-        occ_map = {}
-        instances = ScheduleInstance.objects.filter(
-            schedule__option__classId__businessId=business,
-            date__gte=week0,
-            date__lte=today,
-            status__in=["scheduled", "completed"],
-        ).only("date", "max_participants", "current_bookings")
-        for inst in instances:
-            w = _week_start(inst.date)
-            bucket = occ_map.setdefault(w, {"taken": 0, "cap": 0})
-            bucket["taken"] += inst.current_bookings or 0
-            bucket["cap"] += inst.max_participants or 0
-        occupancy_weekly = []
-        for i in range(12):
-            w = week0 + timedelta(weeks=i)
-            bucket = occ_map.get(w) or {"taken": 0, "cap": 0}
-            occupancy_weekly.append(
-                {
-                    "date": w.isoformat(),
-                    "value": round(100.0 * bucket["taken"] / bucket["cap"], 1)
-                    if bucket["cap"]
-                    else 0.0,
-                }
-            )
-
-        # bookings_by_weekday_hour — last 90 days of confirmed bookings
-        heat_start = today - timedelta(days=90)
-        heat_rows = (
-            booking_qs.filter(
-                status="confirmed",
-                schedule_instance__date__gte=heat_start,
-            )
-            .annotate(
-                wd=ExtractWeekDay("schedule_instance__date"),
-                hr=ExtractHour("schedule_instance__time"),
-            )
-            .values("wd", "hr")
-            .annotate(count=Count("id"))
-        )
-        heat = []
-        for row in heat_rows:
-            wd = row["wd"]
-            hr = row["hr"]
-            if wd is None or hr is None:
-                continue
-            # Django ExtractWeekDay: Sunday=1 … Saturday=7 → Monday=0
-            monday0 = (int(wd) + 5) % 7
-            heat.append({"weekday": monday0, "hour": int(hr), "count": row["count"]})
-
-        return {
-            "bookings_daily": bookings_daily,
-            "new_clients_weekly": new_clients_weekly,
-            "no_show_weekly": no_show_weekly,
-            "occupancy_weekly": occupancy_weekly,
-            "bookings_by_weekday_hour": heat,
-        }
-    except Exception:
-        logger.exception("Error building overview series")
-        return empty
-
-
-def _build_recent_transactions(business):
-    rows = []
-    try:
-        payments = (
-            Payment.objects.filter(
-                booking__schedule_instance__schedule__option__classId__businessId=business,
-                status__in=["succeeded", "refunded", "partially_refunded"],
-            )
-            .select_related(
-                "booking",
-                "booking__contact",
-                "booking__user",
-                "booking__schedule_instance__schedule__option__classId",
-            )
-            .order_by("-created_at")[:12]
-        )
-        for p in payments:
-            booking = p.booking
-            client = "Client"
-            if booking.user and (booking.user.first_name or booking.user.last_name):
-                client = f"{booking.user.first_name or ''} {booking.user.last_name or ''}".strip()
-            elif booking.contact:
-                client = (
-                    f"{booking.contact.first_name or ''} {booking.contact.last_name or ''}".strip()
-                    or booking.contact.email
-                    or "Client"
-                )
-            service = "Service"
-            try:
-                service = booking.schedule_instance.schedule.option.classId.title
-            except Exception:
-                pass
-            refunded = float(p.refunded_amount or 0)
-            kind = "refund" if refunded > 0 or p.status in ("refunded", "partially_refunded") else "payment"
-            rows.append(
-                {
-                    "id": p.id,
-                    "booking_id": booking.id,
-                    "user_facing_reference": booking.user_facing_reference or "",
-                    "client_name": client,
-                    "service_name": service,
-                    "amount": float(p.amount or 0),
-                    "net_payout_amount": float(p.net_payout_amount or 0),
-                    "currency": getattr(p, "currency", None) or "usd",
-                    "card_brand": p.card_brand,
-                    "card_last4": p.card_last4,
-                    "status": p.status,
-                    "kind": kind,
-                    "created_at": p.created_at,
-                }
-            )
-    except Exception:
-        logger.exception("Error building recent transactions")
-    return rows
-
-
 # --- Views for Logged-in Business Users ---
 
 
@@ -773,7 +553,7 @@ class MyBusinessOverviewView(APIView):
                 today_agg["total_participants"] or 0
             )
 
-            for inst in upcoming_instances_qs[:40]:
+            for inst in upcoming_instances_qs[:5]:
                 naive_schedule_datetime = datetime.combine(inst.date, inst.time)
                 display_datetime_str = f"{naive_schedule_datetime.strftime('%b %d')}, {naive_schedule_datetime.strftime('%I:%M %p').lstrip('0') if naive_schedule_datetime.strftime('%I').startswith('0') else naive_schedule_datetime.strftime('%I:%M %p')}"
                 upcoming_classes_data.append(
@@ -781,8 +561,6 @@ class MyBusinessOverviewView(APIView):
                         "schedule_instance_id": inst.id,
                         "name": inst.schedule.option.classId.title,
                         "time": display_datetime_str,
-                        "date": inst.date.isoformat(),
-                        "class_id": inst.schedule.option.classId_id,
                         "current_occupancy": inst.current_participant_spots,
                         "max_occupancy": inst.max_participants,
                         "booking_type": inst.schedule.option.booking_type,
@@ -803,10 +581,7 @@ class MyBusinessOverviewView(APIView):
                     schedule_instance__schedule__option__classId__businessId=business,
                     payment_status="paid",
                 )
-                .values(
-                    "schedule_instance__schedule__option__classId",
-                    "schedule_instance__schedule__option__classId__title",
-                )
+                .values("schedule_instance__schedule__option__classId__title")
                 .annotate(enrollment_spots=Sum("participants"))
                 .order_by("-enrollment_spots")[:5]
             )
@@ -816,7 +591,6 @@ class MyBusinessOverviewView(APIView):
                         "schedule_instance__schedule__option__classId__title"
                     ],
                     "enrollment": entry["enrollment_spots"] or 0,
-                    "class_id": entry["schedule_instance__schedule__option__classId"],
                 }
                 for entry in popular_classes_raw
                 if entry["schedule_instance__schedule__option__classId__title"]
@@ -841,7 +615,7 @@ class MyBusinessOverviewView(APIView):
                 .order_by("-booking_date")[:3]
             )
             for booking in recent_bookings:
-                booker_name = "A client"
+                booker_name = "A guest"
                 if booking.user and booking.user.first_name:
                     booker_name = booking.user.first_name
                 elif booking.contact and booking.contact.first_name:
@@ -892,29 +666,23 @@ class MyBusinessOverviewView(APIView):
         no_show_rate = {"value": 0.0, "change": 0.0}
         upcoming_capacity_fill = {"value": 0.0, "change": 0.0}
         try:
-            def _repeat_rate(qs):
-                booker_counts = qs.values("contact_id").annotate(c=Count("id"))
-                unique = booker_counts.count()
-                repeats = booker_counts.filter(c__gt=1).count()
-                return round(100.0 * repeats / unique, 1) if unique else 0.0
+            from django.db.models import Count as DjCount
 
-            paid_base = Booking.objects.filter(
-                schedule_instance__schedule__option__classId__businessId=business,
-                payment_status="paid",
-            )
-            curr_window_start = now_utc - timedelta(days=90)
-            prev_window_start = now_utc - timedelta(days=180)
-            curr_rate = _repeat_rate(paid_base.filter(booking_date__gte=curr_window_start))
-            prev_rate = _repeat_rate(
-                paid_base.filter(
-                    booking_date__gte=prev_window_start,
-                    booking_date__lt=curr_window_start,
+            booker_counts = (
+                Booking.objects.filter(
+                    schedule_instance__schedule__option__classId__businessId=business,
+                    payment_status="paid",
                 )
+                .values("contact_id")
+                .annotate(c=DjCount("id"))
             )
-            repeat_client_rate = {
-                "value": curr_rate,
-                "change": _pct_change(curr_rate, prev_rate),
-            }
+            unique = booker_counts.count()
+            repeats = booker_counts.filter(c__gt=1).count()
+            if unique:
+                repeat_client_rate = {
+                    "value": round(100.0 * repeats / unique, 1),
+                    "change": 0.0,
+                }
         except Exception:
             pass
         try:
@@ -925,18 +693,11 @@ class MyBusinessOverviewView(APIView):
             )
             marked = attendance_qs.count()
             noshows = attendance_qs.filter(attendance="no_show").count()
-            curr_rate = round(100.0 * noshows / marked, 1) if marked else 0.0
-            prev_marked = attendance_qs.filter(
-                attendance_marked_at__lt=now_utc - timedelta(days=30),
-                attendance_marked_at__gte=now_utc - timedelta(days=60),
-            )
-            prev_n = prev_marked.count()
-            prev_noshow = prev_marked.filter(attendance="no_show").count()
-            prev_rate = round(100.0 * prev_noshow / prev_n, 1) if prev_n else 0.0
-            no_show_rate = {
-                "value": curr_rate,
-                "change": _pct_change(curr_rate, prev_rate),
-            }
+            if marked:
+                no_show_rate = {
+                    "value": round(100.0 * noshows / marked, 1),
+                    "change": 0.0,
+                }
         except Exception:
             pass
         try:
@@ -951,36 +712,19 @@ class MyBusinessOverviewView(APIView):
             for inst in upcoming:
                 cap += inst.max_participants or 0
                 taken += inst.current_bookings or 0
-            curr_fill = round(100.0 * taken / cap, 1) if cap else 0.0
-            prev_inst = ScheduleInstance.objects.filter(
-                schedule__option__classId__businessId=business,
-                date__gte=today_utc_date - timedelta(days=7),
-                date__lt=today_utc_date,
-                status__in=["scheduled", "completed"],
-            )
-            p_cap = 0
-            p_taken = 0
-            for inst in prev_inst:
-                p_cap += inst.max_participants or 0
-                p_taken += inst.current_bookings or 0
-            prev_fill = round(100.0 * p_taken / p_cap, 1) if p_cap else 0.0
-            upcoming_capacity_fill = {
-                "value": curr_fill,
-                "change": _pct_change(curr_fill, prev_fill),
-            }
+            if cap:
+                upcoming_capacity_fill = {
+                    "value": round(100.0 * taken / cap, 1),
+                    "change": 0.0,
+                }
         except Exception:
             pass
-
-        active_now = business.classes.filter(status="active").count()
-        active_last = business.classes.filter(
-            status="active", created_at__lt=current_month_start_utc
-        ).count()
 
         metrics_payload = {
             "total_students": total_students,
             "active_classes": {
-                "value": active_now,
-                "change": _pct_change(active_now, active_last),
+                "value": business.classes.filter(status="active").count(),
+                "change": 0,
             },
             "repeat_client_rate": repeat_client_rate,
             "no_show_rate": no_show_rate,
@@ -1087,11 +831,7 @@ class MyBusinessOverviewView(APIView):
             "popular_classes": popular_classes_data,
             "recent_activity": recent_activity_data,
             "actionable_prompts": actionable_prompts_data,
-            "setup_progress": setup_progress_data,
-            "series": _build_overview_series(business, today_utc_date),
-            "recent_transactions": _build_recent_transactions(business)
-            if can_view_revenue
-            else [],
+            "setup_progress": setup_progress_data,  # Added setup progress
         }
         serializer = BusinessDashboardOverviewSerializer(payload)
         return Response(serializer.data)
