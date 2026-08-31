@@ -28,6 +28,8 @@ from .business.business_class_serializers import (
     BulkScheduleCreateSerializer,
     BusinessContactInfoSerializer,
     ScheduleGroupActionSerializer,
+    PublicCategorySerializer,
+    PublicSubcategorySerializer,
 )
 
 from .public.public_blog_serializers import (
@@ -114,6 +116,8 @@ __all__ = [
     "ScheduleInstanceSerializer",
     "ManagedClassOptionSerializer",
     "ManagedClassSerializer",
+    "PublicCategorySerializer",
+    "PublicSubcategorySerializer",
     "PublicBlogAuthorSerializer",
     "PublicBlogCategorySerializer",
     "PublicBlogPostListSerializer",
