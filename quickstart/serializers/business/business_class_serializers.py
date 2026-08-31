@@ -158,6 +158,13 @@ class ScheduleInstanceSerializer(serializers.ModelSerializer):
         source="schedule.name", read_only=True, allow_null=True
     )
 
+    assigned_staff_id = serializers.UUIDField(
+        source="assigned_staff_id", read_only=True, allow_null=True
+    )
+    recurrence_rule_id = serializers.UUIDField(
+        source="recurrence_rule_id", read_only=True, allow_null=True
+    )
+
     class Meta:
         model = ScheduleInstance
         fields = [
@@ -179,6 +186,8 @@ class ScheduleInstanceSerializer(serializers.ModelSerializer):
             "class_id",
             "booking_type",
             "schedule_name",
+            "assigned_staff_id",
+            "recurrence_rule_id",
         ]
         read_only_fields = [
             "id",
@@ -247,6 +256,12 @@ class ScheduleSerializer(serializers.ModelSerializer):
         if not option:
             raise serializers.ValidationError(
                 "Option context is required for schedule validation."
+            )
+
+        booking_type = option.booking_type
+        if booking_type == "Full Course" and not instance:
+            raise serializers.ValidationError(
+                "Multi-session courses can no longer be created. Use a recurring series on a group service."
             )
 
         # 2. Resolve Fields (Incoming Data -> Fallback to Instance -> None)
@@ -484,9 +499,11 @@ class ManagedClassOptionSerializer(serializers.ModelSerializer):
         fields = [
             "optionId",
             "classId",
-            "title",           # NEW
-            "description",     # NEW
-            "schedule_mode",   # NEW
+            "title",
+            "description",
+            "duration_minutes",
+            "price",
+            "capacity",
             "booking_type",
             "level",
             "equipment",
@@ -494,10 +511,6 @@ class ManagedClassOptionSerializer(serializers.ModelSerializer):
             "cancellationPolicy",
             "cancellationCustomHours",
             "cancellationRefundPercentage",
-            "allowMidCourseDrops",
-            "midCourseCancellationPolicy",
-            "midCourseCancellationCustomHours",
-            "midCourseCancellationRefundPercentage",
             "price_type",
             "createdAt",
             "updatedAt",
@@ -509,10 +522,12 @@ class ManagedClassOptionSerializer(serializers.ModelSerializer):
             "updatedAt",
         ]
         extra_kwargs = {
-            "title": {"required": False}, 
-            "schedule_mode": {"default": "primary"},
+            "title": {"required": False},
             "equipment": {"required": False},
             "tags": {"required": False},
+            "duration_minutes": {"required": False, "allow_null": True},
+            "price": {"required": False, "allow_null": True},
+            "capacity": {"required": False, "allow_null": True},
             "level": {"default": ClassOption._meta.get_field("level").get_default()},
             "cancellationPolicy": {
                 "default": ClassOption._meta.get_field(
@@ -530,25 +545,15 @@ class ManagedClassOptionSerializer(serializers.ModelSerializer):
             "price_type": {
                 "default": ClassOption._meta.get_field("price_type").get_default()
             },
-            "allowMidCourseDrops": {
-                "default": ClassOption._meta.get_field(
-                    "allowMidCourseDrops"
-                ).get_default()
-            },
-            "midCourseCancellationPolicy": {"required": False},
-            "midCourseCancellationCustomHours": {"required": False},
-            "midCourseCancellationRefundPercentage": {
-                "required": False,
-                "default": ClassOption._meta.get_field(
-                    "cancellationRefundPercentage"
-                ).get_default(),
-            },
         }
 
     def validate(self, data):
-        """
-        Validate that custom hours are provided when the policy is 'custom'.
-        """
+        if data.get("booking_type") == "Full Course":
+            raise serializers.ValidationError(
+                {
+                    "booking_type": "Multi-session courses can no longer be created."
+                }
+            )
         policy = data.get(
             "cancellationPolicy", getattr(self.instance, "cancellationPolicy", None)
         )
@@ -628,8 +633,6 @@ class ManagedClassSerializer(serializers.ModelSerializer):
     business_name = serializers.CharField(
         source="businessId.businessName", read_only=True
     )
-    average_rating = serializers.FloatField(read_only=True)
-    review_count = serializers.IntegerField(read_only=True)
     last_schedule_date = serializers.DateField(read_only=True, allow_null=True)
     location_ref = serializers.PrimaryKeyRelatedField(
         queryset=BusinessLocation.objects.all(),
@@ -646,7 +649,19 @@ class ManagedClassSerializer(serializers.ModelSerializer):
             "businessId",
             "title",
             "description",
-            "features",
+            "service_type",
+            "duration_minutes",
+            "price",
+            "capacity",
+            "buffer_before_minutes",
+            "buffer_after_minutes",
+            "slot_interval_minutes",
+            "max_concurrent",
+            "min_notice_hours",
+            "max_advance_days",
+            "cancellationPolicy",
+            "cancellationCustomHours",
+            "cancellationRefundPercentage",
             "status",
             "unit_number",
             "location",
@@ -665,8 +680,6 @@ class ManagedClassSerializer(serializers.ModelSerializer):
             "options",
             "images",
             "business_name",
-            "average_rating",
-            "review_count",
             "last_schedule_date",
         ]
         read_only_fields = [
@@ -678,8 +691,6 @@ class ManagedClassSerializer(serializers.ModelSerializer):
             "options",
             "images",
             "business_name",
-            "average_rating",
-            "review_count",
             "last_schedule_date",
             "location_name",
         ]
@@ -758,7 +769,19 @@ class ClassCreateSerializer(serializers.ModelSerializer):
         fields = [
             "title",
             "description",
-            "features",
+            "service_type",
+            "duration_minutes",
+            "price",
+            "capacity",
+            "buffer_before_minutes",
+            "buffer_after_minutes",
+            "slot_interval_minutes",
+            "max_concurrent",
+            "min_notice_hours",
+            "max_advance_days",
+            "cancellationPolicy",
+            "cancellationCustomHours",
+            "cancellationRefundPercentage",
             "location",
             "unit_number",
             "coordinates",
@@ -771,6 +794,15 @@ class ClassCreateSerializer(serializers.ModelSerializer):
             "adminContactEmail",
             "adminContactPhone",
         ]
+        extra_kwargs = {
+            "description": {"required": False, "allow_blank": True},
+            "location": {"required": False, "allow_blank": True},
+            "coordinates": {"required": False, "allow_blank": True},
+            "service_type": {"required": False},
+            "duration_minutes": {"required": False},
+            "price": {"required": True},
+            "capacity": {"required": False},
+        }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

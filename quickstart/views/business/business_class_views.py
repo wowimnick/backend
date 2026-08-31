@@ -383,76 +383,72 @@ class BusinessClassViewSet(viewsets.ModelViewSet):
 
     def _process_images_and_options_on_create(self, class_instance, request_data):
         """Helper to handle images (from S3 keys) and options (List) during creation."""
-        # 1. Image Processing
-        image_s3_keys = request_data.get("image_s3_keys", [])
+        # 1. Image Processing (optional for SaaS services)
+        image_s3_keys = request_data.get("image_s3_keys", []) or []
         cover_image_s3_key = request_data.get("cover_image_s3_key")
 
-        _min_images = 4
-        if not image_s3_keys or len(image_s3_keys) < _min_images:
-            raise DRFValidationError(
-                {
-                    "image_s3_keys": f"At least {_min_images} class images are required.",
-                }
-            )
-
-        if cover_image_s3_key and cover_image_s3_key not in image_s3_keys:
-            raise DRFValidationError(
-                {
-                    "cover_image_s3_key": "The selected cover image key must be one of the uploaded image keys."
-                }
-            )
-
-        if not cover_image_s3_key and image_s3_keys:
-            cover_image_s3_key = image_s3_keys[0]
-
-        image_objects_to_create = [
-            ClassImage(
-                classId=class_instance,
-                image=key,
-                isCover=(key == cover_image_s3_key),
-            )
-            for key in image_s3_keys
-        ]
-        ClassImage.objects.bulk_create(image_objects_to_create)
-        logger.info(
-            f"Bulk-created {len(image_objects_to_create)} images for class {class_instance.classId} from S3 keys."
-        )
-
-        # 2. Options Processing (MULTI-TIER SUPPORT)
-        options_json_string = request_data.get("options")
-        if not options_json_string:
-            raise DRFValidationError({"options": "Class option data is required."})
-
-        try:
-            options_data_list = json.loads(options_json_string)
-            if not (isinstance(options_data_list, list) and len(options_data_list) > 0):
+        if image_s3_keys:
+            if cover_image_s3_key and cover_image_s3_key not in image_s3_keys:
                 raise DRFValidationError(
                     {
-                        "options": "Options data must be a list containing at least one option object."
+                        "cover_image_s3_key": "The selected cover image key must be one of the uploaded image keys."
                     }
                 )
+            if not cover_image_s3_key:
+                cover_image_s3_key = image_s3_keys[0]
+            image_objects_to_create = [
+                ClassImage(
+                    classId=class_instance,
+                    image=key,
+                    isCover=(key == cover_image_s3_key),
+                )
+                for key in image_s3_keys
+            ]
+            ClassImage.objects.bulk_create(image_objects_to_create)
 
-            # Loop through all options in the array
-            for index, option_dict in enumerate(options_data_list):
-                # Enforce that the first option (index 0) is always primary
-                # unless explicitly set, but for new classes, first is safe assumption for primary.
-                if index == 0:
-                    option_dict["schedule_mode"] = "primary"
-                
-                # If subsequent items don't have a schedule_mode, default to synced
-                if "schedule_mode" not in option_dict:
-                    option_dict["schedule_mode"] = "synced"
+        # 2. Options / variants. If omitted, create a Standard variant from service defaults.
+        options_json_string = request_data.get("options")
+        options_data_list = []
+        if options_json_string:
+            try:
+                options_data_list = (
+                    json.loads(options_json_string)
+                    if isinstance(options_json_string, str)
+                    else options_json_string
+                )
+            except json.JSONDecodeError:
+                raise DRFValidationError(
+                    {"options": "Invalid JSON format for options data."}
+                )
+        if not options_data_list:
+            options_data_list = [
+                {
+                    "title": "Standard",
+                    "duration_minutes": class_instance.duration_minutes,
+                    "price": str(class_instance.price),
+                    "capacity": class_instance.capacity,
+                    "cancellationPolicy": class_instance.cancellationPolicy,
+                    "cancellationCustomHours": class_instance.cancellationCustomHours,
+                    "cancellationRefundPercentage": class_instance.cancellationRefundPercentage,
+                    "booking_type": "Single Session",
+                }
+            ]
 
+        try:
+            for option_dict in options_data_list:
+                option_dict = dict(option_dict)
+                option_dict.pop("schedule_mode", None)
+                if option_dict.get("booking_type") == "Full Course":
+                    raise DRFValidationError(
+                        {
+                            "options": "Multi-session courses can no longer be created."
+                        }
+                    )
                 option_serializer = ManagedClassOptionSerializer(data=option_dict)
                 option_serializer.is_valid(raise_exception=True)
                 option_serializer.save(classId=class_instance)
-            
-            logger.info(f"Created {len(options_data_list)} ClassOptions for class {class_instance.classId}.")
-
-        except json.JSONDecodeError:
-            raise DRFValidationError(
-                {"options": "Invalid JSON format for options data."}
-            )
+        except DRFValidationError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error creating ClassOption for class {class_instance.classId}: {str(e)}",
@@ -1262,6 +1258,7 @@ class BusinessScheduleInstanceViewSet(viewsets.ModelViewSet):
         IsAuthenticated,
         CanManageOwnClassesOrClassAdmin,
     ]
+    pagination_class = None
     http_method_names = ["get", "post", "patch", "head", "options"]  # No PUT/DELETE
 
     def get_queryset(self):
@@ -1318,6 +1315,9 @@ class BusinessScheduleInstanceViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(date__lte=end_date)
         if status_filter:
             queryset = queryset.filter(status=status_filter)
+        staff_id = self.request.query_params.get("assigned_staff_id")
+        if staff_id:
+            queryset = queryset.filter(assigned_staff_id=staff_id)
 
         return queryset.order_by("date", "time")
 
@@ -1345,4 +1345,24 @@ class BusinessScheduleInstanceViewSet(viewsets.ModelViewSet):
                 f"Cancelled {cancelled_count} bookings for instance {pk} by {request.user.email}"
             )
         # TODO: Notifications
+        return Response(self.get_serializer(instance).data)
+
+    @action(detail=True, methods=["post"], url_path="assign-staff")
+    def assign_staff(self, request, pk=None):
+        instance = self.get_object()
+        staff_id = request.data.get("assigned_staff_id")
+        if not staff_id:
+            instance.assigned_staff = None
+            instance.save(update_fields=["assigned_staff"])
+            return Response(self.get_serializer(instance).data)
+        from quickstart.models import BusinessStaff
+
+        business = instance.schedule.option.classId.businessId
+        staff = BusinessStaff.objects.filter(
+            pk=staff_id, business=business, status="accepted"
+        ).first()
+        if not staff:
+            raise DRFValidationError({"assigned_staff_id": "Staff member not found."})
+        instance.assigned_staff = staff
+        instance.save(update_fields=["assigned_staff"])
         return Response(self.get_serializer(instance).data)

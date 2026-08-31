@@ -72,9 +72,12 @@ class BusinessCourseManagementViewSet(viewsets.ModelViewSet):
         return BusinessCourseSerializer
 
     def create(self, request, *args, **kwargs):
-        """
-        Create a new course schedule.
-        """
+        """Full Course creation is frozen for the SaaS booking model."""
+        raise ValidationError(
+            {
+                "booking_type": "Multi-session courses are no longer offered. Create a group service with a recurring series instead."
+            }
+        )
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data

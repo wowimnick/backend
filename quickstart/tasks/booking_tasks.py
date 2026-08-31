@@ -81,30 +81,15 @@ def release_expired_spots():
 @shared_task
 def send_upcoming_booking_reminders():
     """
-    Sends reminder emails for confirmed bookings scheduled to start
-    within the next 22 to 24 hours.
+    Sends reminder emails for confirmed bookings based on each business's
+    reminder_hours_before setting (default 24).
     """
     now = timezone.now()
-    reminder_start_time = now + timedelta(hours=22)
-    reminder_end_time = now + timedelta(hours=24)
-
-    # FIX: Widen the date search window to account for timezone differences.
-    # A class might be on "Friday" in NY but "Saturday" in UTC.
-    # We check the target dates, plus one day before and one day after to be safe.
-    start_date = reminder_start_time.date()
-    end_date = reminder_end_time.date()
-    
-    possible_dates = {
-        start_date - timedelta(days=1),
-        start_date,
-        end_date,
-        end_date + timedelta(days=1)
-    }
-
     upcoming_bookings = (
         Booking.objects.filter(
             status="confirmed",
-            schedule_instance__date__in=possible_dates,
+            schedule_instance__date__gte=now.date() - timedelta(days=1),
+            schedule_instance__date__lte=(now + timedelta(days=8)).date(),
             schedule_instance__schedule__option__classId__businessId__reminderNotification=True
         )
         .select_related(
@@ -115,22 +100,21 @@ def send_upcoming_booking_reminders():
         .iterator()
     )
 
-    logger.info(f"Starting reminder task. Window: {reminder_start_time} to {reminder_end_time}.")
+    logger.info("Starting reminder task at %s.", now)
 
     sent_count = 0
     for booking in upcoming_bookings:
-        # ATOMIC LOCKING: Define key
         cache_key = f"booking_reminder_sent_{booking.id}"
-        
-        # Try to acquire lock IMMEDIATELY. 
-        # If cache.add returns False, the key exists (sent or in progress) -> SKIP.
-        # Lock duration: 30 hours (covers the entire 24h window + buffer)
         if not cache.add(cache_key, True, timeout=108000):
             continue
 
         try:
-            # Timezone Logic
-            business_tz_str = booking.schedule_instance.schedule.option.classId.businessId.business_timezone
+            business = booking.schedule_instance.schedule.option.classId.businessId
+            hours = int(getattr(business, "reminder_hours_before", 24) or 24)
+            reminder_start_time = now + timedelta(hours=max(1, hours - 1))
+            reminder_end_time = now + timedelta(hours=hours)
+
+            business_tz_str = business.business_timezone
             business_tz = pytz.timezone(business_tz_str)
 
             naive_datetime = timezone.datetime.combine(
@@ -139,10 +123,7 @@ def send_upcoming_booking_reminders():
             schedule_datetime_aware = business_tz.localize(naive_datetime)
             schedule_datetime_utc = schedule_datetime_aware.astimezone(pytz.utc)
 
-            # Precision Check
             if not (reminder_start_time <= schedule_datetime_utc < reminder_end_time):
-                # IMPORTANT: If we skipped because of time, we must RELEASE the lock
-                # so it can be picked up in the next hour if valid.
                 cache.delete(cache_key)
                 continue  
 

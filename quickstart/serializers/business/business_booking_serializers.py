@@ -176,6 +176,8 @@ class BusinessBookingListSerializer(serializers.ModelSerializer):
             "notes",
             "booking_date",
             "session_info",
+            "attendance",
+            "attendance_marked_at",
         ]
         read_only_fields = fields
 
@@ -306,6 +308,8 @@ class BusinessBookingDetailSerializer(serializers.ModelSerializer):
             "rescheduled_at",
             "original_session_details",
             "course_schedule",
+            "attendance",
+            "attendance_marked_at",
         ]
         read_only_fields = fields
 

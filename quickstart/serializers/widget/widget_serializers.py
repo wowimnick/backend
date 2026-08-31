@@ -79,8 +79,12 @@ class WidgetClassOptionSerializer(serializers.ModelSerializer):
         model = ClassOption
         fields = [
             "optionId",
+            "title",
             "booking_type",
             "level",
+            "duration_minutes",
+            "price",
+            "capacity",
             "schedules",
             "cancellation_policy",
             "cancellation_refund_percentage",
@@ -117,8 +121,6 @@ class WidgetClassSerializer(serializers.ModelSerializer):
 
     options = WidgetClassOptionSerializer(many=True, read_only=True)
     images = WidgetClassImageSerializer(many=True, read_only=True)
-    average_rating = serializers.FloatField(read_only=True, allow_null=True)
-    review_count = serializers.IntegerField(read_only=True, default=0)
     require_participant_names = serializers.BooleanField(
         source="businessId.require_participant_names",
         read_only=True,
@@ -133,13 +135,15 @@ class WidgetClassSerializer(serializers.ModelSerializer):
             "classId",
             "title",
             "description",
+            "service_type",
+            "duration_minutes",
+            "price",
+            "capacity",
             "location",
             "location_name",
             "location_address",
             "options",
             "images",
-            "average_rating",
-            "review_count",
             "require_participant_names",
         ]
         read_only_fields = fields

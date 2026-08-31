@@ -249,8 +249,6 @@ class BusinessPayoutViewSet(viewsets.ReadOnlyModelViewSet):
                 "HST on Platform Fee",
                 "Net Payout for this Booking",
                 "Business Discount ($)",
-                "Global Discount ($)",
-                "Gift Card Applied ($)",
             ]
         )
 
@@ -340,8 +338,6 @@ class BusinessPayoutViewSet(viewsets.ReadOnlyModelViewSet):
                     f"${fee_tax_shown:.2f}",
                     f"${net_shown:.2f}",
                     f"${biz_disc:.2f}",
-                    f"${glob_disc:.2f}",
-                    f"${gift_amt:.2f}",
                 ]
             )
             total_payout_from_bookings += net_shown

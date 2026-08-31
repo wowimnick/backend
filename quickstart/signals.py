@@ -111,6 +111,16 @@ def create_booking_notification(sender, instance, created, **kwargs):
 
     content_type = ContentType.objects.get_for_model(instance)
 
+    try:
+        from quickstart.services.calendar_sync import push_booking_to_calendars
+
+        if instance.status == "cancelled" and not created:
+            push_booking_to_calendars(instance, action="delete")
+        elif instance.status == "confirmed":
+            push_booking_to_calendars(instance, action="create" if created else "update")
+    except Exception as cal_err:
+        logger.warning("Calendar sync skipped for booking %s: %s", instance.id, cal_err)
+
     # --- FIX: Determine Booker Name safely (User or Guest Contact) ---
     booker_name = "Unknown Guest"
     if instance.user:

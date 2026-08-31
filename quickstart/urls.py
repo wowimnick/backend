@@ -84,11 +84,18 @@ from quickstart.views.business.email_marketing_views import (
     MarketingTemplateDetailView,
     MarketingTemplateListCreateView,
 )
-from quickstart.views.business.email_marketing_workflow_views import (
-    MarketingWorkflowDetailView,
-    MarketingWorkflowEnrollmentListView,
-    MarketingWorkflowEnrollView,
-    MarketingWorkflowListCreateView,
+from quickstart.views.business.scheduling_views import (
+    AppointmentSlotsView,
+    BusinessTimeOffDetailView,
+    BusinessTimeOffListCreateView,
+    CalendarConnectionDisconnectView,
+    CalendarConnectionListView,
+    CalendarOAuthCallbackView,
+    CalendarOAuthStartView,
+    RecurrenceRuleMaterializeView,
+    RecurrenceRuleViewSet,
+    ServiceAvailabilityWindowListView,
+    SessionEditScopeView,
 )
 from quickstart.views.admin.payout_management.admin_payout_views import (
     AdminPayoutViewSet,
@@ -234,6 +241,9 @@ business_management_router.register(
     basename="business-course-management",
 )
 
+business_management_router.register(
+    r"recurrence-rules", RecurrenceRuleViewSet, basename="business-recurrence-rules"
+)
 business_management_router.register(
     r"discounts", BusinessDiscountViewSet, basename="business-discount"
 )
@@ -692,6 +702,56 @@ urlpatterns = [
         "my-business/payouts/external-accounts/",
         ConnectPayoutExternalAccountsView.as_view(),
         name="my-business-payout-external-accounts",
+    ),
+    path(
+        "my-business/time-off/",
+        BusinessTimeOffListCreateView.as_view(),
+        name="my-business-time-off",
+    ),
+    path(
+        "my-business/time-off/<uuid:pk>/",
+        BusinessTimeOffDetailView.as_view(),
+        name="my-business-time-off-detail",
+    ),
+    path(
+        "my-business/calendar/connections/",
+        CalendarConnectionListView.as_view(),
+        name="my-business-calendar-connections",
+    ),
+    path(
+        "my-business/calendar/connections/<uuid:pk>/disconnect/",
+        CalendarConnectionDisconnectView.as_view(),
+        name="my-business-calendar-disconnect",
+    ),
+    path(
+        "my-business/calendar/oauth/<str:provider>/start/",
+        CalendarOAuthStartView.as_view(),
+        name="my-business-calendar-oauth-start",
+    ),
+    path(
+        "my-business/calendar/oauth/<str:provider>/callback/",
+        CalendarOAuthCallbackView.as_view(),
+        name="my-business-calendar-oauth-callback",
+    ),
+    path(
+        "business/classes/<int:class_id>/availability-windows/",
+        ServiceAvailabilityWindowListView.as_view(),
+        name="business-service-availability-windows",
+    ),
+    path(
+        "business/classes/<int:class_id>/appointment-slots/",
+        AppointmentSlotsView.as_view(),
+        name="business-appointment-slots",
+    ),
+    path(
+        "business/recurrence-rules/<uuid:pk>/materialize/",
+        RecurrenceRuleMaterializeView.as_view(),
+        name="business-recurrence-materialize",
+    ),
+    path(
+        "business/schedule-instances/<int:pk>/edit-scope/",
+        SessionEditScopeView.as_view(),
+        name="business-session-edit-scope",
     ),
     path(
         "my-business/marketing/account/",

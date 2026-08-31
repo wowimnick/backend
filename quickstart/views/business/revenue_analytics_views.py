@@ -129,12 +129,12 @@ class RevenueAnalyticsView(views.APIView):
         if widget_extra > 0:
             merged = False
             for e in rest:
-                if e.get("name") == "Platform Booking":
+                if e.get("name") == "Direct (non-widget)":
                     e["value"] = float(e.get("value") or 0) + widget_extra
                     merged = True
                     break
             if not merged:
-                rest.append({"name": "Platform Booking", "value": widget_extra})
+                rest.append({"name": "Direct (non-widget)", "value": widget_extra})
             rest.sort(key=lambda x: -float(x.get("value") or 0))
         return redacted_classes, rest
 
@@ -180,7 +180,7 @@ class RevenueAnalyticsView(views.APIView):
             Returns all bookings that contribute to revenue (paid).
             UPDATED: Now includes ALL bookings for a course, because revenue is split 1/N
             across them. We no longer filter for just the first booking.
-            `source` can be "all" (default), "widget", or "marketplace".
+            `source` can be "all" (default), "widget", or "direct".
             """
             if not business:
                 return Booking.objects.none()
@@ -209,7 +209,7 @@ class RevenueAnalyticsView(views.APIView):
             )
             if source == "widget":
                 base_bookings = base_bookings.filter(Exists(_widget_payment_exists))
-            elif source == "marketplace":
+            elif source in ("direct", "marketplace"):
                 base_bookings = base_bookings.exclude(Exists(_widget_payment_exists))
 
             return base_bookings
@@ -403,7 +403,7 @@ class RevenueAnalyticsView(views.APIView):
             class_id_filter = int(class_id_filter) if class_id_filter else None
 
         source_filter = request.query_params.get("source", "all")
-        if source_filter not in ("widget", "marketplace", "all", "membership"):
+        if source_filter not in ("widget", "direct", "all", "membership"):
             source_filter = "all"
         if source_filter == "widget" and not business_has_growth_or_advanced_widget_plan(
             business
@@ -849,7 +849,7 @@ class RevenueAnalyticsView(views.APIView):
                         metadata__original_stripe_metadata__booking_source__in=_WIDGET_SOURCE_LIST,
                         then=Value("Widget Booking"),
                     ),
-                    default=Value("Platform Booking"),
+                    default=Value("Direct (non-widget)"),
                     output_field=CharField(),
                 )
             )
@@ -888,7 +888,7 @@ class RevenueAnalyticsView(views.APIView):
             class_id_filter = int(class_id_filter) if class_id_filter else None
 
             source_filter = request.query_params.get("source", "all")
-            if source_filter not in ("widget", "marketplace", "all", "membership"):
+            if source_filter not in ("widget", "direct", "all", "membership"):
                 source_filter = "all"
 
             if source_filter == "widget" and not business_has_growth_or_advanced_widget_plan(
@@ -1076,9 +1076,6 @@ class RevenueAnalyticsView(views.APIView):
                 "Net Deposited to You",
                 "Business Discount (codes)",
                 "Business Discount ($)",
-                "Global Discount (names)",
-                "Global Discount ($)",
-                "Gift Card Applied ($)",
                 "Payment Status",
                 "Booking Status",
             ],
@@ -1161,9 +1158,6 @@ class RevenueAnalyticsView(views.APIView):
                     f"${net_payout:.2f}",
                     business_discount_names,
                     f"${business_discount_amt:.2f}",
-                    global_discount_names,
-                    f"${global_discount_amt:.2f}",
-                    f"${gift_card_amt:.2f}",
                     booking.get_payment_status_display(),
                     booking.get_status_display(),
                 ]

@@ -519,6 +519,18 @@ class WidgetAvailabilityView(APIView):
             )
             raise ValidationError("Invalid option_id for this business.")
 
+        service = option.classId
+        start_d = datetime.strptime(str(start_date)[:10], "%Y-%m-%d").date()
+        end_d = datetime.strptime(str(end_date)[:10], "%Y-%m-%d").date()
+        if getattr(service, "service_type", "group") == "appointment":
+            from quickstart.services.availability import generate_appointment_slots
+
+            slots = generate_appointment_slots(service, start_d, end_d, variant=option)
+            by_date = {}
+            for slot in slots:
+                by_date.setdefault(slot["date"], []).append(slot)
+            return Response(by_date)
+
         # Correctly defined subquery to calculate the sum of confirmed participants.
         # This groups bookings by the schedule instance, annotates the sum, and selects that value.
         confirmed_participants_subquery = (
@@ -732,19 +744,44 @@ class CreateGuestPaymentIntentView(APIView):
             )
         instance_id = request.data.get("schedule_instance_id")
         participants = int(request.data.get("participants", 1))
+        appointment_date = request.data.get("appointment_date")
+        appointment_time = request.data.get("appointment_time")
+        option_id = request.data.get("option_id")
 
-        if not instance_id or participants < 1:
-            raise ValidationError(
-                "A valid schedule_instance_id and at least 1 participant are required."
-            )
+        if participants < 1:
+            raise ValidationError("At least 1 participant is required.")
 
         business = request.business_context
-        try:
-            instance = ScheduleInstance.objects.select_related(
-                "schedule__option__classId__businessId"
-            ).get(id=instance_id, schedule__option__classId__businessId=business)
-        except ScheduleInstance.DoesNotExist:
-            raise NotFound("The selected session is not available.")
+        instance = None
+        if instance_id:
+            try:
+                instance = ScheduleInstance.objects.select_related(
+                    "schedule__option__classId__businessId"
+                ).get(id=instance_id, schedule__option__classId__businessId=business)
+            except ScheduleInstance.DoesNotExist:
+                raise NotFound("The selected session is not available.")
+        elif appointment_date and appointment_time and option_id:
+            from datetime import datetime as dt
+            from quickstart.services.availability import materialize_appointment_instance
+
+            try:
+                option = ClassOption.objects.select_related("classId").get(
+                    optionId=option_id,
+                    classId__businessId=business,
+                    classId__service_type="appointment",
+                )
+            except ClassOption.DoesNotExist:
+                raise NotFound("The selected service is not available.")
+            slot_date = dt.strptime(str(appointment_date)[:10], "%Y-%m-%d").date()
+            tstr = str(appointment_time)
+            slot_time = dt.strptime(tstr[:8] if len(tstr) >= 8 else tstr[:5], "%H:%M:%S" if len(tstr) >= 8 else "%H:%M").time()
+            instance = materialize_appointment_instance(
+                option.classId, slot_date, slot_time, variant=option
+            )
+        else:
+            raise ValidationError(
+                "A valid schedule_instance_id or appointment slot (option_id, appointment_date, appointment_time) is required."
+            )
 
         if not instance.can_accommodate(participants):
             raise ValidationError(

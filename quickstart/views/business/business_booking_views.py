@@ -301,6 +301,30 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
             return BusinessBookingDetailSerializer
         return BusinessBookingListSerializer
 
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="mark-attendance",
+        permission_classes=[IsAuthenticated, CanManageOwnBusinessBookings],
+    )
+    def mark_attendance(self, request, pk=None):
+        booking = self.get_object()
+        value = (request.data.get("attendance") or "").strip()
+        if value not in ("pending", "attended", "no_show"):
+            raise ValidationError(
+                {"attendance": "Must be pending, attended, or no_show."}
+            )
+        booking.attendance = value
+        booking.attendance_marked_at = timezone.now() if value != "pending" else None
+        booking.save(update_fields=["attendance", "attendance_marked_at"])
+        return Response(
+            {
+                "id": booking.id,
+                "attendance": booking.attendance,
+                "attendance_marked_at": booking.attendance_marked_at,
+            }
+        )
+
     def get_business_context(self):
         user = self.request.user
         try:
@@ -388,6 +412,11 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
             queryset = queryset.filter(
                 schedule_instance__schedule__option__classId_id=class_id
             )
+        instance_id = request.query_params.get("instance_id") or request.query_params.get(
+            "schedule_instance_id"
+        )
+        if instance_id and str(instance_id).isdigit():
+            queryset = queryset.filter(schedule_instance_id=int(instance_id))
         user_id = request.query_params.get("user_id")
         if user_id and user_id.isdigit():
             queryset = queryset.filter(user_id=user_id)
@@ -919,7 +948,7 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                 )
 
             source_filter = request.query_params.get("source", "all")
-            if source_filter not in ("widget", "marketplace", "all"):
+            if source_filter not in ("widget", "direct", "all"):
                 source_filter = "all"
             # Widget-only breakdown and funnel require Growth/Advanced; degrade to "all"
             # so the dashboard always loads (avoid 500 when PermissionDenied hits broad except).
@@ -934,7 +963,7 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
             )
             if source_filter == "widget":
                 bookings_qs_base = bookings_qs_base.filter(Exists(_widget_payment_exists))
-            elif source_filter == "marketplace":
+            elif source_filter == "direct":
                 bookings_qs_base = bookings_qs_base.exclude(Exists(_widget_payment_exists))
 
             bookings_qs = bookings_qs_base.select_related(
@@ -972,6 +1001,13 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
             # Guest-facing: % of participant spots that sit on cancelled bookings
             cancellation_rate = (
                 (cancelled_spots / total_spots * 100) if total_spots > 0 else 0
+            )
+            marked_attendance = bookings_qs.filter(
+                attendance__in=["attended", "no_show"]
+            ).count()
+            noshows = bookings_qs.filter(attendance="no_show").count()
+            no_show_rate = (
+                (noshows / marked_attendance * 100) if marked_attendance else 0
             )
 
             user_bookings_in_business = (
@@ -1419,7 +1455,9 @@ class BusinessBookingViewSet(viewsets.ReadOnlyModelViewSet):
                     ],
                     "cancelled_booking_transactions": cancelled_transactions,
                     "total_revenue": float(total_aggregates["total_revenue"]),
+                    "cancellation_rate_by_spots": round(cancellation_rate, 1),
                     "cancellation_rate_by_transaction": round(cancellation_rate, 1),
+                    "no_show_rate": round(no_show_rate, 1),
                     "booker_retention_rate": round(booker_retention_rate, 1),
                     "average_lead_time_days": avg_lead_time_days,
                     "new_student_bookings": new_student_bookings,

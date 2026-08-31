@@ -413,9 +413,19 @@ class MyBusinessOverviewView(APIView):
                 current_revenue_metrics = revenue_view.calculate_metrics(
                     business, current_month_start_dt_aware, now_utc
                 )
+                prev_month_metrics = revenue_view.calculate_metrics(
+                    business, prev_month_start_utc, prev_month_end_utc
+                )
+                prev_val = float(prev_month_metrics.get("total_gross_revenue") or 0)
+                curr_val = float(current_revenue_metrics["total_gross_revenue"] or 0)
+                mom_change = 0.0
+                if prev_val > 0:
+                    mom_change = round(((curr_val - prev_val) / prev_val) * 100, 1)
+                elif curr_val > 0:
+                    mom_change = 100.0
                 monthly_revenue = {
-                    "value": current_revenue_metrics["total_gross_revenue"],
-                    "change": current_revenue_metrics["revenue_growth"],
+                    "value": curr_val,
+                    "change": mom_change,
                 }
                 all_time_start_utc = timezone.make_aware(
                     datetime(2000, 1, 1, 0, 0, 0), pytz.utc
@@ -642,25 +652,6 @@ class MyBusinessOverviewView(APIView):
                             "type": "payment",
                         }
                     )
-            recent_reviews = (
-                Reviews.objects.filter(
-                    classId__businessId=business,
-                    status="approved",
-                    createdAt__gte=three_days_ago_utc,
-                )
-                .select_related("userId")
-                .order_by("-createdAt")[:3]
-            )
-            for review in recent_reviews:
-                recent_activity_data.append(
-                    {
-                        "timestamp": review.createdAt.isoformat(),
-                        "message": f"New review: {review.rating}★ from {review.userId.first_name}",
-                        "icon": "Star",
-                        "color": colors.get("chart", {}).get("orange", "#f97316"),
-                        "type": "review",
-                    }
-                )
             recent_activity_data.sort(key=lambda x: x["timestamp"], reverse=True)
             recent_activity_data = recent_activity_data[:5]
         except Exception as e:
@@ -670,43 +661,75 @@ class MyBusinessOverviewView(APIView):
             if not recent_activity_data:
                 recent_activity_data = []
 
-        # --- COMBINED REVIEW METRICS (PLATFORM + GOOGLE) ---
-        average_rating_data = {"value": 0.0, "change": 0.0}  # Default
+        # Repeat-client rate, no-show rate, upcoming capacity fill
+        repeat_client_rate = {"value": 0.0, "change": 0.0}
+        no_show_rate = {"value": 0.0, "change": 0.0}
+        upcoming_capacity_fill = {"value": 0.0, "change": 0.0}
         try:
-            # Platform stats
-            platform_stats = Reviews.objects.filter(
-                classId__businessId=business, status="approved"
-            ).aggregate(total_reviews=Count("reviewId"), avg_rating=Avg("rating"))
-            platform_total = platform_stats.get("total_reviews") or 0
-            platform_avg = platform_stats.get("avg_rating")
+            from django.db.models import Count as DjCount
 
-            # Google stats
-            google_stats = ImportedGoogleReview.objects.filter(
-                business=business
-            ).aggregate(total_reviews=Count("id"), avg_rating=Avg("rating"))
-            google_total = google_stats.get("total_reviews") or 0
-            google_avg = google_stats.get("avg_rating")
-
-            total_reviews = platform_total + google_total
-
-            if total_reviews > 0:
-                # Calculate weighted average
-                platform_total_rating = float(platform_avg or 0) * platform_total
-                google_total_rating = float(google_avg or 0) * google_total
-                combined_avg_rating = (
-                    platform_total_rating + google_total_rating
-                ) / total_reviews
-                average_rating_data["value"] = round(combined_avg_rating, 1)
-
-        except Exception as e:
-            logger.error(
-                f"Error calculating combined review metrics for overview (Business {pk}): {e}",
-                exc_info=True,
+            booker_counts = (
+                Booking.objects.filter(
+                    schedule_instance__schedule__option__classId__businessId=business,
+                    payment_status="paid",
+                )
+                .values("contact_id")
+                .annotate(c=DjCount("id"))
             )
-            # Fallback to avoid breaking dashboard on error, but value will be 0.0
-            average_rating_data = {"value": 0.0, "change": 0.0}
+            unique = booker_counts.count()
+            repeats = booker_counts.filter(c__gt=1).count()
+            if unique:
+                repeat_client_rate = {
+                    "value": round(100.0 * repeats / unique, 1),
+                    "change": 0.0,
+                }
+        except Exception:
+            pass
+        try:
+            attendance_qs = Booking.objects.filter(
+                schedule_instance__schedule__option__classId__businessId=business,
+                status__in=["confirmed", "completed"],
+                attendance__in=["attended", "no_show"],
+            )
+            marked = attendance_qs.count()
+            noshows = attendance_qs.filter(attendance="no_show").count()
+            if marked:
+                no_show_rate = {
+                    "value": round(100.0 * noshows / marked, 1),
+                    "change": 0.0,
+                }
+        except Exception:
+            pass
+        try:
+            upcoming = ScheduleInstance.objects.filter(
+                schedule__option__classId__businessId=business,
+                date__gte=today_utc_date,
+                date__lte=today_utc_date + timedelta(days=7),
+                status="scheduled",
+            )
+            cap = 0
+            taken = 0
+            for inst in upcoming:
+                cap += inst.max_participants or 0
+                taken += inst.current_bookings or 0
+            if cap:
+                upcoming_capacity_fill = {
+                    "value": round(100.0 * taken / cap, 1),
+                    "change": 0.0,
+                }
+        except Exception:
+            pass
 
-        # --- Setup Guide Status ---
+        metrics_payload = {
+            "total_students": total_students,
+            "active_classes": {
+                "value": business.classes.filter(status="active").count(),
+                "change": 0,
+            },
+            "repeat_client_rate": repeat_client_rate,
+            "no_show_rate": no_show_rate,
+            "upcoming_capacity_fill": upcoming_capacity_fill,
+        }
         profile_fields_to_check = [
             business.businessDescription,
             business.studentContactEmail,
@@ -736,6 +759,8 @@ class MyBusinessOverviewView(APIView):
         ).exists()
         has_schedules = Schedule.objects.filter(
             option__classId__businessId=business
+        ).exists() or ClassesMain.objects.filter(
+            businessId=business, service_type="appointment"
         ).exists()
 
         # --- Actionable Prompts: Find classes needing schedules ---
@@ -792,14 +817,6 @@ class MyBusinessOverviewView(APIView):
                 "has_widget_embed_verified": has_widget_embed_verified,
             }
 
-        metrics_payload = {
-            "total_students": total_students,
-            "active_classes": {
-                "value": business.classes.filter(status="active").count(),
-                "change": 0,
-            },
-            "average_rating": average_rating_data,
-        }
         # Only add revenue data to the payload if the user has permission
         if can_view_revenue and monthly_revenue is not None:
             metrics_payload["monthly_revenue"] = monthly_revenue
@@ -927,23 +944,15 @@ class BusinessDashboardViewSet(viewsets.ReadOnlyModelViewSet):
                     "options__schedules__instances__bookings__amount_paid",
                     filter=paid_filter,
                 ),
-                review_count=Count(
-                    "reviews", filter=Q(reviews__status="approved"), distinct=True
-                ),
-                average_rating=Avg(
-                    "reviews__rating", filter=Q(reviews__status="approved")
-                ),
             )
             .values(
                 "classId",
                 "title",
                 "booking_count",
                 "revenue",
-                "review_count",
-                "average_rating",
             )
             .order_by("-revenue")
-        )  # Example ordering
+        )
 
         response_data = [
             {
@@ -951,8 +960,6 @@ class BusinessDashboardViewSet(viewsets.ReadOnlyModelViewSet):
                 "title": item["title"],
                 "booking_count": item["booking_count"] or 0,
                 "revenue": float(item["revenue"] or 0.0),
-                "review_count": item["review_count"] or 0,
-                "average_rating": round(float(item["average_rating"] or 0.0), 1),
             }
             for item in classes_qs
         ]

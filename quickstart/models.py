@@ -613,6 +613,11 @@ class BusinessInfo(models.Model):
     newBookingNotification = models.BooleanField(default=True)
     cancellationNotification = models.BooleanField(default=True)
     reminderNotification = models.BooleanField(default=True)
+    reminder_hours_before = models.PositiveIntegerField(
+        default=24,
+        validators=[MinValueValidator(1), MaxValueValidator(168)],
+        help_text="Hours before a session to send the client reminder email.",
+    )
     scheduleExpiryNotification = models.BooleanField(
         default=True,
         help_text="Receive warnings when classes are about to run out of scheduled instances.",
@@ -1214,6 +1219,7 @@ class ClientSegment(models.Model):
         ordering = ["name"]
 
 
+# DEPRECATED(saas): Unused CRM scaffolding. No views or serializers.
 class Resource(models.Model):
     """A schedulable resource, e.g., 'Room A', 'Pottery Wheel 3'."""
 
@@ -1232,6 +1238,7 @@ class Resource(models.Model):
         db_table = "crm_resources"
 
 
+# DEPRECATED(saas): Unused CRM scaffolding. No views or serializers.
 class Appointment(models.Model):
     """Represents a manually scheduled appointment or off-platform booking."""
 
@@ -1527,6 +1534,8 @@ class BusinessLocation(models.Model):
 
 
 class ClassesMain(models.Model):
+    """User-facing name: Service. Group sessions or 1:1 appointments sold via the widget."""
+
     classId = models.AutoField(primary_key=True)
     businessId = models.ForeignKey(
         "BusinessInfo", on_delete=models.CASCADE, related_name="classes"
@@ -1552,7 +1561,7 @@ class ClassesMain(models.Model):
         db_index=True,
     )
     title = models.CharField(max_length=100)
-    description = models.TextField(max_length=4000)
+    description = models.TextField(max_length=4000, blank=True, default="")
     description_summary = models.CharField(max_length=240, blank=True, default="")
     description_sections = models.JSONField(default=list, blank=True)
     description_ai_source_hash = models.CharField(max_length=64, blank=True, default="")
@@ -1568,18 +1577,75 @@ class ClassesMain(models.Model):
         db_index=True,
     )
     description_ai_generated_at = models.DateTimeField(null=True, blank=True)
-    features = models.JSONField(default=list)
+    features = models.JSONField(default=list, blank=True)
+    SERVICE_TYPE_CHOICES = [
+        ("group", "Group session"),
+        ("appointment", "Appointment"),
+    ]
+    service_type = models.CharField(
+        max_length=20,
+        choices=SERVICE_TYPE_CHOICES,
+        default="group",
+        db_index=True,
+        help_text="group = published sessions; appointment = open-slot generation from availability.",
+    )
+    duration_minutes = models.PositiveIntegerField(
+        default=60,
+        validators=[MinValueValidator(5)],
+        help_text="Default session length in minutes. Schedule rows inherit unless overridden.",
+    )
+    price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        help_text="Default price. Schedule rows inherit unless overridden.",
+    )
+    capacity = models.PositiveIntegerField(
+        default=1,
+        validators=[MinValueValidator(1)],
+        help_text="Default max participants per session. Appointment services typically use 1.",
+    )
+    buffer_before_minutes = models.PositiveIntegerField(default=0)
+    buffer_after_minutes = models.PositiveIntegerField(default=0)
+    slot_interval_minutes = models.PositiveIntegerField(
+        default=30,
+        validators=[MinValueValidator(5)],
+        help_text="Appointment slot start interval (e.g. every 15 or 30 minutes).",
+    )
+    max_concurrent = models.PositiveIntegerField(
+        default=1,
+        validators=[MinValueValidator(1)],
+        help_text="How many overlapping appointment bookings this service can take at once.",
+    )
+    min_notice_hours = models.PositiveIntegerField(
+        default=1,
+        help_text="Minimum hours of notice required to book an appointment slot.",
+    )
+    max_advance_days = models.PositiveIntegerField(
+        default=60,
+        help_text="How many days ahead appointment slots are offered.",
+    )
+    cancellationPolicy = models.CharField(
+        max_length=30,
+        choices=CANCELLATION_POLICY_CHOICES + [("custom", "Custom Notice Period")],
+        default="flexible",
+    )
+    cancellationCustomHours = models.PositiveIntegerField(null=True, blank=True)
+    cancellationRefundPercentage = models.PositiveIntegerField(
+        default=100,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+    )
     STATUS_CHOICES = [
         ("active", "Active"),
         ("inactive", "Inactive"),
         ("suspended", "Suspended"),
     ]
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="active")
-    location = models.CharField(max_length=255)
+    location = models.CharField(max_length=255, blank=True, default="")
     unit_number = models.CharField(max_length=50, blank=True, null=True)
     city = models.CharField(max_length=100, blank=True, null=True, db_index=True)
     state = models.CharField(max_length=100, blank=True, null=True, db_index=True)
-    coordinates = models.CharField(max_length=50)
+    coordinates = models.CharField(max_length=50, blank=True, default="")
     point = gis_models.PointField(
         srid=4326,  # Standard GPS coordinate system
         null=True,
@@ -1763,21 +1829,23 @@ class Favorites(models.Model):
 
 
 class ClassOption(models.Model):
+    """User-facing name: Service variant. Optional duration/price/capacity overrides."""
+
     optionId = models.AutoField(primary_key=True)
     classId = models.ForeignKey(
         "ClassesMain", on_delete=models.CASCADE, related_name="options"
     )
 
-    # --- NEW FIELDS FOR MULTI-TIER ---
     title = models.CharField(
         max_length=150,
-        default="General Admission",
-        help_text="Name of this ticket tier (e.g., VIP, General Admission).",
+        default="Standard",
+        help_text="Variant name (e.g. 30 min, 60 min). Default variant is created automatically.",
     )
     description = models.TextField(
         blank=True, help_text="Specific details for this ticket tier."
     )
 
+    # DEPRECATED(saas): no longer used. Variants are independent; kept for backfill.
     SCHEDULE_MODE_CHOICES = [
         ("primary", "Primary"),
         ("synced", "Synced (Same Schedule)"),
@@ -1787,15 +1855,29 @@ class ClassOption(models.Model):
         max_length=20,
         choices=SCHEDULE_MODE_CHOICES,
         default="primary",
-        help_text="Determines if this tier follows the main schedule or has its own.",
+        help_text="DEPRECATED: variants no longer share schedules.",
+    )
+    duration_minutes = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Optional override of the parent service duration.",
+    )
+    price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Optional override of the parent service price.",
+    )
+    capacity = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Optional override of the parent service capacity.",
     )
 
     BOOKING_TYPES = [
         ("Single Session", "Single Session"),
-        (
-            "Full Course",
-            "Full Course",
-        ),  # You might want to rename this to "Multi-Day Adventure" in the future
+        ("Full Course", "Full Course"),  # DEPRECATED(saas): frozen; existing enrollments remain
     ]
     booking_type = models.CharField(
         max_length=20, choices=BOOKING_TYPES, default="Single Session"
@@ -1923,6 +2005,136 @@ class ClassOption(models.Model):
     class Meta:
         db_table = "class_options"
         indexes = [models.Index(fields=["classId"])]
+
+
+class RecurrenceRule(models.Model):
+    """Stores a repeating group-session pattern. Materializes ScheduleInstance rows."""
+
+    WEEKDAY_CHOICES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    service = models.ForeignKey(
+        ClassesMain, on_delete=models.CASCADE, related_name="recurrence_rules"
+    )
+    variant = models.ForeignKey(
+        ClassOption,
+        on_delete=models.CASCADE,
+        related_name="recurrence_rules",
+        null=True,
+        blank=True,
+    )
+    weekdays = models.JSONField(
+        default=list,
+        help_text='List of weekday abbreviations, e.g. ["Tue", "Thu"].',
+    )
+    time = models.TimeField()
+    duration_minutes = models.PositiveIntegerField(null=True, blank=True)
+    price = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True
+    )
+    capacity = models.PositiveIntegerField(null=True, blank=True)
+    start_date = models.DateField()
+    until_date = models.DateField(null=True, blank=True)
+    timezone = models.CharField(max_length=50, default="America/Toronto")
+    assigned_staff = models.ForeignKey(
+        "BusinessStaff",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="recurrence_rules",
+    )
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "recurrence_rules"
+        indexes = [
+            models.Index(fields=["service", "is_active"]),
+            models.Index(fields=["start_date", "until_date"]),
+        ]
+
+    def __str__(self):
+        days = ",".join(self.weekdays or [])
+        return f"{self.service.title} {days} {self.time}"
+
+
+class ServiceAvailabilityWindow(models.Model):
+    """Optional per-service override of business hours for appointment slot generation."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    service = models.ForeignKey(
+        ClassesMain, on_delete=models.CASCADE, related_name="availability_windows"
+    )
+    weekday = models.CharField(
+        max_length=3,
+        choices=[
+            ("Mon", "Monday"),
+            ("Tue", "Tuesday"),
+            ("Wed", "Wednesday"),
+            ("Thu", "Thursday"),
+            ("Fri", "Friday"),
+            ("Sat", "Saturday"),
+            ("Sun", "Sunday"),
+        ],
+    )
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    is_closed = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = "service_availability_windows"
+        unique_together = ("service", "weekday", "start_time")
+        ordering = ["weekday", "start_time"]
+
+
+class BusinessTimeOff(models.Model):
+    """Calendar blackout / time-off that blocks appointment slots and is shown on the calendar."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        BusinessInfo, on_delete=models.CASCADE, related_name="time_off"
+    )
+    title = models.CharField(max_length=150, default="Time off")
+    start_date = models.DateField()
+    end_date = models.DateField()
+    start_time = models.TimeField(null=True, blank=True)
+    end_time = models.TimeField(null=True, blank=True)
+    all_day = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "business_time_off"
+        ordering = ["-start_date"]
+
+
+class CalendarConnection(models.Model):
+    """One-way push of bookings to Google or Outlook."""
+
+    PROVIDER_CHOICES = [
+        ("google", "Google Calendar"),
+        ("outlook", "Microsoft Outlook"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        BusinessInfo, on_delete=models.CASCADE, related_name="calendar_connections"
+    )
+    provider = models.CharField(max_length=20, choices=PROVIDER_CHOICES)
+    calendar_id = models.CharField(max_length=255, blank=True, default="")
+    access_token = models.TextField(blank=True, default="")
+    refresh_token = models.TextField(blank=True, default="")
+    token_expires_at = models.DateTimeField(null=True, blank=True)
+    email = models.EmailField(blank=True, default="")
+    is_active = models.BooleanField(default=True)
+    last_error = models.TextField(blank=True, default="")
+    last_synced_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "calendar_connections"
+        unique_together = ("business", "provider")
 
 
 class Schedule(models.Model):
@@ -2312,10 +2524,24 @@ class CourseEnrollment(models.Model):
 
 
 class ScheduleInstance(models.Model):
-    """Specific occurrence of a schedule"""
+    """User-facing name: Session. Specific occurrence of a schedule or appointment slot."""
 
     schedule = models.ForeignKey(
         Schedule, on_delete=models.CASCADE, related_name="instances"
+    )
+    recurrence_rule = models.ForeignKey(
+        RecurrenceRule,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="instances",
+    )
+    assigned_staff = models.ForeignKey(
+        "BusinessStaff",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="assigned_sessions",
     )
     date = models.DateField()
     time = models.TimeField()
@@ -2328,6 +2554,7 @@ class ScheduleInstance(models.Model):
         ("scheduled", "Scheduled"),
         ("cancelled", "Cancelled"),
         ("completed", "Completed"),
+        ("blackout", "Blackout"),
     ]
     status = models.CharField(
         max_length=20, choices=STATUS_CHOICES, default="scheduled"
@@ -2449,6 +2676,8 @@ class ScheduleInstance(models.Model):
             models.Index(fields=["schedule", "status"]),
             models.Index(fields=["date", "time"]),
             models.Index(fields=["schedule", "date", "status"]),
+            models.Index(fields=["recurrence_rule", "date"]),
+            models.Index(fields=["assigned_staff", "date"]),
         ]
 
 
@@ -2709,6 +2938,24 @@ class Booking(models.Model):
         validators=[MinValueValidator(0), MaxValueValidator(100)],
         help_text="The refund percentage snapshotted at the time of booking.",
     )
+    ATTENDANCE_CHOICES = [
+        ("pending", "Pending"),
+        ("attended", "Attended"),
+        ("no_show", "No-show"),
+    ]
+    attendance = models.CharField(
+        max_length=16,
+        choices=ATTENDANCE_CHOICES,
+        default="pending",
+        db_index=True,
+    )
+    attendance_marked_at = models.DateTimeField(null=True, blank=True)
+    calendar_event_id = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="External calendar event id for one-way Google/Outlook push.",
+    )
 
     amount_paid = models.DecimalField(max_digits=10, decimal_places=2)
     payment_status = models.CharField(
@@ -2796,6 +3043,7 @@ class Booking(models.Model):
             models.Index(fields=["user_facing_reference"]),
             models.Index(fields=["booking_group_id", "course_session_number"]),
             models.Index(fields=["contact"]),
+            models.Index(fields=["attendance"]),
         ]
         permissions = [
             ("cancel_any_booking", "Can cancel any user's booking (Admin)"),

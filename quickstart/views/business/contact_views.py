@@ -52,6 +52,12 @@ def _contact_to_dict(contact, extra=None):
         "created_at": contact.created_at.isoformat() if contact.created_at else None,
         "updated_at": contact.updated_at.isoformat() if contact.updated_at else None,
     }
+    marked = contact.bookings.filter(attendance__in=["attended", "no_show"]).count()
+    noshows = contact.bookings.filter(attendance="no_show").count()
+    data["no_show_count"] = noshows
+    data["attendance_rate"] = (
+        round(100.0 * (marked - noshows) / marked, 1) if marked else None
+    )
     if extra:
         data.update(extra)
     return data
@@ -143,6 +149,9 @@ class ContactListView(APIView):
 
         qs = Contact.objects.filter(business=business).order_by("last_name", "first_name")
         qs = _apply_segment(qs, business, segment or "all")
+        status_filter = (request.query_params.get("status") or "").strip().lower()
+        if status_filter and status_filter != "all":
+            qs = qs.filter(status=status_filter)
 
         if search:
             qs = qs.filter(

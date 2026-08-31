@@ -94,7 +94,9 @@ class MetricsContainerSerializer(serializers.Serializer):
     active_classes = MetricSerializer()
     monthly_revenue = MetricSerializer(required=False)
     gross_total_revenue = MetricSerializer(required=False)
-    average_rating = MetricSerializer()
+    repeat_client_rate = MetricSerializer(required=False)
+    no_show_rate = MetricSerializer(required=False)
+    upcoming_capacity_fill = MetricSerializer(required=False)
 
 
 class WidgetSetupProgressSerializer(serializers.Serializer):
@@ -209,6 +211,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "newBookingNotification",
             "cancellationNotification",
             "reminderNotification",
+            "reminder_hours_before",
             "scheduleExpiryNotification",
             "smsNotifications",
             "require_participant_names",
@@ -290,6 +293,7 @@ class ManagedBusinessInfoSerializer(serializers.ModelSerializer):
             "newBookingNotification": {"required": False},
             "cancellationNotification": {"required": False},
             "reminderNotification": {"required": False},
+            "reminder_hours_before": {"required": False},
             "scheduleExpiryNotification": {"required": False},
             "smsNotifications": {"required": False},
             "onboarding_survey": {"required": False},
