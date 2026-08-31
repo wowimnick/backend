@@ -3,7 +3,7 @@ from django.utils import timezone
 from django.db import transaction
 from django.db.models import Q, Sum, Count
 from django.conf import settings
-from datetime import timedelta, datetime
+from datetime import timedelta, datetime, timezone as dt_timezone
 from decimal import Decimal
 from collections import defaultdict
 import hashlib
@@ -19,7 +19,7 @@ from quickstart.utils.stripe_refund import create_stripe_refund
 # CUTOVER_DATE = 2026-08-31
 # Destination-charge bookings (payout_status='settled') skip this holding-account batch.
 # Booking uses booking_date (no created_at). Only pre-cutover pending rows are included.
-CUTOVER_DATE = datetime(2026, 8, 31, tzinfo=timezone.utc)
+CUTOVER_DATE = datetime(2026, 8, 31, tzinfo=dt_timezone.utc)
 
 logger = logging.getLogger(__name__)
 PAYOUT_INTEGRITY_ALERT_RECIPIENTS = ("nick@classeasily.com",)
