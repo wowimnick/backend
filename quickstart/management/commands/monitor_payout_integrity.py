@@ -9,8 +9,8 @@ from quickstart.tasks.payout_tasks import (
 
 class Command(BaseCommand):
     help = (
-        "Run payout integrity checks and optionally send alert email to "
-        "nick@classeasily.com when anomalies are detected."
+        "Run payout integrity checks. Sends alert email only when PAYOUT_SEND_EMAILS "
+        "is enabled and PAYOUT_INTEGRITY_ALERT_RECIPIENTS is set."
     )
 
     def add_arguments(self, parser):

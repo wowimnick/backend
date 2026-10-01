@@ -1,0 +1,129 @@
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER_FILE: /run/pg/user
+      POSTGRES_PASSWORD_FILE: /run/pg/password
+      POSTGRES_DB_FILE: /run/pg/db
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./pg-creds:/run/pg:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$(cat /run/pg/user) -d $$(cat /run/pg/db)"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - classeasily-net
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - classeasily-net
+
+  typesense:
+    image: typesense/typesense:26.0
+    restart: unless-stopped
+    env_file:
+      - typesense.env
+    environment:
+      TYPESENSE_DATA_DIR: /data
+      TYPESENSE_ENABLE_CORS: "true"
+      TYPESENSE_RESET_PEERS_ON_ERROR: "true"
+    volumes:
+      - typesense-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8108/health | grep -q ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - classeasily-net
+
+  web:
+    image: ${APP_IMAGE}
+    restart: unless-stopped
+    env_file:
+      - /home/ec2-user/.env.prod.compose
+    environment:
+      IS_DOCKER: "true"
+      CONTAINER_ROLE: web
+      DJANGO_ENV: prod
+      DEBUG: "False"
+    command:
+      - gunicorn
+      - CEBackend.asgi:application
+      - -w
+      - "1"
+      - -k
+      - uvicorn.workers.UvicornWorker
+      - -b
+      - 0.0.0.0:8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"
+    networks:
+      - classeasily-net
+
+  worker:
+    image: ${APP_IMAGE}
+    restart: unless-stopped
+    env_file:
+      - /home/ec2-user/.env.prod.compose
+    environment:
+      IS_DOCKER: "true"
+      CONTAINER_ROLE: worker
+      DJANGO_ENV: prod
+      DEBUG: "False"
+    command:
+      - /usr/bin/supervisord
+      - -c
+      - /etc/supervisor/conf.d/supervisord.conf
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - classeasily-net
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - web
+    networks:
+      - classeasily-net
+
+networks:
+  classeasily-net:
+    name: classeasily-prod-net
+
+volumes:
+  postgres-data:
+  redis-data:
+  typesense-data:
+  caddy-data:
+  caddy-config:

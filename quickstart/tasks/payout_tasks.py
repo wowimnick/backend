@@ -22,7 +22,6 @@ from quickstart.utils.stripe_refund import create_stripe_refund
 CUTOVER_DATE = datetime(2026, 8, 31, tzinfo=dt_timezone.utc)
 
 logger = logging.getLogger(__name__)
-PAYOUT_INTEGRITY_ALERT_RECIPIENTS = ("nick@classeasily.com",)
 PAYOUT_INTEGRITY_PENDING_QUEUE_WARNING_BUSINESSES = 25
 PAYOUT_INTEGRITY_PENDING_QUEUE_WARNING_TOTAL_ALLOC = Decimal("5000.00")
 
@@ -93,6 +92,9 @@ def _send_payout_connect_required_immediate(business: BusinessInfo) -> None:
     Email the business to finish Connect / payout setup after a transfer failure.
     Uses the same 3-day cooldown as scheduled reminders.
     """
+    if not getattr(settings, "PAYOUT_SEND_EMAILS", False):
+        return
+
     from quickstart.utils.email_utils import send_payout_connect_required_email
 
     total_payout, booking_count = _pending_payout_totals_for_business(business)
@@ -145,6 +147,9 @@ def _maybe_send_payout_connect_reminder(business):
     If the business has pending payout bookings and we haven't sent the
     "connect Stripe" reminder in the last 3 days, send it and update the cooldown.
     """
+    if not getattr(settings, "PAYOUT_SEND_EMAILS", False):
+        return
+
     from quickstart.utils.email_utils import send_payout_connect_required_email
 
     total_payout, booking_count = _pending_payout_totals_for_business(business)
@@ -570,6 +575,13 @@ def collect_payout_integrity_findings(
 
 
 def _send_payout_integrity_alert_email(report: dict, *, include_warnings: bool = False) -> None:
+    if not getattr(settings, "PAYOUT_SEND_EMAILS", False):
+        return
+
+    recipients = getattr(settings, "PAYOUT_INTEGRITY_ALERT_RECIPIENTS", ()) or ()
+    if not recipients:
+        return
+
     from quickstart.utils.email_utils import send_templated_email
 
     critical_findings = report.get("critical_findings") or []
@@ -592,7 +604,7 @@ def _send_payout_integrity_alert_email(report: dict, *, include_warnings: bool =
         alert_mode = "critical_only"
 
     send_templated_email(
-        recipient_list=list(PAYOUT_INTEGRITY_ALERT_RECIPIENTS),
+        recipient_list=list(recipients),
         template_name="emails/payout_integrity_alert.html",
         context={
             "report": report,
@@ -601,13 +613,13 @@ def _send_payout_integrity_alert_email(report: dict, *, include_warnings: bool =
             "warning_findings": warning_findings,
             "alert_mode": alert_mode,
             "admin_url": f"{settings.FRONTEND_BASE_URL}/admin",
-            "recipient_email": ", ".join(PAYOUT_INTEGRITY_ALERT_RECIPIENTS),
+            "recipient_email": ", ".join(recipients),
         },
         subject=subject,
     )
     logger.warning(
         "Payout integrity alert sent to %s with %s findings.",
-        ",".join(PAYOUT_INTEGRITY_ALERT_RECIPIENTS),
+        ",".join(recipients),
         len(findings),
     )
 
@@ -625,9 +637,14 @@ def monitor_payout_integrity(days: int = 3, stripe_limit: int = 200):
     warning_findings = report.get("warning_findings") or []
     if critical_findings:
         _send_payout_integrity_alert_email(report)
+        recipients = getattr(settings, "PAYOUT_INTEGRITY_ALERT_RECIPIENTS", ()) or ()
+        if getattr(settings, "PAYOUT_SEND_EMAILS", False) and recipients:
+            alert_note = f"Alert sent to {','.join(recipients)}."
+        else:
+            alert_note = "No alert email sent (PAYOUT_SEND_EMAILS disabled or no recipients)."
         return (
             f"Payout integrity CRITICAL anomalies found: {len(critical_findings)}. "
-            f"Alert sent to {','.join(PAYOUT_INTEGRITY_ALERT_RECIPIENTS)}."
+            f"{alert_note}"
         )
     if warning_findings:
         logger.warning(
@@ -659,9 +676,15 @@ def send_daily_payout_integrity_warning_digest(days: int = 7, stripe_limit: int 
     warning_findings = report.get("warning_findings") or []
     if critical_findings or warning_findings:
         _send_payout_integrity_alert_email(report, include_warnings=True)
+        recipients = getattr(settings, "PAYOUT_INTEGRITY_ALERT_RECIPIENTS", ()) or ()
+        if getattr(settings, "PAYOUT_SEND_EMAILS", False) and recipients:
+            email_note = "digest email sent."
+        else:
+            email_note = "no digest email sent (PAYOUT_SEND_EMAILS disabled or no recipients)."
         return (
-            "Daily payout integrity digest sent: "
-            f"{len(critical_findings)} critical, {len(warning_findings)} warning."
+            "Daily payout integrity findings: "
+            f"{len(critical_findings)} critical, {len(warning_findings)} warning; "
+            f"{email_note}"
         )
     logger.info(
         "Daily payout integrity digest clean (days=%s, stripe_limit=%s).",
@@ -801,8 +824,6 @@ def process_daily_payouts():
                 
                 if not business.stripe_account_id:
                     logger.warning(f"Business {business_id} has no Stripe account. Skipping.")
-                    # Compute pending amount/count and send "connect Stripe" reminder at most once every 3 days
-                    _maybe_send_payout_connect_reminder(business)
                     continue
 
                 logger.info(f"Stripe Account ID: {business.stripe_account_id}")
@@ -940,42 +961,44 @@ def process_daily_payouts():
         except stripe.StripeError as e:
             failed_payouts += 1
             logger.error(f"✗ STRIPE ERROR for Business {business_id}: {e}")
-            try:
-                business = BusinessInfo.objects.filter(pk=business_id).first()
-                if business and _is_business_connect_not_ready_for_payout(business, e):
-                    try:
+            if getattr(settings, "PAYOUT_SEND_EMAILS", False):
+                try:
+                    business = BusinessInfo.objects.filter(pk=business_id).first()
+                    if business and _is_business_connect_not_ready_for_payout(
+                        business, e
+                    ):
                         _send_payout_connect_required_immediate(business)
-                    except Exception as biz_email_err:
-                        logger.warning(
-                            "Could not send business payout connect email after transfer failure: %s",
-                            biz_email_err,
+                    else:
+                        from quickstart.utils.email_utils import (
+                            send_super_admin_payout_failed_email,
                         )
-                else:
-                    from quickstart.utils.email_utils import send_super_admin_payout_failed_email
 
-                    send_super_admin_payout_failed_email(
-                        business_id, str(e), business=business, stripe_error=True
+                        send_super_admin_payout_failed_email(
+                            business_id, str(e), business=business, stripe_error=True
+                        )
+                except Exception as email_err:
+                    logger.warning(
+                        "Could not send payout failure notification: %s", email_err
                     )
-            except Exception as email_err:
-                logger.warning(
-                    "Could not send payout failure notification: %s", email_err
-                )
             # Note: Transaction rollback will occur automatically, keeping bookings as 'pending'
 
         except Exception as e:
             failed_payouts += 1
             logger.error(f"✗ ERROR processing payout for Business {business_id}: {e}", exc_info=True)
-            try:
-                business = BusinessInfo.objects.filter(pk=business_id).first()
-                from quickstart.utils.email_utils import send_super_admin_payout_failed_email
+            if getattr(settings, "PAYOUT_SEND_EMAILS", False):
+                try:
+                    business = BusinessInfo.objects.filter(pk=business_id).first()
+                    from quickstart.utils.email_utils import (
+                        send_super_admin_payout_failed_email,
+                    )
 
-                send_super_admin_payout_failed_email(
-                    business_id, str(e), business=business, stripe_error=False
-                )
-            except Exception as email_err:
-                logger.warning(
-                    "Could not send Super Admin payout failure email: %s", email_err
-                )
+                    send_super_admin_payout_failed_email(
+                        business_id, str(e), business=business, stripe_error=False
+                    )
+                except Exception as email_err:
+                    logger.warning(
+                        "Could not send Super Admin payout failure email: %s", email_err
+                    )
 
     logger.info("=" * 80)
     logger.info(f"TASK END: process_daily_payouts")

@@ -693,7 +693,7 @@ def send_payout_notification(sender, instance: Payout, created, **kwargs):
     if meta.get("skip_payout_notification"):
         return
 
-    from .utils.email_utils import send_payout_initiated_email 
+    from django.conf import settings
 
     try:
         business = instance.business
@@ -702,12 +702,16 @@ def send_payout_notification(sender, instance: Payout, created, **kwargs):
 
         recipient_list = [u for u in recipients if u and getattr(u, "email", None)]
 
-        for user in recipient_list:
-            # FIX: Queue EACH email to send only after the transaction commits successfully.
-            # We use (u=user) to bind the variable correctly in the lambda loop.
-            transaction.on_commit(
-                lambda u=user: send_payout_initiated_email(business_user=u, payout=instance)
-            )
+        if getattr(settings, "PAYOUT_SEND_EMAILS", False):
+            from .utils.email_utils import send_payout_initiated_email
+
+            for user in recipient_list:
+                # Queue EACH email to send only after the transaction commits successfully.
+                transaction.on_commit(
+                    lambda u=user: send_payout_initiated_email(
+                        business_user=u, payout=instance
+                    )
+                )
 
         def _create_payout_in_app_notifications():
             from quickstart.utils.notification_utils import create_notifications_for_users
@@ -728,7 +732,10 @@ def send_payout_notification(sender, instance: Payout, created, **kwargs):
 
         transaction.on_commit(_create_payout_in_app_notifications)
 
-        logger.info(f"Queued payout initiated emails for Payout ID {instance.id} (waiting for DB commit)")
+        if getattr(settings, "PAYOUT_SEND_EMAILS", False):
+            logger.info(
+                f"Queued payout initiated emails for Payout ID {instance.id} (waiting for DB commit)"
+            )
 
     except Exception as e:
         logger.error(

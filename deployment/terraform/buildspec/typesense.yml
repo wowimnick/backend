@@ -1,0 +1,31 @@
+version: 0.2
+
+# AWS-native equivalent of .github/workflows/typesense-ecs-deploy.yml
+env:
+  variables:
+    AWS_REGION: us-east-2
+    TYPESENSE_IMAGE: typesense/typesense:26.0
+    TASK_FAMILY: classeasily-prod-typesense-task
+    ECS_CLUSTER: classeasily-prod-cluster
+    ECS_SERVICE: classeasily-prod-typesense-service
+
+phases:
+  build:
+    commands:
+      - aws ecs describe-task-definition --task-definition $TASK_FAMILY --query taskDefinition > td.json
+      - |
+        jq --arg IMG "$TYPESENSE_IMAGE" '
+          .containerDefinitions |= map(if .name == "typesense" then .image = $IMG else . end)
+          | if (.containerDefinitions | map(select(.name == "typesense")) | length) == 0 then
+              error("Task definition has no container named typesense")
+            else . end
+          | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)
+        ' td.json > td-new.json
+      - ARN=$(aws ecs register-task-definition --cli-input-json file://td-new.json --query taskDefinition.taskDefinitionArn --output text)
+      - |
+        aws ecs update-service \
+          --cluster $ECS_CLUSTER \
+          --service $ECS_SERVICE \
+          --task-definition "$ARN" \
+          --deployment-configuration "deploymentCircuitBreaker={enable=true,rollback=true},maximumPercent=200,minimumHealthyPercent=100" \
+          --force-new-deployment

@@ -1,0 +1,22 @@
+aws_region  = "us-east-2"
+aws_account_id = "459929160817"
+
+# Required: existing media bucket name (AWS_STORAGE_BUCKET_NAME).
+media_bucket_name = "REPLACE-WITH-EXISTING-MEDIA-BUCKET"
+
+# ACM cert in us-east-2 covering api.classeasily.com (+ staging host if used).
+alb_certificate_arn = ""
+
+# Optional: existing GitHub OIDC provider in this account.
+# github_oidc_provider_arn = "arn:aws:iam::459929160817:oidc-provider/token.actions.githubusercontent.com"
+
+# CodePipeline (AWS-native stand-in for the three GitHub Actions workflows).
+# Create a GitHub connection in the CodePipeline console, then paste the ARN.
+enable_codepipeline     = true
+codestar_connection_arn = ""
+
+alert_email = "admin@classeasily.com"
+
+# Keep GitHub Actions as CD until CodePipeline is wired; still apply this stack
+# for infra. Set false if you only want GHA + OIDC.
+# enable_codepipeline = false

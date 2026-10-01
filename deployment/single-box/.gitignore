@@ -1,0 +1,6 @@
+pg-creds/
+typesense.env
+.env.prod
+.env.prod.compose
+backup.log
+dumps/

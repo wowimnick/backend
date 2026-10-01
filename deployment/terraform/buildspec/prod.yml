@@ -1,0 +1,53 @@
+version: 0.2
+
+# AWS-native equivalent of .github/workflows/prod-backend-deploy.yml
+env:
+  variables:
+    AWS_REGION: us-east-2
+    ECR_REPOSITORY: classeasily-backend-staging
+    ECS_CLUSTER: classeasily-prod-cluster
+    ECS_SERVICE_WEB: classeasily-prod-web-service
+    ECS_SERVICE_WORKER: classeasily-prod-worker-service
+    ECS_TASK_DEFINITION_WEB: classeasily-prod-backend-web-task
+    ECS_TASK_DEFINITION_WORKER: classeasily-prod-backend-task-worker
+    ECS_WEB_HEALTH_CHECK_GRACE_PERIOD_SECONDS: "900"
+
+phases:
+  pre_build:
+    commands:
+      - ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+      - IMAGE_TAG=${CODEBUILD_RESOLVED_SOURCE_VERSION}
+      - IMAGE_URI=$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
+      - aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+      - echo $IMAGE_URI > /tmp/image_uri
+      - echo $IMAGE_TAG > /tmp/image_tag
+      - echo IMAGE_URI=$IMAGE_URI
+  build:
+    commands:
+      - IMAGE_URI=$(cat /tmp/image_uri)
+      - docker build -t $IMAGE_URI .
+      - docker push $IMAGE_URI
+  post_build:
+    commands:
+      - IMAGE_URI=$(cat /tmp/image_uri)
+      - IMAGE_TAG=$(cat /tmp/image_tag)
+      - |
+        patch_task() {
+          FAMILY=$1
+          aws ecs describe-task-definition --task-definition "$FAMILY" --query taskDefinition > td.json
+          ENV_ENTRY=$(jq -nc --arg v "$IMAGE_TAG" '[{name:"BUILD_ID",value:$v}]')
+          jq --arg IMAGE_URI "$IMAGE_URI" --argjson newenv "$ENV_ENTRY" '
+            .containerDefinitions[0].image = $IMAGE_URI |
+            .containerDefinitions[0].environment = ((.containerDefinitions[0].environment // []) | map(select(.name != "BUILD_ID")) + $newenv) |
+            del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)
+          ' td.json > td-new.json
+          aws ecs register-task-definition --cli-input-json file://td-new.json --query taskDefinition.taskDefinitionArn --output text
+        }
+        WEB_ARN=$(patch_task $ECS_TASK_DEFINITION_WEB)
+        WORKER_ARN=$(patch_task $ECS_TASK_DEFINITION_WORKER)
+        aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE_WEB \
+          --task-definition "$WEB_ARN" \
+          --health-check-grace-period-seconds $ECS_WEB_HEALTH_CHECK_GRACE_PERIOD_SECONDS \
+          --force-new-deployment
+        aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE_WORKER \
+          --task-definition "$WORKER_ARN" --force-new-deployment

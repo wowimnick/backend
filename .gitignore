@@ -27,6 +27,7 @@ wheels/
 MANIFEST
 
 # Virtual Environments
+.env
 .env.*
 .venv
 env/

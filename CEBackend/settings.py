@@ -598,6 +598,18 @@ ACCOUNT_EMAIL_CONFIRMATION_AUTHENTICATED_REDIRECT_URL = "/"
 EMAIL_BACKEND = "anymail.backends.resend.EmailBackend"
 DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "noreply@classeasily.com")
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
+# Payout-related emails (connect reminders, failures, initiated, integrity alerts) are off by default.
+PAYOUT_SEND_EMAILS = os.environ.get("PAYOUT_SEND_EMAILS", "false").lower() in (
+    "true",
+    "1",
+    "yes",
+)
+_payout_integrity_alert_raw = os.environ.get("PAYOUT_INTEGRITY_ALERT_RECIPIENTS", "")
+PAYOUT_INTEGRITY_ALERT_RECIPIENTS = tuple(
+    part.strip()
+    for part in _payout_integrity_alert_raw.split(",")
+    if part.strip()
+)
 ANYMAIL = {"RESEND_API_KEY": RESEND_API_KEY}
 ACCOUNT_ADAPTER = "quickstart.adapters.CustomAccountAdapter"
 SOCIALACCOUNT_ADAPTER = "quickstart.adapters.CustomSocialAccountAdapter"

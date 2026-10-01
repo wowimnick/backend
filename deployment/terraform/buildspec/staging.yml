@@ -1,0 +1,30 @@
+version: 0.2
+
+# AWS-native equivalent of .github/workflows/staging-deploy.yml
+# Replaces appleboy/ssh-action with SSM Run Command on classeasily-staging-server.
+env:
+  variables:
+    AWS_REGION: us-east-2
+    ECR_REPOSITORY: classeasily-backend-staging
+
+phases:
+  pre_build:
+    commands:
+      - ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+      - IMAGE_URI=$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:${CODEBUILD_RESOLVED_SOURCE_VERSION}
+      - aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+      - echo $IMAGE_URI > /tmp/image_uri
+  build:
+    commands:
+      - IMAGE_URI=$(cat /tmp/image_uri)
+      - docker build -t $IMAGE_URI .
+      - docker push $IMAGE_URI
+  post_build:
+    commands:
+      - IMAGE_URI=$(cat /tmp/image_uri)
+      - |
+        aws ssm send-command \
+          --document-name "$STAGING_SSM_DOCUMENT" \
+          --instance-ids "$STAGING_INSTANCE_ID" \
+          --parameters "{\"ImageUri\":[\"$IMAGE_URI\"]}" \
+          --timeout-seconds 900

@@ -65,7 +65,17 @@ def test_is_connect_not_ready_false_when_active_and_generic_error():
     assert _is_business_connect_not_ready_for_payout(business, err) is False
 
 
-def test_send_payout_connect_required_immediate_calls_email():
+def test_send_payout_connect_required_immediate_no_op_when_payout_emails_disabled():
+    business = _biz("restricted", bid=7)
+    with patch(
+        "quickstart.utils.email_utils.send_payout_connect_required_email"
+    ) as mock_send:
+        _send_payout_connect_required_immediate(business)
+    mock_send.assert_not_called()
+
+
+def test_send_payout_connect_required_immediate_calls_email_when_enabled(settings):
+    settings.PAYOUT_SEND_EMAILS = True
     business = _biz("restricted", bid=7)
     with patch(
         "quickstart.tasks.payout_tasks._pending_payout_totals_for_business",
@@ -85,7 +95,8 @@ def test_send_payout_connect_required_immediate_calls_email():
     m_q.return_value.update.assert_called_once()
 
 
-def test_send_payout_connect_required_immediate_respects_cooldown():
+def test_send_payout_connect_required_immediate_respects_cooldown(settings):
+    settings.PAYOUT_SEND_EMAILS = True
     business = _biz("restricted", bid=8)
     business.last_payout_connect_reminder_sent = timezone.now()
     with patch(

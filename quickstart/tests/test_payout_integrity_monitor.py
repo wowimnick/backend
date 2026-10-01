@@ -49,7 +49,7 @@ def test_collect_payout_integrity_findings_detects_duplicates_and_temp_rows():
     )
 
 
-def test_monitor_payout_integrity_sends_alert_to_nick_when_findings_exist():
+def test_monitor_payout_integrity_does_not_email_when_payout_emails_disabled():
     report = {
         "ran_at": "2026-01-01T00:00:00+00:00",
         "days": 3,
@@ -72,9 +72,8 @@ def test_monitor_payout_integrity_sends_alert_to_nick_when_findings_exist():
         with patch("quickstart.utils.email_utils.send_templated_email") as mock_send:
             result = monitor_payout_integrity(days=3, stripe_limit=200)
 
-    assert "Alert sent to nick@classeasily.com" in result
-    mock_send.assert_called_once()
-    assert mock_send.call_args.kwargs["recipient_list"] == ["nick@classeasily.com"]
+    assert "No alert email sent" in result
+    mock_send.assert_not_called()
 
 
 def test_monitor_payout_integrity_does_not_email_warning_only_findings():
@@ -104,7 +103,7 @@ def test_monitor_payout_integrity_does_not_email_warning_only_findings():
     mock_send.assert_not_called()
 
 
-def test_daily_digest_sends_for_warning_findings():
+def test_daily_digest_does_not_email_when_payout_emails_disabled():
     report = {
         "ran_at": "2026-01-01T00:00:00+00:00",
         "days": 7,
@@ -127,6 +126,5 @@ def test_daily_digest_sends_for_warning_findings():
         with patch("quickstart.utils.email_utils.send_templated_email") as mock_send:
             result = send_daily_payout_integrity_warning_digest(days=7, stripe_limit=300)
 
-    assert "Daily payout integrity digest sent" in result
-    mock_send.assert_called_once()
-    assert mock_send.call_args.kwargs["recipient_list"] == ["nick@classeasily.com"]
+    assert "no digest email sent" in result
+    mock_send.assert_not_called()
